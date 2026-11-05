@@ -88,9 +88,9 @@ private struct BugReportCard: View {
             HStack {
                 Image(systemName: "ladybug.fill")
                     .foregroundColor(.red)
-                    .font(.system(size: 18, weight: .semibold))
+                    .qaudionScaledFont(size: 18, weight: .semibold)
                 Text("Segnala un problema")
-                    .font(.system(size: 16, weight: .semibold))
+                    .qaudionScaledFont(size: 16, weight: .semibold)
                     .foregroundColor(.primary)
                 Spacer()
                 Button {
@@ -98,7 +98,7 @@ private struct BugReportCard: View {
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundColor(Color(.systemGray3))
-                        .font(.system(size: 22))
+                        .qaudionScaledFont(size: 22, family: .headline)
                 }
                 .accessibilityLabel("Chiudi")
             }
@@ -135,7 +135,7 @@ private struct BugReportCard: View {
                 .overlay(
                     Image(systemName: "photo")
                         .foregroundColor(Color(.systemGray3))
-                        .font(.system(size: 28))
+                        .qaudionScaledFont(size: 28, family: .headline)
                 )
         }
     }
@@ -149,11 +149,11 @@ private struct BugReportCard: View {
                     .foregroundColor(Color(.placeholderText))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 10)
-                    .font(.system(size: 14))
+                    .qaudionScaledFont(size: 14)
                     .allowsHitTesting(false)
             }
             TextEditor(text: $note)
-                .font(.system(size: 14))
+                .qaudionScaledFont(size: 14)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 6)
                 .background(Color.clear)
@@ -204,7 +204,7 @@ private struct BugReportCard: View {
                 reporter.dismiss()
             } label: {
                 Text("Salta")
-                    .font(.system(size: 15, weight: .medium))
+                    .qaudionScaledFont(size: 15, weight: .medium)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
@@ -220,7 +220,7 @@ private struct BugReportCard: View {
                 attachScreenshot = true
             } label: {
                 Text("Invia report")
-                    .font(.system(size: 15, weight: .semibold))
+                    .qaudionScaledFont(size: 15, weight: .semibold)
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)

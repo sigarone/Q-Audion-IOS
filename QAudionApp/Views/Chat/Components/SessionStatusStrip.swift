@@ -54,7 +54,7 @@ struct SessionStatusStrip: View {
 
             if let rekeyInSeconds {
                 Image(systemName: "key.fill")
-                    .font(.system(size: 10, weight: .semibold))
+                    .qaudionScaledFont(size: 10, weight: .semibold, family: .label)
                     .foregroundStyle(scheme.onSurfaceVariant)
                 Text("RE-KEY \(formatMmSs(rekeyInSeconds))")
                     .qaudionStyle(type.labelSmall)

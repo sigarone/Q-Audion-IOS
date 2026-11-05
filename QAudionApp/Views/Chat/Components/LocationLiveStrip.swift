@@ -29,7 +29,7 @@ struct LocationLiveStrip: View {
     private func strip(_ share: LocationShareCenter.ActiveShare) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "location.fill")
-                .font(.system(size: 12, weight: .semibold))
+                .qaudionScaledFont(size: 12, weight: .semibold, family: .label)
                 .foregroundStyle(extras.success)
             Text(verbatim: LocationCardStrings.stripText(until: LocationCardFormat.clock(share.endAt)))
                 .qaudionStyle(type.labelSmall)

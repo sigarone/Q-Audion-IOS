@@ -16,16 +16,16 @@ struct RuntimeLogViewerSheet: View {
                     ForEach(Array(entries.enumerated()), id: \.element.id) { _, e in
                         VStack(alignment: .leading, spacing: 2) {
                             HStack(alignment: .top, spacing: 6) {
-                                Text(e.level.symbol).font(.system(size: 10))
+                                Text(e.level.symbol).qaudionScaledFont(size: 10, family: .label)
                                 Text("[\(e.tag)]")
-                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                    .qaudionScaledFont(size: 10, weight: .semibold, design: .monospaced, family: .label)
                                     .foregroundStyle(.secondary)
                                 Text(formatTime(e.timestamp))
-                                    .font(.system(size: 10, design: .monospaced))
+                                    .qaudionScaledFont(size: 10, design: .monospaced, family: .label)
                                     .foregroundStyle(.tertiary)
                             }
                             Text(e.message)
-                                .font(.system(size: 11, design: .monospaced))
+                                .qaudionScaledFont(size: 11, design: .monospaced, family: .label)
                                 .textSelection(.enabled)
                                 .foregroundStyle(.primary)
                         }

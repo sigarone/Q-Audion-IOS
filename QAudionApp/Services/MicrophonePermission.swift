@@ -190,7 +190,7 @@ struct MicrophonePermissionBanner: View {
         if kind != .none {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "mic.slash.fill")
-                    .font(.system(size: 16, weight: .semibold))
+                    .qaudionScaledFont(size: 16, weight: .semibold)
                     .foregroundStyle(extras.riskHigh)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(String(localized: "call.mic.banner.title", defaultValue: "Microfono non attivo", comment: "In-call strip title: the microphone permission is missing, so the other person cannot hear you"))
@@ -251,7 +251,7 @@ struct MicrophonePrimerSheet: View {
         VStack(spacing: 20) {
             Spacer()
             Image(systemName: "mic.fill")
-                .font(.system(size: 56))
+                .qaudionScaledFont(size: 56, family: .display)
                 .foregroundStyle(scheme.primary)
             Text(String(localized: "call.mic.primer.title", defaultValue: "Il microfono per le chiamate", comment: "First-use screen title before the system microphone request"))
                 .qaudionStyle(type.titleLarge)

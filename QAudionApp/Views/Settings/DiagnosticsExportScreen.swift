@@ -254,7 +254,7 @@ struct DiagnosticsExportScreen: View {
     private var runtimeLogCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("LOG RUNTIME (\(logSink.entryCount) righe)")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .qaudionScaledFont(size: 11, weight: .medium, design: .monospaced, family: .label)
                 .tracking(1.5)
                 .foregroundStyle(scheme.primary)
             Text("Sistema RTLog cattura eventi app (call setup, WS, errori) in un buffer in-memory. Niente token, niente messaggi utente. Esportabile per debug remoto.")
@@ -336,17 +336,17 @@ struct DiagnosticsExportScreen: View {
             if let id = uploadFileId {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("UPLOAD COMPLETATO — fileId:")
-                        .font(.system(size: 10, weight: .semibold))
+                        .qaudionScaledFont(size: 10, weight: .semibold, family: .label)
                         .foregroundStyle(extras.success)
                     Text(id)
-                        .font(.system(size: 12, design: .monospaced))
+                        .qaudionScaledFont(size: 12, design: .monospaced, family: .label)
                         .textSelection(.enabled)
                         .foregroundStyle(scheme.onSurface)
                     Text("Copia + condividi col maintainer. Lui può scaricare il dump via:")
-                        .font(.system(size: 10))
+                        .qaudionScaledFont(size: 10, family: .label)
                         .foregroundStyle(scheme.onSurfaceVariant)
                     Text("curl -H \"Authorization: Bearer <admin>\" \(appState.filesServerUrl)/api/v1/files/\(id)")
-                        .font(.system(size: 10, design: .monospaced))
+                        .qaudionScaledFont(size: 10, design: .monospaced, family: .label)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .textSelection(.enabled)
                 }
@@ -356,7 +356,7 @@ struct DiagnosticsExportScreen: View {
             }
             if let err = uploadError {
                 Text("Errore: \(err)")
-                    .font(.system(size: 11))
+                    .qaudionScaledFont(size: 11, family: .label)
                     .foregroundStyle(extras.riskHigh)
                     .padding(8)
                     .background(extras.riskHigh.opacity(0.10))
@@ -380,7 +380,7 @@ struct DiagnosticsExportScreen: View {
     private var introCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("DEVTOOL")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .qaudionScaledFont(size: 11, weight: .medium, design: .monospaced, family: .label)
                 .tracking(1.5)
                 .foregroundStyle(extras.warning)
             Text("Genera un report testuale con build, device, stato auth e summary di UserDefaults. **Non** include token, refresh-token, chiavi private né contenuti chat — solo metadata. Utile per allegare a una segnalazione al supporto.")
@@ -404,12 +404,12 @@ struct DiagnosticsExportScreen: View {
     private var reportCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("REPORT")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .qaudionScaledFont(size: 11, weight: .medium, design: .monospaced, family: .label)
                 .tracking(1.5)
                 .foregroundStyle(scheme.primary)
             ScrollView {
                 Text(container.report)
-                    .font(.system(size: 11, weight: .regular, design: .monospaced))
+                    .qaudionScaledFont(size: 11, weight: .regular, design: .monospaced, family: .label)
                     .foregroundStyle(scheme.onSurface)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
@@ -489,7 +489,7 @@ struct DiagnosticsExportScreen: View {
                         .tint(scheme.primary)
                 } else {
                     Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 14, weight: .semibold))
+                        .qaudionScaledFont(size: 14, weight: .semibold)
                 }
                 Text(container.generating
                      ? String(localized: "settings.diagnostics.generating", defaultValue: "Generazione…", comment: "Diagnostics export screen, button label while the report is being generated")

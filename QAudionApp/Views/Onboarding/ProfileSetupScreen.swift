@@ -31,7 +31,7 @@ struct ProfileSetupScreen: View {
                 Spacer().frame(height: 32)
 
                 Text("Come vuoi chiamarti?")
-                    .font(.system(size: 24, weight: .semibold))
+                    .qaudionScaledFont(size: 24, weight: .semibold, family: .headline)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 24)
 

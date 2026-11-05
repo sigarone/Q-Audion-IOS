@@ -138,7 +138,7 @@ struct LocationShareSheet: View {
         Button(action: { presetTapped(seconds) }) {
             HStack {
                 Image(systemName: "location.fill")
-                    .font(.system(size: 14, weight: .semibold))
+                    .qaudionScaledFont(size: 14, weight: .semibold)
                 Text(verbatim: title)
                     .qaudionStyle(type.bodyMedium)
                 Spacer(minLength: 0)

@@ -81,7 +81,7 @@ struct CallInProgressBar: View {
 
     private var phoneIcon: some View {
         Image(systemName: "phone.fill")
-            .font(.system(size: iconSize))
+            .qaudionScaledFont(size: iconSize, maxSize: .xLarge)
             .accessibilityHidden(true)
     }
 

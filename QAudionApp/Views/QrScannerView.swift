@@ -127,7 +127,7 @@ struct QrScannerView: View {
     private var deniedView: some View {
         VStack(spacing: 16) {
             Image(systemName: "camera.slash.fill")
-                .font(.system(size: 48))
+                .qaudionScaledFont(size: 48, family: .display)
                 .foregroundStyle(.red)
             Text("Accesso fotocamera negato")
                 .font(.title3.weight(.semibold))
@@ -153,7 +153,7 @@ struct QrScannerView: View {
     private var restrictedView: some View {
         VStack(spacing: 16) {
             Image(systemName: "camera.fill.badge.ellipsis")
-                .font(.system(size: 48))
+                .qaudionScaledFont(size: 48, family: .display)
                 .foregroundStyle(.orange)
             Text("Fotocamera non disponibile")
                 .font(.title3.weight(.semibold))

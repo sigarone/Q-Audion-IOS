@@ -188,7 +188,7 @@ struct OutgoingCallScreen: View {
 
                     if let fp = sessionFingerprint {
                         Text(fp)
-                            .font(.system(size: 12, weight: .regular, design: .monospaced))
+                            .qaudionScaledFont(size: 12, weight: .regular, design: .monospaced, family: .label, maxSize: .xLarge)
                             .tracking(2)
                             .foregroundStyle(ringPQCColorForText)
                             .padding(.bottom, 6)
@@ -326,7 +326,7 @@ struct OutgoingCallScreen: View {
         HStack(spacing: 8) {
             if done {
                 Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 14, weight: .semibold))
+                    .qaudionScaledFont(size: 14, weight: .semibold, maxSize: .xLarge)
                     .foregroundStyle(extras.success)
             } else {
                 Circle()

@@ -221,7 +221,7 @@ struct BubbleActionSheet: View {
                     dismiss()
                 } label: {
                     Text(emoji)
-                        .font(.system(size: 26))
+                        .qaudionScaledFont(size: 26, family: .headline)
                         .frame(width: 40, height: 40)
                         .background(Circle().fill(scheme.surfaceVariant.opacity(0.45)))
                 }
@@ -237,7 +237,7 @@ struct BubbleActionSheet: View {
                 ZStack {
                     Circle().fill(scheme.surfaceVariant.opacity(0.45))
                     Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .semibold))
+                        .qaudionScaledFont(size: 18, weight: .semibold)
                         .foregroundStyle(scheme.onSurfaceVariant)
                 }
                 .frame(width: 40, height: 40)
@@ -262,7 +262,7 @@ struct BubbleActionSheet: View {
     private var plusHintRow: some View {
         HStack(spacing: 8) {
             Image(systemName: "info.circle.fill")
-                .font(.system(size: 14, weight: .regular))
+                .qaudionScaledFont(size: 14, weight: .regular)
                 .foregroundStyle(scheme.onSurfaceVariant)
             Text(Self.plusHintText)
                 .qaudionStyle(type.labelMedium)

@@ -193,7 +193,7 @@ private struct CallDockCell: View {
             VStack(spacing: 3) {
                 circleView
                 Text(item.label)
-                    .font(.system(size: 11, weight: .medium))
+                    .qaudionScaledFont(size: 11, weight: .medium, family: .label, maxSize: .xLarge)
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -216,7 +216,7 @@ private struct CallDockCell: View {
             .frame(width: diameter, height: diameter)
             .overlay {
                 Image(systemName: item.icon)
-                    .font(.system(size: diameter * 0.40, weight: .semibold))
+                    .qaudionScaledFont(size: diameter * 0.40, weight: .semibold, maxSize: .xLarge)
                     .foregroundStyle(item.iconColor)
             }
             .overlay {
@@ -248,7 +248,7 @@ private struct CallDockCell: View {
                 .accessibilityHidden(true)
         case .count(let number):
             Text(number > 99 ? "99+" : number.description)
-                .font(.system(size: 10, weight: .bold))
+                .qaudionScaledFont(size: 10, weight: .bold, family: .label, maxSize: .xLarge)
                 .foregroundStyle(Color.white)
                 .padding(.horizontal, 5)
                 .padding(.vertical, 2)

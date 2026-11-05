@@ -291,7 +291,7 @@ struct DeviceManagementScreen: View {
                     // server fetch); the timestamp at least makes the
                     // toolbar Refresh button visibly do something.
                     Text(Self.lastRefreshLabel(container.lastRefreshAt))
-                        .font(.system(size: 11, weight: .regular, design: .monospaced))
+                        .qaudionScaledFont(size: 11, weight: .regular, design: .monospaced, family: .label)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .padding(.horizontal, 14).padding(.top, 8)
 
@@ -378,7 +378,7 @@ struct DeviceManagementScreen: View {
         Button { showingLinkNew = true } label: {
             HStack(spacing: 10) {
                 Image(systemName: "qrcode")
-                    .font(.system(size: 16, weight: .semibold))
+                    .qaudionScaledFont(size: 16, weight: .semibold)
                 Text("COLLEGA NUOVO DISPOSITIVO")
                     .qaudionStyle(type.labelLarge)
                     .tracking(1.1)
@@ -432,7 +432,7 @@ private struct DeviceRow: View {
                     .fill(scheme.surfaceVariant.opacity(0.6))
                     .frame(width: 40, height: 40)
                 Image(systemName: kindIcon)
-                    .font(.system(size: 18, weight: .regular))
+                    .qaudionScaledFont(size: 18, weight: .regular)
                     .foregroundStyle(scheme.onSurface)
             }
 

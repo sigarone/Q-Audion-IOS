@@ -98,7 +98,7 @@ struct WhatsNewScreen: View {
     private var intro: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("CHANGELOG")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .qaudionScaledFont(size: 11, weight: .medium, design: .monospaced, family: .label)
                 .tracking(1.5)
                 .foregroundStyle(scheme.primary)
             Text("Novità delle ultime versioni, con i cambiamenti principali di ogni aggiornamento.")
@@ -119,11 +119,11 @@ struct WhatsNewScreen: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(note.id)
-                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                    .qaudionScaledFont(size: 16, weight: .semibold, design: .monospaced)
                     .foregroundStyle(scheme.onSurface)
                 Spacer(minLength: 0)
                 Text(note.date)
-                    .font(.system(size: 12, weight: .regular, design: .monospaced))
+                    .qaudionScaledFont(size: 12, weight: .regular, design: .monospaced, family: .label)
                     .foregroundStyle(scheme.onSurfaceVariant)
             }
             Text(note.title)

@@ -88,7 +88,7 @@ struct LinkNewDeviceScreen: View {
                 Button { regenerate() } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 13, weight: .semibold))
+                            .qaudionScaledFont(size: 13, weight: .semibold)
                         Text("RIGENERA")
                             .qaudionStyle(type.labelSmall)
                             .tracking(1.2)
@@ -169,7 +169,7 @@ struct LinkNewDeviceScreen: View {
             } else {
                 VStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 40))
+                        .qaudionScaledFont(size: 40, family: .display)
                         .foregroundStyle(extras.riskHigh)
                     Text("QR non disponibile")
                         .qaudionStyle(type.bodyMedium)
@@ -196,7 +196,7 @@ struct LinkNewDeviceScreen: View {
                 HStack(spacing: 12) {
                     ForEach(rows[i], id: \.self) { g in
                         Text(g)
-                            .font(.system(size: 14, weight: .medium, design: .monospaced))
+                            .qaudionScaledFont(size: 14, weight: .medium, design: .monospaced)
                             .foregroundStyle(scheme.onSurface)
                             .frame(maxWidth: .infinity)
                     }

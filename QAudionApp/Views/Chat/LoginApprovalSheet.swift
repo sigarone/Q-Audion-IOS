@@ -201,7 +201,7 @@ struct LoginApprovalBanner: View {
         if model.current != nil {
             HStack(spacing: 10) {
                 Image(systemName: "iphone.badge.plus")
-                    .font(.system(size: 18, weight: .semibold))
+                    .qaudionScaledFont(size: 18, weight: .semibold)
                     .foregroundStyle(extras.warning)
                 Text(DeviceApprovalTexts.bannerTitle)
                     .qaudionStyle(type.labelLarge)

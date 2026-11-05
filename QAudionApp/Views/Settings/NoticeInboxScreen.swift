@@ -73,7 +73,7 @@ struct NoticeInboxScreen: View {
         } label: {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: iconName(for: notice.kind))
-                    .font(.system(size: 17))
+                    .qaudionScaledFont(size: 17)
                     .foregroundStyle(isUrgent ? extras.riskHigh : scheme.onSurfaceVariant.opacity(alpha))
                 VStack(alignment: .leading, spacing: 4) {
                     Text(notice.title)

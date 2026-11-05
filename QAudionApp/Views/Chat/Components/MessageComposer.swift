@@ -156,7 +156,7 @@ struct MessageComposer: View {
             Spacer(minLength: 0)
             Button(action: onCancelEdit) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .semibold))
+                    .qaudionScaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .padding(6)
             }
@@ -274,7 +274,7 @@ struct MessageComposer: View {
             Spacer(minLength: 0)
             Button(action: onCancelReply) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .semibold))
+                    .qaudionScaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .padding(6)
             }

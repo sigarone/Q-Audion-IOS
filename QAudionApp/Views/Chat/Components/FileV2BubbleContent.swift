@@ -155,7 +155,7 @@ struct FileV2BubbleContent: View {
                 if let url = readableURL, !exportBlocked {
                     Button(action: { sharing = VideoTarget(url: url) }) {
                         Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 13, weight: .semibold))
+                            .qaudionScaledFont(size: 13, weight: .semibold)
                     }
                     .buttonStyle(.plain)
                 }
@@ -207,7 +207,7 @@ struct FileV2BubbleContent: View {
     private var playOverlay: some View {
         if readablePath != nil {
             Image(systemName: "play.circle.fill")
-                .font(.system(size: 44))
+                .qaudionScaledFont(size: 44, family: .display)
                 .foregroundStyle(.white.opacity(0.9))
                 .shadow(radius: 3)
                 .accessibilityLabel(String(localized: "file_v2.video.play", defaultValue: "Riproduci video", comment: "Accessibility label of the play button over a video in a chat."))
@@ -217,7 +217,7 @@ struct FileV2BubbleContent: View {
                 .tint(.white)
         } else {
             Image(systemName: "video.fill")
-                .font(.system(size: 22))
+                .qaudionScaledFont(size: 22, family: .headline)
                 .foregroundStyle(.white.opacity(0.8))
         }
     }
@@ -241,7 +241,7 @@ struct FileV2BubbleContent: View {
                     .fill(scheme.surfaceVariant.opacity(0.65))
                     .frame(width: 36, height: 36)
                 Image(systemName: systemImage)
-                    .font(.system(size: 16, weight: .semibold))
+                    .qaudionScaledFont(size: 16, weight: .semibold)
                     .foregroundStyle(scheme.onSurface)
             }
             VStack(alignment: .leading, spacing: 4) {
@@ -316,7 +316,7 @@ struct FileV2BubbleContent: View {
         Button(action: action) {
             HStack(spacing: 3) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 11, weight: .semibold))
+                    .qaudionScaledFont(size: 11, weight: .semibold, family: .label)
                 Text(title)
                     .qaudionStyle(type.labelSmall)
             }
@@ -391,7 +391,7 @@ struct FileV2VideoPlayerView: View {
             }
             Button(action: onDismiss) {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 28))
+                    .qaudionScaledFont(size: 28, family: .headline)
                     .foregroundStyle(.white.opacity(0.85))
             }
             .padding()

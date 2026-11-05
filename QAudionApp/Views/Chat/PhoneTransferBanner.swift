@@ -28,7 +28,7 @@ struct PhoneTransferBanner: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.shield.fill")
-                    .font(.system(size: 18, weight: .semibold))
+                    .qaudionScaledFont(size: 18, weight: .semibold)
                     .foregroundStyle(extras.warning)
                     .padding(.top, 2)
                 VStack(alignment: .leading, spacing: 4) {

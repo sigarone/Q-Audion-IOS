@@ -82,7 +82,7 @@ struct SovereignOnlySettingsScreen: View {
     private func hint(_ text: LocalizedStringKey) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "info.circle.fill")
-                .font(.system(size: 14, weight: .semibold))
+                .qaudionScaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .padding(.top, 1)
                 .accessibilityHidden(true)

@@ -886,7 +886,7 @@ struct ChatDetailScreen: View {
     private var e2eEducationBanner: some View {
         VStack(spacing: 8) {
             Image(systemName: "lock.shield.fill")
-                .font(.system(size: 32, weight: .regular))
+                .qaudionScaledFont(size: 32, weight: .regular, family: .headline)
                 .foregroundStyle(extras.pqcAccent)
             Text("Cifratura end-to-end")
                 .qaudionStyle(type.titleSmall)
@@ -1121,7 +1121,7 @@ struct ChatDetailScreen: View {
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "eye.slash.fill")
-                            .font(.system(size: 14, weight: .semibold))
+                            .qaudionScaledFont(size: 14, weight: .semibold)
                         Text("Tocca per visualizzare · una sola volta")
                             .qaudionStyle(type.labelSmall)
                     }
@@ -1134,7 +1134,7 @@ struct ChatDetailScreen: View {
                 // Already opened — show tombstone.
                 HStack(spacing: 6) {
                     Image(systemName: "eye.slash")
-                        .font(.system(size: 12))
+                        .qaudionScaledFont(size: 12, family: .label)
                     Text("Visualizzato")
                         .qaudionStyle(type.labelSmall)
                 }
@@ -1632,7 +1632,7 @@ struct ChatDetailScreen: View {
             if convTimer == -1 {
                 HStack(spacing: 6) {
                     Image(systemName: "eye.slash.fill")
-                        .font(.system(size: 12, weight: .semibold))
+                        .qaudionScaledFont(size: 12, weight: .semibold, family: .label)
                         .foregroundStyle(extras.pqcAccent)
                     Text("Modalità: visualizza una volta")
                         .qaudionStyle(type.labelSmall)
@@ -1642,7 +1642,7 @@ struct ChatDetailScreen: View {
                         container.setEphemeralTimer(nil)
                     } label: {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 14))
+                            .qaudionScaledFont(size: 14)
                             .foregroundStyle(scheme.onSurfaceVariant)
                     }
                     .buttonStyle(.plain)

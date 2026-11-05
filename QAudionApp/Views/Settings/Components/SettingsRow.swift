@@ -78,7 +78,7 @@ struct SettingsRow: View {
     var body: some View {
         HStack(spacing: 14) {
             Image(systemName: icon)
-                .font(.system(size: 17, weight: .regular))
+                .qaudionScaledFont(size: 17, weight: .regular)
                 .foregroundStyle(destructive ? extras.riskHigh
                                               : (iconColor ?? scheme.onSurfaceVariant))
                 .frame(width: 22)
@@ -111,7 +111,7 @@ struct SettingsRow: View {
 
             if !destructive {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
+                    .qaudionScaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(scheme.onSurfaceVariant)
             }
         }

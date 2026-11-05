@@ -293,7 +293,7 @@ struct ImageBubbleContent: View {
                 .frame(width: 200, height: 150)
             VStack(spacing: 6) {
                 Image(systemName: "photo.badge.exclamationmark")
-                    .font(.system(size: 28))
+                    .qaudionScaledFont(size: 28, family: .headline)
                     .foregroundStyle(scheme.onSurfaceVariant)
                 Text("Foto non disponibile")
                     .qaudionStyle(type.labelSmall)
@@ -402,7 +402,7 @@ struct ImageFullscreenView: View {
                 HStack {
                     if !metadataLine.isEmpty {
                         Text(metadataLine)
-                            .font(.system(size: 13, weight: .regular))
+                            .qaudionScaledFont(size: 13, weight: .regular)
                             .foregroundStyle(.white.opacity(0.85))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 6)
@@ -414,7 +414,7 @@ struct ImageFullscreenView: View {
                     Spacer()
                     Button(action: onDismiss) {
                         Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 28))
+                            .qaudionScaledFont(size: 28, family: .headline)
                             .foregroundStyle(.white.opacity(0.85))
                     }
                     .padding()
@@ -424,7 +424,7 @@ struct ImageFullscreenView: View {
                 // there's more than one image to swipe through.
                 if items.count > 1 {
                     Text("\(selection + 1) / \(items.count)")
-                        .font(.system(size: 12, weight: .medium))
+                        .qaudionScaledFont(size: 12, weight: .medium, family: .label)
                         .foregroundStyle(.white.opacity(0.7))
                         .padding(.bottom, 24)
                 }
@@ -471,7 +471,7 @@ private struct GalleryPage: View {
                 } else if loadFailed {
                     VStack(spacing: 8) {
                         Image(systemName: "photo.badge.exclamationmark")
-                            .font(.system(size: 32))
+                            .qaudionScaledFont(size: 32, family: .headline)
                             .foregroundStyle(.white.opacity(0.6))
                         Text("Immagine non disponibile")
                             .foregroundStyle(.white.opacity(0.6))

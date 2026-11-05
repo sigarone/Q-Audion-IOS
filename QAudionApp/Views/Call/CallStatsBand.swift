@@ -105,13 +105,13 @@ struct CallStatsBand: View {
     private func cell(_ label: LocalizedStringKey, _ value: String, _ color: Color) -> some View {
         VStack(spacing: 2) {
             Text(label)
-                .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                .qaudionScaledFont(size: 8.5, weight: .medium, design: .monospaced, family: .label, maxSize: .xLarge)
                 .tracking(1.0)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
             Text(value)
-                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                .qaudionScaledFont(size: 14, weight: .semibold, design: .monospaced, maxSize: .xLarge)
                 .foregroundStyle(color)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)

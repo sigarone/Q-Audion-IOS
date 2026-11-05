@@ -156,7 +156,7 @@ struct NotificationsSettingsScreen: View {
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: 13, weight: .semibold))
+                                    .qaudionScaledFont(size: 13, weight: .semibold)
                                     .foregroundStyle(scheme.onSurfaceVariant)
                             }
                             .padding(.horizontal, 14)
@@ -185,7 +185,7 @@ struct NotificationsSettingsScreen: View {
                                 }
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: 13, weight: .semibold))
+                                    .qaudionScaledFont(size: 13, weight: .semibold)
                                     .foregroundStyle(scheme.onSurfaceVariant)
                             }
                             .padding(.horizontal, 14)
@@ -286,7 +286,7 @@ struct NotificationsSettingsScreen: View {
                             }
                             Spacer()
                             Image(systemName: "play.fill")
-                                .font(.system(size: 12, weight: .regular))
+                                .qaudionScaledFont(size: 12, weight: .regular, family: .label)
                                 .foregroundStyle(scheme.onSurfaceVariant)
                         }
                         .padding(.horizontal, 14)
@@ -323,7 +323,7 @@ struct NotificationsSettingsScreen: View {
                             }
                             Spacer()
                             Image(systemName: "play.fill")
-                                .font(.system(size: 12, weight: .regular))
+                                .qaudionScaledFont(size: 12, weight: .regular, family: .label)
                                 .foregroundStyle(scheme.onSurfaceVariant)
                         }
                         .padding(.horizontal, 14)
@@ -353,7 +353,7 @@ struct NotificationsSettingsScreen: View {
                             }
                             Spacer()
                             Image(systemName: "play.fill")
-                                .font(.system(size: 12, weight: .regular))
+                                .qaudionScaledFont(size: 12, weight: .regular, family: .label)
                                 .foregroundStyle(scheme.onSurfaceVariant)
                         }
                         .padding(.horizontal, 14)
@@ -391,7 +391,7 @@ struct NotificationsSettingsScreen: View {
                             }
                             Spacer()
                             Image(systemName: "trash")
-                                .font(.system(size: 14, weight: .regular))
+                                .qaudionScaledFont(size: 14, weight: .regular)
                                 .foregroundStyle(scheme.onSurfaceVariant)
                         }
                         .padding(.horizontal, 14)
@@ -429,7 +429,7 @@ struct NotificationsSettingsScreen: View {
                             }
                             Spacer()
                             Image(systemName: "xmark.circle")
-                                .font(.system(size: 14, weight: .regular))
+                                .qaudionScaledFont(size: 14, weight: .regular)
                                 .foregroundStyle(scheme.onSurfaceVariant)
                         }
                         .padding(.horizontal, 14)
@@ -468,7 +468,7 @@ struct NotificationsSettingsScreen: View {
                             }
                             Spacer()
                             Image(systemName: "arrow.up.right.square")
-                                .font(.system(size: 14, weight: .regular))
+                                .qaudionScaledFont(size: 14, weight: .regular)
                                 .foregroundStyle(scheme.onSurfaceVariant)
                         }
                         .padding(.horizontal, 14)

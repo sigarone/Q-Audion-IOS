@@ -31,7 +31,7 @@ struct RecoveryReminderBanner: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "lock.trianglebadge.exclamationmark")
-                .font(.system(size: 16, weight: .semibold))
+                .qaudionScaledFont(size: 16, weight: .semibold)
                 .foregroundStyle(scheme.primary)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
@@ -53,7 +53,7 @@ struct RecoveryReminderBanner: View {
             Spacer(minLength: 0)
             Button(action: onDismiss) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .semibold))
+                    .qaudionScaledFont(size: 12, weight: .semibold, family: .label)
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .padding(6)
                     .contentShape(Rectangle())

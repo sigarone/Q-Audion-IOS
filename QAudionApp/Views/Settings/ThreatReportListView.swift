@@ -104,7 +104,7 @@ struct ThreatReportListView: View {
         // dentro un List + Form context, non Q-Audion design system).
         VStack(spacing: 16) {
             Image(systemName: "checkmark.shield.fill")
-                .font(.system(size: 64))
+                .qaudionScaledFont(size: 64, family: .display)
                 .foregroundStyle(.green)
             Text("Nessuna segnalazione")
                 .font(.title3.weight(.semibold))

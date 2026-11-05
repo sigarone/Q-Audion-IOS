@@ -67,7 +67,7 @@ struct GroupInviteQrSheet: View {
     private var instructionsCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("ISTRUZIONI")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .qaudionScaledFont(size: 11, weight: .medium, design: .monospaced, family: .label)
                 .tracking(1.5)
                 .foregroundStyle(scheme.primary)
             Text("Il peer apre Q-Audion → Contatti → \"Aggiungi via QR\" e inquadra questo codice. Si auto-aggiungerà al gruppo dopo la verifica dell'admin.")
@@ -121,7 +121,7 @@ struct GroupInviteQrSheet: View {
     private var metadataCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("DETTAGLI INVITO")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .qaudionScaledFont(size: 11, weight: .medium, design: .monospaced, family: .label)
                 .tracking(1.5)
                 .foregroundStyle(scheme.primary)
             HStack(spacing: 10) {
@@ -130,7 +130,7 @@ struct GroupInviteQrSheet: View {
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .frame(width: 80, alignment: .leading)
                 Text(groupId.uuidString)
-                    .font(.system(size: 12, weight: .regular, design: .monospaced))
+                    .qaudionScaledFont(size: 12, weight: .regular, design: .monospaced, family: .label)
                     .foregroundStyle(scheme.onSurface)
                     .lineLimit(1)
                     .truncationMode(.middle)

@@ -205,7 +205,7 @@ struct IncomingCallScreen: View {
     private var subtitleBlock: some View {
         if callType == .video {
             HStack(spacing: 6) {
-                Image(systemName: "video.fill").font(.system(size: 13, weight: .semibold))
+                Image(systemName: "video.fill").qaudionScaledFont(size: 13, weight: .semibold, maxSize: .xLarge)
                 Text(subtitleLine).qaudionStyle(type.titleMedium)
             }
             .foregroundStyle(extras.trustEnterprise)
@@ -217,7 +217,7 @@ struct IncomingCallScreen: View {
             Button { acceptWithoutVideo.toggle() } label: {
                 HStack(spacing: 6) {
                     Image(systemName: acceptWithoutVideo ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 15, weight: .semibold))
+                        .qaudionScaledFont(size: 15, weight: .semibold, maxSize: .xLarge)
                     Text("Rispondi senza video").qaudionStyle(type.labelSmall)
                 }
                 .foregroundStyle(acceptWithoutVideo ? extras.trustEnterprise : scheme.onSurfaceVariant)

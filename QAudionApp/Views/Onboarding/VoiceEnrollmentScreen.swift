@@ -158,7 +158,7 @@ struct VoiceEnrollmentScreen: View {
         VStack(spacing: 16) {
             ZStack {
                 Image(systemName: icon)
-                    .font(.system(size: 56, weight: .regular))
+                    .qaudionScaledFont(size: 56, weight: .regular, family: .display)
                     .foregroundStyle(tint)
                 if showsSpinner {
                     ProgressView()
@@ -225,7 +225,7 @@ struct VoiceEnrollmentScreen: View {
     private func errorBanner(_ msg: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 18, weight: .semibold))
+                .qaudionScaledFont(size: 18, weight: .semibold)
                 .foregroundStyle(extras.riskHigh)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Errore")

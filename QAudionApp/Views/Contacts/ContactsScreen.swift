@@ -406,7 +406,7 @@ struct ContactsScreen: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 15))
+                .qaudionScaledFont(size: 15)
                 .foregroundStyle(scheme.onSurfaceVariant)
             TextField("", text: $searchText,
                       prompt: Text("Cerca contatti o scopri tramite hash…")
@@ -580,7 +580,7 @@ struct ContactsScreen: View {
             if blocked.isEmpty {
                 VStack(spacing: 16) {
                     Image(systemName: "circle.slash")
-                        .font(.system(size: 56))
+                        .qaudionScaledFont(size: 56, family: .display)
                         .foregroundStyle(scheme.onSurfaceVariant)
                     Text("Nessun contatto bloccato")
                         .qaudionStyle(type.titleMedium)
@@ -637,7 +637,7 @@ struct ContactsScreen: View {
     private var emptyAll: some View {
         VStack(spacing: 16) {
             Image(systemName: "person.2")
-                .font(.system(size: 56))
+                .qaudionScaledFont(size: 56, family: .display)
                 .foregroundStyle(scheme.onSurfaceVariant)
             Text("Nessun contatto")
                 .qaudionStyle(type.titleMedium)
@@ -711,7 +711,7 @@ private struct NewContactPlaceholder: View {
     var body: some View {
         VStack(spacing: 16) {
             Image(systemName: "person.crop.circle.badge.plus")
-                .font(.system(size: 56))
+                .qaudionScaledFont(size: 56, family: .display)
                 .foregroundStyle(scheme.primary)
             Text("Nuovo contatto")
                 .qaudionStyle(type.titleLarge)

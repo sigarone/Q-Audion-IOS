@@ -357,7 +357,7 @@ private struct ContactPickerRow: View {
                     if isSelected {
                         Circle().fill(scheme.primary).frame(width: 22, height: 22)
                         Image(systemName: "checkmark")
-                            .font(.system(size: 11, weight: .bold))
+                            .qaudionScaledFont(size: 11, weight: .bold, family: .label)
                             .foregroundStyle(scheme.onPrimary)
                     }
                 }

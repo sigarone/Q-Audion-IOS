@@ -76,7 +76,7 @@ struct OtpVerificationScreen: View {
                 Spacer().frame(height: 16)
 
                 Text("Inserisci il codice")
-                    .font(.system(size: 24, weight: .semibold))
+                    .qaudionScaledFont(size: 24, weight: .semibold, family: .headline)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 24)
 
@@ -96,7 +96,7 @@ struct OtpVerificationScreen: View {
                     TextField("123456", text: $code)
                         .keyboardType(.numberPad)
                         .textContentType(.oneTimeCode)
-                        .font(.system(size: 22, weight: .semibold, design: .monospaced))
+                        .qaudionScaledFont(size: 22, weight: .semibold, design: .monospaced, family: .headline)
                         .foregroundStyle(.white)
                         .padding(14)
                         .background(

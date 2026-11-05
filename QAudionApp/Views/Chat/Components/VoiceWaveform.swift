@@ -50,7 +50,7 @@ struct VoiceWaveform: View {
                             .fill(scheme.primary.opacity(0.15))
                             .frame(width: 32, height: 32)
                         Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 14, weight: .semibold))
+                            .qaudionScaledFont(size: 14, weight: .semibold)
                             .foregroundStyle(scheme.primary)
                     }
                 }

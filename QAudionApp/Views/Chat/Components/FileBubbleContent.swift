@@ -172,7 +172,7 @@ struct FileBubbleContent: View {
     private var lockedExportBadge: some View {
         HStack(spacing: 3) {
             Image(systemName: "lock.fill")
-                .font(.system(size: 11, weight: .semibold))
+                .qaudionScaledFont(size: 11, weight: .semibold, family: .label)
             Text("Esportazione non consentita")
                 .qaudionStyle(type.labelSmall)
         }
@@ -190,7 +190,7 @@ struct FileBubbleContent: View {
         Button(action: action) {
             HStack(spacing: 3) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 11, weight: .semibold))
+                    .qaudionScaledFont(size: 11, weight: .semibold, family: .label)
                 Text(title)
                     .qaudionStyle(type.labelSmall)
             }
@@ -217,14 +217,14 @@ struct FileBubbleContent: View {
                 .fill(isReady ? scheme.primary : scheme.surfaceVariant.opacity(0.65))
                 .frame(width: 36, height: 36)
             Image(systemName: "doc.fill")
-                .font(.system(size: 16, weight: .semibold))
+                .qaudionScaledFont(size: 16, weight: .semibold)
                 .foregroundStyle(scheme.onPrimary)
                 .opacity(isReady ? 1.0 : 0.6)
         }
         .overlay(alignment: .bottom) {
             if isReady, !fileExtension.isEmpty {
                 Text(fileExtension)
-                    .font(.system(size: 7, weight: .bold))
+                    .qaudionScaledFont(size: 7, weight: .bold, family: .label)
                     .foregroundStyle(scheme.onPrimary)
                     .padding(.horizontal, 3)
                     .background(

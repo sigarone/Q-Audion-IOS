@@ -682,7 +682,7 @@ struct InCallScreen: View {
     private var peerScreenShareBadge: some View {
         HStack(spacing: 8) {
             Image(systemName: "rectangle.on.rectangle.fill")
-                .font(.system(size: 14, weight: .semibold))
+                .qaudionScaledFont(size: 14, weight: .semibold, maxSize: .xLarge)
                 .foregroundStyle(extras.onSuccess)
             Text("\(peerDisplayName) sta condividendo lo schermo")
                 .qaudionStyle(type.labelSmall)
@@ -708,7 +708,7 @@ struct InCallScreen: View {
     private var identityChangeBanner: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.shield.fill")
-                .font(.system(size: 16, weight: .semibold))
+                .qaudionScaledFont(size: 16, weight: .semibold, maxSize: .xLarge)
                 .foregroundStyle(extras.warning)
             VStack(alignment: .leading, spacing: 2) {
                 Text("CHIAVE IDENTITÀ CAMBIATA")
@@ -749,7 +749,7 @@ struct InCallScreen: View {
     private var signatureInvalidBanner: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.shield.fill")
-                .font(.system(size: 16, weight: .semibold))
+                .qaudionScaledFont(size: 16, weight: .semibold, maxSize: .xLarge)
                 .foregroundStyle(extras.warning)
             VStack(alignment: .leading, spacing: 2) {
                 Text("FIRMA NON VERIFICATA")
@@ -787,7 +787,7 @@ struct InCallScreen: View {
     private var identityHoldBanner: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "lock.shield.fill")
-                .font(.system(size: 16, weight: .semibold))
+                .qaudionScaledFont(size: 16, weight: .semibold, maxSize: .xLarge)
                 .foregroundStyle(extras.riskHigh)
             VStack(alignment: .leading, spacing: 2) {
                 Text("AUDIO IN ATTESA DI CONFERMA")
@@ -851,7 +851,7 @@ struct InCallScreen: View {
             }()
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 16, weight: .semibold))
+                    .qaudionScaledFont(size: 16, weight: .semibold, maxSize: .xLarge)
                     .foregroundStyle(tint)
                 Text(presentation.message)
                     .qaudionStyle(type.labelMedium)
@@ -883,7 +883,7 @@ struct InCallScreen: View {
     private func physicalPresenceBadge(_ presentation: AssuranceStateUI.Presentation) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "checkmark.seal.fill")
-                .font(.system(size: 26, weight: .bold))
+                .qaudionScaledFont(size: 26, weight: .bold, family: .headline, maxSize: .xLarge)
                 .foregroundStyle(extras.success)
             VStack(alignment: .leading, spacing: 3) {
                 Text("PRESENZA FISICA VERIFICATA")
@@ -1089,7 +1089,7 @@ struct InCallScreen: View {
     private var identityHoldLine: some View {
         HStack(spacing: 6) {
             Image(systemName: "lock.shield.fill")
-                .font(.system(size: 14, weight: .semibold))
+                .qaudionScaledFont(size: 14, weight: .semibold, maxSize: .xLarge)
             Text("AUDIO IN ATTESA DI CONFERMA")
                 .qaudionStyle(type.labelSmall)
                 .tracking(0.6)
@@ -1209,13 +1209,13 @@ struct InCallScreen: View {
     private func statColumn(_ label: LocalizedStringKey, _ value: String, _ color: Color) -> some View {
         VStack(spacing: 2) {
             Text(label)
-                .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                .qaudionScaledFont(size: 8.5, weight: .medium, design: .monospaced, family: .label, maxSize: .xLarge)
                 .tracking(1.0)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
             Text(value)
-                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                .qaudionScaledFont(size: 14, weight: .semibold, design: .monospaced, maxSize: .xLarge)
                 .foregroundStyle(color)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
@@ -1352,7 +1352,7 @@ struct InCallScreen: View {
 
             HStack(spacing: 6) {
                 Image(systemName: sasVerifiedShown ? "checkmark.seal.fill" : "lock.fill")
-                    .font(.system(size: 14, weight: .semibold))
+                    .qaudionScaledFont(size: 14, weight: .semibold, maxSize: .xLarge)
                     .foregroundStyle(sasVerifiedShown ? extras.success : scheme.primary)
                 // W-L10N-BATCH1 (2026-09-08) — ternary-in-Text(variable) does
                 // NOT auto-localize (confirmed for this codebase); explicit
@@ -1426,7 +1426,7 @@ struct InCallScreen: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "lock.fill")
-                    .font(.system(size: 14, weight: .semibold))
+                    .qaudionScaledFont(size: 14, weight: .semibold, maxSize: .xLarge)
                     .foregroundStyle(extras.pqcAccent)
                 Text("CHIAVE IN USO")
                     .qaudionStyle(type.labelSmall)
@@ -1718,11 +1718,11 @@ struct InCallScreen: View {
                 Circle().fill(Self.trustShieldGold).frame(width: 3.4, height: 3.4).offset(x: 12.6, y: -10.2)
                 if let icon {
                     Image(systemName: icon)
-                        .font(.system(size: 15, weight: .bold))
+                        .qaudionScaledFont(size: 15, weight: .bold, maxSize: .xLarge)
                         .foregroundStyle(.black)
                 } else if let label {
                     Text(label)
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .qaudionScaledFont(size: 9, weight: .bold, design: .monospaced, family: .label, maxSize: .xLarge)
                         .tracking(0.2)
                         .foregroundStyle(.black)
                         .lineLimit(1)
@@ -1971,7 +1971,7 @@ struct InCallScreen: View {
                     Circle().stroke((pqcActive ? extras.pqcAccent : scheme.outline).opacity(0.5), lineWidth: 1)
                 )
             Image(systemName: "lock.rectangle.stack.fill")
-                .font(.system(size: 14, weight: .semibold))
+                .qaudionScaledFont(size: 14, weight: .semibold, maxSize: .xLarge)
                 .foregroundStyle(pqcActive ? extras.pqcAccent : scheme.onSurfaceVariant)
         }
     }
@@ -2098,7 +2098,7 @@ struct InCallScreen: View {
                         // it rides along correctly once the whole composite
                         // is shifted by the trailing `.offset` below.
                         Text(VoiceCustodyCopy.boundary)
-                            .font(.system(size: 7.5, weight: .semibold, design: .monospaced))
+                            .qaudionScaledFont(size: 7.5, weight: .semibold, design: .monospaced, family: .label, maxSize: .xLarge)
                             .foregroundStyle(envColor)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 1.5)
@@ -2167,16 +2167,16 @@ struct InCallScreen: View {
                     .frame(width: 42, height: 42)
                     .shadow(color: accent.opacity(0.35), radius: 6)
                 Image(systemName: icon)
-                    .font(.system(size: 17, weight: .medium))
+                    .qaudionScaledFont(size: 17, weight: .medium, maxSize: .xLarge)
                     .foregroundStyle(accent)
             }
             Text(title)
-                .font(.system(size: 10, weight: .semibold))
+                .qaudionScaledFont(size: 10, weight: .semibold, family: .label, maxSize: .xLarge)
                 .foregroundStyle(scheme.onSurface)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
             Text(sub)
-                .font(.system(size: 7, design: .monospaced))
+                .qaudionScaledFont(size: 7, design: .monospaced, family: .label, maxSize: .xLarge)
                 .foregroundStyle(accent)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
@@ -2216,11 +2216,11 @@ struct InCallScreen: View {
                         .frame(width: 64, height: 64)
                         .shadow(color: envColor.opacity(0.45), radius: 10)
                     Image(systemName: "lock.rectangle.stack.fill")
-                        .font(.system(size: 26, weight: .medium))
+                        .qaudionScaledFont(size: 26, weight: .medium, family: .headline, maxSize: .xLarge)
                         .foregroundStyle(envColor)
                 }
                 Text(VoiceCustodyCopy.sealedOnPhone)
-                    .font(.system(size: 7, weight: .semibold, design: .monospaced))
+                    .qaudionScaledFont(size: 7, weight: .semibold, design: .monospaced, family: .label, maxSize: .xLarge)
                     .foregroundStyle(envColor)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
@@ -2283,7 +2283,7 @@ struct InCallScreen: View {
         let envColor = extras.pqcAccent
         return HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 17, weight: .regular))
+                .qaudionScaledFont(size: 17, weight: .regular, maxSize: .xLarge)
                 .foregroundStyle(envColor)
                 .padding(.top, 1)
                 .accessibilityHidden(true)
@@ -2349,16 +2349,16 @@ struct InCallScreen: View {
                     .frame(width: 30, height: 30)
                     .shadow(color: active ? accent.opacity(0.3) : .clear, radius: 5)
                 Image(systemName: icon)
-                    .font(.system(size: 13, weight: .medium))
+                    .qaudionScaledFont(size: 13, weight: .medium, maxSize: .xLarge)
                     .foregroundStyle(active ? accent : scheme.onSurfaceVariant)
             }
             Text(label)
-                .font(.system(size: 8, weight: .semibold))
+                .qaudionScaledFont(size: 8, weight: .semibold, family: .label, maxSize: .xLarge)
                 .foregroundStyle(scheme.onSurface)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
             Text(value)
-                .font(.system(size: 7, design: .monospaced))
+                .qaudionScaledFont(size: 7, design: .monospaced, family: .label, maxSize: .xLarge)
                 .textCase(.uppercase)
                 .foregroundStyle(active ? accent : scheme.onSurfaceVariant)
                 .lineLimit(1)
@@ -2402,7 +2402,7 @@ struct InCallScreen: View {
     private var cryptoEngineMeterRow: some View {
         HStack(spacing: 8) {
             Text("ENGINE")
-                .font(.system(size: 7, weight: .semibold, design: .monospaced))
+                .qaudionScaledFont(size: 7, weight: .semibold, design: .monospaced, family: .label, maxSize: .xLarge)
                 .foregroundStyle(scheme.onSurfaceVariant)
             TimelineView(.animation(paused: reduceMotion || cryptoOpsPerSec == 0)) { timeline in
                 Canvas { ctx, size in
@@ -2414,7 +2414,7 @@ struct InCallScreen: View {
                 .frame(height: 14)
             }
             Text(Self.cryptoReadout(cryptoOpsPerSec))
-                .font(.system(size: 8, design: .monospaced))
+                .qaudionScaledFont(size: 8, design: .monospaced, family: .label, maxSize: .xLarge)
                 .foregroundStyle(extras.pqcAccent)
         }
         .padding(.horizontal, 12)

@@ -453,7 +453,7 @@ struct PrivacySettingsScreen: View {
                             }
                             Spacer()
                             Image(systemName: "arrow.up.right.square")
-                                .font(.system(size: 14, weight: .regular))
+                                .qaudionScaledFont(size: 14, weight: .regular)
                                 .foregroundStyle(scheme.onSurfaceVariant)
                         }
                         .padding(.horizontal, 14)

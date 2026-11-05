@@ -614,7 +614,7 @@ struct ContactDetailScreen: View {
                                 ctaLabel: String? = nil, ctaAction: (() -> Void)? = nil) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: done ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 18, weight: .semibold))
+                .qaudionScaledFont(size: 18, weight: .semibold)
                 .foregroundStyle(done ? TrustChipColors.jade : TrustChipColors.mutedGrey)
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
@@ -1170,7 +1170,7 @@ private struct SasVerifySheet: View {
                                 .foregroundStyle(scheme.onSurface)
                             Spacer()
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .semibold))
+                                .qaudionScaledFont(size: 12, weight: .semibold, family: .label)
                                 .foregroundStyle(scheme.onSurfaceVariant)
                         }
                         .padding(.horizontal, 14).padding(.vertical, 12)

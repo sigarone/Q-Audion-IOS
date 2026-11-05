@@ -14,7 +14,7 @@ struct LocationLiveChip: View {
         if center.activeShare(forPeer: peerUserId) != nil {
             HStack(spacing: 3) {
                 Image(systemName: "location.fill")
-                    .font(.system(size: 8, weight: .bold))
+                    .qaudionScaledFont(size: 8, weight: .bold, family: .label)
                 Text(verbatim: LocationCardStrings.chipLive)
                     .qaudionStyle(type.labelSmall)
             }

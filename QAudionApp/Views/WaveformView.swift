@@ -12,7 +12,7 @@ struct WaveformView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .qaudionScaledFont(size: 10, weight: .semibold, design: .monospaced, family: .label, maxSize: .xLarge)
                 .foregroundColor(color.opacity(0.8))
 
             Canvas { context, size in

@@ -469,7 +469,7 @@ struct TransportSettingsScreen: View {
     private func errorBanner(_ msg: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 14, weight: .semibold))
+                .qaudionScaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(extras.riskHigh)
                 .padding(.top, 1)
             Text(msg)
@@ -615,7 +615,7 @@ struct TransportSettingsScreen: View {
         let icon: String = ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
         return HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 14, weight: .semibold))
+                .qaudionScaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(tone)
                 .padding(.top, 1)
             Text(text)
