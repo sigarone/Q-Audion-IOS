@@ -1187,6 +1187,12 @@ final class AppState: ObservableObject {
     /// user taps "CONFERMA COINCIDONO" on the SAS panel, and reset at the
     /// start of every new call same lifecycle as `callIdentityUnauthenticatedChange`.
     @Published var awaitingIdentityConfirmation: Bool = false
+    /// True once THIS call's handshake has reported an authenticated identity verdict. The notice and hold flags
+    /// above reach the main actor from engine callbacks; this one is posted after them from the same callback
+    /// path, so a screen that sees it true has the notices of the verdict too. A confirmation made on an earlier
+    /// call carries over only after it (see `SasCardPlacement.isConfirmedForThisCall`). Reset at the start of
+    /// every call.
+    @Published var callIdentityAuthenticated: Bool = false
     /// Lowercased callId -> deferred media-install closures (relay sealer
     /// install, v4 ratchet bootstrap) held back while that call's handshake
     /// identity verdict was `.abort`. Drained and run once by
@@ -1528,6 +1534,17 @@ final class AppState: ObservableObject {
     /// handshake wrote to.
     func peerDeviceId(for peerId: String) -> String? {
         senderDeviceIdByPeer[peerId]
+    }
+
+    /// The device id under which THIS call's handshake pinned the peer's key. An incoming call has its own stamped
+    /// entry (pinned as `peer|device`); an outgoing call has none and pins under the bare peer id, so it must not
+    /// borrow the peer-keyed value left by an earlier incoming call from another device. With no active call the
+    /// peer-keyed value is returned.
+    func callPinDeviceId(for peerId: String) -> String? {
+        guard let callId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() else {
+            return peerDeviceId(for: peerId)
+        }
+        return AcceptDeviceIdResolution.callerAcceptDeviceId(callId: callId, callScopedStash: senderDeviceIdByCallId)
     }
     /// W478 — display name of the incoming caller, set when `call_incoming`
     /// is processed. Shown in the in-app ringing banner as a fallback when
@@ -3293,8 +3310,34 @@ final class AppState: ObservableObject {
         case .recoveryContactChanged:
             accountNoticeToShow = kind
             Task { [weak self] in await self?.recoveryContacts.load() }
+        case .phoneMoved:
+            accountNoticeToShow = kind
+            handlePhoneMoved()
         case .loginDenied, .loginExpired, .loginRecovered, .deviceDisconnected:
             accountNoticeToShow = kind
+        }
+    }
+
+    /// The number of this account was linked to another account: forget the number kept on this device (the
+    /// caller-id number and its entry in the own-numbers list) and read the profile again.
+    func handlePhoneMoved() {
+        let defaults = UserDefaults.standard
+        let moved = Self.locallyConfiguredPhone(defaults: defaults)
+        LocalCallerIdSettings.setPhoneNumber(nil, defaults: defaults)
+        if let moved {
+            let digits = moved.filter { $0.isASCII && $0.isNumber }
+            let key = "com.qaudion.profile.myPhones"
+            let phones = defaults.array(forKey: key) as? [String] ?? []
+            let kept = phones.filter { $0.filter { $0.isASCII && $0.isNumber } != digits }
+            if kept.count != phones.count { defaults.set(kept, forKey: key) }
+        }
+        guard let accountApi = liveProvider?.accountApi else { return }
+        Task { @MainActor [weak self] in
+            guard let profile = try? await accountApi.getProfile() else { return }
+            if let ext = profile.dialExtension, ext > 0 {
+                self?.currentUserDialExtension = String(ext)
+                defaults.set(String(ext), forKey: "currentUserDialExtension")
+            }
         }
     }
 
@@ -7832,6 +7875,7 @@ final class AppState: ObservableObject {
             // P0-3: a fresh incoming call must not inherit a stale media hold
             // from a previous call's aborted handshake.
             self.awaitingIdentityConfirmation = false
+            self.callIdentityAuthenticated = false
             // W-ASSURANCE: same reset — a fresh incoming call must not show a
             // stale live-assurance verdict from a previous call.
             self.callAssuranceState = nil
@@ -17915,6 +17959,14 @@ final class AppState: ObservableObject {
         // QAudionCallIntegration's OFFER verdict switch, BEFORE onRelaySessionReady
         // / onV4BootstrapReady fire for this same call, so the gate is always set
         // before there is anything to gate.
+        integration.onHandshakeIdentityAuthenticated = { [weak self] _, peerId in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                if self.callContactId == nil || self.callContactId == peerId {
+                    self.callIdentityAuthenticated = true
+                }
+            }
+        }
         integration.onHandshakeIdentityUnverified = { [weak self] cid, code in
             Task { @MainActor [weak self] in
                 self?.handleHandshakeIdentityUnverified(callId: cid, code: code)
@@ -19906,6 +19958,7 @@ final class AppState: ObservableObject {
         // P0-3: a fresh outgoing call must not inherit a stale media hold
         // from a previous call's aborted handshake.
         awaitingIdentityConfirmation = false
+        callIdentityAuthenticated = false
         // W-ASSURANCE: same reset for the fresh outgoing call.
         callAssuranceState = nil
         callAssuranceExpectedNfc = false
@@ -20336,6 +20389,14 @@ final class AppState: ObservableObject {
                 // onV4BootstrapReady below for the same call (verdict evaluation
                 // in QAudionCallIntegration happens earlier in the ACCEPT path than
                 // either of those).
+                integration.onHandshakeIdentityAuthenticated = { [weak self] _, peerId in
+                    Task { @MainActor [weak self] in
+                        guard let self = self else { return }
+                        if self.callContactId == nil || self.callContactId == peerId {
+                            self.callIdentityAuthenticated = true
+                        }
+                    }
+                }
                 integration.onHandshakeIdentityUnverified = { [weak self] cid, code in
                     Task { @MainActor [weak self] in
                         self?.handleHandshakeIdentityUnverified(callId: cid, code: code)

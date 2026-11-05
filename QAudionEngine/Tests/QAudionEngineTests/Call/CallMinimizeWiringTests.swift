@@ -281,7 +281,14 @@ final class CallMinimizeWiringTests: XCTestCase {
     func testTheSasConfirmationDoesNotLiveInTheScreen() throws {
         let live = try code("QAudionApp/Views/Call/LiveInCallScreen.swift")
         XCTAssertTrue(live.contains("SasVerificationStore.shared.recordVerified("))
-        XCTAssertTrue(live.contains("SasVerificationStore.shared.isVerified("))
+        // The decision is read from the shared store on every tick and goes through the one shared rule, on both screens.
+        for source in [live, try code("QAudionApp/Views/VideoCallView.swift")] {
+            XCTAssertTrue(source.contains("let store = SasVerificationStore.shared"))
+            XCTAssertTrue(source.contains("store.isVerified("))
+            XCTAssertTrue(source.contains("store.hasVerifiedBinding("))
+            XCTAssertTrue(source.contains("SasCardPlacement.isConfirmedForThisCall("))
+            XCTAssertTrue(source.contains("identityAuthenticated: appState.callIdentityAuthenticated"))
+        }
         XCTAssertTrue(live.contains("appState.confirmIdentityAndReleaseMedia()"))
         for path in ["QAudionApp/Views/Call/LiveInCallScreen.swift", "QAudionApp/Views/Call/InCallScreen.swift"] {
             let names = try stateVariableNames(in: try code(path))
@@ -290,6 +297,13 @@ final class CallMinimizeWiringTests: XCTestCase {
                 XCTAssertFalse(name.lowercased().contains("sas"), "\(path): @State \(name) is about the SAS")
             }
         }
+    }
+
+    /// The identity verdict of the call reaches the app on both legs (caller and responder), and the flag is reset per call.
+    func testTheIdentityVerdictFlagIsWiredOnBothLegsAndResetPerCall() throws {
+        let app = try code("QAudionApp/AppState.swift")
+        XCTAssertEqual(app.components(separatedBy: "integration.onHandshakeIdentityAuthenticated = ").count - 1, 2)
+        XCTAssertEqual(app.components(separatedBy: "callIdentityAuthenticated = false").count - 1, 2)
     }
 
     /// The names of the `@State` variables of a source (comments already stripped, whitespace collapsed).

@@ -400,6 +400,18 @@ enum DeviceApprovalTexts {
                comment: "Notice: the recovery email or phone changed.")
     }
 
+    static var noticePhoneMovedTitle: String {
+        String(localized: "account_notice.phone_moved.title",
+               defaultValue: "Numero di telefono spostato",
+               comment: "Alert title: the phone number of the account was linked to another account.")
+    }
+
+    static var noticePhoneMoved: String {
+        String(localized: "account_notice.phone_moved.body",
+               defaultValue: "Il tuo numero è stato collegato a un altro account. Se non sei stato tu, contatta l'assistenza.",
+               comment: "Alert text: the phone number of the account was linked to another account.")
+    }
+
     static var rcTitle: String {
         String(localized: "settings.recovery_contacts.title",
                defaultValue: "Email e numero per il recupero",

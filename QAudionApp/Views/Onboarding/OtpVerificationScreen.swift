@@ -277,6 +277,11 @@ struct OtpVerificationScreen: View {
         Self.userFacingMessage(for: error, mode: mode)
     }
 
+    /// The SMS provider failed (HTTP 503 `sms_unavailable`): the person stays on the screen and can ask again later.
+    static var smsUnavailableMessage: String {
+        String(localized: "onboarding.otp.error.sms_unavailable", defaultValue: "Non riusciamo a inviare l'SMS in questo momento. Riprova tra qualche minuto.", comment: "Error (HTTP 503): the SMS provider is temporarily unavailable.")
+    }
+
     /// Pure mapping, exposed for unit tests.
     static func userFacingMessage(for error: Error, mode: PhoneEntryScreen.Mode) -> String {
         if BCryptoTermsRefusal.from(error) != nil { return LegalStrings.termsUpdatedReview }
@@ -294,7 +299,7 @@ struct OtpVerificationScreen: View {
             case 429:
                 return String(localized: "onboarding.error.too_many_attempts", defaultValue: "Troppi tentativi. Riprova tra qualche minuto.", comment: "Onboarding error (HTTP 429): rate limit reached.")
             case 503:
-                return String(localized: "onboarding.otp.error.sms_unavailable", defaultValue: "Servizio SMS temporaneamente non disponibile. Riprova più tardi.", comment: "Error (HTTP 503): the SMS provider is temporarily unavailable.")
+                return smsUnavailableMessage
             default:
                 return String(localized: "onboarding.error.server", defaultValue: "Errore del server (\(statusCode)).", comment: "Onboarding error for any other server answer; %lld is the HTTP status code.")
             }

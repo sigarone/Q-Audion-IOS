@@ -4567,6 +4567,174 @@
         }
       }
     },
+    "phone_moved.alert.title": {
+      "extractionState": "manual",
+      "comment": "Push notification title shown when the phone number of the account was linked to another account.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numero di telefono spostato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Phone number moved"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número de teléfono trasladado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numéro de téléphone déplacé"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Telefonnummer übertragen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número de telefone transferido"
+          }
+        }
+      }
+    },
+    "phone_moved.alert.body": {
+      "extractionState": "manual",
+      "comment": "Push notification body for the same event.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il tuo numero è stato collegato a un altro account. Se non sei stato tu, contatta l'assistenza."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your number was linked to another account. If it was not you, contact support."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu número se ha vinculado a otra cuenta. Si no fuiste tú, contacta con el soporte."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Votre numéro a été associé à un autre compte. Si ce n'était pas vous, contactez l'assistance."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deine Nummer wurde mit einem anderen Konto verknüpft. Wenn du das nicht warst, wende dich an den Support."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seu número foi vinculado a outra conta. Se não foi você, entre em contato com o suporte."
+          }
+        }
+      }
+    },
+    "account_notice.phone_moved.title": {
+      "extractionState": "manual",
+      "comment": "Alert title: the phone number of the account was linked to another account.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numero di telefono spostato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Phone number moved"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número de teléfono trasladado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Numéro de téléphone déplacé"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Telefonnummer übertragen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Número de telefone transferido"
+          }
+        }
+      }
+    },
+    "account_notice.phone_moved.body": {
+      "extractionState": "manual",
+      "comment": "Alert text: the phone number of the account was linked to another account.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il tuo numero è stato collegato a un altro account. Se non sei stato tu, contatta l'assistenza."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your number was linked to another account. If it was not you, contact support."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu número se ha vinculado a otra cuenta. Si no fuiste tú, contacta con el soporte."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Votre numéro a été associé à un autre compte. Si ce n'était pas vous, contactez l'assistance."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deine Nummer wurde mit einem anderen Konto verknüpft. Wenn du das nicht warst, wende dich an den Support."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seu número foi vinculado a outra conta. Se não foi você, entre em contato com o suporte."
+          }
+        }
+      }
+    },
     "chat.send_error.psk_missing": {
       "extractionState": "manual",
       "comment": "Message-send failure banner — recipient's key isn't verified",
@@ -79611,37 +79779,37 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Servizio SMS temporaneamente non disponibile. Riprova più tardi."
+            "value": "Non riusciamo a inviare l'SMS in questo momento. Riprova tra qualche minuto."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "SMS service temporarily unavailable. Try again later."
+            "value": "We can't send the SMS right now. Please try again in a few minutes."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Servicio de SMS no disponible temporalmente. Inténtalo más tarde."
+            "value": "No podemos enviar el SMS en este momento. Inténtalo de nuevo en unos minutos."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Service SMS temporairement indisponible. Réessaie plus tard."
+            "value": "Nous ne parvenons pas à envoyer le SMS pour le moment. Réessaie dans quelques minutes."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Der SMS-Dienst ist vorübergehend nicht verfügbar. Bitte versuchen Sie es später erneut."
+            "value": "Wir können die SMS gerade nicht senden. Bitte versuchen Sie es in einigen Minuten erneut."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Serviço de SMS temporariamente indisponível. Tente novamente mais tarde."
+            "value": "Não conseguimos enviar o SMS neste momento. Tente novamente em alguns minutos."
           }
         }
       }

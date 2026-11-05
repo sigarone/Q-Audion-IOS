@@ -103,6 +103,8 @@ final class MyPhonesContainer: ObservableObject {
             pendingOtpPhone = normalized
             otpCode = ""
             otpError = nil
+        } catch BCryptoError.httpError(503) {
+            self.error = OtpVerificationScreen.smsUnavailableMessage
         } catch {
             self.error = String(localized: "my_phones.error.otp_request_failed", defaultValue: "Richiesta codice fallita: \(error.localizedDescription)", comment: "Error banner — SMS OTP request for phone verification failed, %@ is the underlying error description")
         }
