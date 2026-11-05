@@ -43,6 +43,7 @@ targets:
           - BugReportFreezeTests.swift
           - BugReportConsentTests.swift
           - BugReporterRetryQueueTests.swift
+          - CatalogHygieneTests.swift
           - PeerDiagResponderTests.swift
           - ChatVoiceNoteSenderMaxUsesTests.swift
           - CallCloseReasonRedactionTests.swift

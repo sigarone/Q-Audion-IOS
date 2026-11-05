@@ -1,6 +1,48 @@
 {
   "sourceLanguage": "it",
   "strings": {
+    "Build · device · stato · share": {
+      "extractionState": "manual",
+      "comment": "Label of the hardware test console and diagnostic screens.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Build · device · stato · share"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Build · device · status · share"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Build · dispositivo · estado · compartir"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Build · appareil · état · partage"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Build · Gerät · Status · Teilen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Build · dispositivo · estado · compartilhar"
+          }
+        }
+      }
+    },
     "settings.change_password.title": {
       "extractionState": "manual",
       "comment": "Settings row and screen title: change the account password.",
@@ -1131,90 +1173,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Fechar"
-          }
-        }
-      }
-    },
-    "account_notice.password_changed.title": {
-      "extractionState": "manual",
-      "comment": "Push notification title: another device changed the account password.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Password cambiata"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Password changed"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Passwort geändert"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Contraseña cambiada"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mot de passe changé"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Senha alterada"
-          }
-        }
-      }
-    },
-    "account_notice.password_changed.body": {
-      "extractionState": "manual",
-      "comment": "Push notification body: another device changed the account password.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Password cambiata su un altro dispositivo. Se non sei stato tu contatta l'amministratore."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Password changed on another device. If it wasn't you, contact your administrator."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Passwort auf einem anderen Gerät geändert. Wenn du das nicht warst, wende dich an deinen Administrator."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Contraseña cambiada en otro dispositivo. Si no has sido tú, ponte en contacto con el administrador."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mot de passe changé sur un autre appareil. Si ce n'est pas toi, contacte l'administrateur."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Senha alterada em outro dispositivo. Se não foi você, entre em contato com o administrador."
           }
         }
       }
@@ -3115,30 +3073,6 @@
         "pt-BR": { "stringUnit": { "state": "translated", "value": "Nova mensagem" } }
       }
     },
-    "MSG_NEW_BODY": {
-      "extractionState": "manual",
-      "comment": "Body of the generic push alert for a new message received while the app has no live connection. Resolved by the system from the loc-key; keep it generic.",
-      "localizations": {
-        "it": { "stringUnit": { "state": "translated", "value": "Nuovo messaggio cifrato" } },
-        "en": { "stringUnit": { "state": "translated", "value": "New encrypted message" } },
-        "fr": { "stringUnit": { "state": "translated", "value": "Nouveau message chiffré" } },
-        "de": { "stringUnit": { "state": "translated", "value": "Neue verschlüsselte Nachricht" } },
-        "es": { "stringUnit": { "state": "translated", "value": "Nuevo mensaje cifrado" } },
-        "pt-BR": { "stringUnit": { "state": "translated", "value": "Nova mensagem criptografada" } }
-      }
-    },
-    "MSG_NEW_TITLE": {
-      "extractionState": "manual",
-      "comment": "Title of the generic push alert for a new message received while the app has no live connection. Resolved by the system from the loc-key.",
-      "localizations": {
-        "it": { "stringUnit": { "state": "translated", "value": "Q-Audion" } },
-        "en": { "stringUnit": { "state": "translated", "value": "Q-Audion" } },
-        "fr": { "stringUnit": { "state": "translated", "value": "Q-Audion" } },
-        "de": { "stringUnit": { "state": "translated", "value": "Q-Audion" } },
-        "es": { "stringUnit": { "state": "translated", "value": "Q-Audion" } },
-        "pt-BR": { "stringUnit": { "state": "translated", "value": "Q-Audion" } }
-      }
-    },
     "carplay.tab.recents": {
       "extractionState": "manual",
       "comment": "CarPlay tab title — recent calls list",
@@ -4479,90 +4413,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Chamada do Q-Audion"
-          }
-        }
-      }
-    },
-    "phone_transfer.alert.title": {
-      "extractionState": "manual",
-      "comment": "Push notification title shown when a request to move the phone number linked to the account is waiting.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Richiesta di spostamento del numero"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Number transfer request"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Solicitud de traslado del número"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Demande de déplacement du numéro"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anfrage zur Übertragung der Nummer"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Solicitação de transferência do número"
-          }
-        }
-      }
-    },
-    "phone_transfer.alert.body": {
-      "extractionState": "manual",
-      "comment": "Push notification body for the same request; names neither the number nor who asked.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Qualcuno ha chiesto di spostare il numero collegato al tuo account. Apri l'app per annullare la richiesta."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Someone asked to move the number linked to your account. Open the app to cancel the request."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Alguien ha pedido trasladar el número vinculado a tu cuenta. Abre la app para cancelar la solicitud."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Quelqu'un a demandé de déplacer le numéro lié à ton compte. Ouvre l'app pour annuler la demande."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Jemand hat darum gebeten, die mit Ihrem Konto verknüpfte Nummer zu übertragen. Öffnen Sie die App, um die Anfrage abzubrechen."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Alguém pediu para transferir o número vinculado à sua conta. Abra o app para cancelar a solicitação."
           }
         }
       }
@@ -8233,90 +8083,6 @@
         }
       }
     },
-    "group_chat.file_unreadable": {
-      "extractionState": "manual",
-      "comment": "Snackbar warning in group chat / in-call chat panel when a picked file's contents could not be read from disk before sending.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "File non leggibile"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "File unreadable"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Archivo no legible"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Fichier illisible"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Datei nicht lesbar"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Não foi possível ler o arquivo"
-          }
-        }
-      }
-    },
-    "group_chat.attachment_send_failed": {
-      "extractionState": "manual",
-      "comment": "Snackbar error in group chat / in-call chat panel when preparing or sending a group attachment throws; %@ is the underlying error's localized description.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Allegato non inviato — %@"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Attachment not sent — %@"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anhang nicht gesendet — %@"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Adjunto no enviado — %@"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pièce jointe non envoyée — %@"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Anexo não enviado — %@"
-          }
-        }
-      }
-    },
     "group_chat.group_id_copied": {
       "extractionState": "manual",
       "comment": "Snackbar confirming the group id was copied to the clipboard after a long-press on the group chat header; %@ is the first 8 hex characters of the id.",
@@ -9069,90 +8835,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Solicitação de captura de tela enviada."
-          }
-        }
-      }
-    },
-    "chat_detail.contact_blocked": {
-      "extractionState": "manual",
-      "comment": "Snackbar confirming the contact was blocked from the chat overflow menu.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Contatto bloccato."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Contact blocked."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Contacto bloqueado."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Contact bloqué."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kontakt blockiert."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Contato bloqueado."
-          }
-        }
-      }
-    },
-    "chat_detail.operation_failed": {
-      "extractionState": "manual",
-      "comment": "Generic snackbar error shown when the block/unblock contact action fails.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Operazione fallita."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Operation failed."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Error en la operación."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Échec de l'opération."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vorgang fehlgeschlagen."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Falha na operação."
           }
         }
       }
@@ -12306,174 +11988,6 @@
         }
       }
     },
-    "MODO": {
-      "extractionState": "manual",
-      "comment": "Label of the network diagnostics panel in the live call screen",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "MODO"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mode"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Modo"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mode"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Modus"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Modo"
-          }
-        }
-      }
-    },
-    "TX FRAME CIFRATI": {
-      "extractionState": "manual",
-      "comment": "Label of the network diagnostics panel in the live call screen",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "TX FRAME CIFRATI"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ENCRYPTED TX FRAMES"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "TX FRAMES CIFRADOS"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "TRAMES TX CHIFFRÉES"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "TX-FRAMES VERSCHL."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "FRAMES TX CRIPT."
-          }
-        }
-      }
-    },
-    "RX FRAME DECIFRATI": {
-      "extractionState": "manual",
-      "comment": "Label of the network diagnostics panel in the live call screen",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "RX FRAME DECIFRATI"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "DECRYPTED RX FRAMES"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "RX FRAMES DESCIFRADOS"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "TRAMES RX DÉCHIFFRÉES"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "RX-FRAMES ENTSCHL."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "FRAMES RX DESCRIPT."
-          }
-        }
-      }
-    },
-    "LATENZA RELAY": {
-      "extractionState": "manual",
-      "comment": "Label of the network diagnostics panel in the live call screen",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "LATENZA RELAY"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "RELAY LATENCY"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "LATENCIA DEL RELAY"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "LATENCE RELAIS"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "RELAY-LATENZ"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "LATÊNCIA DO RELAY"
-          }
-        }
-      }
-    },
     "n/d": {
       "extractionState": "manual",
       "comment": "Label of the network diagnostics panel in the live call screen",
@@ -14490,48 +14004,6 @@
         }
       }
     },
-    "video.diag.codec_cipher": {
-      "extractionState": "manual",
-      "comment": "Row label in the video call diagnostics panel: video codec and encryption cipher (capitals).",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CODEC / CIFRA"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CODEC / CIPHER"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CODEC / CIFRADO"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CODEC / CHIFFREMENT"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CODEC / CIPHER"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "CODEC / CRIPTOGRAFIA"
-          }
-        }
-      }
-    },
     "video.diag.pipeline": {
       "extractionState": "manual",
       "comment": "Row label in the video call diagnostics panel: state of the video pipeline (capitals).",
@@ -14570,90 +14042,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "PIPELINE DE VÍDEO"
-          }
-        }
-      }
-    },
-    "video.diag.relay_latency": {
-      "extractionState": "manual",
-      "comment": "Row label in the video call diagnostics panel: round-trip time to the relay server (capitals).",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "LATENZA RELAY"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "RELAY LATENCY"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "LATENCIA DEL RELAY"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "LATENCE RELAIS"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "RELAY-LATENZ"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "LATÊNCIA RELAY"
-          }
-        }
-      }
-    },
-    "video.diag.session_mlkem": {
-      "extractionState": "manual",
-      "comment": "Row label in the video call diagnostics panel: fingerprint of the ML-KEM session key (capitals).",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SESSIONE ML-KEM"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ML-KEM SESSION"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SESIÓN ML-KEM"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SESSION ML-KEM"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ML-KEM-SITZUNG"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SESSÃO ML-KEM"
           }
         }
       }
@@ -14822,48 +14210,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "relay (WS)"
-          }
-        }
-      }
-    },
-    "video.diag.not_available": {
-      "extractionState": "manual",
-      "comment": "Value in the video call diagnostics panel when a measurement is not available (abbreviation).",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "n/d"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "n/a"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "n/d"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "n/d"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "k. A."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "n/d"
           }
         }
       }
@@ -15116,132 +14462,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Anomalia na voz: verifique a identidade da pessoa."
-          }
-        }
-      }
-    },
-    "in_call.confidence_word_genuine": {
-      "extractionState": "manual",
-      "comment": "Biometrics row value — voice authenticity confidence label when the score is above the green threshold (genuine)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "genuina"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "genuine"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "genuina"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "authentique"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "echt"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "genuína"
-          }
-        }
-      }
-    },
-    "in_call.confidence_word_verify_sas": {
-      "extractionState": "manual",
-      "comment": "Biometrics row value — voice authenticity confidence label for the mid-range score, prompting an SAS compare",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "verifica con SAS"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "verify with SAS"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "verificar con SAS"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "vérifie avec SAS"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "mit SAS prüfen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "verificar com SAS"
-          }
-        }
-      }
-    },
-    "in_call.confidence_word_at_risk": {
-      "extractionState": "manual",
-      "comment": "Biometrics row value — voice authenticity confidence label when the score is below the red threshold (possible synthetic voice)",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "a rischio"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "at risk"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "en riesgo"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "à risque"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "gefährdet"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "em risco"
           }
         }
       }
@@ -18354,47 +17574,6 @@
         }
       }
     },
-    "1. Apri Q-Audion sul nuovo dispositivo.\\n2. Tocca \\\"Collega dispositivo\\\".\\n3. Inquadra il QR qui sotto con la fotocamera.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "1. Apri Q-Audion sul nuovo dispositivo.\\n2. Tocca \\\"Collega dispositivo\\\".\\n3. Inquadra il QR qui sotto con la fotocamera."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "1. Open Q-Audion on the new device.\\n2. Tap \\\"Link device\\\".\\n3. Point the camera at the QR code below."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "1. Abre Q-Audion en el nuevo dispositivo.\\n2. Toca \\\"Vincular dispositivo\\\".\\n3. Enfoca el código QR de abajo con la cámara."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "1. Ouvre Q-Audion sur le nouvel appareil.\\n2. Appuie sur \\\"Associer un appareil\\\".\\n3. Cadre le QR code ci-dessous avec l'appareil photo."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "1. Öffnen Sie Q-Audion auf dem neuen Gerät.\\n2. Tippen Sie auf \\\"Gerät verbinden\\\".\\n3. Scannen Sie den QR-Code unten mit der Kamera."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "1. Abra o Q-Audion no novo dispositivo.\\n2. Toque em \\\"Vincular dispositivo\\\".\\n3. Aponte a câmera para o QR abaixo."
-          }
-        }
-      }
-    },
     "2 hop": {
       "extractionState": "manual",
       "localizations": {
@@ -18596,88 +17775,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "ATUALIZAÇÃO CONCLUÍDA"
-          }
-        }
-      }
-    },
-    "AGGIORNAMENTO RICHIESTO": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "AGGIORNAMENTO RICHIESTO"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "UPDATE REQUIRED"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ACTUALIZACIÓN REQUERIDA"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "MISE À JOUR REQUISE"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "UPDATE ERFORDERLICH"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ATUALIZAÇÃO NECESSÁRIA"
-          }
-        }
-      }
-    },
-    "APPRENDIMENTO VOCE…": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "APPRENDIMENTO VOCE…"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "LEARNING VOICE…"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "APRENDIZAJE DE VOZ…"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "APPRENTISSAGE VOCAL…"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SPRACHTRAINING LÄUFT…"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "APRENDENDO VOZ…"
           }
         }
       }
@@ -20400,47 +19497,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Abra o leitor de QR code para adicionar um contato de forma verificada, ou use o pareamento NFC."
-          }
-        }
-      }
-    },
-    "Apri il dettaglio chiamata per confrontare le 6 parole con il peer": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Apri il dettaglio chiamata per confrontare le 6 parole con il peer"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Open the call detail to compare the 6 words with the peer"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Abre el detalle de la llamada para comparar las 6 palabras con el interlocutor"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ouvre le détail de l'appel pour comparer les 6 mots avec le correspondant"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Öffnen Sie die Anrufdetails, um die 6 Wörter mit dem Peer zu vergleichen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Abra os detalhes da chamada para comparar as 6 palavras com o outro participante"
           }
         }
       }
@@ -23192,47 +22248,6 @@
         }
       }
     },
-    "Chiudi banner SAS": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chiudi banner SAS"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dismiss SAS banner"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cerrar banner SAS"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Fermer la bannière SAS"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SAS-Banner schließen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Fechar banner SAS"
-          }
-        }
-      }
-    },
     "Ciao! Tutto a posto?": {
       "extractionState": "manual",
       "localizations": {
@@ -24627,47 +23642,6 @@
         }
       }
     },
-    "Curva di verifica vocale in tempo reale": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Curva di verifica vocale in tempo reale"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Real-time voice verification curve"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Curva de verificación de voz en tiempo real"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Courbe de vérification vocale en temps réel"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Echtzeit-Kurve der Stimmverifizierung"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Curva de verificação de voz em tempo real"
-          }
-        }
-      }
-    },
     "DETTAGLI INVITO": {
       "extractionState": "manual",
       "localizations": {
@@ -24746,88 +23720,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "DEVTOOL"
-          }
-        }
-      }
-    },
-    "DIAGNOSTICA RETE": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "DIAGNOSTICA RETE"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "NETWORK DIAGNOSTICS"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "DIAGNÓSTICO DE RED"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "DIAGNOSTIC RÉSEAU"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "NETZWERKDIAGNOSE"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "DIAGNÓSTICO DE REDE"
-          }
-        }
-      }
-    },
-    "DIAGNOSTICA VIDEO": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "DIAGNOSTICA VIDEO"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "VIDEO DIAGNOSTICS"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "DIAGNÓSTICO DE VIDEO"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "DIAGNOSTIC VIDÉO"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "VIDEODIAGNOSE"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "DIAGNÓSTICO DE VÍDEO"
           }
         }
       }
@@ -33335,47 +32227,6 @@
         }
       }
     },
-    "I messaggi verranno eliminati automaticamente. \\\"Visualizza una volta\\\" li elimina appena aperti.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "I messaggi verranno eliminati automaticamente. \\\"Visualizza una volta\\\" li elimina appena aperti."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Messages will be deleted automatically. \\\"View once\\\" deletes them as soon as they're opened."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Los mensajes se eliminarán automáticamente. \\\"Ver una vez\\\" los elimina en cuanto se abren."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Les messages seront supprimés automatiquement. \\\"Voir une seule fois\\\" les supprime dès leur ouverture."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nachrichten werden automatisch gelöscht. \\\"Einmal ansehen\\\" löscht sie, sobald sie geöffnet wurden."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "As mensagens serão apagadas automaticamente. \\\"Visualizar uma vez\\\" as apaga assim que abertas."
-          }
-        }
-      }
-    },
     "I miei numeri": {
       "extractionState": "manual",
       "localizations": {
@@ -34110,47 +32961,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "O remetente desativou o salvamento e o compartilhamento deste anexo."
-          }
-        }
-      }
-    },
-    "Il peer apre Q-Audion → Contatti → \\\"Aggiungi via QR\\\" e inquadra questo codice. Si auto-aggiungerà al gruppo dopo la verifica dell'admin.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Il peer apre Q-Audion → Contatti → \\\"Aggiungi via QR\\\" e inquadra questo codice. Si auto-aggiungerà al gruppo dopo la verifica dell'admin."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The peer opens Q-Audion → Contacts → \\\"Add via QR\\\" and scans this code. They'll be added to the group automatically after the admin's approval."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "El interlocutor abre Q-Audion → Contactos → \\\"Añadir por QR\\\" y enfoca este código. Se añadirá automáticamente al grupo tras la verificación del admin."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Le correspondant ouvre Q-Audion → Contacts → \\\"Ajouter via QR\\\" et cadre ce code. Il s'ajoutera automatiquement au groupe après vérification de l'admin."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Der Peer öffnet Q-Audion → Kontakte → \\\"Über QR hinzufügen\\\" und scannt diesen Code. Er wird nach der Prüfung durch den Admin automatisch zur Gruppe hinzugefügt."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "A outra pessoa abre o Q-Audion → Contatos → \\\"Adicionar via QR\\\" e aponta a câmera para este código. Ela vai entrar automaticamente no grupo depois da verificação do admin."
           }
         }
       }
@@ -34931,47 +33741,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Informações"
-          }
-        }
-      }
-    },
-    "Inietta latenza / perdita pacchetti / offline nelle chiamate attive. Il profilo \\\"Normale\\\" ripristina il comportamento di produzione.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Inietta latenza / perdita pacchetti / offline nelle chiamate attive. Il profilo \\\"Normale\\\" ripristina il comportamento di produzione."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Injects latency / packet loss / offline into active calls. The \\\"Normal\\\" profile restores production behavior."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Inyecta latencia / pérdida de paquetes / desconexión en las llamadas activas. El perfil \\\"Normal\\\" restaura el comportamiento de producción."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Injecte de la latence / une perte de paquets / une mise hors ligne dans les appels actifs. Le profil \\\"Normal\\\" rétablit le comportement de production."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Injiziert Latenz / Paketverlust / Offline-Zustand in aktive Anrufe. Das Profil \\\"Normal\\\" stellt das Produktionsverhalten wieder her."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Injeta latência / perda de pacotes / offline nas chamadas ativas. O perfil \\\"Normal\\\" restaura o comportamento de produção."
           }
         }
       }
@@ -37477,47 +36246,6 @@
         }
       }
     },
-    "Mostrato come ID chiamante alle persone che chiami. Scegli tra la tua estensione o uno dei numeri elencati in \\\"Numeri pubblici\\\" qui sotto. Salvato solo su questo dispositivo.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mostrato come ID chiamante alle persone che chiami. Scegli tra la tua estensione o uno dei numeri elencati in \\\"Numeri pubblici\\\" qui sotto. Salvato solo su questo dispositivo."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Shown as caller ID to the people you call. Choose between your extension or one of the numbers listed in \\\"Public numbers\\\" below. Saved only on this device."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Se muestra como identificador de llamada a las personas a las que llamas. Elige entre tu extensión o uno de los números indicados en \\\"Números públicos\\\" más abajo. Guardado solo en este dispositivo."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Affiché comme ID d'appelant aux personnes que tu appelles. Choisis entre ton poste ou l'un des numéros listés dans \\\"Numéros publics\\\" ci-dessous. Enregistré uniquement sur cet appareil."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wird den Personen, die Sie anrufen, als Anrufer-ID angezeigt. Wählen Sie zwischen Ihrer Nebenstelle oder einer der unten unter \\\"Öffentliche Nummern\\\" aufgeführten Nummern. Nur auf diesem Gerät gespeichert."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mostrado como identificador de chamador para as pessoas que você liga. Escolha entre o seu ramal ou um dos números listados em \\\"Números públicos\\\" abaixo. Salvo somente neste dispositivo."
-          }
-        }
-      }
-    },
     "Motivo": {
       "extractionState": "manual",
       "localizations": {
@@ -38129,47 +36857,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Nenhum número registrado ainda."
-          }
-        }
-      }
-    },
-    "Nessun numero registrato. Gestiscili da \\\"I miei numeri\\\".": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nessun numero registrato. Gestiscili da \\\"I miei numeri\\\"."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No numbers registered. Manage them from \\\"My numbers\\\"."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ningún número registrado. Gestiónalos desde \\\"Mis números\\\"."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aucun numéro enregistré. Gère-les depuis \\\"Mes numéros\\\"."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Keine Nummer registriert. Verwalten Sie sie unter \\\"Meine Nummern\\\"."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nenhum número registrado. Gerencie-os em \\\"Meus números\\\"."
           }
         }
       }
@@ -40880,47 +39567,6 @@
         }
       }
     },
-    "Registrazione solo interno": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Registrazione solo interno"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Extension-only recording"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Registro solo con extensión"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enregistrement poste uniquement"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nur interne Aufzeichnung"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gravação somente interna"
-          }
-        }
-      }
-    },
     "Reset": {
       "extractionState": "manual",
       "localizations": {
@@ -41819,88 +40465,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "SECURE COMMS"
-          }
-        }
-      }
-    },
-    "SECURE ELEMENT": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SECURE ELEMENT"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SECURE ELEMENT"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SECURE ELEMENT"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SECURE ELEMENT"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SECURE ELEMENT"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SECURE ELEMENT"
-          }
-        }
-      }
-    },
-    "SESSION SECURITY · CUSTODY OF YOUR VOICE": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SESSION SECURITY · CUSTODY OF YOUR VOICE"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SESSION SECURITY · CUSTODY OF YOUR VOICE"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SESSION SECURITY · CUSTODY OF YOUR VOICE"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SESSION SECURITY · CUSTODY OF YOUR VOICE"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SESSION SECURITY · CUSTODY OF YOUR VOICE"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SESSION SECURITY · CUSTODY OF YOUR VOICE"
           }
         }
       }
@@ -52098,47 +50662,6 @@
         }
       }
     },
-    "Scansiona il QR generato dal pannello admin del server. ": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scansiona il QR generato dal pannello admin del server. "
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scan the QR code generated by the server's admin panel. "
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escanea el QR generado por el panel de admin del servidor. "
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scanne le QR généré par le panneau admin du serveur. "
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scannen Sie den vom Server-Admin-Panel generierten QR-Code. "
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escaneie o QR gerado pelo painel admin do servidor. "
-          }
-        }
-      }
-    },
     "Scansiona un altro": {
       "extractionState": "manual",
       "localizations": {
@@ -52217,88 +50740,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Tirar foto"
-          }
-        }
-      }
-    },
-    "Scegli \\\"Salva in File\\\" nella schermata di condivisione per salvare il documento sul dispositivo.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scegli \\\"Salva in File\\\" nella schermata di condivisione per salvare il documento sul dispositivo."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose \\\"Save to Files\\\" on the share sheet to save the document to your device."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Elige \\\"Guardar en Archivos\\\" en la pantalla de compartir para guardar el documento en el dispositivo."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choisis \\\"Enregistrer dans Fichiers\\\" sur l'écran de partage pour enregistrer le document sur l'appareil."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wählen Sie \\\"In Dateien sichern\\\" im Freigabebildschirm, um das Dokument auf dem Gerät zu speichern."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escolha \\\"Salvar em Arquivos\\\" na tela de compartilhamento para salvar o documento no dispositivo."
-          }
-        }
-      }
-    },
-    "Scegli da quale paese esce il traffico VPN. \\\"Auto\\\" sceglie il nodo migliore. La scelta vale dalla prossima connessione VPN.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scegli da quale paese esce il traffico VPN. \\\"Auto\\\" sceglie il nodo migliore. La scelta vale dalla prossima connessione VPN."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choose which country the VPN traffic exits from. \\\"Auto\\\" picks the best node. The choice takes effect from the next VPN connection."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Elige desde qué país sale el tráfico VPN. \\\"Auto\\\" elige el mejor nodo. La elección se aplica a partir de la próxima conexión VPN."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Choisis le pays de sortie du trafic VPN. \\\"Auto\\\" sélectionne le meilleur nœud. Le choix s'applique à partir de la prochaine connexion VPN."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wählen Sie, aus welchem Land der VPN-Traffic austritt. \\\"Auto\\\" wählt den besten Knoten. Die Auswahl gilt ab der nächsten VPN-Verbindung."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escolha de qual país sai o tráfego da VPN. \\\"Auto\\\" escolhe o melhor nó. A escolha vale a partir da próxima conexão de VPN."
           }
         }
       }
@@ -53903,47 +52344,6 @@
         }
       }
     },
-    "Tocca \\\"Conferma\\\" per richiedere l'ingresso al gruppo. L'admin del gruppo dovrà approvare la richiesta server-side.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tocca \\\"Conferma\\\" per richiedere l'ingresso al gruppo. L'admin del gruppo dovrà approvare la richiesta server-side."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tap \\\"Confirm\\\" to request to join the group. The group admin will need to approve the request server-side."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Toca \\\"Confirmar\\\" para solicitar el ingreso al grupo. El admin del grupo deberá aprobar la solicitud en el servidor."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Appuie sur \\\"Confirmer\\\" pour demander à rejoindre le groupe. L'admin du groupe devra approuver la demande côté serveur."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tippen Sie auf \\\"Bestätigen\\\", um den Beitritt zur Gruppe zu beantragen. Der Gruppen-Admin muss die Anfrage serverseitig genehmigen."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Toque em \\\"Confirmar\\\" para solicitar entrada no grupo. O admin do grupo vai precisar aprovar a solicitação no servidor."
-          }
-        }
-      }
-    },
     "Tocca per rientrare": {
       "extractionState": "manual",
       "localizations": {
@@ -54600,47 +53000,6 @@
         }
       }
     },
-    "VPN non disponibile al momento": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "VPN non disponibile al momento"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "VPN not available at the moment"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "VPN no disponible por el momento"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "VPN indisponible pour le moment"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "VPN derzeit nicht verfügbar"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "VPN indisponível no momento"
-          }
-        }
-      }
-    },
     "Verifica SAS": {
       "extractionState": "manual",
       "localizations": {
@@ -54678,47 +53037,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Verificação SAS"
-          }
-        }
-      }
-    },
-    "Verifica SAS disponibile": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verifica SAS disponibile"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SAS verification available"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verificación SAS disponible"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vérification SAS disponible"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "SAS-Verifizierung verfügbar"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verificação SAS disponível"
           }
         }
       }
@@ -71739,48 +70057,6 @@
         }
       }
     },
-    "nfc.peer_name": {
-      "extractionState": "manual",
-      "comment": "Name shown for the Android phone the iPhone was tapped against during NFC pairing.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "il telefono Android"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "the Android phone"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "el teléfono Android"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "le téléphone Android"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "dem Android-Telefon"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "o telefone Android"
-          }
-        }
-      }
-    },
     "nfc.error.identity_key_missing": {
       "extractionState": "manual",
       "comment": "NFC pairing error: this phone has no identity key yet.",
@@ -71819,90 +70095,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "A chave de identidade local não está configurada"
-          }
-        }
-      }
-    },
-    "nfc.error.apdu_failed": {
-      "extractionState": "manual",
-      "comment": "NFC pairing error: a command sent to the other phone failed; first %@ is the command name, second %@ the status word.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$@ non riuscito: SW=%2$@"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$@ failed: SW=%2$@"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$@ falló: SW=%2$@"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$@ a échoué : SW=%2$@"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$@ fehlgeschlagen: SW=%2$@"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%1$@ falhou: SW=%2$@"
-          }
-        }
-      }
-    },
-    "nfc.error.invalid_response": {
-      "extractionState": "manual",
-      "comment": "NFC pairing error: the other phone answered with unexpected data; %@ is a short technical detail.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Risposta non valida dall'altro telefono: %@"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Invalid response from the other phone: %@"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Respuesta no válida del otro teléfono: %@"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Réponse invalide de l'autre téléphone : %@"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ungültige Antwort vom anderen Telefon: %@"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Resposta inválida do outro telefone: %@"
           }
         }
       }
@@ -73539,47 +71731,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pareamento NFC"
-          }
-        }
-      }
-    },
-    "L’iPhone funge da lettore NFC. Il telefono Android deve avere Q-Audion attivo.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "L’iPhone funge da lettore NFC. Il telefono Android deve avere Q-Audion attivo."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The iPhone acts as the NFC reader. The Android phone must have Q-Audion running."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "El iPhone actúa como lector NFC. El teléfono Android debe tener Q-Audion activo."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "L’iPhone sert de lecteur NFC. Le téléphone Android doit avoir Q-Audion actif."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Das iPhone dient als NFC-Leser. Auf dem Android-Telefon muss Q-Audion aktiv sein."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O iPhone funciona como leitor NFC. O telefone Android precisa estar com o Q-Audion ativo."
           }
         }
       }
