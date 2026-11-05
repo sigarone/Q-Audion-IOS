@@ -29422,7 +29422,7 @@ extension AppState {
         // Only a call CallKit does not track owes its own deactivation: a tracked one
         // is balanced by its `reportCallEnded` (which also drains any extra count).
         if groupCallKitId == nil { groupSelfActivatedAudio = true }
-        Task { await provider.reactivateAudioSessionForSelfManagedCall(uuid: nil) }
+        Task { await provider.reactivateAudioSessionForSelfManagedCall(uuid: nil, groupActivation: true) }
         #endif
     }
 

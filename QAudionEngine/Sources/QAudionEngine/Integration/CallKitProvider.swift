@@ -502,8 +502,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// call, so a native-SRTP call's re-activation is marked under its own
     /// uuid (see `CallKitCallLedger.markAudioSelfActivated`). `nil` keeps the
     /// process-wide mark, as before.
-    public func reactivateAudioSessionForSelfManagedCall(uuid: UUID? = nil) async {
-        await activateAudioSession(logSite: "answer", source: .selfManaged, uuid: uuid)
+    public func reactivateAudioSessionForSelfManagedCall(uuid: UUID? = nil, groupActivation: Bool = false) async {
+        await activateAudioSession(logSite: "answer", source: .selfManaged, uuid: uuid, groupActivation: groupActivation)
     }
 
     /// Group calls v2 — the end of a group call that CallKit does not track
@@ -517,9 +517,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// deactivation, exactly what a native call's report pays, and only when the
     /// flag says one is owed; no CXProvider report (there is no call to end).
     public func balanceSelfManagedGroupActivation() {
-        // A fresh uuid is never native, so `consumeEndBalance` takes the
-        // process-wide test-and-clear (true once after a self-activation).
-        guard ledger.consumeEndBalance(UUID()).selfActivated else { return }
+        // The group's own mark, never another call's.
+        guard ledger.consumeGroupActivationBalance() else { return }
         let rtcSession = RTCAudioSession.sharedInstance()
         rtcSession.lockForConfiguration()
         let countBefore = rtcSession.activationCount
@@ -668,7 +667,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// W-SELFACTID (2026-09-27) — `uuid`: the CallKit uuid this activation is
     /// made for; the self-activation mark of a native-SRTP call is keyed by it
     /// (see `CallKitCallLedger.markAudioSelfActivated`).
-    private func activateAudioSession(logSite: String, source: AudioSessionActivationSource, uuid: UUID?) async {
+    private func activateAudioSession(logSite: String, source: AudioSessionActivationSource, uuid: UUID?, groupActivation: Bool = false) async {
         let rtcSession = RTCAudioSession.sharedInstance()
         // W-NOMIXOPTION (2026-09-10) — best-practices audit: `.interruptSpoken
         // AudioAndMixWithOthers` is Apple's documented option for apps whose
@@ -760,6 +759,12 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
                 // `onAudioSessionActivated` below would set `CallService.audioSessionActive = true` after
                 // `endCall` cleared it, pre-satisfying the W464 gate of the redial. The check and the mark are
                 // one ledger critical section, so an end that runs concurrently sees one or the other.
+                if groupActivation {
+                    ledger.markGroupAudioSelfActivated()
+                    rtcSession.unlockForConfiguration()
+                    onAudioSessionActivated?(source)
+                    return
+                }
                 switch ledger.markAudioSelfActivatedUnlessEnded(uuid) {
                 case .owed:
                     rtcSession.unlockForConfiguration()
