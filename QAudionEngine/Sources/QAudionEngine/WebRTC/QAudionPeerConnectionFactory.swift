@@ -231,8 +231,7 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
         // initializer libwebrtc uses changed with this call-site migration.
         // Safe to repeat on a wedge-recovery rebuild: `InitFieldTrialsFromString`
         // copies the string into persistent, mutex-guarded storage.
-        let fieldTrials: [String: String] = ["WebRTC-Network-UseNWPathMonitor": "Enabled"]
-        let fieldTrialString = fieldTrials.map { "\($0.key)/\($0.value)/" }.joined()
+        let fieldTrialString = ReceiveBufferTuning.fieldTrialString(ReceiveBufferTuning.fieldTrials)
         RTCPeerConnectionFactory.configureFieldTrials(fieldTrialString)
 
         // RTCInitializeSSL is idempotent — safe to call once on first use.
