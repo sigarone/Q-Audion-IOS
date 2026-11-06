@@ -386,6 +386,10 @@ jobs:
           # extra beyond one skipped iteration. -resultBundlePath must be
           # unique per attempt (xcodebuild refuses to write into an
           # already-existing bundle).
+          # 2026-11-06: timings of the last 13 runs (build + test, one attempt) ranged from 13 to 25 min on the same
+          # code, so the old 25 min watchdog sat right at the slow end and killed one finished-but-slow run while it
+          # wrote its result bundle. Now 35 min. The code coverage instrumentation (-profile-generate in the whole
+          # module compile) is off: nothing here reads coverage, and it slows both the compile and the test run.
           ATTEMPT=1
           MAX_ATTEMPTS=2
           EXIT_CODE=1
@@ -395,6 +399,7 @@ jobs:
               -scheme "QAudionEngine" \
               -configuration Release \
               -jobs 2 \
+              -enableCodeCoverage NO \
               SWIFT_ENABLE_TESTABILITY=YES \
               COMPILER_INDEX_STORE_ENABLE=NO \
               SWIFT_ENABLE_EXPLICIT_MODULES=NO \
@@ -402,7 +407,7 @@ jobs:
               -derivedDataPath /tmp/dd-ios-sim \
               -resultBundlePath "/tmp/ios-sim-results-attempt${ATTEMPT}.xcresult" &
             XCODEBUILD_PID=$!
-            ( sleep 1500; echo "::error::xcodebuild test exceeded 25min watchdog — killing (was hanging the full 60min job timeout before this fix)"; kill -9 "$XCODEBUILD_PID" 2>/dev/null ) &
+            ( sleep 2100; echo "::error::xcodebuild test exceeded 35min watchdog — killing (was hanging the full 60min job timeout before this fix)"; kill -9 "$XCODEBUILD_PID" 2>/dev/null ) &
             WATCHDOG_PID=$!
             wait "$XCODEBUILD_PID"
             EXIT_CODE=$?
