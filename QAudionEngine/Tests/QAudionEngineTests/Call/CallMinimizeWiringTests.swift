@@ -150,8 +150,9 @@ final class CallMinimizeWiringTests: XCTestCase {
     /// The reduce button is on the audio call screen only, behind the policy, and reduces through the state.
     func testTheReduceButtonIsOnTheAudioCallScreenBehindThePolicy() throws {
         let live = try code("QAudionApp/Views/Call/LiveInCallScreen.swift")
-        XCTAssertTrue(live.contains(".overlay(alignment: .topTrailing) { reduceButtonOverlay }"))
-        XCTAssertTrue(live.contains("if canReduceCall { MinimizeCallButton(action: reduceCall)"))
+        XCTAssertTrue(live.contains("onMinimize: minimizeAction"))
+        XCTAssertFalse(live.contains("MinimizeCallButton"), "the button is drawn by the call screen, top left")
+        XCTAssertTrue(try code("QAudionApp/Views/Call/InCallScreen.swift").contains("MinimizeCallButton(action: onMinimize)"))
         XCTAssertTrue(live.contains("CallMinimizePolicy.canMinimize( callState: appState.callState, isVideoCall: appState.isVideoCall, remoteScreenSharing: appState.peerScreenShareActive)"))
         XCTAssertTrue(live.contains("appState.minimizeCallScreen()"))
         XCTAssertTrue(live.contains("CallMinimizeAnimation.animation(reduceMotion: reduceMotion)"))
@@ -281,13 +282,13 @@ final class CallMinimizeWiringTests: XCTestCase {
     func testTheSasConfirmationDoesNotLiveInTheScreen() throws {
         let live = try code("QAudionApp/Views/Call/LiveInCallScreen.swift")
         XCTAssertTrue(live.contains("SasVerificationStore.shared.recordVerified("))
-        // The decision is read from the shared store on every tick and goes through the one shared rule, on both screens.
+        // The decision is read from the shared store on every tick, from the words of THIS call only: no earlier
+        // confirmation carries over, on either screen.
         for source in [live, try code("QAudionApp/Views/VideoCallView.swift")] {
-            XCTAssertTrue(source.contains("let store = SasVerificationStore.shared"))
-            XCTAssertTrue(source.contains("store.isVerified("))
-            XCTAssertTrue(source.contains("store.hasVerifiedBinding("))
-            XCTAssertTrue(source.contains("SasCardPlacement.isConfirmedForThisCall("))
-            XCTAssertTrue(source.contains("identityAuthenticated: appState.callIdentityAuthenticated"))
+            XCTAssertTrue(source.contains("SasVerificationStore.shared.isVerified("))
+            XCTAssertFalse(source.contains("hasVerifiedBinding"))
+            XCTAssertFalse(source.contains("isConfirmedForThisCall"))
+            XCTAssertFalse(source.contains("callIdentityAuthenticated"))
         }
         XCTAssertTrue(live.contains("appState.confirmIdentityAndReleaseMedia()"))
         for path in ["QAudionApp/Views/Call/LiveInCallScreen.swift", "QAudionApp/Views/Call/InCallScreen.swift"] {
@@ -299,11 +300,11 @@ final class CallMinimizeWiringTests: XCTestCase {
         }
     }
 
-    /// The identity verdict of the call reaches the app on both legs (caller and responder), and the flag is reset per call.
-    func testTheIdentityVerdictFlagIsWiredOnBothLegsAndResetPerCall() throws {
+    /// The app keeps no per-call "identity verdict" flag that could mark a new call confirmed.
+    func testNoConfirmationCarriesOverToANewCall() throws {
         let app = try code("QAudionApp/AppState.swift")
-        XCTAssertEqual(app.components(separatedBy: "integration.onHandshakeIdentityAuthenticated = ").count - 1, 2)
-        XCTAssertEqual(app.components(separatedBy: "callIdentityAuthenticated = false").count - 1, 2)
+        XCTAssertFalse(app.contains("callIdentityAuthenticated"))
+        XCTAssertFalse(app.contains("onHandshakeIdentityAuthenticated"))
     }
 
     /// The names of the `@State` variables of a source (comments already stripped, whitespace collapsed).

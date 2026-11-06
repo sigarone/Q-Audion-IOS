@@ -1187,12 +1187,6 @@ final class AppState: ObservableObject {
     /// user taps "CONFERMA COINCIDONO" on the SAS panel, and reset at the
     /// start of every new call same lifecycle as `callIdentityUnauthenticatedChange`.
     @Published var awaitingIdentityConfirmation: Bool = false
-    /// True once THIS call's handshake has reported an authenticated identity verdict. The notice and hold flags
-    /// above reach the main actor from engine callbacks; this one is posted after them from the same callback
-    /// path, so a screen that sees it true has the notices of the verdict too. A confirmation made on an earlier
-    /// call carries over only after it (see `SasCardPlacement.isConfirmedForThisCall`). Reset at the start of
-    /// every call.
-    @Published var callIdentityAuthenticated: Bool = false
     /// Lowercased callId -> deferred media-install closures (relay sealer
     /// install, v4 ratchet bootstrap) held back while that call's handshake
     /// identity verdict was `.abort`. Drained and run once by
@@ -7875,7 +7869,6 @@ final class AppState: ObservableObject {
             // P0-3: a fresh incoming call must not inherit a stale media hold
             // from a previous call's aborted handshake.
             self.awaitingIdentityConfirmation = false
-            self.callIdentityAuthenticated = false
             // W-ASSURANCE: same reset — a fresh incoming call must not show a
             // stale live-assurance verdict from a previous call.
             self.callAssuranceState = nil
@@ -17959,14 +17952,6 @@ final class AppState: ObservableObject {
         // QAudionCallIntegration's OFFER verdict switch, BEFORE onRelaySessionReady
         // / onV4BootstrapReady fire for this same call, so the gate is always set
         // before there is anything to gate.
-        integration.onHandshakeIdentityAuthenticated = { [weak self] _, peerId in
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                if self.callContactId == nil || self.callContactId == peerId {
-                    self.callIdentityAuthenticated = true
-                }
-            }
-        }
         integration.onHandshakeIdentityUnverified = { [weak self] cid, code in
             Task { @MainActor [weak self] in
                 self?.handleHandshakeIdentityUnverified(callId: cid, code: code)
@@ -19958,7 +19943,6 @@ final class AppState: ObservableObject {
         // P0-3: a fresh outgoing call must not inherit a stale media hold
         // from a previous call's aborted handshake.
         awaitingIdentityConfirmation = false
-        callIdentityAuthenticated = false
         // W-ASSURANCE: same reset for the fresh outgoing call.
         callAssuranceState = nil
         callAssuranceExpectedNfc = false
@@ -20389,14 +20373,6 @@ final class AppState: ObservableObject {
                 // onV4BootstrapReady below for the same call (verdict evaluation
                 // in QAudionCallIntegration happens earlier in the ACCEPT path than
                 // either of those).
-                integration.onHandshakeIdentityAuthenticated = { [weak self] _, peerId in
-                    Task { @MainActor [weak self] in
-                        guard let self = self else { return }
-                        if self.callContactId == nil || self.callContactId == peerId {
-                            self.callIdentityAuthenticated = true
-                        }
-                    }
-                }
                 integration.onHandshakeIdentityUnverified = { [weak self] cid, code in
                     Task { @MainActor [weak self] in
                         self?.handleHandshakeIdentityUnverified(callId: cid, code: code)

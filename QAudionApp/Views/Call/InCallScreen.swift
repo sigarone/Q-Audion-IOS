@@ -52,8 +52,6 @@ struct InCallScreen: View {
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
-    /// Height of the call window, for the pinned code card's limit (differs from the screen in Split View).
-    @State private var windowHeight: CGFloat = 0
     /// Unified call UI — respect the system Reduce Motion setting: when on,
     /// the animated mini-spectrum + crypto-engine comet freeze to a single
     /// representative frame instead of continuously redrawing.
@@ -412,6 +410,8 @@ struct InCallScreen: View {
     /// "Segnala un problema": opens the report sheet (logs, screenshot, call id, a note) without leaving the call.
     /// Offered in every call state. nil hides the button (previews).
     let onReportProblem: (() -> Void)?
+    /// Reduces the call to the bar on top of the app. Drawn top left, before the report button. nil hides it.
+    let onMinimize: (() -> Void)?
     /// Feature B ("voce verificata") — state of the per-contact call-time
     /// voice-learning session, fed from the SAME decoded RX audio as
     /// `voiceBiometrics`/`voiceSpectrum` above. nil ⇒ no session has run
@@ -523,6 +523,7 @@ struct InCallScreen: View {
          onConfirmSas: @escaping () -> Void = {},
          onToggleDiagnostics: @escaping () -> Void = {},
          onReportProblem: (() -> Void)? = nil,
+         onMinimize: (() -> Void)? = nil,
          voiceLearningState: VoiceLearningSession.State? = nil,
          onStartVoiceLearning: @escaping () -> Void = {},
          voiceConfidenceHistory: [Float] = [],
@@ -584,6 +585,7 @@ struct InCallScreen: View {
         self.onConfirmSas = onConfirmSas
         self.onToggleDiagnostics = onToggleDiagnostics
         self.onReportProblem = onReportProblem
+        self.onMinimize = onMinimize
         self.voiceLearningState = voiceLearningState
         self.onStartVoiceLearning = onStartVoiceLearning
         self.voiceConfidenceHistory = voiceConfidenceHistory
@@ -605,20 +607,11 @@ struct InCallScreen: View {
     private var fullBody: some View {
         ZStack(alignment: .bottom) {
             CallMeshBackground()
-                .background(GeometryReader { geo in
-                    Color.clear
-                        .onAppear { windowHeight = geo.size.height }
-                        .onChange(of: geo.size.height) { newHeight in windowHeight = newHeight }
-                })
-            // The dock (and the security-code card above it while the confirmation is outstanding) is a bottom
-            // inset: the column ends above it at rest. While scrolling, content still passes under the inset, as
-            // under any bar.
+            // The dock is a bottom inset: the column ends above it at rest. While scrolling, content still passes
+            // under the inset, as under any bar.
             scrollContent
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    VStack(spacing: 10) {
-                        pinnedSasArea
-                        bottomActionRow
-                    }
+                    bottomActionRow
                 }
             // W534: top-center pill badge "Peer sta condividendo lo
             // schermo" surfaced when the remote side has announced a
@@ -680,6 +673,9 @@ struct InCallScreen: View {
 
     private func callTopBar(onReportProblem: @escaping () -> Void) -> some View {
         HStack(spacing: 8) {
+            if let onMinimize {
+                MinimizeCallButton(action: onMinimize)
+            }
             Button(action: onReportProblem) {
                 Image(systemName: "ladybug")
                     .qaudionScaledFont(size: 20, weight: .regular, maxSize: .xLarge)
@@ -1025,15 +1021,17 @@ struct InCallScreen: View {
                 }
 
                 // P0-3 — this one actually gates media (see the field's doc).
-                if awaitingIdentityConfirmation && !sasPinsHoldNotice {
+                if awaitingIdentityConfirmation {
                     Spacer().frame(height: 10)
                     identityHoldBanner.padding(.horizontal, 20)
                 }
 
-                // The card is pinned above the dock (`pinnedSasArea`) only when a comparison is needed; it is
-                // never drawn here. The code is always available in the security sheet.
-                if SasCardPlacement.showsWaitingLine(sasWordCount: sasWords.count, sasWaiting: sasWaiting,
-                                                     verificationNeeded: sasVerificationNeeded) {
+                // The security code: always in the column once it exists (a state of the call, never a prompt), with
+                // the confirm action. Without words yet, the waiting line stands in its place.
+                if sasWords.count == SasCardPlacement.wordCount {
+                    Spacer().frame(height: 12)
+                    sasPanel.padding(.horizontal, 20)
+                } else if sasWaiting {
                     Spacer().frame(height: 12)
                     sasWaitingRow.padding(.horizontal, 20)
                 }
@@ -1056,72 +1054,10 @@ struct InCallScreen: View {
         }
     }
 
-    private var sasIsPinned: Bool {
-        SasCardPlacement.isPinned(sasWordCount: sasWords.count, sasVerified: sasVerified,
-                                  verificationNeeded: sasVerificationNeeded)
-    }
-
     /// The code counts as confirmed on screen only once this call's assurance verdict is in. Until then (the first
     /// seconds of a call) the header, the shield and the identity cell stay in the neutral pending state.
     private var sasVerifiedShown: Bool {
         SasCardPlacement.showsVerified(sasVerified: sasVerified, verdictKnown: assurancePresentation != nil)
-    }
-
-    /// A comparison of the code is really needed (see `SasCardPlacement.isVerificationNeeded`).
-    private var sasVerificationNeeded: Bool {
-        SasCardPlacement.isVerificationNeeded(
-            sasRequired: assurancePresentation?.sasRequired,
-            awaitingConfirmation: awaitingIdentityConfirmation,
-            identityNotice: identityUnauthenticatedChange || handshakeSignatureInvalid || identityRotationAwaitingSas)
-    }
-
-    private var sasPinsHoldNotice: Bool {
-        SasCardPlacement.pinsHoldNotice(sasWordCount: sasWords.count, sasVerified: sasVerified,
-                                        verificationNeeded: sasVerificationNeeded,
-                                        awaitingConfirmation: awaitingIdentityConfirmation)
-    }
-
-    /// The hold notice and the security-code card, pinned above the dock while the confirmation is outstanding. The
-    /// confirm button is outside the scrollable part, so it is always visible and tappable; the notice is one line.
-    /// Only at the largest text sizes does the part with the words scroll, inside a limit taken from the window height.
-    @ViewBuilder
-    private var pinnedSasArea: some View {
-        if sasIsPinned {
-            VStack(spacing: 10) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        if sasPinsHoldNotice {
-                            identityHoldLine
-                        }
-                        sasHeaderAndWords
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxHeight: SasCardPlacement.maxScrollableHeight(windowHeight: windowHeight))
-                sasConfirmButton
-            }
-            .padding(16)
-            .background(RoundedRectangle(cornerRadius: 6).fill(scheme.surface.opacity(0.9)))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(scheme.primary.opacity(0.6), lineWidth: 1))
-            .padding(.horizontal, SasCardPlacement.horizontalInset)
-            .qaudionReadableWidth()
-        }
-    }
-
-    /// One-line form of the hold notice for the pinned card (the full text stays in the column form).
-    private var identityHoldLine: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "lock.shield.fill")
-                .qaudionScaledFont(size: 14, weight: .semibold, maxSize: .xLarge)
-            Text("AUDIO IN ATTESA DI CONFERMA")
-                .qaudionStyle(type.labelSmall)
-                .tracking(0.6)
-                .lineLimit(2)
-        }
-        .foregroundStyle(extras.riskHigh)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Audio e video in attesa: verifica le parole SAS per continuare la chiamata in sicurezza.")
     }
 
     /// The "DEMO" badge is shown only when neither the key panel nor the live-call flag is set. The panel exists only
