@@ -93,7 +93,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // Ringtone: the user's choice (bundled 28 s CAF, or the imported file in Library/Sounds), so an incoming
         // Q-Audion call is audibly ours. iOS falls back to the system ringtone if the file is ever missing.
         cfg.ringtoneSound = CustomRingtone.currentResolution().callKitFileName
-        // Brand the native call UI with the Q-Audion lock glyph (template image
+        // Brand the native call UI with the Q-Audion logo (shield with bars, template image
         // from Assets.xcassets/CallKitGlyph — alpha defines the shape, tinted by
         // the system). Best-effort: a nil/absent asset just leaves the default.
         cfg.iconTemplateImageData = UIImage(named: "CallKitGlyph")?.pngData()
