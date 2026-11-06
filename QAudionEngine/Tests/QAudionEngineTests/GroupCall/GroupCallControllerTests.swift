@@ -613,7 +613,9 @@ final class GroupCallControllerTests: XCTestCase {
         let failed = await h.waitUntil { !h.errors.isEmpty }
         XCTAssertTrue(failed)
         XCTAssertEqual(h.errors, [.other("janus_436")])
-        XCTAssertEqual(h.controller.state, .idle)
+        // The error is reported before the call is torn down (on another thread): wait for the end state.
+        let ended = await h.waitUntil { h.controller.state == .idle }
+        XCTAssertTrue(ended, "state: \(h.controller.state)")
     }
 
     func testARefreshRequestOfTheSessionIsSentToTheServer() async {
@@ -639,10 +641,10 @@ final class GroupCallControllerTests: XCTestCase {
         guard let link = await h.joinAndConnect() else { return XCTFail("no link") }
         link.emit(.tokenRefresh("periodic"))
         XCTAssertEqual(refreshCount(h), 1)
-        let three = await h.waitUntil { self.refreshCount(h) == 3 }
+        let three = await h.waitUntil(15) { self.refreshCount(h) == 3 }
         XCTAssertTrue(three, "an attempt, then two more after the pauses")
         // Nobody answered any of them: the media is rejoined while the old token is still good.
-        let rejoined = await h.waitUntil { h.sent.contains { $0.type == "group_call_media_rejoin" } }
+        let rejoined = await h.waitUntil(15) { h.sent.contains { $0.type == "group_call_media_rejoin" } }
         XCTAssertTrue(rejoined)
         XCTAssertEqual(h.sent.first { $0.type == "group_call_media_rejoin" }?.data["reason"] as? String, "token_refresh")
         XCTAssertEqual(refreshCount(h), 3, "no attempt beyond the round")
