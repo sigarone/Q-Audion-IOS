@@ -12,8 +12,6 @@ enum CallControlKind: String, CaseIterable, Sendable {
     case buds
     case hand
     case reaction
-    /// The single report-a-problem button (audio call only, last of the top row).
-    case report
     case mute
     case audio
     case video
@@ -53,7 +51,7 @@ enum CallDockLayout {
         case .connecting:
             return []
         case .oneToOne:
-            wanted = [.chat, .share, .add, .buds, .report]
+            wanted = [.chat, .share, .add, .buds]
         case .group:
             wanted = [.chat, .share, .hand, .reaction]
         }
@@ -435,18 +433,6 @@ enum CallDockItems {
             isLocked: isLocked,
             action: action,
             onLockedAction: onLocked)
-    }
-
-    /// The single report-a-problem button of the audio call (marks the moment in the call telemetry, then opens the sheet).
-    static func report(_ style: CallDockStyle, action: @escaping () -> Void) -> CallDockItem {
-        return CallDockItem(
-            kind: .report,
-            icon: "ladybug",
-            label: CallControlText.report,
-            accessibilityLabel: CallControlText.reportA11y,
-            background: style.scheme.surfaceVariant,
-            iconColor: style.scheme.onSurface,
-            action: action)
     }
 
     static func hand(_ style: CallDockStyle, raised: Bool, action: @escaping () -> Void) -> CallDockItem {

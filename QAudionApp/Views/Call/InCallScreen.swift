@@ -625,6 +625,10 @@ struct InCallScreen: View {
             // SCREEN_SHARE:start. Wrapped in the outermost ZStack so
             // the position is fixed independent of scrollContent /
             // bottomActionRow layout.
+            // Report-a-problem button, top left like the Android call screen (44 pt circle, 16 pt in, 8 pt down).
+            if let onReportProblem {
+                callTopBar(onReportProblem: onReportProblem)
+            }
             if peerScreenSharing {
                 VStack {
                     peerScreenShareBadge
@@ -672,6 +676,24 @@ struct InCallScreen: View {
             get: { trustBadgeInfo != nil },
             set: { shown in if !shown { trustBadgeInfo = nil } }
         )
+    }
+
+    private func callTopBar(onReportProblem: @escaping () -> Void) -> some View {
+        HStack(spacing: 8) {
+            Button(action: onReportProblem) {
+                Image(systemName: "ladybug")
+                    .qaudionScaledFont(size: 20, weight: .regular, maxSize: .xLarge)
+                    .foregroundStyle(scheme.onSurface)
+                    .frame(width: 44, height: 44)
+                    .background(Circle().fill(scheme.surface.opacity(0.85)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(CallControlText.reportA11y)
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 16)
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     /// W534 — pill badge surfaced when `peerScreenSharing == true`.
@@ -947,10 +969,12 @@ struct InCallScreen: View {
                     .foregroundStyle(scheme.onBackground)
                     .multilineTextAlignment(.center)
 
-                presenceLine
-                    .padding(.top, 2)
+                if Self.demoBadgeShown(keyInfoPresent: keyInfo != nil, sessionKeyPresent: hasSessionKey) {
+                    stubBadge
+                        .padding(.top, 2)
+                }
 
-                Spacer().frame(height: 12)
+                Spacer().frame(height: 8)
 
                 statsBand.padding(.horizontal, 20)
 
@@ -1098,27 +1122,6 @@ struct InCallScreen: View {
         .foregroundStyle(extras.riskHigh)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Audio e video in attesa: verifica le parole SAS per continuare la chiamata in sicurezza.")
-    }
-
-    // MARK: - Presence line (matches Stitch / Android subtitle)
-
-    private var presenceLine: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(extras.success)
-                .frame(width: 6, height: 6)
-            // Presence only: it used to add a fixed "verified voice" claim that
-            // no measurement backed, shown on every call.
-            Text("online")
-                .qaudionStyle(type.labelMedium)
-                .foregroundStyle(scheme.onSurfaceVariant)
-            // W323: tiny "DATI DEMO" badge surfaced while the call holds no
-            // session key at all — heuristic for "engine not yet wired" so
-            // testers know the numbers above are placeholder.
-            if Self.demoBadgeShown(keyInfoPresent: keyInfo != nil, sessionKeyPresent: hasSessionKey) {
-                stubBadge
-            }
-        }
     }
 
     /// The "DEMO" badge is shown only when neither the key panel nor the live-call flag is set. The panel exists only
@@ -2714,10 +2717,6 @@ struct InCallScreen: View {
                                        isLocked: !addParticipantUnlocked,
                                        action: onAddParticipant,
                                        onLocked: onAddParticipantLocked))
-        // The single report button, in the dock where the report control was: always reachable, after the other controls.
-        if let onReportProblem {
-            items.append(CallDockItems.report(style, action: onReportProblem))
-        }
         return CallDockItems.assemble(mode: .oneToOne, items: items)
     }
 
