@@ -302,7 +302,7 @@ struct LocationPinGlyph: View {
                     .frame(width: 34, height: 34)
             }
             Image(systemName: ended ? "mappin.slash" : "mappin.circle.fill")
-                .font(.system(size: 24, weight: .semibold))
+                .qaudionScaledFont(size: 24, weight: .semibold, family: .headline)
                 .foregroundStyle(ended ? scheme.onSurfaceVariant : scheme.primary)
         }
         .accessibilityHidden(true)

@@ -132,7 +132,7 @@ struct VoiceDetailsLine: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: fontSize, weight: .medium, design: .monospaced))
+            .qaudionScaledFont(size: fontSize, weight: .medium, design: .monospaced, maxSize: .xLarge)
             .foregroundStyle(scheme.onSurfaceVariant)
             .lineLimit(1)
             .truncationMode(.tail)
@@ -158,7 +158,7 @@ struct VoiceDetailsLine: View {
     /// room of its own: it is a background.
     private var templateWidthProbe: some View {
         Text(template)
-            .font(.system(size: baseSize, weight: .medium, design: .monospaced))
+            .qaudionScaledFont(size: baseSize, weight: .medium, design: .monospaced, maxSize: .xLarge)
             .lineLimit(1)
             .fixedSize()
             .hidden()

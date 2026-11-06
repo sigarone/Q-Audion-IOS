@@ -910,7 +910,7 @@ struct EarbudDiagScreen: View {
                             .scaleEffect(0.8)
                     } else {
                         Image(systemName: "lock.shield.fill")
-                            .font(.system(size: 15, weight: .semibold))
+                            .qaudionScaledFont(size: 15, weight: .semibold)
                     }
                     Text(isPairing ? "Pairing in corso…" : "Avvia Pairing")
                         .qaudionStyle(type.labelLarge)
@@ -934,7 +934,7 @@ struct EarbudDiagScreen: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 15, weight: .semibold))
+                        .qaudionScaledFont(size: 15, weight: .semibold)
                     Text("Auto-relay (cross-phone)")
                         .qaudionStyle(type.labelLarge)
                 }
@@ -958,7 +958,7 @@ struct EarbudDiagScreen: View {
                             .scaleEffect(0.75)
                     } else {
                         Image(systemName: "info.circle")
-                            .font(.system(size: 12))
+                            .qaudionScaledFont(size: 12, family: .label)
                             .foregroundStyle(extras.pqcAccent)
                     }
                     Text(status)
@@ -1000,7 +1000,7 @@ struct EarbudDiagScreen: View {
         let (icon, label, color) = pairingStatusContent
         return HStack(spacing: 6) {
             Image(systemName: icon)
-                .font(.system(size: 12, weight: .semibold))
+                .qaudionScaledFont(size: 12, weight: .semibold, family: .label)
                 .foregroundStyle(color)
             Text(label)
                 .qaudionStyle(type.labelSmall)
@@ -1042,7 +1042,7 @@ struct EarbudDiagScreen: View {
     private var emptyStateSection: some View {
         VStack(spacing: 16) {
             Image(systemName: "headphones")
-                .font(.system(size: 48))
+                .qaudionScaledFont(size: 48, family: .display)
                 .foregroundStyle(scheme.onSurfaceVariant.opacity(0.4))
             Text("Nessun auricolare Q-Audion rilevato")
                 .qaudionStyle(type.bodyMedium)
@@ -1062,7 +1062,7 @@ struct EarbudDiagScreen: View {
     private var blePermissionHint: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 14, weight: .semibold))
+                .qaudionScaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(extras.warning)
                 .padding(.top, 1)
             Text("Accesso Bluetooth negato. Abilitalo in Impostazioni iOS → Privacy → Bluetooth.")

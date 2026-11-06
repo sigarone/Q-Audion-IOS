@@ -58,7 +58,7 @@ struct WelcomeScreen: View {
                     Spacer().frame(height: 56)
 
                     Text("Benvenuto a Q-Audion.")
-                        .font(.system(size: 42, weight: .semibold))
+                        .qaudionScaledFont(size: 42, weight: .semibold, family: .display)
                         .foregroundStyle(scheme.onBackground)
                         .lineLimit(2)
                         // A word never runs past the edge: on a narrow cover display or at a large text size the

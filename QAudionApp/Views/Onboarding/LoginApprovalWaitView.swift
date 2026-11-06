@@ -58,7 +58,7 @@ struct LoginApprovalWaitView: View {
     private var waitingContent: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text(DeviceApprovalTexts.waitTitle)
-                .font(.system(size: 24, weight: .semibold))
+                .qaudionScaledFont(size: 24, weight: .semibold, family: .headline)
                 .foregroundStyle(.white)
 
             Text(model.ticket.matchCode)
@@ -213,7 +213,7 @@ struct LoginApprovalWaitView: View {
     private func endContent(title: String, text: String) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(title)
-                .font(.system(size: 24, weight: .semibold))
+                .qaudionScaledFont(size: 24, weight: .semibold, family: .headline)
                 .foregroundStyle(.white)
             Text(text)
                 .font(.body)

@@ -745,7 +745,7 @@ struct P3ControlScreen: View {
                 LazyVStack(alignment: .leading, spacing: 4) {
                     ForEach(gattManager.logLines.reversed(), id: \.self) { line in
                         Text(line)
-                            .font(.system(size: 11, design: .monospaced))
+                            .qaudionScaledFont(size: 11, design: .monospaced, family: .label)
                             .foregroundColor(Color(hex: 0xC9D1D9))
                             .multilineTextAlignment(.leading)
                     }

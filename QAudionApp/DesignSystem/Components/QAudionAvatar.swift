@@ -174,7 +174,7 @@ struct QAudionAvatar: View {
             .frame(width: size, height: size)
             .overlay(
                 Image(systemName: iconName)
-                    .font(.system(size: size * 0.42, weight: .semibold))
+                    .qaudionScaledFont(size: size * 0.42, weight: .semibold, maxSize: .xLarge)
                     .foregroundStyle(.white.opacity(0.95))
             )
     }
@@ -225,7 +225,7 @@ struct QAudionAvatar: View {
             .overlay {
                 if kind == .group {
                     Image(systemName: "person.3.fill")
-                        .font(.system(size: size * 0.42, weight: .semibold))
+                        .qaudionScaledFont(size: size * 0.42, weight: .semibold, maxSize: .xLarge)
                         .foregroundStyle(.white.opacity(0.95))
                 } else {
                     // shortNumber ha priorità assoluta (1:1 con Android AvatarImage.kt)
@@ -235,8 +235,7 @@ struct QAudionAvatar: View {
                     // moltiplicatore 0.7 di Android `AvatarImage.kt` L55.
                     let fontMultiplier: CGFloat = label.count > 2 ? 0.7 : 1.0
                     Text(label)
-                        .font(.system(size: size * 0.40 * fontMultiplier,
-                                      weight: .semibold))
+                        .qaudionScaledFont(size: size * 0.40 * fontMultiplier, weight: .semibold, maxSize: .xLarge)
                         .foregroundStyle(.white)
                 }
             }

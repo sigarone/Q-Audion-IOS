@@ -294,7 +294,7 @@ struct MyPhonesScreen: View {
                     // keep the closure body trivial — CLAUDE.md §13.
                     if let saved = container.lastSavedAt {
                         Text(Self.lastSavedLabel(saved))
-                            .font(.system(size: 11, weight: .regular, design: .monospaced))
+                            .qaudionScaledFont(size: 11, weight: .regular, design: .monospaced, family: .label)
                             .foregroundStyle(scheme.onSurfaceVariant)
                             .padding(.top, 4)
                     }
@@ -340,7 +340,7 @@ struct MyPhonesScreen: View {
     private var headerCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("I MIEI NUMERI")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .qaudionScaledFont(size: 11, weight: .medium, design: .monospaced, family: .label)
                 .tracking(1.5)
                 .foregroundStyle(scheme.primary)
             Spacer().frame(height: 8)
@@ -356,7 +356,7 @@ struct MyPhonesScreen: View {
             }
 
             Text("NUMERI DI TELEFONO")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .qaudionScaledFont(size: 11, weight: .medium, design: .monospaced, family: .label)
                 .tracking(1.2)
                 .foregroundStyle(scheme.onSurfaceVariant)
             Spacer().frame(height: 4)
@@ -397,14 +397,14 @@ struct MyPhonesScreen: View {
     private func extensionRow(_ ext: Int) -> some View {
         HStack(alignment: .center, spacing: 8) {
             Text("INTERNO")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .qaudionScaledFont(size: 11, weight: .medium, design: .monospaced, family: .label)
                 .tracking(1.2)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .frame(width: 80, alignment: .leading)
             // Pavel, 2026-07-29: bare digits, no "#" (or any other) prefix —
             // same rule as every other rendering of this identity, self or peer.
             Text(String(ext))
-                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                .qaudionScaledFont(size: 14, weight: .semibold, design: .monospaced)
                 .foregroundStyle(scheme.onSurface)
             Spacer(minLength: 0)
             Button {
@@ -425,7 +425,7 @@ struct MyPhonesScreen: View {
     private func phoneRow(_ phone: String) -> some View {
         HStack(alignment: .center, spacing: 8) {
             Text(phone)
-                .font(.system(size: 14, weight: .regular, design: .monospaced))
+                .qaudionScaledFont(size: 14, weight: .regular, design: .monospaced)
                 .foregroundStyle(scheme.onSurface)
             Spacer(minLength: 0)
             Button {

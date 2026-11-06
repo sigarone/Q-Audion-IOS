@@ -307,7 +307,7 @@ struct BackupSettingsScreen: View {
     private var infoBanner: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "checkmark.shield.fill")
-                .font(.system(size: 18, weight: .semibold))
+                .qaudionScaledFont(size: 18, weight: .semibold)
                 .foregroundStyle(extras.success)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 4) {
@@ -387,7 +387,7 @@ struct BackupSettingsScreen: View {
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
+                    .qaudionScaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(scheme.onSurfaceVariant)
             }
             .padding(.horizontal, 14)
@@ -406,7 +406,7 @@ struct BackupSettingsScreen: View {
     private func errorBanner(_ msg: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 14, weight: .semibold))
+                .qaudionScaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(extras.riskHigh)
                 .padding(.top, 1)
             Text(msg)

@@ -209,7 +209,7 @@ struct ProximityHowItWorksSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     Image(systemName: "qrcode.viewfinder")
-                        .font(.system(size: 40))
+                        .qaudionScaledFont(size: 40, family: .display)
                         .foregroundStyle(.blue)
                     Text(ProximityHowItWorks.body)
                         .font(.body)
@@ -264,7 +264,7 @@ struct ProximityOutcomeResultSheet: View {
             VStack(spacing: 20) {
                 Spacer(minLength: 12)
                 Image(systemName: iconName)
-                    .font(.system(size: 64))
+                    .qaudionScaledFont(size: 64, family: .display)
                     .foregroundStyle(iconColor)
                 Text(outcome.title)
                     .font(.title3.weight(.semibold))

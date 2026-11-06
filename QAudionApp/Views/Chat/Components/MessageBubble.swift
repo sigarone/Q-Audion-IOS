@@ -230,7 +230,7 @@ struct MessageBubble<Body: View>: View {
         let tint = viaMesh ? extras.bluetoothAccent : scheme.onSurfaceVariant
         return HStack(spacing: 3) {
             Image(systemName: viaMesh ? "dot.radiowaves.left.and.right" : "globe")
-                .font(.system(size: 9, weight: .semibold))
+                .qaudionScaledFont(size: 9, weight: .semibold, family: .label)
             Text(viaMesh ? LocalizedStringKey("Bluetooth") : LocalizedStringKey("Rete"))
                 .qaudionStyle(type.labelSmall)
         }
@@ -248,7 +248,7 @@ struct MessageBubble<Body: View>: View {
         switch delivery {
         case .sending:
             Image(systemName: "clock")
-                .font(.system(size: 11, weight: .semibold))
+                .qaudionScaledFont(size: 11, weight: .semibold, family: .label)
                 .foregroundStyle(scheme.onSurfaceVariant)
         case .uploading(let progress):
             // Thin determinate bar, same visual weight as the check-mark
@@ -261,19 +261,19 @@ struct MessageBubble<Body: View>: View {
                 .frame(width: 28)
         case .sent:
             Image(systemName: "checkmark")
-                .font(.system(size: 11, weight: .semibold))
+                .qaudionScaledFont(size: 11, weight: .semibold, family: .label)
                 .foregroundStyle(scheme.onSurfaceVariant)
         case .delivered:
             Image(systemName: "checkmark.circle")
-                .font(.system(size: 11, weight: .semibold))
+                .qaudionScaledFont(size: 11, weight: .semibold, family: .label)
                 .foregroundStyle(scheme.onSurfaceVariant)
         case .read:
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 11, weight: .semibold))
+                .qaudionScaledFont(size: 11, weight: .semibold, family: .label)
                 .foregroundStyle(scheme.primary)
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11, weight: .semibold))
+                .qaudionScaledFont(size: 11, weight: .semibold, family: .label)
                 .foregroundStyle(scheme.error)
         }
     }
@@ -295,7 +295,7 @@ struct MessageBubble<Body: View>: View {
     @ViewBuilder
     private func reactionChip(_ r: MessageReaction) -> some View {
         let label = HStack(spacing: 3) {
-            Text(r.emoji).font(.system(size: 12))
+            Text(r.emoji).qaudionScaledFont(size: 12, family: .label)
             Text("\(r.count)")
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(scheme.onSurfaceVariant)

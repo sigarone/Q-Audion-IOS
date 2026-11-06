@@ -13,7 +13,7 @@ struct PasswordChangedBanner: View {
         if isVisible {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "key.fill")
-                    .font(.system(size: 16, weight: .semibold))
+                    .qaudionScaledFont(size: 16, weight: .semibold)
                     .foregroundStyle(extras.warning)
                     .padding(.top, 2)
                 Text(Self.messageText)
@@ -24,7 +24,7 @@ struct PasswordChangedBanner: View {
                     isVisible = false
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 13, weight: .semibold))
+                        .qaudionScaledFont(size: 13, weight: .semibold)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .padding(6)
                 }

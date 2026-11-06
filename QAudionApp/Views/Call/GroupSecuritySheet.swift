@@ -206,7 +206,7 @@ struct GroupSecuritySheet: View {
         let visual = memberTrustVisual(eval)
         return HStack(spacing: 4) {
             Image(systemName: visual.icon)
-                .font(.system(size: 9, weight: .bold))
+                .qaudionScaledFont(size: 9, weight: .bold, family: .label, maxSize: .xLarge)
             Text(visual.label)
                 .qaudionStyle(type.labelSmall)
                 .tracking(0.4)

@@ -747,7 +747,7 @@ struct AccountSettingsScreen: View {
                 .frame(width: 64, height: 64)
                 .overlay(
                     Image(systemName: iconName)
-                        .font(.system(size: 28))
+                        .qaudionScaledFont(size: 28, family: .headline)
                         .foregroundStyle(scheme.primary)
                 )
                 .overlay(Circle().stroke(scheme.outline.opacity(0.4), lineWidth: 1))
@@ -947,7 +947,7 @@ struct AccountSettingsScreen: View {
         } label: {
             HStack {
                 Image(systemName: "rectangle.portrait.and.arrow.right")
-                    .font(.system(size: 16, weight: .regular))
+                    .qaudionScaledFont(size: 16, weight: .regular)
                 Text("Esci dall'account")
                     .qaudionStyle(type.bodyMedium)
             }
@@ -1006,7 +1006,7 @@ struct AccountSettingsScreen: View {
         } label: {
             HStack {
                 Image(systemName: "trash")
-                    .font(.system(size: 16, weight: .regular))
+                    .qaudionScaledFont(size: 16, weight: .regular)
                 Text("Elimina account")
                     .qaudionStyle(type.bodyMedium)
             }
@@ -1029,7 +1029,7 @@ struct AccountSettingsScreen: View {
     private func errorBanner(_ msg: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 14, weight: .semibold))
+                .qaudionScaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(extras.riskHigh)
                 .padding(.top, 1)
             Text(msg)

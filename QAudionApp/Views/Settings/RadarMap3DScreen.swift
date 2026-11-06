@@ -659,15 +659,15 @@ struct RadarMap3DScreen: View {
                             
                             if ready && presence && stationary {
                                 Text("SOGGETTO FERMO - LETTURA ATTIVA")
-                                    .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                                    .qaudionScaledFont(size: 8, weight: .semibold, design: .monospaced, family: .label)
                                     .foregroundColor(Color(hex: 0x2FBF71))
                             } else if ready && presence {
                                 Text("MOVIMENTO CORPO - FILTRO ATTIVO")
-                                    .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                                    .qaudionScaledFont(size: 8, weight: .semibold, design: .monospaced, family: .label)
                                     .foregroundColor(Color(hex: 0xE0A53C))
                             } else {
                                 Text("NESSUN SOGGETTO RILEVATO")
-                                    .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                                    .qaudionScaledFont(size: 8, weight: .semibold, design: .monospaced, family: .label)
                                     .foregroundColor(scheme.onSurfaceVariant.opacity(0.6))
                             }
                         }
@@ -695,7 +695,7 @@ struct RadarMap3DScreen: View {
     private func metricItem(label: String, value: String, icon: String, iconColor: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
-                .font(.system(size: 9, weight: .bold))
+                .qaudionScaledFont(size: 9, weight: .bold, family: .label)
                 .foregroundColor(scheme.onSurfaceVariant)
             
             HStack(spacing: 6) {

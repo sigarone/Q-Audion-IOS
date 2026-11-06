@@ -820,14 +820,14 @@ struct ContactsListView: View {
                 Circle().fill(Color(hex: 0xB388FF)).frame(width: 12, height: 12)
                     .overlay(Circle().stroke(.white, lineWidth: 2))
                 Image(systemName: "phone.fill")
-                    .font(.system(size: 6, weight: .bold)).foregroundStyle(.white)
+                    .qaudionScaledFont(size: 6, weight: .bold, family: .label).foregroundStyle(.white)
             }
         case .doNotDisturb:
             ZStack {
                 Circle().fill(Color(hex: 0xF2B73A)).frame(width: 12, height: 12)
                     .overlay(Circle().stroke(.white, lineWidth: 2))
                 Image(systemName: "moon.fill")
-                    .font(.system(size: 5, weight: .bold)).foregroundStyle(.white)
+                    .qaudionScaledFont(size: 5, weight: .bold, family: .label).foregroundStyle(.white)
             }
         default:
             EmptyView()
@@ -853,7 +853,7 @@ struct ContactsListView: View {
         .overlay(alignment: .bottomTrailing) {
             if blocked {
                 Image(systemName: "circle.slash.fill")
-                    .font(.system(size: 12, weight: .semibold))
+                    .qaudionScaledFont(size: 12, weight: .semibold, family: .label)
                     .foregroundStyle(.red)
                     .background(Circle().fill(.white).padding(-1))
             } else {

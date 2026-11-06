@@ -590,7 +590,7 @@ struct MeshSheetView: View {
     private func sendButton(label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Image(systemName: "paperplane.fill").font(.system(size: 13))
+                Image(systemName: "paperplane.fill").qaudionScaledFont(size: 13, maxSize: .xLarge)
                 Text(label).qaudionStyle(type.labelLarge)
             }
             .foregroundStyle(scheme.onPrimary)
@@ -629,7 +629,7 @@ struct MeshSheetView: View {
                     .foregroundStyle(scheme.onSurface)
                 Spacer()
                 relayCountChip(peer.relayNodeHexes.count)
-                Image(systemName: "chevron.down").font(.system(size: 12)).foregroundStyle(scheme.onSurfaceVariant)
+                Image(systemName: "chevron.down").qaudionScaledFont(size: 12, family: .label, maxSize: .xLarge).foregroundStyle(scheme.onSurfaceVariant)
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(scheme.outline, lineWidth: 1))
@@ -706,7 +706,7 @@ struct MeshTransportChip: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "dot.radiowaves.left.and.right")
-                .font(.system(size: 13))
+                .qaudionScaledFont(size: 13, maxSize: .xLarge)
                 .foregroundStyle(tint)
             Text(reachable
                  ? String(localized: "mesh.chip.reachable", defaultValue: "Invio via mesh Bluetooth — \(peerName)", comment: "Chip above the composer: messages are sent through the Bluetooth mesh; %@ is the name of the device.")
@@ -716,7 +716,7 @@ struct MeshTransportChip: View {
             Spacer(minLength: 4)
             Button(action: onClear) {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 15))
+                    .qaudionScaledFont(size: 15, maxSize: .xLarge)
                     .foregroundStyle(tint)
             }
             .accessibilityLabel("Torna al trasporto normale")

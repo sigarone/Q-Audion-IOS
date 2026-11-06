@@ -87,7 +87,7 @@ struct EnigmaSceneView: View {
 
     private var labelText: some View {
         Text(verbatim: labelLine)
-            .font(.system(size: 11, design: .monospaced))
+            .qaudionScaledFont(size: 11, design: .monospaced, family: .label)
             .foregroundStyle(scheme.onSurfaceVariant)
             .lineLimit(2)
     }
@@ -149,7 +149,7 @@ struct EnigmaUploadPanel: View {
         let line: String = EnigmaStrings.fileLine(percent: EnigmaUpload.percent(shown))
         return VStack(alignment: .leading, spacing: 3) {
             Text(verbatim: line)
-                .font(.system(size: 11, design: .monospaced))
+                .qaudionScaledFont(size: 11, design: .monospaced, family: .label)
                 .foregroundStyle(scheme.onSurfaceVariant)
             EnigmaRotorPanel(index: target, accent: extras.pqcAccent)
                 .animation(.linear(duration: 0.45), value: target)

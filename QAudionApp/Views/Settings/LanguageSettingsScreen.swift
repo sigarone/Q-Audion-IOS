@@ -56,7 +56,7 @@ struct LanguageSettingsScreen: View {
                 Spacer()
                 if selected {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 15, weight: .semibold))
+                        .qaudionScaledFont(size: 15, weight: .semibold)
                         .foregroundStyle(scheme.primary)
                 }
             }
@@ -82,7 +82,7 @@ struct LanguageSettingsScreen: View {
                 Spacer()
                 if selected {
                     Image(systemName: "checkmark")
-                        .font(.system(size: 15, weight: .semibold))
+                        .qaudionScaledFont(size: 15, weight: .semibold)
                         .foregroundStyle(scheme.primary)
                 }
             }

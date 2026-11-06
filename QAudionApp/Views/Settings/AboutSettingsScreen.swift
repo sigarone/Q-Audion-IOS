@@ -253,7 +253,7 @@ struct AboutSettingsScreen: View {
                                     .foregroundStyle(scheme.onSurface)
                                 Spacer()
                                 Image(systemName: "arrow.up.right.square")
-                                    .font(.system(size: 14, weight: .regular))
+                                    .qaudionScaledFont(size: 14, weight: .regular)
                                     .foregroundStyle(scheme.onSurfaceVariant)
                             }
                             .padding(.horizontal, 14)
@@ -286,7 +286,7 @@ struct AboutSettingsScreen: View {
                                 }
                                 Spacer()
                                 Image(systemName: "arrow.up.right.square")
-                                    .font(.system(size: 14, weight: .regular))
+                                    .qaudionScaledFont(size: 14, weight: .regular)
                                     .foregroundStyle(scheme.onSurfaceVariant)
                             }
                             .padding(.horizontal, 14)
@@ -330,7 +330,7 @@ struct AboutSettingsScreen: View {
                                 }
                                 Spacer()
                                 Image(systemName: "arrow.up.right.square")
-                                    .font(.system(size: 14, weight: .regular))
+                                    .qaudionScaledFont(size: 14, weight: .regular)
                                     .foregroundStyle(scheme.onSurfaceVariant)
                             }
                             .padding(.horizontal, 14)
@@ -378,7 +378,7 @@ struct AboutSettingsScreen: View {
                                 }
                                 Spacer()
                                 Image(systemName: "doc.on.clipboard")
-                                    .font(.system(size: 14, weight: .regular))
+                                    .qaudionScaledFont(size: 14, weight: .regular)
                                     .foregroundStyle(scheme.onSurfaceVariant)
                             }
                             .padding(.horizontal, 14)
@@ -1049,7 +1049,7 @@ struct AboutSettingsScreen: View {
                          subtitle: String?) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 16, weight: .semibold))
+                .qaudionScaledFont(size: 16, weight: .semibold)
                 .foregroundStyle(tint)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {

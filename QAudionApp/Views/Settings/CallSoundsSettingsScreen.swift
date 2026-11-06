@@ -395,7 +395,7 @@ struct CallSoundsSettingsScreen: View {
                     Text(subtitle).qaudionStyle(type.labelSmall).foregroundStyle(scheme.onSurfaceVariant).multilineTextAlignment(.leading)
                 }
                 Spacer()
-                Image(systemName: "arrow.up.right.square").font(.system(size: 14)).foregroundStyle(scheme.onSurfaceVariant)
+                Image(systemName: "arrow.up.right.square").qaudionScaledFont(size: 14).foregroundStyle(scheme.onSurfaceVariant)
             }
             .accessibilityHint(loc("Apri Impostazioni"))
         }

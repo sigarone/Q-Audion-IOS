@@ -165,7 +165,7 @@ struct ChatsRootView: View {
             ZStack {
                 scheme.background.ignoresSafeArea()
                 Image(systemName: "lock.shield.fill")
-                    .font(.system(size: 56, weight: .regular))
+                    .qaudionScaledFont(size: 56, weight: .regular, family: .display)
                     .foregroundStyle(extras.pqcAccent.opacity(0.35))
                     .accessibilityHidden(true)
             }

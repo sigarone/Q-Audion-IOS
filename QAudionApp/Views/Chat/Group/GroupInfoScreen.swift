@@ -337,7 +337,7 @@ struct GroupInfoScreen: View {
                             showingRename = true
                         }) {
                             Image(systemName: "pencil.circle.fill")
-                                .font(.system(size: 15))
+                                .qaudionScaledFont(size: 15)
                                 .foregroundStyle(scheme.onSurfaceVariant)
                         }
                         .buttonStyle(.plain)
@@ -414,7 +414,7 @@ struct GroupInfoScreen: View {
             if isSelfAdmin && !member.isSelf {
                 Button(action: { pendingRemoveMember = member }) {
                     Image(systemName: "minus.circle.fill")
-                        .font(.system(size: 20, weight: .semibold))
+                        .qaudionScaledFont(size: 20, weight: .semibold)
                         .foregroundStyle(extras.riskHigh)
                 }
                 .buttonStyle(.plain)
@@ -442,7 +442,7 @@ struct GroupInfoScreen: View {
                         .frame(width: 32, height: 32)
                     Image(systemName: "person.badge.plus")
                         .foregroundStyle(scheme.primary)
-                        .font(.system(size: 14, weight: .semibold))
+                        .qaudionScaledFont(size: 14, weight: .semibold)
                 }
                 Text("Aggiungi membri")
                     .qaudionStyle(type.bodyMedium)
@@ -469,7 +469,7 @@ struct GroupInfoScreen: View {
                         .frame(width: 32, height: 32)
                     Image(systemName: "rectangle.portrait.and.arrow.right")
                         .foregroundStyle(extras.riskHigh)
-                        .font(.system(size: 14, weight: .semibold))
+                        .qaudionScaledFont(size: 14, weight: .semibold)
                 }
                 Text("Esci dal gruppo")
                     .qaudionStyle(type.bodyMedium)
@@ -502,7 +502,7 @@ struct GroupInfoScreen: View {
                         .frame(width: 32, height: 32)
                     Image(systemName: "trash")
                         .foregroundStyle(extras.riskHigh)
-                        .font(.system(size: 14, weight: .semibold))
+                        .qaudionScaledFont(size: 14, weight: .semibold)
                 }
                 Text("Elimina chat")
                     .qaudionStyle(type.bodyMedium)
@@ -533,7 +533,7 @@ struct GroupInfoScreen: View {
                         .frame(width: 32, height: 32)
                     Image(systemName: "flag")
                         .foregroundStyle(extras.riskHigh)
-                        .font(.system(size: 14, weight: .semibold))
+                        .qaudionScaledFont(size: 14, weight: .semibold)
                 }
                 Text("Segnala gruppo")
                     .qaudionStyle(type.bodyMedium)
@@ -748,7 +748,7 @@ private struct AddGroupMembersSheet: View {
         VStack(spacing: 8) {
             Spacer()
             Image(systemName: "person.crop.circle.badge.questionmark")
-                .font(.system(size: 40))
+                .qaudionScaledFont(size: 40, family: .display)
                 .foregroundStyle(scheme.onSurfaceVariant)
             Text("Nessun contatto da aggiungere")
                 .qaudionStyle(type.bodyMedium)

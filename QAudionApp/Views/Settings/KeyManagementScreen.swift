@@ -331,7 +331,7 @@ struct KeyManagementScreen: View {
     private func errorBanner(_ msg: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 14, weight: .semibold))
+                .qaudionScaledFont(size: 14, weight: .semibold)
                 .foregroundStyle(extras.riskHigh)
                 .padding(.top, 1)
             Text(msg)

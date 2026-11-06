@@ -35,7 +35,7 @@ struct AppLockGateView: View {
 
             VStack(spacing: 32) {
                 Image(systemName: "lock.fill")
-                    .font(.system(size: 64, weight: .light))
+                    .qaudionScaledFont(size: 64, weight: .light, family: .display)
                     .foregroundStyle(.white.opacity(0.85))
 
                 VStack(spacing: 8) {

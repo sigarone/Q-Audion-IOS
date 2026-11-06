@@ -139,7 +139,7 @@ struct PhoneContactImportView: View {
                         .frame(width: 44, height: 44)
                     Image(systemName: "person.2.crop.square.stack.fill")
                         .foregroundStyle(scheme.primary)
-                        .font(.system(size: 18))
+                        .qaudionScaledFont(size: 18)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -271,7 +271,7 @@ struct PhoneContactImportView: View {
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "person.crop.circle.badge.questionmark")
-                .font(.system(size: 48))
+                .qaudionScaledFont(size: 48, family: .display)
                 .foregroundStyle(scheme.onSurfaceVariant)
             Text("Nessun contatto con numero di telefono")
                 .qaudionStyle(type.bodyMedium)

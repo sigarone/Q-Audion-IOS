@@ -498,7 +498,7 @@ struct CallHistoryView: View {
     private var emptyState: some View {
         VStack(spacing: 16) {
             Image(systemName: "phone.badge.checkmark")
-                .font(.system(size: 56))
+                .qaudionScaledFont(size: 56, family: .display, maxSize: .xLarge)
                 .foregroundStyle(scheme.onSurfaceVariant)
             Text("Nessuna chiamata recente")
                 .qaudionStyle(type.titleMedium)
@@ -569,7 +569,7 @@ private struct CallHistoryRow: View {
 
                 HStack(spacing: 6) {
                     Image(systemName: directionIcon)
-                        .font(.system(size: 11, weight: .semibold))
+                        .qaudionScaledFont(size: 11, weight: .semibold, family: .label, maxSize: .xLarge)
                         .foregroundStyle(directionColor)
                     Text(metadataLine)
                         .qaudionStyle(type.labelSmall)
@@ -578,7 +578,7 @@ private struct CallHistoryRow: View {
                         .modifier(MonoCaption())
                     if entry.isVideo {
                         Image(systemName: "video.fill")
-                            .font(.system(size: 10, weight: .semibold))
+                            .qaudionScaledFont(size: 10, weight: .semibold, family: .label, maxSize: .xLarge)
                             .foregroundStyle(scheme.onSurfaceVariant)
                     }
                 }
@@ -753,7 +753,7 @@ private struct DialPadSheet: View {
                     // Display numero composto
                     ZStack {
                         Text(input.isEmpty ? "——" : input)
-                            .font(.system(size: 38, weight: .semibold, design: .monospaced))
+                            .qaudionScaledFont(size: 38, weight: .semibold, design: .monospaced, family: .display, maxSize: .xLarge)
                             .foregroundStyle(input.isEmpty ? scheme.onSurfaceVariant.opacity(0.4) : scheme.onSurface)
                             .lineLimit(1)
                             .minimumScaleFactor(0.5)
@@ -766,7 +766,7 @@ private struct DialPadSheet: View {
                                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                             } label: {
                                 Image(systemName: "delete.backward")
-                                    .font(.system(size: 22))
+                                    .qaudionScaledFont(size: 22, family: .headline, maxSize: .xLarge)
                                     .foregroundStyle(input.isEmpty ? scheme.onSurfaceVariant.opacity(0.3) : scheme.onSurfaceVariant)
                             }
                             .buttonStyle(.plain)
@@ -873,11 +873,11 @@ private struct DialKeyButton: View {
         Button(action: action) {
             VStack(spacing: 1) {
                 Text(key.label)
-                    .font(.system(size: 28, weight: .regular, design: .rounded))
+                    .qaudionScaledFont(size: 28, weight: .regular, design: .rounded, family: .headline, maxSize: .xLarge)
                     .foregroundStyle(scheme.onSurface)
                 if let sub = key.sublabel {
                     Text(sub)
-                        .font(.system(size: 9, weight: .medium))
+                        .qaudionScaledFont(size: 9, weight: .medium, family: .label, maxSize: .xLarge)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .tracking(1.5)
                 }

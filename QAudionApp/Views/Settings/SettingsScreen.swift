@@ -370,7 +370,7 @@ struct SettingsScreen: View {
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "lock.trianglebadge.exclamationmark")
-                    .font(.system(size: 16, weight: .semibold))
+                    .qaudionScaledFont(size: 16, weight: .semibold)
                     .foregroundStyle(extras.riskMedium)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Configura la frase di recupero")
@@ -382,7 +382,7 @@ struct SettingsScreen: View {
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
+                    .qaudionScaledFont(size: 13, weight: .semibold)
                     .foregroundStyle(scheme.onSurfaceVariant)
             }
             .padding(.horizontal, 14)
@@ -1222,7 +1222,7 @@ struct SettingsScreen: View {
                 // than "hide". OpenRouter review on v1.0.65 flagged
                 // `eye.slash.fill` as misleading for sign-out.
                 Image(systemName: "rectangle.portrait.and.arrow.right")
-                    .font(.system(size: 16, weight: .regular))
+                    .qaudionScaledFont(size: 16, weight: .regular)
                 Text("Esci")
                     .qaudionStyle(type.bodyMedium)
             }

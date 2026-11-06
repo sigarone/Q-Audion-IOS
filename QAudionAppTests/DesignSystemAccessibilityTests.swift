@@ -98,6 +98,32 @@ final class DesignSystemAccessibilityTests: XCTestCase {
         }
     }
 
+    // MARK: - Fixed point sizes (qaudionScaledFont)
+
+    /// At the default size the helper gives back exactly the point size written at the call site, for every family,
+    /// with and without a cap.
+    func testScaledFontHelperKeepsTheWrittenSizeAtTheDefaultSize() {
+        let written: [CGFloat] = [7, 7.5, 8.5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20, 22, 26, 28, 34, 44, 56]
+        for family in QAudionTypography.Family.allCases {
+            for size in written {
+                XCTAssertEqual(QAudionTypography.scaledSize(size, family: family, at: .large), size, "\(family) \(size)")
+                XCTAssertEqual(QAudionTypography.scaledSize(size, family: family, at: .large, maxSize: .xLarge), size,
+                               "\(family) \(size) capped")
+            }
+        }
+    }
+
+    /// A cap stops the growth at that size, and never below the default size.
+    func testScaledFontHelperCapStopsGrowth() {
+        for family in QAudionTypography.Family.allCases {
+            let atCap = QAudionTypography.scaleFactor(for: family, at: .xLarge)
+            XCTAssertEqual(QAudionTypography.scaleFactor(for: family, at: .accessibility3, maxSize: .xLarge), atCap, "\(family)")
+            XCTAssertEqual(QAudionTypography.scaleFactor(for: family, at: .xxLarge, maxSize: .xLarge), atCap, "\(family)")
+            XCTAssertLessThan(QAudionTypography.scaleFactor(for: family, at: .small, maxSize: .xLarge), 1, "\(family)")
+            XCTAssertGreaterThan(atCap, 1, "\(family)")
+        }
+    }
+
     /// Above the cap text stops growing.
     func testSizesAboveTheCapAreTheCap() {
         let cap = QAudionTypography.maxDynamicTypeSize

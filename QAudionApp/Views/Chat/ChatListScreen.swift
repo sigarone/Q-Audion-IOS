@@ -271,7 +271,7 @@ struct ChatListScreen: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 15))
+                .qaudionScaledFont(size: 15)
                 .foregroundStyle(scheme.onSurfaceVariant)
             TextField("", text: $searchText,
                       prompt: Text("Cerca conversazioni")
@@ -916,7 +916,7 @@ struct ChatListScreen: View {
     private func adminBannerView(_ data: AdminBannerData) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "shield.lefthalf.filled")
-                .font(.system(size: 18, weight: .semibold))
+                .qaudionScaledFont(size: 18, weight: .semibold)
                 .foregroundStyle(extras.warning)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 4) {
@@ -945,7 +945,7 @@ struct ChatListScreen: View {
                 adminBannerDismissed = true
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 14, weight: .semibold))
+                    .qaudionScaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .padding(6)
             }
@@ -1036,7 +1036,7 @@ struct ChatListScreen: View {
     ) -> some View {
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: status.icon)
-                .font(.system(size: 16, weight: .semibold))
+                .qaudionScaledFont(size: 16, weight: .semibold)
                 .foregroundStyle(status.tint)
             Text(status.title)
                 .qaudionStyle(type.bodySmall)
@@ -1258,7 +1258,7 @@ struct ChatListScreen: View {
                     HStack(spacing: 4) {
                         if item.pinned {
                             Image(systemName: "pin.fill")
-                                .font(.system(size: 10, weight: .semibold))
+                                .qaudionScaledFont(size: 10, weight: .semibold, family: .label)
                                 .foregroundStyle(extras.warning)
                         }
                         if item.muted {
@@ -1266,7 +1266,7 @@ struct ChatListScreen: View {
                             // muted state. Subdued tint so it doesn't
                             // compete with the pinned indicator.
                             Image(systemName: "bell.slash.fill")
-                                .font(.system(size: 10, weight: .semibold))
+                                .qaudionScaledFont(size: 10, weight: .semibold, family: .label)
                                 .foregroundStyle(scheme.onSurfaceVariant)
                         }
                         Text(rowTitle)
@@ -1798,7 +1798,7 @@ struct ChatListScreen: View {
             // ease-in-out repeating, autoreverse=true. Matches the
             // VoiceNote pulse animation pattern (W126).
             Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 56))
+                .qaudionScaledFont(size: 56, family: .display)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .scaleEffect(emptyStateBounce ? 1.08 : 1.0)
                 .animation(
@@ -1854,7 +1854,7 @@ struct ChatListScreen: View {
         Button(action: { showingNewGroup = true }) {
             HStack(spacing: 8) {
                 Image(systemName: "person.3.fill")
-                    .font(.system(size: 18, weight: .semibold))
+                    .qaudionScaledFont(size: 18, weight: .semibold)
                     // The visible Text is the label now; without this the
                     // symbol contributes a second phrase to VoiceOver.
                     .accessibilityHidden(true)

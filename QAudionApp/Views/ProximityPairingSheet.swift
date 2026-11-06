@@ -174,7 +174,7 @@ struct ProximityPairingInvalidCodeView: View {
     var body: some View {
         VStack(spacing: 20) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 48))
+                .qaudionScaledFont(size: 48, family: .display)
                 .foregroundStyle(.red)
             Text(message)
                 .multilineTextAlignment(.center)

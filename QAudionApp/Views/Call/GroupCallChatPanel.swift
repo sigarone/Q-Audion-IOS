@@ -247,7 +247,7 @@ struct GroupCallChatPanel: View {
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 40))
+                .qaudionScaledFont(size: 40, family: .display, maxSize: .xLarge)
                 .foregroundStyle(scheme.onSurfaceVariant)
             Text("Nessun messaggio")
                 .qaudionStyle(type.titleSmall)
@@ -268,7 +268,7 @@ struct GroupCallChatPanel: View {
     private var unavailableState: some View {
         VStack(spacing: 12) {
             Image(systemName: "bubble.left.slash")
-                .font(.system(size: 40))
+                .qaudionScaledFont(size: 40, family: .display, maxSize: .xLarge)
                 .foregroundStyle(scheme.onSurfaceVariant)
             Text("Chat non disponibile")
                 .qaudionStyle(type.titleSmall)

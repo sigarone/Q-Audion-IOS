@@ -119,7 +119,7 @@ struct DevResetScreen: View {
     private var introCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("DEVTOOL")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .qaudionScaledFont(size: 11, weight: .medium, design: .monospaced, family: .label)
                 .tracking(1.5)
                 .foregroundStyle(extras.warning)
             Text("Wipe di tutto lo stato locale non-credenziale (UserDefaults). Utile per QA TestFlight: ripulisce numeri, opt-in beta, banner dismessi, senza fare logout. La sessione e i token restano intatti.")
@@ -143,16 +143,16 @@ struct DevResetScreen: View {
     private var keysCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("CHIAVI INTERESSATE (\(DevResetContainer.knownKeys.count))")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .qaudionScaledFont(size: 11, weight: .medium, design: .monospaced, family: .label)
                 .tracking(1.5)
                 .foregroundStyle(scheme.primary)
             ForEach(DevResetContainer.knownKeys, id: \.self) { key in
                 HStack(alignment: .center, spacing: 6) {
                     Image(systemName: "key.fill")
-                        .font(.system(size: 10))
+                        .qaudionScaledFont(size: 10, family: .label)
                         .foregroundStyle(scheme.onSurfaceVariant)
                     Text(key)
-                        .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .qaudionScaledFont(size: 12, weight: .regular, design: .monospaced, family: .label)
                         .foregroundStyle(scheme.onSurface)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -161,16 +161,16 @@ struct DevResetScreen: View {
 
             Spacer().frame(height: 8)
             Text("PRESERVATE (auth)")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .qaudionScaledFont(size: 11, weight: .medium, design: .monospaced, family: .label)
                 .tracking(1.5)
                 .foregroundStyle(extras.success)
             ForEach(DevResetContainer.authKeys, id: \.self) { key in
                 HStack(alignment: .center, spacing: 6) {
                     Image(systemName: "lock.fill")
-                        .font(.system(size: 10))
+                        .qaudionScaledFont(size: 10, family: .label)
                         .foregroundStyle(extras.success)
                     Text(key)
-                        .font(.system(size: 12, weight: .regular, design: .monospaced))
+                        .qaudionScaledFont(size: 12, weight: .regular, design: .monospaced, family: .label)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -223,7 +223,7 @@ struct DevResetScreen: View {
                         .tint(extras.riskHigh)
                 } else {
                     Image(systemName: "trash.fill")
-                        .font(.system(size: 16, weight: .semibold))
+                        .qaudionScaledFont(size: 16, weight: .semibold)
                 }
                 Text(container.resetting ? "Reset in corso…" : "Reset dati locali")
                     .qaudionStyle(type.labelLarge)

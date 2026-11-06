@@ -319,7 +319,7 @@ struct GroupChatScreen: View {
                             .frame(width: 36, height: 36)
                         Image(systemName: "person.3.fill")
                             .foregroundStyle(scheme.primary)
-                            .font(.system(size: 16, weight: .semibold))
+                            .qaudionScaledFont(size: 16, weight: .semibold)
                     }
                     VStack(alignment: .leading, spacing: 1) {
                         Text(state.name)
@@ -483,7 +483,7 @@ struct GroupChatScreen: View {
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: "person.3.fill")
-                .font(.system(size: 48))
+                .qaudionScaledFont(size: 48, family: .display)
                 .foregroundStyle(scheme.onSurfaceVariant)
             Text("Nessun messaggio")
                 .qaudionStyle(type.titleSmall)
@@ -1186,23 +1186,23 @@ struct GroupMessageBubble: View {
                 .frame(width: 14, height: 14)
         case .sending:
             Image(systemName: "clock")
-                .font(.system(size: 11, weight: .semibold))
+                .qaudionScaledFont(size: 11, weight: .semibold, family: .label)
                 .foregroundStyle(scheme.onSurfaceVariant)
         case .sent:
             Image(systemName: "checkmark")
-                .font(.system(size: 11, weight: .semibold))
+                .qaudionScaledFont(size: 11, weight: .semibold, family: .label)
                 .foregroundStyle(scheme.onSurfaceVariant)
         case .delivered:
             Image(systemName: "checkmark.circle")
-                .font(.system(size: 11, weight: .semibold))
+                .qaudionScaledFont(size: 11, weight: .semibold, family: .label)
                 .foregroundStyle(scheme.onSurfaceVariant)
         case .read:
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 11, weight: .semibold))
+                .qaudionScaledFont(size: 11, weight: .semibold, family: .label)
                 .foregroundStyle(scheme.primary)
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 11, weight: .semibold))
+                .qaudionScaledFont(size: 11, weight: .semibold, family: .label)
                 .foregroundStyle(scheme.error)
         }
     }

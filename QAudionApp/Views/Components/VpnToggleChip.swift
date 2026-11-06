@@ -85,7 +85,7 @@ struct VpnToggleChip: View {
                 HStack(spacing: 5) {
                     chipIcon
                     Text(vpnService.state.statusLabel)
-                        .font(.system(size: 12, weight: .medium))
+                        .qaudionScaledFont(size: 12, weight: .medium, family: .label)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)

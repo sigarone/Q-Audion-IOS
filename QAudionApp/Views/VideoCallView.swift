@@ -309,13 +309,13 @@ struct VideoCallView: View {
     private var remoteVideoFallback: some View {
         VStack(spacing: 8) {
             Image(systemName: "video.fill")
-                .font(.system(size: 48))
+                .qaudionScaledFont(size: 48, family: .display, maxSize: .xLarge)
                 .foregroundColor(.white.opacity(0.3))
             Text("Video cifrato")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.3))
             Text(appState.videoCodecLabel + " + AES-256-GCM")
-                .font(.system(size: 10, design: .monospaced))
+                .qaudionScaledFont(size: 10, design: .monospaced, family: .label, maxSize: .xLarge)
                 .foregroundColor(.green.opacity(0.5))
         }
     }
@@ -327,7 +327,7 @@ struct VideoCallView: View {
     private var screenShareBadge: some View {
         HStack(spacing: 6) {
             Image(systemName: "rectangle.on.rectangle.angled")
-                .font(.system(size: 11, weight: .semibold))
+                .qaudionScaledFont(size: 11, weight: .semibold, family: .label, maxSize: .xLarge)
             Text("Schermo condiviso")
                 .font(.caption)
                 .fontWeight(.medium)
@@ -353,7 +353,7 @@ struct VideoCallView: View {
     private var peerVideoPausedBadge: some View {
         HStack(spacing: 6) {
             Image(systemName: "video.slash.fill")
-                .font(.system(size: 11, weight: .semibold))
+                .qaudionScaledFont(size: 11, weight: .semibold, family: .label, maxSize: .xLarge)
             Text("Il peer ha messo in pausa la videocamera")
                 .font(.caption)
                 .fontWeight(.medium)
@@ -398,7 +398,7 @@ struct VideoCallView: View {
 
                 HStack(spacing: 4) {
                     Image(systemName: "lock.fill")
-                        .font(.system(size: 9))
+                        .qaudionScaledFont(size: 9, family: .label, maxSize: .xLarge)
                         .foregroundColor(.green)
 
                     Text(String(localized: "Cifrato · ") + appState.videoCodecLabel)
@@ -418,7 +418,7 @@ struct VideoCallView: View {
                     withAnimation { showSas.toggle() }
                 } label: {
                     Image(systemName: sasVerified ? "checkmark.seal.fill" : "lock.shield")
-                        .font(.system(size: 20))
+                        .qaudionScaledFont(size: 20, maxSize: .xLarge)
                         .foregroundColor(sasVerified ? .green : .white)
                 }
                 .padding(.trailing, 8)
@@ -530,10 +530,10 @@ struct VideoCallView: View {
         HStack(spacing: 4) {
             if let icon {
                 Image(systemName: icon)
-                    .font(.system(size: 8, weight: .bold))
+                    .qaudionScaledFont(size: 8, weight: .bold, family: .label, maxSize: .xLarge)
             }
             Text(label)
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .qaudionScaledFont(size: 9, weight: .semibold, design: .monospaced, family: .label, maxSize: .xLarge)
                 .tracking(0.4)
                 .lineLimit(1)
                 .fixedSize()
@@ -570,7 +570,7 @@ struct VideoCallView: View {
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 4) {
                 Image(systemName: sasVerified ? "checkmark.seal.fill" : "lock.fill")
-                    .font(.system(size: 11, weight: .semibold))
+                    .qaudionScaledFont(size: 11, weight: .semibold, family: .label, maxSize: .xLarge)
                     .foregroundColor(sasVerified ? .green : .cyan)
                 // W-L10N-SASCONSOLIDATE — shared keys with InCallScreen's SAS panel.
                 Text(sasVerified
@@ -597,7 +597,7 @@ struct VideoCallView: View {
                     // W-L10N-SASCONSOLIDATE — was "CONFERMO", now shares
                     // InCallScreen's sas.confirm.button key/wording ("CONFERMA").
                     Text(String(localized: "sas.confirm.button", defaultValue: "CONFERMA", comment: "SAS verification panel — button to confirm the 6 SAS words match, ALL CAPS styling"))
-                        .font(.system(size: 10, weight: .bold))
+                        .qaudionScaledFont(size: 10, weight: .bold, family: .label, maxSize: .xLarge)
                         .tracking(1.0)
                         .foregroundColor(.black)
                         .padding(.horizontal, 12)
@@ -620,7 +620,7 @@ struct VideoCallView: View {
 
     private func sasWord(_ word: String) -> some View {
         Text(word)
-            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            .qaudionScaledFont(size: 11, weight: .semibold, design: .monospaced, family: .label, maxSize: .xLarge)
             .foregroundColor(.white)
     }
 
@@ -831,7 +831,7 @@ struct VideoCallView: View {
             DisclosureGroup(isExpanded: $showVoiceTechnicalData) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(VoiceTechnicalCopy.note)
-                        .font(.system(size: 9))
+                        .qaudionScaledFont(size: 9, family: .label, maxSize: .xLarge)
                         .foregroundColor(.gray)
                         .fixedSize(horizontal: false, vertical: true)
                     videoDiagRow("HNR", videoDiagHnrText)
@@ -840,7 +840,7 @@ struct VideoCallView: View {
                 .padding(.top, 6)
             } label: {
                 Text(VoiceTechnicalCopy.title)
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .qaudionScaledFont(size: 9, weight: .semibold, design: .monospaced, family: .label, maxSize: .xLarge)
                     .tracking(0.8)
                     .foregroundColor(.gray)
             }
@@ -866,12 +866,12 @@ struct VideoCallView: View {
     private func videoDiagRow(_ label: String, _ value: String) -> some View {
         HStack(spacing: 8) {
             Text(label)
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .qaudionScaledFont(size: 9, weight: .semibold, design: .monospaced, family: .label, maxSize: .xLarge)
                 .tracking(0.8)
                 .foregroundColor(.gray)
                 .frame(width: 130, alignment: .leading)
             Text(value)
-                .font(.system(size: 9, design: .monospaced))
+                .qaudionScaledFont(size: 9, design: .monospaced, family: .label, maxSize: .xLarge)
                 .foregroundColor(.white)
                 .lineLimit(1)
                 .truncationMode(.middle)

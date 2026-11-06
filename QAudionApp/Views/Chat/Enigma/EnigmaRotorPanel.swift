@@ -32,7 +32,7 @@ struct EnigmaRotorPanel: View, Animatable {
         } symbols: {
             ForEach(0..<26, id: \.self) { (i: Int) in
                 Text(verbatim: EnigmaRotorArt.letters[i])
-                    .font(.system(size: 6.4, weight: .bold))
+                    .qaudionScaledFont(size: 6.4, weight: .bold, family: .label)
                     .foregroundColor(EnigmaRotorArt.ivory)
                     .tag(i)
             }
@@ -42,7 +42,7 @@ struct EnigmaRotorPanel: View, Animatable {
             // as soon as the full level showed the panel). The tag is the id, so the lookup `resolveSymbol(id:)` is unchanged.
             ForEach(EnigmaRotorArt.windowSymbolIds, id: \.self) { (tag: Int) in
                 Text(verbatim: EnigmaRotorArt.letters[tag - EnigmaRotorArt.windowSymbolBase])
-                    .font(.system(size: 15.5, weight: .bold))
+                    .qaudionScaledFont(size: 15.5, weight: .bold)
                     .foregroundColor(EnigmaRotorArt.windowInk)
                     .tag(tag)
             }

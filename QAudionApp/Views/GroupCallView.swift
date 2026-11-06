@@ -182,7 +182,7 @@ struct GroupCallView: View {
                             .overlay(alignment: .topLeading) {
                                 HStack(spacing: 4) {
                                     Image(systemName: "rectangle.on.rectangle")
-                                        .font(.system(size: 11, weight: .bold))
+                                        .qaudionScaledFont(size: 11, weight: .bold, family: .label, maxSize: .xLarge)
                                     Text("Schermo di \(sharer.displayName)")
                                         .font(.caption2).fontWeight(.semibold)
                                 }
@@ -667,7 +667,7 @@ struct GroupCallView: View {
                     viewModel.sendReaction(emoji: emoji)
                     showReactionPicker = false
                 } label: {
-                    Text(emoji).font(.system(size: 30))
+                    Text(emoji).qaudionScaledFont(size: 30, family: .headline, maxSize: .xLarge)
                 }
             }
         }
@@ -689,7 +689,7 @@ struct GroupCallView: View {
                      comment: "Group call banner — several participants have not been verified; %lld is how many")
         return HStack(spacing: 8) {
             Image(systemName: "exclamationmark.shield.fill")
-                .font(.system(size: 14, weight: .semibold))
+                .qaudionScaledFont(size: 14, weight: .semibold, maxSize: .xLarge)
                 .foregroundStyle(Color.orange)
             Text(message)
                 .qaudionStyle(type.bodySmall)
@@ -796,7 +796,7 @@ struct GroupCallView: View {
         HStack(spacing: 4) {
             if let icon {
                 Image(systemName: icon)
-                    .font(.system(size: 9, weight: .bold))
+                    .qaudionScaledFont(size: 9, weight: .bold, family: .label, maxSize: .xLarge)
             }
             Text(label)
                 .qaudionStyle(type.labelSmall)
@@ -875,7 +875,7 @@ struct ParticipantTile: View {
                 // sender's participant tile" spec.
                 if let reactionEmoji {
                     Text(reactionEmoji)
-                        .font(.system(size: isPinned ? 44 : 28))
+                        .qaudionScaledFont(size: isPinned ? 44 : 28, maxSize: .xLarge)
                         .transition(.scale.combined(with: .opacity))
                         .animation(.easeOut(duration: 0.2), value: reactionEmoji)
                 }
@@ -893,7 +893,7 @@ struct ParticipantTile: View {
             .overlay(alignment: .bottomTrailing) {
                 if participant.screenShareTrack != nil {
                     Image(systemName: "rectangle.on.rectangle")
-                        .font(.system(size: 10, weight: .bold))
+                        .qaudionScaledFont(size: 10, weight: .bold, family: .label, maxSize: .xLarge)
                         .foregroundColor(.white)
                         .padding(5)
                         .background(Circle().fill(Color.blue.opacity(0.85)))
@@ -905,7 +905,7 @@ struct ParticipantTile: View {
             .overlay(alignment: .topTrailing) {
                 if participant.handRaised {
                     Image(systemName: "hand.raised.fill")
-                        .font(.system(size: 10, weight: .bold))
+                        .qaudionScaledFont(size: 10, weight: .bold, family: .label, maxSize: .xLarge)
                         .foregroundColor(.white)
                         .padding(5)
                         .background(Circle().fill(Color.orange.opacity(0.9)))
@@ -928,7 +928,7 @@ struct ParticipantTile: View {
             if showsUnverifiedBadge {
                 HStack(spacing: 3) {
                     Image(systemName: "exclamationmark.shield.fill")
-                        .font(.system(size: 9, weight: .bold))
+                        .qaudionScaledFont(size: 9, weight: .bold, family: .label, maxSize: .xLarge)
                     Text(String(localized: "group_call.unverified_badge",
                                 defaultValue: "Non verificato",
                                 comment: "Group call participant tile — badge: this participant's identity has not been verified (no SAS confirmation, no in-person pairing)"))

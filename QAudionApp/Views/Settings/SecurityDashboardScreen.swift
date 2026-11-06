@@ -326,7 +326,7 @@ struct SecurityDashboardScreen: View {
                 .qaudionStyle(type.titleSmall)
                 .foregroundStyle(count > 0 ? warningColor : scheme.onSurfaceVariant)
             Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
+                .qaudionScaledFont(size: 13, weight: .semibold)
                 .foregroundStyle(scheme.onSurfaceVariant)
         }
         .padding(.horizontal, 14)

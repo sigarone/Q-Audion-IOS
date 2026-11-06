@@ -163,8 +163,7 @@ struct NetworkSimulatorScreen: View {
                         .foregroundStyle(isSelected ? scheme.primary
                                                     : scheme.onSurface)
                     Text(profile.descriptor)
-                        .font(.system(size: 11, weight: .regular,
-                                      design: .monospaced))
+                        .qaudionScaledFont(size: 11, weight: .regular, design: .monospaced, family: .label)
                         .tracking(0.5)
                         .foregroundStyle(scheme.onSurfaceVariant)
                 }
@@ -207,7 +206,7 @@ struct NetworkSimulatorScreen: View {
             Text("offline: \(container.active.offline ? "true" : "false")")
                 .modifier(MonoBodySmall())
             Text("Effetto immediato sulla prossima chiamata attiva.")
-                .font(.system(size: 10, weight: .regular, design: .monospaced))
+                .qaudionScaledFont(size: 10, weight: .regular, design: .monospaced, family: .label)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .padding(.top, 6)
         }

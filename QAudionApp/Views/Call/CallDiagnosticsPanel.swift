@@ -250,7 +250,7 @@ struct CallDiagnosticsPanel<Extra: View>: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Image(systemName: "chart.bar.fill")
-                    .font(.system(size: 11, weight: .semibold))
+                    .qaudionScaledFont(size: 11, weight: .semibold, family: .label, maxSize: .xLarge)
                     .foregroundColor(.green)
                 Text(String(localized: "call.diag.title", defaultValue: "DIAGNOSTICA",
                             comment: "Call diagnostics panel — title (capitals)"))
@@ -260,14 +260,14 @@ struct CallDiagnosticsPanel<Extra: View>: View {
                 Spacer()
                 Button(action: onClose) {
                     Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .semibold))
+                        .qaudionScaledFont(size: 10, weight: .semibold, family: .label, maxSize: .xLarge)
                         .foregroundColor(.gray)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Chiudi")
             }
             Text(model.subtitle.text)
-                .font(.system(size: 9, design: .monospaced))
+                .qaudionScaledFont(size: 9, design: .monospaced, family: .label, maxSize: .xLarge)
                 .foregroundColor(.gray)
         }
     }
@@ -277,11 +277,11 @@ struct CallDiagnosticsPanel<Extra: View>: View {
             ForEach(Array(model.rows.enumerated()), id: \.offset) { _, row in
                 HStack(spacing: 8) {
                     Text(row.field.label)
-                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .qaudionScaledFont(size: 9, weight: .semibold, design: .monospaced, family: .label, maxSize: .xLarge)
                         .foregroundColor(.gray)
                         .frame(width: 150, alignment: .leading)
                     Text(row.value)
-                        .font(.system(size: 9, design: .monospaced))
+                        .qaudionScaledFont(size: 9, design: .monospaced, family: .label, maxSize: .xLarge)
                         .foregroundColor(.white)
                         .lineLimit(1)
                         .truncationMode(.middle)

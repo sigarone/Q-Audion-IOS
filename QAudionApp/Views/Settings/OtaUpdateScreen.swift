@@ -217,7 +217,7 @@ struct OtaUpdateScreen: View {
                     // session.
                     if let last = container.lastCheckedAt {
                         Text(Self.lastCheckedLabel(last))
-                            .font(.system(size: 11, weight: .regular, design: .monospaced))
+                            .qaudionScaledFont(size: 11, weight: .regular, design: .monospaced, family: .label)
                             .foregroundStyle(scheme.onSurfaceVariant)
                             .padding(.top, 8)
                     }
@@ -252,7 +252,7 @@ struct OtaUpdateScreen: View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "checkmark.circle.fill")
                 .foregroundStyle(extras.success)
-                .font(.system(size: 18, weight: .semibold))
+                .qaudionScaledFont(size: 18, weight: .semibold)
             VStack(alignment: .leading, spacing: 2) {
                 Text("AGGIORNAMENTO COMPLETATO")
                     .qaudionStyle(type.labelSmall)
@@ -267,7 +267,7 @@ struct OtaUpdateScreen: View {
                 container.justUpdatedToVersion = nil
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .semibold))
+                    .qaudionScaledFont(size: 12, weight: .semibold, family: .label)
                     .foregroundStyle(scheme.onSurfaceVariant)
                     .padding(6)
             }
@@ -293,7 +293,7 @@ struct OtaUpdateScreen: View {
                 .tracking(1.5)
                 .foregroundStyle(scheme.primary)
             Text(container.currentVersion)
-                .font(.system(size: 24, weight: .semibold, design: .monospaced))
+                .qaudionScaledFont(size: 24, weight: .semibold, design: .monospaced, family: .headline)
                 .foregroundStyle(scheme.onSurface)
             Text("versionCode \(container.currentVersionCode)")
                 .qaudionStyle(type.labelSmall)
@@ -366,7 +366,7 @@ struct OtaUpdateScreen: View {
                 .tracking(1.5)
                 .foregroundStyle(scheme.primary)
             Text(container.pubkeyFingerprint ?? String(localized: "ota.fingerprint_unavailable", defaultValue: "Non disponibile", comment: "OTA update screen, trust card: the signing key fingerprint is not available"))
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                .qaudionScaledFont(size: 13, weight: .medium, design: .monospaced)
                 .foregroundStyle(container.pubkeyFingerprint == nil ? scheme.onSurfaceVariant : scheme.onSurface)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -421,7 +421,7 @@ struct OtaUpdateScreen: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
                     Text(release.versionName)
-                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                        .qaudionScaledFont(size: 16, weight: .semibold, design: .monospaced)
                         .foregroundStyle(scheme.onSurface)
                     Text("(\(release.versionCode))")
                         .qaudionStyle(type.labelSmall)

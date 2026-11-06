@@ -52,7 +52,7 @@ struct CallSecurityBadge: View {
     private var compactBadge: some View {
         HStack(spacing: 8) {
             Image(systemName: "lock.fill")
-                .font(.system(size: 14))
+                .qaudionScaledFont(size: 14, maxSize: .xLarge)
                 .foregroundColor(.white)
 
             Circle()
@@ -66,7 +66,7 @@ struct CallSecurityBadge: View {
                 .onChange(of: appState.confidenceLevel) { _ in startRedPulseIfNeeded() }
 
             Text(Self.backendLabel(appState.backendType))
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .qaudionScaledFont(size: 11, weight: .bold, design: .monospaced, family: .label, maxSize: .xLarge)
                 .foregroundColor(backendColor)
                 .lineLimit(1)
                 .fixedSize()
@@ -75,7 +75,7 @@ struct CallSecurityBadge: View {
             // the broader `pskActive` flag.
             if appState.callPskMixedThisCall {
                 Text("PSK")
-                    .font(.system(size: 9, weight: .bold))
+                    .qaudionScaledFont(size: 9, weight: .bold, family: .label, maxSize: .xLarge)
                     .foregroundColor(.black)
                     .lineLimit(1)
                     .fixedSize()
@@ -86,7 +86,7 @@ struct CallSecurityBadge: View {
             }
 
             Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                .font(.system(size: 10))
+                .qaudionScaledFont(size: 10, family: .label, maxSize: .xLarge)
                 .foregroundColor(.gray)
         }
         .padding(.horizontal, 14)
@@ -106,7 +106,7 @@ struct CallSecurityBadge: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text(statusLabel)
-                    .font(.system(size: 13, weight: .bold))
+                    .qaudionScaledFont(size: 13, weight: .bold, maxSize: .xLarge)
                     .foregroundColor(dotColor)
                 Spacer()
                 // A negative score is the "no Guardian score yet" sentinel, not
@@ -160,12 +160,12 @@ struct CallSecurityBadge: View {
             // Wide enough for the longest label ("Signalisierungs-Ping" in German, "Ping de señalización" in
             // Spanish); a label that still does not fit goes on a second line.
             Text(label)
-                .font(.system(size: 12, weight: .medium))
+                .qaudionScaledFont(size: 12, weight: .medium, family: .label, maxSize: .xLarge)
                 .foregroundColor(.gray)
                 .lineLimit(2)
                 .frame(width: 112, alignment: .leading)
             Text(value)
-                .font(.system(size: 12, weight: .regular, design: .monospaced))
+                .qaudionScaledFont(size: 12, weight: .regular, design: .monospaced, family: .label, maxSize: .xLarge)
                 .foregroundColor(.white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)

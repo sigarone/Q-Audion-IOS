@@ -77,7 +77,7 @@ struct NarrowbandBluetoothBanner: View {
     private var banner: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "headphones")
-                .font(.system(size: 16, weight: .semibold))
+                .qaudionScaledFont(size: 16, weight: .semibold, maxSize: .xLarge)
                 .foregroundStyle(extras.warning)
                 .padding(.top, 2)
                 .accessibilityHidden(true)

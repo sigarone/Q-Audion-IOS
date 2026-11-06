@@ -76,7 +76,7 @@ struct CircularAction: View {
                         .frame(width: diameter, height: diameter)
                         .overlay {
                             Image(systemName: icon)
-                                .font(.system(size: diameter * 0.40, weight: .semibold))
+                                .qaudionScaledFont(size: diameter * 0.40, weight: .semibold, maxSize: .xLarge)
                                 .foregroundStyle(iconColor)
                         }
                         .opacity(isDisabled || !unlocked ? 0.45 : 1.0)
@@ -88,7 +88,7 @@ struct CircularAction: View {
                     // together with the circle would render it invisible.
                     if !unlocked {
                         Image(systemName: "lock.fill")
-                            .font(.system(size: 8, weight: .bold))
+                            .qaudionScaledFont(size: 8, weight: .bold, family: .label, maxSize: .xLarge)
                             .foregroundStyle(.white)
                             .padding(3)
                             .background(Circle().fill(Color.black.opacity(0.6)))

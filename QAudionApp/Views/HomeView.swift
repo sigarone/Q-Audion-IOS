@@ -233,7 +233,7 @@ struct HomeView: View {
                                                  ? scheme.primary
                                                  : scheme.onSurfaceVariant)
                             Text(tab.label)
-                                .font(.system(size: 15, weight: selectedTab == tab ? .semibold : .regular))
+                                .qaudionScaledFont(size: 15, weight: selectedTab == tab ? .semibold : .regular)
                                 .foregroundStyle(selectedTab == tab
                                                  ? scheme.primary
                                                  : scheme.onSurface)
@@ -241,7 +241,7 @@ struct HomeView: View {
                             // Unread badge solo sulla tab Chat
                             if tab == .chats, totalUnreadCount > 0 {
                                 Text(totalUnreadCount > 99 ? "99+" : "\(totalUnreadCount)")
-                                    .font(.system(size: 11, weight: .bold))
+                                    .qaudionScaledFont(size: 11, weight: .bold, family: .label)
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
@@ -250,7 +250,7 @@ struct HomeView: View {
                             // W-MISSEDBADGE — the same capsule for the unread missed calls on the Calls row.
                             if tab == .calls, missedCalls.unreadCount > 0 {
                                 Text(missedCalls.unreadCount > 99 ? "99+" : "\(missedCalls.unreadCount)")
-                                    .font(.system(size: 11, weight: .bold))
+                                    .qaudionScaledFont(size: 11, weight: .bold, family: .label)
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
@@ -331,12 +331,12 @@ struct HomeView: View {
             )
             VStack(alignment: .leading, spacing: 1) {
                 Text(labels.primary)
-                    .font(.system(size: 14, weight: .semibold))
+                    .qaudionScaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(scheme.onSurface)
                     .lineLimit(1)
                 if !labels.secondary.isEmpty {
                     Text(labels.secondary)
-                        .font(.system(size: 11, design: .monospaced))
+                        .qaudionScaledFont(size: 11, design: .monospaced, family: .label)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .lineLimit(1)
                 }
@@ -608,7 +608,7 @@ private struct ContactsTabPlaceholder: View {
         } else {
             VStack(spacing: 16) {
                 Image(systemName: "person.2.fill")
-                    .font(.system(size: 48))
+                    .qaudionScaledFont(size: 48, family: .display)
                     .foregroundStyle(.secondary)
                 Text("Contacts")
                     .font(.title2.weight(.semibold))

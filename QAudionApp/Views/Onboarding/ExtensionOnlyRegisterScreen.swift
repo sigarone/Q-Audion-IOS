@@ -74,7 +74,7 @@ struct ExtensionOnlyRegisterScreen: View {
                     Spacer().frame(height: 16)
 
                     Text("Crea un account senza numero di telefono")
-                        .font(.system(size: 24, weight: .semibold))
+                        .qaudionScaledFont(size: 24, weight: .semibold, family: .headline)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 24)
 

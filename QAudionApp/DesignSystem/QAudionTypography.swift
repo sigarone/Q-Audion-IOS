@@ -150,8 +150,10 @@ public struct QAudionTypography: Equatable {
     /// compared with the default size ("Large"), where it is exactly 1. The
     /// curve is the system one for the family's text style, and sizes above
     /// `maxDynamicTypeSize` count as `maxDynamicTypeSize`.
-    public static func scaleFactor(for family: Family, at dynamicTypeSize: DynamicTypeSize) -> CGFloat {
-        let effective = min(dynamicTypeSize, maxDynamicTypeSize)
+    public static func scaleFactor(for family: Family,
+                                   at dynamicTypeSize: DynamicTypeSize,
+                                   maxSize: DynamicTypeSize? = nil) -> CGFloat {
+        let effective = min(dynamicTypeSize, min(maxSize ?? maxDynamicTypeSize, maxDynamicTypeSize))
         if effective == .large { return 1 }
         // Scale a round reference value, not the font size: the result is the
         // ratio between the style's size at `effective` and at "Large".
@@ -164,8 +166,11 @@ public struct QAudionTypography: Equatable {
 
     /// A fixed point size (an icon next to text, a cell of digits) at
     /// `dynamicTypeSize`, with the same curve and cap as the roles.
-    public static func scaledSize(_ size: CGFloat, family: Family, at dynamicTypeSize: DynamicTypeSize) -> CGFloat {
-        size * scaleFactor(for: family, at: dynamicTypeSize)
+    public static func scaledSize(_ size: CGFloat,
+                                  family: Family,
+                                  at dynamicTypeSize: DynamicTypeSize,
+                                  maxSize: DynamicTypeSize? = nil) -> CGFloat {
+        size * scaleFactor(for: family, at: dynamicTypeSize, maxSize: maxSize)
     }
 
     /// All 15 roles at the given text size.
@@ -264,9 +269,10 @@ private struct QAudionScaledSystemFont: ViewModifier {
     let weight: Font.Weight
     let design: Font.Design
     let family: QAudionTypography.Family
+    let maxSize: DynamicTypeSize?
 
     func body(content: Content) -> some View {
-        let scaled = QAudionTypography.scaledSize(size, family: family, at: dynamicTypeSize)
+        let scaled = QAudionTypography.scaledSize(size, family: family, at: dynamicTypeSize, maxSize: maxSize)
         return content.font(.system(size: scaled, weight: weight, design: design))
     }
 }
@@ -276,11 +282,13 @@ public extension View {
     /// text size chosen by the user, with the same curve and cap as the
     /// typography roles. For the parts of a component that are not a role
     /// (the glyph of an icon next to a label, a cell of digits): pick the
-    /// `family` of the text the part sits next to.
+    /// `family` of the text the part sits next to. `maxSize` caps the growth
+    /// for parts of fixed geometry (call controls, badges).
     func qaudionScaledFont(size: CGFloat,
                            weight: Font.Weight = .regular,
                            design: Font.Design = .default,
-                           family: QAudionTypography.Family = .body) -> some View {
-        modifier(QAudionScaledSystemFont(size: size, weight: weight, design: design, family: family))
+                           family: QAudionTypography.Family = .body,
+                           maxSize: DynamicTypeSize? = nil) -> some View {
+        modifier(QAudionScaledSystemFont(size: size, weight: weight, design: design, family: family, maxSize: maxSize))
     }
 }

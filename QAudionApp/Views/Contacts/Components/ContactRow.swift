@@ -82,7 +82,7 @@ struct ContactRow: View {
                     // Unread badge numerico (max 99)
                     if item.unreadMessageCount > 0 {
                         Text(item.unreadMessageCount > 99 ? "99+" : "\(item.unreadMessageCount)")
-                            .font(.system(size: 11, weight: .bold))
+                            .qaudionScaledFont(size: 11, weight: .bold, family: .label)
                             .foregroundStyle(.white)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 2)

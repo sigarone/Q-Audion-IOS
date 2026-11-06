@@ -116,7 +116,7 @@ struct ChatSettingsScreen: View {
         if container.viewModel.messagePreviewInNotifications {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "eye")
-                    .font(.system(size: 14, weight: .semibold))
+                    .qaudionScaledFont(size: 14, weight: .semibold)
                     .foregroundStyle(extras.warning)
                 Text("Il contenuto del messaggio sarà visibile sulla schermata di blocco.")
                     .qaudionStyle(type.labelSmall)

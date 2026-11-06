@@ -91,7 +91,7 @@ struct VoiceGuardCard: View {
             // The icon and the one line, in one row.
             HStack(spacing: 10) {
                 Image(systemName: iconName)
-                    .font(.system(size: 16, weight: .semibold))
+                    .qaudionScaledFont(size: 16, weight: .semibold, maxSize: .xLarge)
                     .foregroundStyle(color(iconTone))
                     .accessibilityHidden(true)
                 contentView

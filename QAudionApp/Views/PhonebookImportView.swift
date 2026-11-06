@@ -70,7 +70,7 @@ struct PhonebookImportView: View {
 
     private var introContent: some View {
         VStack(spacing: 16) {
-            Image(systemName: "person.crop.rectangle.stack").font(.system(size: 64)).foregroundStyle(.blue)
+            Image(systemName: "person.crop.rectangle.stack").qaudionScaledFont(size: 64, family: .display).foregroundStyle(.blue)
             Text("Trova utenti Q-Audion nella tua rubrica").font(.title2.bold())
             Text("Calcoliamo l'hash di ogni numero localmente con un pepper fornito dal server, poi chiediamo al server quali hash corrispondono a utenti noti. La tua rubrica non lascia mai il dispositivo in chiaro.").font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Group {
@@ -93,7 +93,7 @@ struct PhonebookImportView: View {
 
     private func resultsContent(matched: [PhonebookImportViewModel.Match], unmatched: Int) -> some View {
         VStack {
-            Image(systemName: "checkmark.circle.fill").font(.system(size: 64)).foregroundStyle(.green)
+            Image(systemName: "checkmark.circle.fill").qaudionScaledFont(size: 64, family: .display).foregroundStyle(.green)
             Text("\(matched.count) utenti Q-Audion trovati").font(.title2.bold())
             Text("\(unmatched) dei tuoi contatti non sono ancora su Q-Audion.").font(.body).foregroundStyle(.secondary)
             if let notice = container.incompleteNotice {
@@ -116,7 +116,7 @@ struct PhonebookImportView: View {
 
     private func errorContent(_ msg: String) -> some View {
         VStack(spacing: 16) {
-            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 64)).foregroundStyle(.red)
+            Image(systemName: "exclamationmark.triangle.fill").qaudionScaledFont(size: 64, family: .display).foregroundStyle(.red)
             Text("Errore di importazione").font(.title.bold())
             Text(msg).foregroundStyle(.secondary).multilineTextAlignment(.center)
             if CNContactStore.authorizationStatus(for: .contacts) == .denied {
