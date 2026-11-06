@@ -74,13 +74,13 @@ struct WaveformPanel: View {
             // Frame counters
             HStack {
                 Label("\(appState.framesTx) TX", systemImage: "arrow.up.circle.fill")
-                    .font(.system(size: 10, design: .monospaced))
+                    .qaudionScaledFont(size: 10, design: .monospaced, family: .label, maxSize: .xLarge)
                     .foregroundColor(.cyan.opacity(0.7))
 
                 Spacer()
 
                 Label("\(appState.framesRx) RX", systemImage: "arrow.down.circle.fill")
-                    .font(.system(size: 10, design: .monospaced))
+                    .qaudionScaledFont(size: 10, design: .monospaced, family: .label, maxSize: .xLarge)
                     .foregroundColor(.green.opacity(0.7))
             }
         }

@@ -449,7 +449,7 @@ struct MyPhonesScreen: View {
                         get: { container.newPhone },
                         set: { container.newPhone = String($0.prefix(20)) }
                       ))
-                .font(.system(size: 14, design: .monospaced))
+                .qaudionScaledFont(size: 14, design: .monospaced)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .keyboardType(.phonePad)
@@ -515,7 +515,7 @@ struct MyPhonesScreen: View {
                                 get: { container.otpCode },
                                 set: { container.otpCode = String($0.prefix(6)) }
                               ))
-                        .font(.system(size: 16, design: .monospaced))
+                        .qaudionScaledFont(size: 16, design: .monospaced)
                         .keyboardType(.numberPad)
                         .padding(10)
                         .background(
@@ -551,7 +551,7 @@ struct MyPhonesScreen: View {
                 Button("Annulla") {
                     container.cancelOtp()
                 }
-                .font(.system(size: 12, weight: .regular))
+                .qaudionScaledFont(size: 12, weight: .regular, family: .label)
                 .foregroundStyle(scheme.onSurfaceVariant)
             }
             .padding(12)

@@ -230,7 +230,7 @@ private struct MonoBodySmall: ViewModifier {
     @Environment(\.qaudionScheme) private var scheme
     func body(content: Content) -> some View {
         content
-            .font(.system(size: 13, weight: .regular, design: .monospaced))
+            .qaudionScaledFont(size: 13, weight: .regular, design: .monospaced, family: .label)
             .foregroundStyle(scheme.onSurface)
     }
 }

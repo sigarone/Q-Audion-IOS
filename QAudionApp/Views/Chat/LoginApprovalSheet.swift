@@ -87,8 +87,8 @@ struct LoginApprovalSheet: View {
                         Task { await model.approve(id: request.id, choice: choice) }
                     } label: {
                         Text(choice)
-                            .font(.system(size: 36, weight: .bold, design: .rounded))
                             .monospacedDigit()
+                            .qaudionScaledFont(size: 36, weight: .bold, design: .rounded, family: .display, maxSize: .xLarge)
                             .frame(maxWidth: .infinity, minHeight: 84)
                             .foregroundStyle(scheme.onPrimary)
                             .background(RoundedRectangle(cornerRadius: 16).fill(scheme.primary))

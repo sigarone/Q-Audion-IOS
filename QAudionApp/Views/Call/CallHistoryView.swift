@@ -409,7 +409,7 @@ struct CallHistoryView: View {
                     visible: store.visibleEntries.count,
                     filtered: store.missedOnly
                 ))
-                .font(.system(size: 11, weight: .regular, design: .monospaced))
+                .qaudionScaledFont(size: 11, weight: .regular, design: .monospaced, family: .label)
                 .foregroundStyle(scheme.onSurfaceVariant)
             }
             .padding(.horizontal, 16)
