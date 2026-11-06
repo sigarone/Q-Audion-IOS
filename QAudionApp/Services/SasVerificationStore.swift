@@ -6,9 +6,9 @@ import Security
 /// W368 — persistence for the in-call SAS ceremony.
 ///
 /// Once a user taps "CONFERMA COINCIDONO" in the InCallScreen, the
-/// (peer, sasFingerprint) tuple is stored so the next call between
-/// the same two peers automatically renders the panel as VERIFIED
-/// (no need to re-do the ceremony for every call).
+/// (peer, sasFingerprint) tuple is stored for that peer. The words
+/// differ on every call, so the record marks the call it was made on
+/// as verified and never a later one.
 ///
 /// **Cross-platform parity:** mirrors Android's
 /// `SasVerificationTracker.kt` — both store a hash of the peerUserId

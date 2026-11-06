@@ -902,19 +902,10 @@ struct VideoCallView: View {
             contactId: peer, deviceId: appState.callPinDeviceId(for: peer)
         ) else { return false }
         let fp = SasVerificationStore.fingerprint(forWords: words)
-        // The words alone are not enough: they must still belong to the identity key the ceremony was performed
-        // against. Same decision as the audio screen: a contact confirmed before for the key pinned now counts too,
-        // unless this call raised an identity notice or is held.
-        let tag = SasVerificationStore.identityTag(forPinnedKey: pinned)
-        let store = SasVerificationStore.shared
-        return SasCardPlacement.isConfirmedForThisCall(
-            wordsConfirmed: store.isVerified(peerUserId: peer, currentFingerprint: fp, currentIdentityTag: tag),
-            bindingAppliesToPinnedKey: store.hasVerifiedBinding(peerUserId: peer, currentIdentityTag: tag),
-            identityAuthenticated: appState.callIdentityAuthenticated,
-            identityNotice: appState.callIdentityUnauthenticatedChange
-                || appState.callHandshakeSignatureInvalid
-                || appState.callIdentityRotationAwaitingSas,
-            awaitingConfirmation: appState.awaitingIdentityConfirmation)
+        // The words of THIS call must have been confirmed, against the identity key still pinned.
+        return SasVerificationStore.shared.isVerified(
+            peerUserId: peer, currentFingerprint: fp,
+            currentIdentityTag: SasVerificationStore.identityTag(forPinnedKey: pinned))
     }
 
     private func confirmSas() {

@@ -158,8 +158,6 @@ struct LiveInCallScreen: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: showDiagnostics)
-        // Reduce the call to the "call in progress" bar on top of the app (audio call, once connected).
-        .overlay(alignment: .topTrailing) { reduceButtonOverlay }
         // Narrowband Bluetooth notice: a row above the call content (a safe-area inset, so it pushes the content down
         // and never covers a control); it draws nothing, and reserves nothing, while it is hidden.
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -249,14 +247,10 @@ struct LiveInCallScreen: View {
         // the SAS words and the identity of this screen are not visible behind it, and it survives the swap between the two screens.
     }
 
-    /// The reduce button, top right, below the status bar.
-    @ViewBuilder
-    private var reduceButtonOverlay: some View {
-        if canReduceCall {
-            MinimizeCallButton(action: reduceCall)
-                .padding(.top, 8)
-                .padding(.trailing, 12)
-        }
+    /// The action of the reduce button, nil while the call cannot be reduced (the button is then not drawn).
+    private var minimizeAction: (() -> Void)? {
+        guard canReduceCall else { return nil }
+        return { reduceCall() }
     }
 
     /// The reduce button shows on the audio call screen once the call is connected (`CallMinimizePolicy`).
@@ -480,6 +474,8 @@ struct LiveInCallScreen: View {
                 // W502: toggle the diagnostics overlay.
                 onToggleDiagnostics: handleToggleDiagnostics,
                 onReportProblem: handleReportProblem,
+                // Reduces the call to the "call in progress" bar (audio call, once connected); drawn top left.
+                onMinimize: minimizeAction,
                 // Feature B ("voce verificata") — W-AUTOLEARN parity (item 5):
                 // fed from AppState.voiceLearningState (itself fed from the
                 // SAME decoded RX audio the Guardian ribbon above already
@@ -707,28 +703,17 @@ struct LiveInCallScreen: View {
         CallLiveStats.appliedAudioCodecKbps(appState)
     }
 
-    /// Live SAS verification flag. True when the contact counts as confirmed for THIS call
-    /// (`SasCardPlacement.isConfirmedForThisCall`): either these exact words were confirmed, or the contact was
-    /// confirmed before for the identity key pinned now and this call's handshake raised no notice and holds nothing.
-    /// The words change on every call, so the stored words alone never match a later call. Computed every
-    /// TimelineView tick, cheap (one Keychain read).
+    /// Live SAS verification flag. True only when the words of THIS call were confirmed: they change on every call,
+    /// so a confirmation made on an earlier call never matches. Computed every TimelineView tick, cheap (one
+    /// Keychain read).
     private var liveSasVerified: Bool {
         let words = appState.callSasWords
         guard !words.isEmpty,
               let peer = appState.callContactId else { return false }
         guard let identityTag = sasIdentityTag(for: peer) else { return false }
         let fp = SasVerificationStore.fingerprint(forWords: words)
-        let store = SasVerificationStore.shared
-        return SasCardPlacement.isConfirmedForThisCall(
-            wordsConfirmed: store.isVerified(
-                peerUserId: peer, currentFingerprint: fp, currentIdentityTag: identityTag),
-            bindingAppliesToPinnedKey: store.hasVerifiedBinding(
-                peerUserId: peer, currentIdentityTag: identityTag),
-            identityAuthenticated: appState.callIdentityAuthenticated,
-            identityNotice: appState.callIdentityUnauthenticatedChange
-                || appState.callHandshakeSignatureInvalid
-                || appState.callIdentityRotationAwaitingSas,
-            awaitingConfirmation: appState.awaitingIdentityConfirmation)
+        return SasVerificationStore.shared.isVerified(
+            peerUserId: peer, currentFingerprint: fp, currentIdentityTag: identityTag)
     }
 
     /// The call holds the real ML-KEM session key (`callSasKeySource == .mlKem`). This, and nothing about the PSK, is
