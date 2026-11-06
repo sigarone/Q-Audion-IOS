@@ -196,6 +196,7 @@ public final class TusUploadClient {
     public func upload(
         data: Data,
         filename: String? = nil,
+        resumeFileId: String? = nil,
         onProgress: ((Int64, Int64) -> Void)? = nil,
         onCreated: ((String) -> Void)? = nil
     ) async throws -> String {
@@ -214,11 +215,52 @@ public final class TusUploadClient {
         // like internally, rather than relying on every producer to
         // remember to do it.
         let normalized = Data(data)
+        let total = Int64(normalized.count)
+        // A caller that already created the upload (an earlier attempt of the same payload was cut short) passes
+        // its id: the server is asked how much it holds and only the rest is sent. A missing or different upload
+        // starts over with a new one.
+        if let resumeFileId {
+            switch try await resumePlan(fileId: resumeFileId, dataCount: normalized.count) {
+            case .complete:
+                return resumeFileId
+            case .continueAt(let offset):
+                onCreated?(resumeFileId)
+                try await runChunkLoop(fileId: resumeFileId, data: normalized, startOffset: offset, total: total, onProgress: onProgress)
+                return resumeFileId
+            case .startOver:
+                break
+            }
+        }
         let fileId = try await create(totalBytes: normalized.count, filename: filename)
         onCreated?(fileId)
-        let total = Int64(normalized.count)
         try await runChunkLoop(fileId: fileId, data: normalized, startOffset: 0, total: total, onProgress: onProgress)
         return fileId
+    }
+
+    /// What to do with an upload that an earlier attempt created, given what the server reports for it.
+    enum ResumePlan: Equatable {
+        /// The server already holds every byte.
+        case complete
+        /// Send the bytes from this offset on.
+        case continueAt(Int64)
+        /// The upload cannot be continued (purged, or created for different bytes): create a new one.
+        case startOver
+
+        static func decide(serverOffset: Int64, serverLength: Int64, dataCount: Int) -> ResumePlan {
+            guard serverLength == Int64(dataCount), serverOffset >= 0, serverOffset <= serverLength else { return .startOver }
+            return serverOffset == serverLength ? .complete : .continueAt(serverOffset)
+        }
+    }
+
+    /// HEAD the earlier upload. A purged upload (404) means start over; any other failure (network, 5xx, 429)
+    /// is thrown so the caller backs off and keeps the id for its next attempt.
+    private func resumePlan(fileId: String, dataCount: Int) async throws -> ResumePlan {
+        do {
+            let state = try await head(fileId: fileId)
+            return ResumePlan.decide(serverOffset: state.offset, serverLength: state.totalLength, dataCount: dataCount)
+        } catch TusError.uploadNotFound(_) {
+            return .startOver
+        }
     }
 
     /// W-TUSRESUME — tier 1 of the 3-tier retry: continue an existing

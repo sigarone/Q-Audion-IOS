@@ -69,8 +69,10 @@ public final class RuntimeLogSink: ObservableObject {
 
     private init() {}
 
-    public func record(level: Level, tag: String, _ message: String) {
-        record(level: level, tag: tag, message, origin: .app)
+    /// `at` is when the line was produced. A line written off the main thread reaches the ring after a hop to
+    /// the main actor; stamping it there gave every line queued behind a stalled main thread the same second.
+    public func record(level: Level, tag: String, _ message: String, at: Date = Date()) {
+        record(level: level, tag: tag, message, origin: .app, at: at)
     }
 
     /// Where a recorded line comes from. It decides one thing: whether the line is mirrored to the sink's own
@@ -94,7 +96,7 @@ public final class RuntimeLogSink: ObservableObject {
         }
     }
 
-    func record(level: Level, tag: String, _ message: String, origin: Origin) {
+    func record(level: Level, tag: String, _ message: String, origin: Origin, at: Date = Date()) {
         // W-KEYSCRUB (2026-09-21) -- THE choke point for key material. Every line that enters the
         // app's log (RTLog from app code AND the stdout/stderr tee, i.e. whatever the native
         // library prints) passes here, so the ring, the on-screen viewer, the text export, the
@@ -113,7 +115,7 @@ public final class RuntimeLogSink: ObservableObject {
         lock.lock()
         let seq = nextSeq
         nextSeq &+= 1
-        let entry = Entry(seq: seq, timestamp: Date(), level: level, tag: tag, message: safeMessage)
+        let entry = Entry(seq: seq, timestamp: at, level: level, tag: tag, message: safeMessage)
         entries.append(entry)
         if entries.count > maxEntries {
             // Drop the oldest 10% in one shot so we don't pay the
@@ -346,9 +348,10 @@ public final class RuntimeLogSink: ObservableObject {
         // window plus a summary: same single-queue rule as the assembler.
         // Its pending summaries are also flushed by a timer on this same queue when no later line arrives.
         let limiter = StdoutTeeLines.RateLimiter(queue: queue) { [weak self] lines in
+            let flushedAt = Date()
             for out in lines {
                 Task { @MainActor [weak self] in
-                    self?.record(level: .info, tag: "stdout", out, origin: .stdoutTee)
+                    self?.record(level: .info, tag: "stdout", out, origin: .stdoutTee, at: flushedAt)
                 }
             }
         }
@@ -356,6 +359,7 @@ public final class RuntimeLogSink: ObservableObject {
             guard let self = self else { return }
             var buf = [UInt8](repeating: 0, count: 4096)
             let n = read(readFd, &buf, buf.count)
+            let readAt = Date()
             if n > 0 {
                 // 1) Forward to the saved original stdout/stderr so
                 //    Console.app + Xcode still see the line. W-KEYSCRUB: this raw
@@ -382,7 +386,7 @@ public final class RuntimeLogSink: ObservableObject {
                     for out in limiter.admit(safe, now: ProcessInfo.processInfo.systemUptime) {
                         Task { @MainActor [weak self] in
                             // `.stdoutTee`: a captured line is never mirrored back to OSLog (second defence).
-                            self?.record(level: .info, tag: "stdout", out, origin: .stdoutTee)
+                            self?.record(level: .info, tag: "stdout", out, origin: .stdoutTee, at: readAt)
                         }
                     }
                 }
@@ -427,8 +431,9 @@ public enum RTLog {
                 RuntimeLogSink.shared.record(level: level, tag: tag, message)
             }
         } else {
+            let at = Date()
             Task { @MainActor in
-                RuntimeLogSink.shared.record(level: level, tag: tag, message)
+                RuntimeLogSink.shared.record(level: level, tag: tag, message, at: at)
             }
         }
     }

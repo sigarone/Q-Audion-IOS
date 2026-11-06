@@ -82,6 +82,11 @@ public struct LiveLogBacklog: Equatable, Sendable {
         return pending
     }
 
+    /// The live lines, oldest first (what the disk queue stores).
+    public func liveItems() -> [Item] {
+        return Array(items[head...])
+    }
+
     // MARK: - Shipping
 
     /// The next chunk's lines: from the oldest, at most `maxLines`, and at most

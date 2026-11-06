@@ -69,9 +69,18 @@ enum LocalCryptoWipe {
         // The notification key and the list of names and avatars of the notification extension.
         NotifyKeychain.production()?.delete()
         if let directory = NotifyRubricaFiles.defaultDirectory() { NotifyRubricaFiles.clear(in: directory) }
+        // The log shipper's queue on disk belongs to the account that is leaving (logout, account switch, account
+        // deletion and remote wipe all come through here).
+        clearLiveLogQueue()
         // The decrypted attachment copies on disk (caches and temporary files) of the account that is leaving.
         AttachmentCacheCleaner.clearAllCaches()
         print("[LocalCryptoWipe] wipeAll completed")
+    }
+
+    /// Deletes the saved log queue so lines of the account that leaves cannot be uploaded under the next one.
+    /// The queue is a parameter so a test can aim it at a temporary file.
+    static func clearLiveLogQueue(_ queue: LiveLogDiskQueue = LiveLogDiskQueue.inCaches()) {
+        queue.delete()
     }
 
     /// `PersistentCallRecordStore` is main-actor isolated and every caller of `wipeAll()` (logout,

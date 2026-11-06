@@ -98,6 +98,7 @@ actor LiveLogWorker {
     /// produces this is 40-160 s of log; beyond it the OLDEST lines go and are counted.
     private static let backlogMaxEntries: Int = 2000
     private static let backlogMaxBytes: Int = 512 * 1024
+    private static let persistMinSeconds: TimeInterval = 10
 
     // MARK: - State (all touched only on this actor)
 
@@ -115,6 +116,17 @@ actor LiveLogWorker {
     private var backlog = LiveLogBacklog(maxEntries: LiveLogWorker.backlogMaxEntries,
                                          maxBytes: LiveLogWorker.backlogMaxBytes)
     private var backoff = LiveLogBackoff()
+    /// The chunk being delivered: fixed until confirmed, so a retry continues the same server-side upload.
+    private var uploadState = LiveLogUploadState()
+    /// Bounded copy of the unconfirmed chunk and the backlog in the caches folder (lines are redacted before
+    /// they reach the backlog, so nothing raw is ever written). Removed once everything is confirmed.
+    private let diskQueue = LiveLogDiskQueue.inCaches()
+    private var restoredFromDisk: Bool = false
+    /// Tag of the account the backlog, the unconfirmed chunk and the file on disk belong to (never the raw id).
+    private var queueOwner: String?
+    private var persistDirty: Bool = false
+    private var persistForced: Bool = false
+    private var lastPersistAt: TimeInterval = -Double.infinity
     /// Highest ring seq already moved into the backlog (or skipped as a "livelog" line).
     private var collectedSeq: Int64 = 0
     /// Highest ring seq the server confirmed. A restart after consent withdrawal resumes here.
@@ -187,7 +199,14 @@ actor LiveLogWorker {
         uploadTask?.cancel()
         uploadTask = nil
         timedOutSeq = nil
+        uploadState.reset()
         backlog.removeAll()
+        // Consent withdrawn: nothing stays on disk either.
+        diskQueue.delete()
+        restoredFromDisk = false
+        queueOwner = nil
+        persistDirty = false
+        persistForced = false
         collectedSeq = ackSeq
         cachedAuth = nil
     }
@@ -246,6 +265,13 @@ actor LiveLogWorker {
 
         let auth: AuthSnapshot = await currentAuth(cfg: cfg, force: false)
         guard runEpoch == expected else { return }
+        // Whose lines are queued: nobody signed in, or another account (or server) than the one that queued them,
+        // and the whole queue goes (memory and file) instead of being uploaded under the new identity.
+        let owner: String? = LiveLogDiskQueue.ownerTag(userId: auth.userId, serverBaseURL: cfg.serverUrl)
+        if owner == nil || (queueOwner != nil && queueOwner != owner) {
+            discardQueue()
+        }
+        queueOwner = owner
         // W-FLAGS runtime kill-switch. Gates SHIP only; redaction is unconditional (FIX-19:
         // consent is ANDed with the flag above, never replaced by it).
         guard auth.shipEnabled else { return }
@@ -256,6 +282,7 @@ actor LiveLogWorker {
 
         // Keep collecting even while an upload is in flight or the server is throttling: the
         // work is off-main, bounded, and each line is prepared exactly once.
+        restoreFromDiskOnce(owner: owner)
         await collect(expected: expected)
         guard runEpoch == expected else { return }
         // SECURITY C-10 -- the auth read and the collection above each hopped through the main
@@ -273,6 +300,68 @@ actor LiveLogWorker {
         if now - lastUploadStartedAt < LiveLogWorker.minSecondsBetweenUploads { return }
         if backoff.isBackingOff(now: now) { return }
         launchUpload(cfg: cfg, auth: auth, now: now, expected: expected)
+        persistIfDue(now: now)
+    }
+
+    // MARK: - Disk queue
+
+    /// Bring back what an earlier run saved and never got confirmed. The ring numbers of that run mean nothing
+    /// in this one, so the old lines are renumbered below zero (oldest first): they stay ahead of every line of
+    /// this run and a confirmation keyed by sequence number still removes them in order.
+    private func restoreFromDiskOnce(owner: String?) {
+        guard !restoredFromDisk else { return }
+        restoredFromDisk = true
+        // A file of another account, or with no owner, is deleted here and not restored.
+        guard let saved = diskQueue.loadOwned(by: owner) else { return }
+        let count: Int64 = Int64(saved.lines.count)
+        if let chunk = saved.pending {
+            uploadState.restore(filename: chunk.filename, data: chunk.data, lastSeq: -count - 1, fileId: chunk.fileId)
+        }
+        for (index, item) in saved.lines.enumerated() {
+            backlog.append(seq: Int64(index) - count, line: item.line, disposable: item.disposable)
+        }
+        let hasChunk: String = saved.pending == nil ? "0" : "1"
+        RTLog.info("livelog", "restored queue chunk=" + hasChunk + " lines=" + String(describing: saved.lines.count))
+    }
+
+    /// Drop everything queued for the previous owner: in flight, pending chunk, backlog and the file.
+    private func discardQueue() {
+        uploadTask?.cancel()
+        uploadTask = nil
+        inflight = false
+        timedOutSeq = nil
+        uploadState.reset()
+        backlog.removeAll()
+        diskQueue.delete()
+        persistDirty = false
+        persistForced = false
+    }
+
+    private func persistNow() {
+        guard let owner = queueOwner else {
+            diskQueue.delete()
+            persistDirty = false
+            persistForced = false
+            return
+        }
+        let chunk: LiveLogDiskQueue.PendingChunk? = uploadState.pending.map {
+            LiveLogDiskQueue.PendingChunk(filename: $0.filename, data: $0.data, lastSeq: $0.lastSeq, fileId: $0.fileId)
+        }
+        // The chunk's own lines are still in the backlog until confirmed: they are stored once, in the chunk.
+        let snapshot: LiveLogDiskQueue.Snapshot = LiveLogDiskQueue.snapshot(pending: chunk, backlog: backlog.liveItems(), owner: owner)
+        diskQueue.save(snapshot)
+        persistDirty = false
+        persistForced = false
+        lastPersistAt = LiveLogWorker.monotonicNow()
+    }
+
+    /// While lines only accumulate the file is written at most every `persistMinSeconds`; a change of the
+    /// unconfirmed chunk is written at once.
+    private func persistIfDue(now: TimeInterval) {
+        guard running, LiveLogConsent.isEnabled else { return }
+        if persistForced || (persistDirty && now - lastPersistAt >= LiveLogWorker.persistMinSeconds) {
+            persistNow()
+        }
     }
 
     // MARK: - Auth snapshot (one main-actor hop, cached)
@@ -306,54 +395,75 @@ actor LiveLogWorker {
         guard runEpoch == expected else { return }
         backlog.noteDropped(batch.skippedOlder)
         var highest: Int64 = since
+        var prepared: [LogLineCoalescer.Input] = []
+        prepared.reserveCapacity(batch.entries.count)
         for entry in batch.entries {
             if entry.seq > highest { highest = entry.seq }
             // Self-suppression: the shipper's own lines are never shipped (feedback loop).
             if entry.tag == "livelog" { continue }
-            let timestamp: String = isoFormatter.string(from: entry.timestamp)
             let levelInitial: String = String(entry.level.uppercased().prefix(1))
             let redacted: String = LogRedactor.redactStructured(entry.message)
-            let line: String = LiveLogBlob.jsonLine(timestamp: timestamp,
-                                                    levelInitial: levelInitial,
-                                                    tag: entry.tag,
-                                                    message: redacted)
-            backlog.append(seq: entry.seq,
-                           line: line,
-                           disposable: LiveLogBacklog.isDisposable(levelInitial: levelInitial, tag: entry.tag,
-                                                                    message: entry.message))
+            prepared.append(LogLineCoalescer.Input(
+                seq: entry.seq,
+                timestamp: entry.timestamp,
+                level: levelInitial,
+                tag: entry.tag,
+                message: redacted,
+                disposable: LiveLogBacklog.isDisposable(levelInitial: levelInitial, tag: entry.tag,
+                                                         message: entry.message)))
+        }
+        // Identical lines inside one second leave as one line with the repeat count (the redacted text is
+        // compared, so the redactor still sees every line first).
+        for item in LogLineCoalescer.coalesce(prepared) {
+            let line: String = LiveLogBlob.jsonLine(timestamp: isoFormatter.string(from: item.timestamp),
+                                                    levelInitial: item.level,
+                                                    tag: item.tag,
+                                                    message: item.message)
+            backlog.append(seq: item.seq, line: line, disposable: item.disposable)
         }
         if highest > collectedSeq { collectedSeq = highest }
+        if !prepared.isEmpty { persistDirty = true }
     }
 
     // MARK: - Uploading
 
     private func launchUpload(cfg: Config, auth: AuthSnapshot, now: TimeInterval, expected: Int) {
-        let header: String = LiveLogBlob.header(session: cfg.bootSessionId,
-                                                model: cfg.model,
-                                                os: cfg.os,
-                                                net: netType,
-                                                metered: netMetered,
-                                                appVer: cfg.appVer)
-        let budget: Int = LiveLogBlob.linesByteBudget(header: header, maxBytes: cfg.maxChunkBytes)
-        guard let batch = backlog.peekBatch(maxLines: cfg.maxLinesPerChunk, byteBudget: budget) else { return }
-        let data: Data = LiveLogBlob.chunkData(header: header, lines: batch.lines, maxBytes: cfg.maxChunkBytes)
-
-        // SECURITY L-6 -- never the raw user id in the file name: an HMAC keyed by the per-boot
-        // session id, stable within a session.
-        if userTagFor != auth.userId {
-            userTag = LiveLogWorker.sessionScopedTag(userId: auth.userId, sessionKey: cfg.bootSessionId)
-            userTagFor = auth.userId
+        // A chunk that was not confirmed yet is sent again as it is (same bytes, same name): the upload the
+        // server already holds for it is continued, and no line is shipped twice.
+        if !uploadState.hasPending {
+            let header: String = LiveLogBlob.header(session: cfg.bootSessionId,
+                                                    model: cfg.model,
+                                                    os: cfg.os,
+                                                    net: netType,
+                                                    metered: netMetered,
+                                                    appVer: cfg.appVer)
+            let budget: Int = LiveLogBlob.linesByteBudget(header: header, maxBytes: cfg.maxChunkBytes)
+            guard let batch = backlog.peekBatch(maxLines: cfg.maxLinesPerChunk, byteBudget: budget) else { return }
+            let newData: Data = LiveLogBlob.chunkData(header: header, lines: batch.lines, maxBytes: cfg.maxChunkBytes)
+            // SECURITY L-6 -- never the raw user id in the file name: an HMAC keyed by the per-boot
+            // session id, stable within a session.
+            if userTagFor != auth.userId {
+                userTag = LiveLogWorker.sessionScopedTag(userId: auth.userId, sessionKey: cfg.bootSessionId)
+                userTagFor = auth.userId
+            }
+            let nameSeq: Int = chunkSeq + 1
+            uploadState.start(filename: LiveLogBlob.filename(userTag: userTag, session: cfg.bootSessionId, seq: nameSeq),
+                              data: newData,
+                              lastSeq: batch.lastSeq)
         }
+        guard let attempt = uploadState.nextAttempt() else { return }
+        if attempt.attempts == 1 { persistForced = true }
         chunkSeq += 1
         let mySeq: Int = chunkSeq
-        let filename: String = LiveLogBlob.filename(userTag: userTag, session: cfg.bootSessionId, seq: mySeq)
+        let filename: String = attempt.filename
+        let data: Data = attempt.data
         inflight = true
         lastUploadStartedAt = now
 
         let serverUrl: String = cfg.serverUrl
         let token: String = auth.token
         let chunkBytes: Int = data.count
-        let lastSeq: Int64 = batch.lastSeq
+        let lastSeq: Int64 = attempt.lastSeq
 
         // W-LIVELOGHANG watchdog: a hung upload releases `inflight` after `uploadTimeoutSeconds`.
         // W-LIVELOGSINGLEFLIGHT (below) additionally cancels the actual `uploadTask`, so a stuck
@@ -392,6 +502,12 @@ actor LiveLogWorker {
         uploadTask?.cancel()
         uploadTask = nil
         failedUploads += 1
+        // A timeout backs off like any other network failure; without it the next tick (2 s later) sent the
+        // chunk again at once, against a path that had just proved too slow.
+        _ = backoff.recordFailure(status: nil,
+                                  retryAfterSeconds: nil,
+                                  now: LiveLogWorker.monotonicNow(),
+                                  jitterUnit: Double.random(in: 0...1))
         let seqStr: String = String(describing: seq)
         let line: String = "livelog upload timeout seq=" + seqStr
         RTLog.warn("net", line)
@@ -418,17 +534,25 @@ actor LiveLogWorker {
         let backendConfig: BackendConfig = BackendConfig.pinned(serverUrl: serverUrl, accessToken: token)
         let provider: BCryptoBackendProvider = BCryptoBackendProvider(config: backendConfig)
         var tusClient: TusUploadClient?
+        // The server-side upload of this chunk, remembered as soon as it exists so that a cut-short attempt
+        // (timeout, 502 mid-transfer) is continued from the server's offset by the next one.
+        let createdId = CreatedUploadId()
+        let resumeId: String? = uploadState.pending?.fileId
         do {
             let fileId: String
             if let storage = provider.storageApi as? BCryptoStorageApiImpl {
                 let client: TusUploadClient = storage.makeTusClient()
                 tusClient = client
-                fileId = try await client.upload(data: data, filename: filename)
+                fileId = try await client.upload(data: data, filename: filename, resumeFileId: resumeId,
+                                                 onCreated: { id in createdId.set(id) })
             } else {
                 fileId = try await provider.storageApi.uploadFile(data: data, filename: filename)
             }
             await uploadSucceeded(fileId: fileId, chunkBytes: chunkBytes, seq: seq, lastSeq: lastSeq)
         } catch {
+            if let id = createdId.get() { uploadState.noteFileId(id); persistForced = true }
+            // A purged upload cannot be continued: the next attempt creates a new one.
+            if case TusUploadClient.TusError.uploadNotFound = error { uploadState.forgetFileId(); persistForced = true }
             let retryAfterHeader: String? = tusClient?.lastRetryAfterHeader
             await uploadFailed(error: error,
                                retryAfterHeader: retryAfterHeader,
@@ -456,6 +580,9 @@ actor LiveLogWorker {
         // between would be collected again after a restart and shipped twice.
         if lastSeq > collectedSeq { collectedSeq = lastSeq }
         backlog.removeThrough(seq: lastSeq)
+        uploadState.confirm(throughSeq: lastSeq)
+        // Removed from disk only now, after the server's confirmation (an empty queue deletes the file).
+        if running, LiveLogConsent.isEnabled { persistNow() }
         backoff.recordSuccess()
         if uploadedChunks <= 3 || (uploadedChunks % 50) == 0 {
             let seqStr: String = String(describing: seq)
@@ -531,6 +658,15 @@ actor LiveLogWorker {
         failedUploads += 1
         inflight = false
 
+        // A payload the server refuses for good (400/413/415/422) would block every later line: give it up,
+        // count it, and let the queue move on. Every other failure keeps the chunk for the next attempt.
+        if uploadState.noteFailure(status: status) == .discard {
+            let removed: Int = backlog.removeThrough(seq: lastSeq)
+            backlog.noteDropped(removed)
+            persistForced = true
+            RTLog.warn("net", "livelog chunk rejected seq=" + String(describing: seq) + " lines=" + String(describing: removed))
+        }
+
         // 429 / 503: honour Retry-After, else exponential with jitter; other 5xx keep their
         // earlier schedule. W-RETRYAFTER (2026-10-03): 401/402/403, every other 4xx and a
         // network error back off as well (they used to re-send the same chunk every 2 s); the
@@ -567,6 +703,15 @@ actor LiveLogWorker {
     }
 
     // MARK: - Helpers
+
+    /// The id of the server-side upload, written by the upload client from its own context and read back on
+    /// this actor once the attempt has ended.
+    private final class CreatedUploadId: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: String?
+        func set(_ id: String) { lock.lock(); value = id; lock.unlock() }
+        func get() -> String? { lock.lock(); defer { lock.unlock() }; return value }
+    }
 
     /// HTTP status carried by a TUS error, if any.
     private static func httpStatus(of error: Error) -> Int? {

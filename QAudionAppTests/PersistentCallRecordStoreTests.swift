@@ -1,6 +1,7 @@
 import XCTest
 import CryptoKit
 import Security
+import QAudionEngine
 @testable import QAudionApp
 
 /// Reports 52e53e9f and 6ea3601a: the call history was wiped silently. The store hit an unreadable
@@ -640,6 +641,21 @@ final class PersistentCallRecordStoreTests: XCTestCase {
 
         XCTAssertNil(defaults.data(forKey: key), "wipeAll() reaches the call history store")
         XCTAssertTrue(PersistentCallRecordStore.shared.records.isEmpty)
+    }
+
+    func test_localCryptoWipe_deletesTheSavedLogQueue() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("wipe-queue-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let queue = LiveLogDiskQueue(fileURL: directory.appendingPathComponent("q.json"))
+        let line = LiveLogDiskQueue.Line(seq: 1, line: "x", disposable: false)
+        queue.save(LiveLogDiskQueue.Snapshot(pending: nil, lines: [line], owner: "owner-tag"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: queue.fileURL.path))
+
+        LocalCryptoWipe.clearLiveLogQueue(queue)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: queue.fileURL.path),
+                       "logout, account switch, account deletion and remote wipe remove the queue of the leaving account")
     }
 
     @MainActor
