@@ -64,14 +64,9 @@ final class CallControlDockTests: XCTestCase {
         }
     }
 
-    func testTheReportButtonIsTheLastCellOfTheTopRowOfAOneToOneCall() {
-        let rows = CallDockLayout.rows(mode: .oneToOne, available: [.chat, .share, .add, .report, .mute, .audio, .video, .end])
-        XCTAssertEqual(rows[0], [.chat, .share, .add, .report])
-        let alone = CallDockLayout.rows(mode: .oneToOne, available: [.report])
-        XCTAssertEqual(alone[0], [.report])
-        // Not offered on the group call.
-        XCTAssertEqual(CallDockLayout.rows(mode: .group, available: [.report]), [CallDockLayout.bottomRow])
-        XCTAssertEqual(CallDockItems.report(style, action: {}).kind, .report)
+    func testTheReportButtonIsNotACellOfTheDock() {
+        let rows = CallDockLayout.rows(mode: .oneToOne, available: [.chat, .share, .add, .mute, .audio, .video, .end])
+        XCTAssertEqual(rows[0], [.chat, .share, .add])
     }
 
     func testTheEndCellAloneStaysInTheLastColumn() {
@@ -117,7 +112,7 @@ final class CallControlDockTests: XCTestCase {
 
     func testThereIsNoHoldNoVoiceEnhancementAndNoDisturbanceControl() {
         let names: Set<String> = Set(CallControlKind.allCases.map { $0.rawValue })
-        XCTAssertEqual(names, ["chat", "share", "add", "buds", "hand", "reaction", "report", "mute", "audio", "video", "end"])
+        XCTAssertEqual(names, ["chat", "share", "add", "buds", "hand", "reaction", "mute", "audio", "video", "end"])
     }
 
     // MARK: - Items
@@ -249,15 +244,17 @@ final class CallControlDockTests: XCTestCase {
 
     func testOnlyTheDockChangedTheRestOfTheScreensIsAsItWas() throws {
         let audio = try source("QAudionApp/Views/Call/InCallScreen.swift")
-        // No top bar of its own; the trust bar keeps its security-sheet button (it is in the baseline) and the
-        // diagnostics button stays in the transport row.
-        XCTAssertFalse(audio.contains("callTopBar"))
+        // The trust bar keeps its security-sheet button (it is in the baseline) and the diagnostics button stays in the
+        // transport row.
         XCTAssertFalse(audio.contains("diagnosticsRow"))
         XCTAssertTrue(audio.contains("showSecuritySheet = true"))
         XCTAssertTrue(audio.contains("chart.bar.fill"))
-        // The single report button is a cell of the dock (where the report control lived), not in the scrolling transport row.
-        XCTAssertTrue(audio.contains("CallDockItems.report(style"))
-        XCTAssertFalse(audio.contains("Image(systemName: \"ladybug\")"))
+        // The report button sits in the top bar of the screen, not in the dock, and the call header has no presence text.
+        XCTAssertTrue(audio.contains("callTopBar(onReportProblem: onReportProblem)"))
+        XCTAssertTrue(audio.contains("CallControlText.reportA11y"))
+        XCTAssertFalse(audio.contains("CallDockItems.report"))
+        XCTAssertFalse(audio.contains("presenceLine"))
+        XCTAssertFalse(audio.contains("Text(\"online\")"))
         // The group call ring has no "Reply" action, as before the dock.
         let content = try source("QAudionApp/Views/ContentView.swift")
         XCTAssertTrue(content.contains("showReplyAction: false"))
