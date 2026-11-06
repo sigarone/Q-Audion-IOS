@@ -920,7 +920,7 @@ struct ParticipantTile: View {
                 Text(String(localized: "group_call.ringing_badge",
                             defaultValue: "Squilla…",
                             comment: "Group call participant tile — state of an invited person whose phone is still ringing"))
-                    .font(.system(size: 10, weight: .semibold))
+                    .qaudionScaledFont(size: 10, weight: .semibold, family: .label, maxSize: .xLarge)
                     .foregroundColor(Color.white.opacity(0.7))
                     .lineLimit(1)
             }
@@ -932,7 +932,7 @@ struct ParticipantTile: View {
                     Text(String(localized: "group_call.unverified_badge",
                                 defaultValue: "Non verificato",
                                 comment: "Group call participant tile — badge: this participant's identity has not been verified (no SAS confirmation, no in-person pairing)"))
-                        .font(.system(size: 10, weight: .semibold))
+                        .qaudionScaledFont(size: 10, weight: .semibold, family: .label, maxSize: .xLarge)
                         .lineLimit(1)
                 }
                 .foregroundColor(Color.orange)

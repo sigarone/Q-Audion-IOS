@@ -315,8 +315,8 @@ struct ContactDetailScreen: View {
                           size: 120,
                           presenceDot: heroPresenceDot)
             Text(item.displayName)
-                .font(.system(size: 24, weight: .semibold))
                 .italic()
+                .qaudionScaledFont(size: 24, weight: .semibold, family: .headline)
                 .foregroundStyle(scheme.onSurface)
                 .multilineTextAlignment(.center)
             // W445: extended presence label — shows InCall / DND icons

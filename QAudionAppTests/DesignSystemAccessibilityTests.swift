@@ -103,7 +103,7 @@ final class DesignSystemAccessibilityTests: XCTestCase {
     /// At the default size the helper gives back exactly the point size written at the call site, for every family,
     /// with and without a cap.
     func testScaledFontHelperKeepsTheWrittenSizeAtTheDefaultSize() {
-        let written: [CGFloat] = [7, 7.5, 8.5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20, 22, 26, 28, 34, 44, 56]
+        let written: [CGFloat] = [7, 7.5, 8.5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 20, 22, 24, 26, 28, 34, 36, 44, 56]
         for family in QAudionTypography.Family.allCases {
             for size in written {
                 XCTAssertEqual(QAudionTypography.scaledSize(size, family: family, at: .large), size, "\(family) \(size)")

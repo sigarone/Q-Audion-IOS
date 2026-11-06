@@ -116,7 +116,7 @@ struct CallSecurityBadge: View {
                 Text(appState.confidenceScore < 0
                      ? "—"
                      : "\(Int(appState.confidenceScore * 100))%")
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .qaudionScaledFont(size: 24, weight: .bold, design: .rounded, family: .headline, maxSize: .xLarge)
                     .foregroundColor(dotColor)
             }
 

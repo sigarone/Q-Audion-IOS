@@ -254,8 +254,8 @@ struct CallDiagnosticsPanel<Extra: View>: View {
                     .foregroundColor(.green)
                 Text(String(localized: "call.diag.title", defaultValue: "DIAGNOSTICA",
                             comment: "Call diagnostics panel — title (capitals)"))
-                    .font(.system(size: 10, weight: .semibold))
                     .tracking(1.2)
+                    .qaudionScaledFont(size: 10, weight: .semibold, family: .label, maxSize: .xLarge)
                     .foregroundColor(.green)
                 Spacer()
                 Button(action: onClose) {

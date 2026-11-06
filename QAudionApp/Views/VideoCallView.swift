@@ -576,8 +576,8 @@ struct VideoCallView: View {
                 Text(sasVerified
                      ? String(localized: "sas.header.verified", defaultValue: "SAS VERIFICATO", comment: "SAS verification panel header — words already confirmed")
                      : String(localized: "sas.header.compare_words", defaultValue: "CONFRONTA PAROLE", comment: "SAS verification panel header — prompts the user to compare the 6 SAS words with the other party"))
-                    .font(.system(size: 10, weight: .semibold))
                     .tracking(0.8)
+                    .qaudionScaledFont(size: 10, weight: .semibold, family: .label, maxSize: .xLarge)
                     .foregroundColor(sasVerified ? .green : .cyan)
             }
 

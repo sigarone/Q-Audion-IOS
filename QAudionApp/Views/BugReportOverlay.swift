@@ -59,7 +59,7 @@ private struct BugReportCard: View {
             Text(String(localized: "bug_report.privacy_hint",
                         defaultValue: "Il report è cifrato: solo il team di Q-Audion può leggerlo.",
                         comment: "Bug report sheet — note under the text field: the report is end-to-end encrypted and only the Q-Audion team can read it."))
-                .font(.system(size: 12))
+                .qaudionScaledFont(size: 12, family: .label)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -172,7 +172,7 @@ private struct BugReportCard: View {
             Text(String(localized: "bug_report.attach_screenshot",
                         defaultValue: "Allega uno screenshot",
                         comment: "Bug report sheet — checkbox: attach the screenshot of the screen to this report."))
-                .font(.system(size: 14, weight: .medium))
+                .qaudionScaledFont(size: 14, weight: .medium)
         }
     }
 
@@ -185,12 +185,12 @@ private struct BugReportCard: View {
                 Text(String(localized: "bug_report.attach_logs",
                             defaultValue: "Allega log diagnostici della chiamata",
                             comment: "Bug report sheet — checkbox: attach the app's technical log of the call to this report."))
-                    .font(.system(size: 14, weight: .medium))
+                    .qaudionScaledFont(size: 14, weight: .medium)
             }
             Text(String(localized: "bug_report.attach_logs_hint",
                         defaultValue: "Vengono inviati solo gli ultimi minuti del registro tecnico dell'app (eventi, stato di rete e audio, errori), con i dati personali oscurati. Nessun messaggio, nessun contenuto di chiamata. Se lo disattivi non parte nessuna riga di log.",
                         comment: "Bug report sheet — subtitle of the log checkbox: exactly what is sent when it is on."))
-                .font(.system(size: 12))
+                .qaudionScaledFont(size: 12, family: .label)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
