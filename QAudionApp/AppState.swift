@@ -930,6 +930,14 @@ final class AppState: ObservableObject {
         pendingOfferReplays.removeAll { $0.senderId == senderId }
         for m in matches { m.replay() }
     }
+    /// True when the OFFER of this call, from this very peer, was dropped as an invalid first OFFER before
+    /// `call_incoming`. Consumed once; the caller then ends the call with `peer_incompatible`.
+    @MainActor
+    private func consumeEarlyRejectedOffer(callId: String, senderId: String) -> Bool {
+        guard !callId.isEmpty else { return false }
+        return earlyRejectedOffers.consume(callId: callId, senderId: senderId, nowMs: SasCommit.monotonicNowMs())
+    }
+
     /// WIRE_SPEC §8.1 — true when the remote peer has signalled
     /// `call_video_state(paused: true)` (they turned their camera off).
     /// Purely informational UI state: it never touches the PeerConnection
@@ -1209,6 +1217,8 @@ final class AppState: ObservableObject {
     /// The 1:1 calls that already ended here (bounded): a late handshake fatal or confirmation expiry for one of
     /// them is ignored (`EndedCallBook`).
     private var endedCalls = EndedCallBook()
+    /// An OFFER that overtook `call_incoming` and failed the first-OFFER checks (local note, see `EarlyRejectedOfferBook`).
+    private var earlyRejectedOffers = EarlyRejectedOfferBook()
     // W-STALESEALER (2026-09-26) — the monotonic call-generation counter AND the
     // stale-install guard behind the caller/responder `onRelaySessionReady` wiring
     // both live on `CallService` now, not here: several terminal paths call
@@ -8262,6 +8272,14 @@ final class AppState: ObservableObject {
                         integration.didReceiveIncomingCallOffer(
                             callId: callIdStr, callerId: senderId)
                         integration.setLocallyRinging(true)
+                        if self.consumeEarlyRejectedOffer(callId: callIdStr, senderId: senderId) {
+                            // The peer's OFFER already arrived and was invalid: no media plane, same close
+                            // as an invalid OFFER that arrives after `call_incoming`. Only here, not in the PushKit
+                            // prepare: that runs inside the push callback, and this envelope still follows it.
+                            RTLog.error("call", "hsmalformed earlyoffer=1")
+                            self.handleHandshakeFatal(callId: callIdStr, reason: CallCloseReason.peerIncompatible.rawValue)
+                            return
+                        }
                         // P2P iOS↔iOS: the server forwards the caller's
                         // call_offer payload verbatim inside call_incoming
                         // (including the "sdp" field from
@@ -15800,8 +15818,17 @@ final class AppState: ObservableObject {
             if let code = HandshakeSigningPolicy.pendingOfferMalformedCode(
                 round: parsed.bundle.rekeyRound, sasCommitB64: parsed.bundle.sasCommit) {
                 print("[AppState] Android OFFER dropped — not a valid first OFFER code=\(code) callId=\(parsed.callId.prefix(8))… from \(senderId.prefix(8))…")
+                // Nothing valid is held for this call and peer: remember the drop locally, so the call that
+                // `call_incoming` then announces ends as it does when the OFFER arrives second.
+                let holdsValid = pendingOfferReplays.contains {
+                    $0.senderId == senderId && $0.callId == parsed.callId.lowercased()
+                }
+                if !holdsValid {
+                    earlyRejectedOffers.note(callId: parsed.callId, senderId: senderId, nowMs: SasCommit.monotonicNowMs())
+                }
                 return
             }
+            earlyRejectedOffers.clear(callId: parsed.callId, senderId: senderId)
             print("[AppState] Android OFFER buffered — callContactId not yet set, waiting for call_incoming from \(senderId.prefix(8))…")
             bufferOfferReplay(senderId: senderId, callId: parsed.callId) { [weak self] in
                 self?.routeInboundAndroidOffer(parsed: parsed, senderId: senderId)
