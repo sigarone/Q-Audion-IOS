@@ -344,6 +344,7 @@ jobs:
             -only-testing:QAudionAppTests/CallStartSupportTests \
             -only-testing:QAudionAppTests/CarPlayBridgeTests \
             -only-testing:QAudionAppTests/CarPlayListModelTests \
+            -only-testing:QAudionAppTests/CarPlayLinkTests \
             -only-testing:QAudionAppTests/ConfidenceToneTests \
             -only-testing:QAudionAppTests/DesignSystemAccessibilityTests \
             -only-testing:QAudionAppTests/DeviceSymbolTests \
