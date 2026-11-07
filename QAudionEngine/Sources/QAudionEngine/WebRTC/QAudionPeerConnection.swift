@@ -664,8 +664,8 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
             //     massimo dove c'è potenza a sufficienza, in modo adattivo,
             //     non farci limitare da telefoni obsoleti" instruction,
             //     2026-09-29).
-            //   - `requireDtlsPqc()` — gated by the `calls.dtls_pqc_required`
-            //     remote flag (default false), via `dtlsPqcRequiredProvider`
+            //   - `setRequireDtlsPqc(_:)` — set to the `calls.dtls_pqc_required`
+            //     remote flag value (default false) at every call start, via `dtlsPqcRequiredProvider`
             //     (see that property's kdoc on `QAudionWebRtcCallController`
             //     for why the indirection exists and why the default stayed
             //     off, 2026-09-29 revision — originally "AES256 senza
@@ -708,9 +708,9 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
             QaudionRuntimeTuning.setMinPacketLossPercent(PlpPolicy.minPct)
             QaudionRuntimeTuning.setEncoderComplexity(encDriver.currentComplexity)
             QaudionRuntimeTuning.setDecoderComplexity(decDriver.currentComplexity)
-            if dtlsPqcRequiredProvider?() ?? false {
-                QaudionRuntimeTuning.requireDtlsPqc()
-            }
+            // Every 1:1 call start sets the requirement explicitly, true or false, so a flag flip
+            // (including the rollback to false) takes effect on the next call. Groups never call this.
+            QaudionRuntimeTuning.setRequireDtlsPqc(dtlsPqcRequiredProvider?() ?? false)
 
             let reapply: () -> Void = { [weak self] in
                 guard let self else { return }

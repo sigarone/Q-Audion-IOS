@@ -43,10 +43,10 @@ public class GroupPeerBase: NSObject, RTCPeerConnectionDelegate, @unchecked Send
 
     // MARK: Construction
 
-    /// Builds the PeerConnection. `QaudionRuntimeTuning.requireDtlsPqc()` is NOT
-    /// called here: it is tighten-only for the whole process and would also turn
-    /// every later 1:1 call into a PQC-required one (the 1:1 path keeps it behind
-    /// the `calls.dtls_pqc_required` remote gate). The group level is enforced by
+    /// Builds the PeerConnection. `QaudionRuntimeTuning.setRequireDtlsPqc` is NOT
+    /// called here: the setting is process-wide, so a group start would change the
+    /// requirement of a 1:1 call running at the same time (the 1:1 path sets it at every
+    /// call start from the `calls.dtls_pqc_required` remote gate). The group level is enforced by
     /// qjanus itself (DTLS 1.3 + X25519MLKEM768 only, fail-closed), the DTLS pin
     /// binds the node to its published certificate and `GroupTransportPolicy`
     /// checks version / cipher / SRTP profile after connect.

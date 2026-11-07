@@ -82,18 +82,46 @@ public enum QaudionRuntimeTuning {
         return true
     }
 
-    /// `+[RTCPeerConnectionFactory setQaudionRequireDtlsPqc]` — tighten-only
-    /// for the life of the process; there is deliberately no corresponding
-    /// "un-require" native call. Owner instruction (2026-09-29): "deve
-    /// essere sempre utilizzato AES256 senza compromessi" — this app calls
-    /// it unconditionally at the start of every native-audio-srtp call
-    /// (`QAudionPeerConnection.init`), not behind any remote flag. A peer
-    /// that cannot meet it fails DTLS while its ICE stays healthy, which is
-    /// exactly the shape `QAudionWebRtcCallController
-    /// .didChangeConnectionState`'s I6 branch routes to the sealed WS relay
-    /// instead of ending the call.
-    public static func requireDtlsPqc() {
-        RTCPeerConnectionFactory.setQaudionRequireDtlsPqc()
+    /// Test seam: sees every value `setRequireDtlsPqc` is asked to apply, before the native call.
+    nonisolated(unsafe) static var requireDtlsPqcObserver: ((Bool) -> Void)?
+
+    private static let legacyRequireSelectorLogged = NSLock()
+    private nonisolated(unsafe) static var legacyRequireSelectorLoggedOnce = false
+
+    /// `+[RTCPeerConnectionFactory setQaudionRequireDtlsPqc:]` — sets whether the DTLS handshakes that
+    /// complete from now on must negotiate the post-quantum group (X25519MLKEM768). The native side reads the
+    /// value once per handshake, so a change reaches the next call without a restart, in both directions.
+    /// Only the 1:1 path calls this (`QAudionPeerConnection.init`, once per call start, with the
+    /// `calls.dtls_pqc_required` flag value, `true` or `false`). The group path never does: a group start
+    /// must not clear the requirement of a 1:1 call that is running at the same time, and groups are
+    /// post-quantum only through qjanus anyway.
+    ///
+    /// Looked up through the Objective-C runtime like `setEncoderMaxPlaybackRate`. A binary that only has the
+    /// older no-argument selector (always "required") is used for `on == true`; for `false` there is nothing
+    /// to call, so the requirement stays as that binary has it. The fallback is logged once.
+    @discardableResult
+    public static func setRequireDtlsPqc(_ on: Bool) -> Bool {
+        requireDtlsPqcObserver?(on)
+        let factoryClass: AnyClass = RTCPeerConnectionFactory.self
+        let selector: Selector = NSSelectorFromString("setQaudionRequireDtlsPqc:")
+        if let method = class_getClassMethod(factoryClass, selector) {
+            typealias Setter = @convention(c) (AnyObject, Selector, Bool) -> Void
+            let setter: Setter = unsafeBitCast(method_getImplementation(method), to: Setter.self)
+            setter(factoryClass as AnyObject, selector, on)
+            return true
+        }
+        guard on else { return false }
+        let legacy: Selector = NSSelectorFromString("setQaudionRequireDtlsPqc")
+        guard let method = class_getClassMethod(factoryClass, legacy) else { return false }
+        typealias LegacySetter = @convention(c) (AnyObject, Selector) -> Void
+        let setter: LegacySetter = unsafeBitCast(method_getImplementation(method), to: LegacySetter.self)
+        setter(factoryClass as AnyObject, legacy)
+        legacyRequireSelectorLogged.lock()
+        let first = !legacyRequireSelectorLoggedOnce
+        legacyRequireSelectorLoggedOnce = true
+        legacyRequireSelectorLogged.unlock()
+        if first { NativeAudioSessionGate.log?("pqcreq legacy selector in use") }
+        return true
     }
 }
 #endif
