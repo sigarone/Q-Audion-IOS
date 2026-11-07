@@ -6261,7 +6261,7 @@ final class AppState: ObservableObject {
         // through the same `LogRedactor.redact` every other egress line gets
         // (defence in depth) before it ever reaches RTLog/Loki.
         QAudionPeerConnectionFactory.shared.onQaudionSelfReportLine = { line in
-            RTLog.info("call", LogRedactor.redact(line))
+            RTLog.warn("call", LogRedactor.redact(line))
         }
         // W-AUNITCALLDIDINIT (2026-09-10) — see `aunitEventsSeenThisCall`'s
         // own kdoc. `started` is the definitive "the real native VoIP audio

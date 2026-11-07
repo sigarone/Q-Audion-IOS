@@ -348,6 +348,12 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
         // matched against the lifecycle substring checks below (none of
         // those substrings currently start with "Q-AUDION ", but a future
         // native message that happened to could otherwise double-report).
+        // The handshake line arrives behind a `(openssl_stream_adapter.cc:NNNN): ` source prefix, so it is
+        // matched on its exact shape (`NativeHandshakeLogLine`) and forwarded without the prefix.
+        if let handshake = NativeHandshakeLogLine.normalized(message) {
+            onQaudionSelfReportLine?(handshake)
+            return
+        }
         if message.hasPrefix("Q-AUDION ") {
             onQaudionSelfReportLine?(message)
             return
