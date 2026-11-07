@@ -8956,20 +8956,14 @@ final class AppState: ObservableObject {
         }
         // I2/I4 (M150 migration, 2026-09-29) — wire the DTLS-PQC-required
         // remote gate; see `dtlsPqcRequiredProvider`'s own kdoc (QAudionEngine
-        // cannot import FeatureFlags directly). Off-main fails closed to the
-        // flag's own compiled default (false, optional PQC).
-        controller.dtlsPqcRequiredProvider = {
-            guard Thread.isMainThread else { return false }
-            return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_pqc_required", false) }
-        }
+        // cannot import FeatureFlags directly). Read here, on the main actor, and
+        // handed down as a plain value (the consumer runs off-main).
+        controller.dtlsPqcRequiredProvider = CallFlagProviders.snapshot { FeatureFlags.bool("calls.dtls_pqc_required", false) }
         // TRACK B (2026-09-29, "phone always DTLS server when answering") —
         // wire the DTLS-answer-passive remote kill switch; see
         // `dtlsAnswerPassiveKillSwitchProvider`'s own kdoc (QAudionEngine
         // cannot import FeatureFlags directly).
-        controller.dtlsAnswerPassiveKillSwitchProvider = {
-            guard Thread.isMainThread else { return false }
-            return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
-        }
+        controller.dtlsAnswerPassiveKillSwitchProvider = CallFlagProviders.snapshot { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
         controller.useExternalVideoSource = true
         // WIRE_SPEC §8.7 — publication rides the RX render gate (parked
         // until the receiver cryptor is ready, 2s failsafe).
@@ -20882,17 +20876,11 @@ final class AppState: ObservableObject {
                 // I2/I4 (M150 migration, 2026-09-29) — wire the DTLS-PQC-required
                 // remote gate; see `dtlsPqcRequiredProvider`'s own kdoc
                 // (QAudionEngine cannot import FeatureFlags directly).
-                controller.dtlsPqcRequiredProvider = {
-                    guard Thread.isMainThread else { return false }
-                    return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_pqc_required", false) }
-                }
+                controller.dtlsPqcRequiredProvider = CallFlagProviders.snapshot { FeatureFlags.bool("calls.dtls_pqc_required", false) }
                 // TRACK B (2026-09-29) — wire the DTLS-answer-passive remote
                 // kill switch; see `dtlsAnswerPassiveKillSwitchProvider`'s own
                 // kdoc (QAudionEngine cannot import FeatureFlags directly).
-                controller.dtlsAnswerPassiveKillSwitchProvider = {
-                    guard Thread.isMainThread else { return false }
-                    return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
-                }
+                controller.dtlsAnswerPassiveKillSwitchProvider = CallFlagProviders.snapshot { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
                 // For outgoing video calls VideoCallPipeline (above)
                 // already opened the camera. Tell the controller to
                 // skip RTCCameraVideoCapturer so the two AVCaptureSessions
@@ -30592,17 +30580,11 @@ extension AppState {
         // I2/I4 (M150 migration, 2026-09-29) — wire the DTLS-PQC-required
         // remote gate; see `dtlsPqcRequiredProvider`'s own kdoc (QAudionEngine
         // cannot import FeatureFlags directly).
-        controller.dtlsPqcRequiredProvider = {
-            guard Thread.isMainThread else { return false }
-            return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_pqc_required", false) }
-        }
+        controller.dtlsPqcRequiredProvider = CallFlagProviders.snapshot { FeatureFlags.bool("calls.dtls_pqc_required", false) }
         // TRACK B (2026-09-29) — wire the DTLS-answer-passive remote kill
         // switch; see `dtlsAnswerPassiveKillSwitchProvider`'s own kdoc
         // (QAudionEngine cannot import FeatureFlags directly).
-        controller.dtlsAnswerPassiveKillSwitchProvider = {
-            guard Thread.isMainThread else { return false }
-            return MainActor.assumeIsolated { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
-        }
+        controller.dtlsAnswerPassiveKillSwitchProvider = CallFlagProviders.snapshot { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
         // For incoming video calls, start the VideoCallPipeline first so it
         // owns the AVCaptureSession. Tell the WebRTC controller to skip its
         // own RTCCameraVideoCapturer — avoids the dual AVCaptureSession
