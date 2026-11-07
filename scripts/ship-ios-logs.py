@@ -1301,14 +1301,31 @@ _RE_MESH_FULL = re.compile(
     r")\Z"
 )
 
+# NATIVE HANDSHAKE SUMMARY (call / stdout tags): the one line the native DTLS stack reports about itself, forwarded by
+# AppState (onQaudionSelfReportLine) after NativeHandshakeLogLine.normalized, which already accepts only this exact
+# shape. Every field is hex of fixed width or a short decimal, so the line carries no name, address or key by
+# construction. The generic gate cannot read it ("Q-AUDION" and "dtls" are bare words, cipher=1302 is a long number),
+# so it is accepted here by the whole-line match only: one extra word, a longer field or any suffix and it is not this
+# line and goes through the ordinary gates as before. Pinned by test_ship_ios_handshake_vocab.py.
+_HANDSHAKE_TAG_PREFIXES = ("call", "stdout")
+
+_RE_HANDSHAKE_FULL = re.compile(
+    r"\AQ-AUDION dtls v=[0-9a-f]{4} cipher=[0-9a-f]{4} srtp=[0-9a-f]{4} group=[0-9a-f]{4}"
+    r" level=-?[0-9]{1,2} pqc_req=[01] ok=[01]\Z"
+)
+
+
 def _is_closed_grammar_line(tag, norm_body):
-    """True if `tag` is the mesh scope and `norm_body` is, in full, one of the mesh diagnostic events. Full-line
-    validation: a body that merely starts with an event name and carries anything else (a full node id, an address,
-    free text) is not one."""
+    """True if `tag` is the mesh scope and `norm_body` is, in full, one of the mesh diagnostic events, or `tag` is a
+    call / stdout scope and `norm_body` is, in full, the native handshake summary. Full-line validation: a body that
+    merely starts with an event name and carries anything else (a full node id, an address, free text) is not one."""
     if not tag:
         return False
-    if str(tag).lower().startswith(_MESH_TAG_PREFIXES):
+    t = str(tag).lower()
+    if t.startswith(_MESH_TAG_PREFIXES):
         return bool(_RE_MESH_FULL.match(norm_body))
+    if t.startswith(_HANDSHAKE_TAG_PREFIXES):
+        return bool(_RE_HANDSHAKE_FULL.match(norm_body))
     return False
 
 
