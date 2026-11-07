@@ -206,6 +206,13 @@ extension MetricKitDiagnostics {
         let data: Data = c.callStackTree.jsonRepresentation()
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
         guard let stacks = root["callStacks"] as? [[String: Any]] else { return }
+        // Every thread's innermost frames, with the binary UUIDs and which thread was chosen and why (see
+        // `MetricKitCrashStackFormatter`): the attributed thread is not always the one that crashed, and the chain
+        // below is printed from its root, so a deep stack loses the end that matters.
+        for detail in MetricKitCrashStackFormatter.lines(from: root) {
+            let line: String = detail
+            print(line)
+        }
         // Prefer the crash-attributed thread; fall back to the first stack.
         let chosen = stacks.first(where: { ($0["threadAttributed"] as? Bool) == true }) ?? stacks.first
         guard let stack = chosen,
