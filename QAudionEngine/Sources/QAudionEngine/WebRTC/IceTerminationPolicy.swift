@@ -129,7 +129,7 @@ public enum IceTerminationPolicy {
 /// defaulted input, also `false` for every pre-existing caller:
 ///   - `dtlsFailedWithHealthyIce`: the transport-level DTLS handshake failed
 ///     (bad cert, version/cipher mismatch, or — now that PQC is required
-///     unconditionally, see `QaudionRuntimeTuning.requireDtlsPqc` — a peer
+///     unconditionally, see `QaudionRuntimeTuning.setRequireDtlsPqc` — a peer
 ///     that cannot meet it) while ICE itself stayed `.connected`/`.completed`
 ///     (`QAudionWebRtcCallController.didChangeConnectionState`). Before this,
 ///     the doc above this function correctly said "a DTLS/connection failure

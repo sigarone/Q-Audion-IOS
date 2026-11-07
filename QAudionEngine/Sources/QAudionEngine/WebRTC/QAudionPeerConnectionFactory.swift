@@ -590,7 +590,7 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
             //     legacy peer to interop with on this brand-new native-SRTP
             //     path, and the owner's explicit instruction is AES-256
             //     without compromise — a build that requires PQC on DTLS
-            //     (`QaudionRuntimeTuning.requireDtlsPqc`) and then quietly
+            //     (`QaudionRuntimeTuning.setRequireDtlsPqc`) and then quietly
             //     allowed a non-GCM SRTP cipher would be exactly that kind
             //     of compromise. A peer that cannot negotiate GCM fails this
             //     step the same way a peer that cannot negotiate PQC fails

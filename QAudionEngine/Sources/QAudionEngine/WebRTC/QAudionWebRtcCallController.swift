@@ -1567,7 +1567,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public var p2pProbeKillSwitchProvider: (() -> Bool)?
 
     /// I2/I4 (webrtc-plan.md v2 §3.3, M150 migration, 2026-09-29) — remote
-    /// gate for `QaudionRuntimeTuning.requireDtlsPqc()`. Same indirection
+    /// gate for `QaudionRuntimeTuning.setRequireDtlsPqc(_:)`. Same indirection
     /// reason as `p2pProbeKillSwitchProvider` right above (QAudionEngine
     /// cannot import `FeatureFlags`): AppState sets this to a closure that
     /// reads `FeatureFlags.bool("calls.dtls_pqc_required", false)`, wired
@@ -1575,7 +1575,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     ///
     /// Read ONCE, synchronously, at `QAudionPeerConnection.init` (forwarded
     /// through as an init parameter — unlike the P2P-probe provider this
-    /// cannot be read later, `requireDtlsPqc()` has to run before the
+    /// cannot be read later, `setRequireDtlsPqc(_:)` has to run before the
     /// native-SRTP transceiver is pre-attached). `nil` (no AppState wiring,
     /// e.g. a unit test constructing the controller directly) resolves to
     /// `false` — PQC stays OPTIONAL, matching the flag's own compiled
@@ -5392,7 +5392,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// I6 (webrtc-plan.md v2 §3.1/§3.3, 2026-09-29) — a DTLS failure while
     /// ICE stayed healthy (`.connected`/`.completed`) is no longer treated
     /// the same as a genuinely dead transport. Requiring PQC unconditionally
-    /// on every call (`QaudionRuntimeTuning.requireDtlsPqc`, called once
+    /// on every call (`QaudionRuntimeTuning.setRequireDtlsPqc`, called once
     /// M150 ships — see that file) means a peer that cannot meet it WILL
     /// fail DTLS with perfectly healthy ICE candidates; an ICE restart
     /// cannot fix a cipher/version mismatch, so this app now recognizes that
