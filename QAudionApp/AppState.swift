@@ -8126,8 +8126,12 @@ final class AppState: ObservableObject {
                         UIApplication.shared.applicationState == .active
                     }
                     let wsDiagVideo: Bool = (callType == "video")
-                    let wsCarPlay: Bool = Self.isCarPlayConnected()
-                    let wsDiag: String = "[AppState] W-CALLDIAG WS path uuid=\(callUUID.uuidString.prefix(8))… hasVideo=\(wsDiagVideo) pushKitFirst=\(alreadyRegisteredByPushKit) foreground=\(appForeground) carplay=\(wsCarPlay ? 1 : 0)"
+                    let wsCarPlayReading: CarPlayLink.Reading = CarPlayLink.read()
+                    let wsCarPlay: Bool = wsCarPlayReading.connected
+                    // A car shows calls only through CallKit, so with CarPlay connected the foreground
+                    // single-dialer suppression does not apply (see `WsIncomingPresentation`).
+                    let wsPresentation: WsIncomingPresentation = WsIncomingPresentation.decide(foreground: appForeground, carPlay: wsCarPlay)
+                    let wsDiag: String = "[AppState] W-CALLDIAG WS path uuid=\(callUUID.uuidString.prefix(8))… hasVideo=\(wsDiagVideo) pushKitFirst=\(alreadyRegisteredByPushKit) foreground=\(appForeground) carplay=\(wsCarPlay ? 1 : 0) src=\(wsCarPlayReading.source.rawValue) ring=\(wsPresentation == .callKit ? "callkit" : "inapp")"
                     print(wsDiag)
                     let useCustomUI = CallsGate.callKitFreeMode
                     if !alreadyRegisteredByPushKit {
@@ -8145,7 +8149,7 @@ final class AppState: ObservableObject {
                                     hasVideo: wsDiagVideo
                                 )
                             }
-                        } else if appForeground {
+                        } else if wsPresentation == .inAppOnly {
                             await MainActor.run {
                                 (self.callKit as? CallKitProvider)?.registerSuppressedCall(callUUID)
                             }
@@ -8213,7 +8217,7 @@ final class AppState: ObservableObject {
                         // native CallKit UI is handling ringing (background WS or
                         // PushKit), stay .idle so the in-app view stays hidden —
                         // the single-dialer guarantee.
-                        if !alreadyRegisteredByPushKit && appForeground {
+                        if !alreadyRegisteredByPushKit && wsPresentation == .inAppOnly {
                             self.callState = .ringing
                             // In-app ringtone: CallKit (suppressed for in-app dialer) was
                             // previously the only ring source. Play the system "sms-received"
@@ -18312,7 +18316,7 @@ final class AppState: ObservableObject {
     /// this stays callable synchronously from any of them without adding an
     /// actor hop that isn't otherwise needed.
     nonisolated private static func isCarPlayConnected() -> Bool {
-        AVAudioSession.sharedInstance().currentRoute.outputs.contains { $0.portType == .carAudio }
+        CarPlayLink.read().connected
     }
 
     @MainActor

@@ -155,6 +155,7 @@ public final class CarPlayBridge {
 
     public func carPlayConnected() {
         isConnected = true
+        CarPlayLink.setSceneConnected(true)
         ensureBooted()
         refreshAppLock?()
         onCarPlayConnected?()
@@ -162,6 +163,7 @@ public final class CarPlayBridge {
 
     public func carPlayDisconnected() {
         isConnected = false
+        CarPlayLink.setSceneConnected(false)
         noticeSink = nil
         onSignInChanged = nil
         onLockChanged = nil

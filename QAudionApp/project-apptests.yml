@@ -59,6 +59,7 @@ targets:
           - CallStartSupportTests.swift
           - CarPlayBridgeTests.swift
           - CarPlayListModelTests.swift
+          - CarPlayLinkTests.swift
           - ConfidenceToneTests.swift
           - DesignSystemAccessibilityTests.swift
           - DeviceSymbolTests.swift

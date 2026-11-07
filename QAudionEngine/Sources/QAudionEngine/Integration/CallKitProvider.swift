@@ -136,6 +136,13 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         }
     }
 
+    /// The name the system call UI shows: the caller, a separator and the encrypted tag, as plain text. No
+    /// padlock character: the system UI already shows the app's own glyph (`iconTemplateImageData`), and a
+    /// character in the name was shown instead of the logo.
+    public static func callerDisplayName(_ callerName: String, encryptedTag: String) -> String {
+        callerName + " · " + encryptedTag
+    }
+
     /// W-VOIPSYNC (2026-10-08) — synchronous form of `reportIncomingCall`: hands
     /// the report to CallKit before it returns and calls `completion` once CallKit
     /// has answered (success or refusal), after the ledger has been updated.
@@ -165,8 +172,8 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // here since String(localized:) resolves against the main app
         // bundle's own Localizable.xcstrings at runtime regardless of which
         // module the call site lives in.
-        let encryptedTag = String(localized: "callkit.encrypted_tag", defaultValue: "Cifrata", comment: "Suffix appended to the caller name on the native CallKit incoming-call screen, e.g. 'Marco · 🔒 Encrypted'")
-        update.localizedCallerName = callerName + " · 🔒 " + encryptedTag
+        let encryptedTag = String(localized: "callkit.encrypted_tag", defaultValue: "Cifrata", comment: "Suffix appended to the caller name on the native CallKit incoming-call screen, e.g. 'Marco · Encrypted'")
+        update.localizedCallerName = Self.callerDisplayName(callerName, encryptedTag: encryptedTag)
         // W-CALLDIAG: every native report attempt logged (uuid + hasVideo). Two
         // reports for the same uuid ⇒ Code=2 below (the "seconda chiamata in
         // chiaro" duplicate the user sees on voice + video). The source (PushKit
