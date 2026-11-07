@@ -710,7 +710,9 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
             QaudionRuntimeTuning.setDecoderComplexity(decDriver.currentComplexity)
             // Every 1:1 call start sets the requirement explicitly, true or false, so a flag flip
             // (including the rollback to false) takes effect on the next call. Groups never call this.
-            QaudionRuntimeTuning.setRequireDtlsPqc(dtlsPqcRequiredProvider?() ?? false)
+            let pqcRequired = dtlsPqcRequiredProvider?() ?? false
+            QaudionRuntimeTuning.setRequireDtlsPqc(pqcRequired)
+            NativeAudioSessionGate.log?("pqcreq set=\(pqcRequired ? 1 : 0)")
 
             let reapply: () -> Void = { [weak self] in
                 guard let self else { return }
