@@ -85,7 +85,10 @@ Options:
                    VPS then answers ONLY `ios-list <minutes> <limit>` and
                    `ios-cat <uuid>`: no SFTP, no shell, no password. Used by the
                    Helsinki */5 cron; --local-dir and the password path are
-                   untouched.
+                   untouched. A blob the wrapper refuses (not a W417 chunk, e.g.
+                   an encrypted attachment) is remembered in the state file
+                   ("refused", per listing mtime+size, aged out with the
+                   --minutes window, capped) and not asked for again.
 
 Requires:
   - paramiko (`pip install paramiko`)
@@ -2893,18 +2896,27 @@ def list_chunks_exec(client, minutes, limit):
     return parse_ios_list(out_text)
 
 
-def read_blob_exec(client, path):
+def read_blob_exec(client, path, refused=None):
     """Restricted-exec blob read: `ios-cat <uuid>` -> stdout bytes. Returns the
-    bytes, or None on a refusal / non-zero exit / oversize. No SFTP."""
+    bytes, or None on a refusal / non-zero exit / oversize. No SFTP.
+
+    `refused` (optional set): when the wrapper itself REFUSES the blob (exit 1 =
+    its DENY(cat-refused): not a W417 chunk, e.g. an encrypted attachment) the
+    path is added to it, so the caller can remember the refusal. A transport
+    problem (no exit status, other exit code) or an oversize answer is NOT a
+    refusal and is never recorded: those are retried on the next run."""
     uid = path.rsplit("/", 1)[-1]
     if not RE_BLOB_UUID.match(uid):
         return None
     _stdin, stdout, stderr = client.exec_command("ios-cat " + uid)
     blob = stdout.read()
-    if stdout.channel.recv_exit_status() != 0 or len(blob) > 256 * 1024:
+    rc = stdout.channel.recv_exit_status()
+    if rc != 0 or len(blob) > 256 * 1024:
         print("  skip %s: ios-cat refused (%s)"
               % (path, stderr.read().decode("utf-8", "replace").strip()[:80]),
               file=sys.stderr)
+        if refused is not None and rc == 1:
+            refused.add(path)
         return None
     return blob
 
@@ -2982,16 +2994,18 @@ def order_blobs_oldest_first(files):
     return sorted(files, key=lambda f: f[0])
 
 
-def read_chunk_blob(sftp, path, size_s, local_map=None, exec_client=None):
+def read_chunk_blob(sftp, path, size_s, local_map=None, exec_client=None,
+                    refused=None):
     """SFTP-read one blob (or, in --local-dir mode, read it from the local
     mirror via local_map[path]; in restricted-exec mode, `ios-cat` through
     exec_client). Returns the UTF-8 text, or None if it is not a parseable W417
-    chunk (too big, empty, binary, or wrong first line)."""
+    chunk (too big, empty, binary, or wrong first line). `refused` is passed to
+    read_blob_exec() (restricted-exec mode only)."""
     if size_s == 0 or size_s > 256 * 1024:
         return None
     try:
         if exec_client is not None:
-            blob = read_blob_exec(exec_client, path)
+            blob = read_blob_exec(exec_client, path, refused)
             if blob is None:
                 return None
         elif local_map is not None:
@@ -3123,6 +3137,59 @@ def unchanged_since_shipped(state, blob_path, mtime, size):
     prev = state.get("blobs", {}).get(blob_path)
     return (bool(prev) and prev.get("mt") == round(float(mtime), 3)
             and prev.get("sz") == int(size))
+
+
+# Foreign blobs. ios-list returns every uuid-named file of the right size and
+# age, including blobs that are not W417 logs (encrypted attachments / file
+# transfers). The wrapper refuses those (DENY(cat-refused)); without a memory
+# of that the shipper asks again every 5 minutes while the blob stays inside
+# the listing window. state["refused"] = {path: {"mt", "sz", "ts"}} remembers the
+# refusal for exactly that listing mtime+size: a blob that changes is read again.
+IOS_REFUSED_CAP = 1000        # max remembered refusals (state stays small)
+IOS_REFUSED_SLACK_S = 600     # keep an entry this long after it left the window
+
+
+def record_refused(state, blob_path, mtime, size):
+    state.setdefault("refused", {})[blob_path] = {
+        "mt": round(float(mtime), 3),
+        "sz": int(size),
+        "ts": int(time.time()),
+    }
+
+
+def unchanged_since_refused(state, blob_path, mtime, size):
+    """True if the wrapper refused this blob with the SAME listing mtime+size."""
+    ref = state.get("refused")
+    prev = ref.get(blob_path) if isinstance(ref, dict) else None
+    return (isinstance(prev, dict) and prev.get("mt") == round(float(mtime), 3)
+            and prev.get("sz") == int(size))
+
+
+def prune_refused(state, window_s, now=None, cap=IOS_REFUSED_CAP):
+    """Bound state["refused"]: drop entries whose listing mtime is older than
+    the listing window (+ slack: ios-list can no longer return them), drop
+    malformed ones, then keep only the `cap` newest. Returns how many were
+    dropped."""
+    now = time.time() if now is None else now
+    ref = state.get("refused")
+    if not isinstance(ref, dict):
+        state.pop("refused", None)
+        return 0
+    horizon = now - float(window_s) - IOS_REFUSED_SLACK_S
+    keep = {}
+    for p, e in ref.items():
+        mt = e.get("mt") if isinstance(e, dict) else None
+        if isinstance(mt, (int, float)) and not isinstance(mt, bool) and mt >= horizon:
+            keep[p] = e
+    if len(keep) > cap:
+        newest = sorted(keep, key=lambda p: keep[p]["mt"], reverse=True)[:cap]
+        keep = {p: keep[p] for p in newest}
+    dropped = len(ref) - len(keep)
+    if keep:
+        state["refused"] = keep
+    else:
+        state.pop("refused", None)
+    return dropped
 
 
 # ---------------------------------------------------------------------------
@@ -3563,6 +3630,89 @@ def run_selftest():
             or unchanged_since_shipped(_st, "/x/" + _u2, 1758433211.1234567, 921)):
         failures.append("RO[skip]: changed/unknown blob was treated as unchanged")
 
+    # 23b. Foreign blobs (W-FOREIGNBLOB): a wrapper refusal (exit 1) is
+    #      remembered per listing mtime+size so the blob is not asked for again
+    #      every 5 minutes; a real log, a transport problem or an oversize answer
+    #      is never remembered; the memory is bounded.
+    _fp = "%s/%s" % (DATA_DIR, _u1)
+    _rs = set()
+    if read_blob_exec(_FakeClient(b"", rc=1), _fp, _rs) is not None or _rs != {_fp}:
+        failures.append("FOREIGN[cat]: exit-1 refusal not reported: %r" % (_rs,))
+    for _rc in (-1, 2, 3, 124):
+        _rs = set()
+        if read_blob_exec(_FakeClient(b"", rc=_rc), _fp, _rs) is not None or _rs:
+            failures.append("FOREIGN[cat]: exit %d recorded as a refusal" % _rc)
+    _rs = set()
+    if (read_blob_exec(_FakeClient(b"x" * (256 * 1024 + 1)), _fp, _rs) is not None
+            or _rs):
+        failures.append("FOREIGN[cat]: oversize answer recorded as a refusal")
+    _rs = set()
+    _b = read_blob_exec(_FakeClient(b'{"type":"header"}\n'), _fp, _rs)
+    if _b != b'{"type":"header"}\n' or _rs:
+        failures.append("FOREIGN[cat]: a real log changed behaviour: %r %r" % (_b, _rs))
+    _rs = set()
+    _fc = _FakeClient(b"", rc=1)
+    if (read_chunk_blob(None, _fp, 4096, None, exec_client=_fc, refused=_rs) is not None
+            or _rs != {_fp} or _fc.cmds != ["ios-cat " + _u1]):
+        failures.append("FOREIGN[read]: read_chunk_blob did not pass the refusal on")
+    _rs = set()
+    if (read_chunk_blob(None, _fp, 26, None, exec_client=_FakeClient(b"not telemetry\n"),
+                        refused=_rs) is not None or _rs):
+        failures.append("FOREIGN[read]: an allowed non-W417 answer was recorded as refused")
+
+    _st = {"blobs": {}}
+    _mt0 = 1758433211.1234567
+    record_refused(_st, _fp, _mt0, 921)
+    _st = json.loads(json.dumps(_st))     # survives the state file round trip
+    if not unchanged_since_refused(_st, _fp, _mt0, 921):
+        failures.append("FOREIGN[skip]: refused blob not recognised after save/load")
+    if (unchanged_since_refused(_st, _fp, _mt0 + 1.5, 921)
+            or unchanged_since_refused(_st, _fp, _mt0, 922)
+            or unchanged_since_refused(_st, "%s/%s" % (DATA_DIR, _u2), _mt0, 921)
+            or unchanged_since_refused({"blobs": {}}, _fp, _mt0, 921)
+            or unchanged_since_refused({"blobs": {}, "refused": []}, _fp, _mt0, 921)):
+        failures.append("FOREIGN[skip]: changed/unknown blob was treated as refused")
+    if unchanged_since_shipped(_st, _fp, _mt0, 921):
+        failures.append("FOREIGN[skip]: a refusal was treated as a shipped blob")
+
+    _now = 1759579800.0
+    _win = 30 * 60
+
+    def _mk(n, age_s, sz=100):
+        record_refused(_st2, "%s/%08d-0000-4000-8000-000000000000" % (DATA_DIR, n),
+                       _now - age_s, sz)
+    _st2 = {"blobs": {"/keep": {"sig": "s", "lines": 1, "ts": 1}}}
+    _mk(1, 60)                              # inside the window: kept
+    _mk(2, _win + IOS_REFUSED_SLACK_S - 5)  # just inside window+slack: kept
+    _mk(3, _win + IOS_REFUSED_SLACK_S + 5)  # left the window: dropped
+    _mk(4, 7 * 86400)                       # long gone: dropped
+    _st2["refused"]["/bad1"] = "garbage"
+    _st2["refused"]["/bad2"] = {"sz": 1}
+    _st2["refused"]["/bad3"] = {"mt": "x", "sz": 1}
+    _st2["refused"]["/bad4"] = {"mt": True, "sz": 1}
+    _drop = prune_refused(_st2, _win, now=_now)
+    _left = sorted(p.rsplit("/", 1)[1][:8] for p in _st2["refused"])
+    if _left != ["00000001", "00000002"] or _drop != 6:
+        failures.append("FOREIGN[prune]: wrong survivors %r (dropped %d)" % (_left, _drop))
+    if _st2["blobs"] != {"/keep": {"sig": "s", "lines": 1, "ts": 1}}:
+        failures.append("FOREIGN[prune]: shipped-blob state was touched")
+    _st3 = {"blobs": {}, "refused": []}
+    prune_refused(_st3, _win, now=_now)
+    _st4 = {"blobs": {}}
+    prune_refused(_st4, _win, now=_now)
+    _st5 = {"blobs": {}, "refused": {"/old": {"mt": 1.0, "sz": 1}}}
+    prune_refused(_st5, _win, now=_now)
+    if "refused" in _st3 or "refused" in _st4 or "refused" in _st5:
+        failures.append("FOREIGN[prune]: empty/corrupt memory not dropped from state")
+    _st2 = {"blobs": {}}
+    for _n in range(IOS_REFUSED_CAP + 50):  # all inside the window, ages 1..N s
+        _mk(_n, _n + 1)
+    prune_refused(_st2, _win, now=_now)
+    _ages = sorted(_now - e["mt"] for e in _st2["refused"].values())
+    if len(_st2["refused"]) != IOS_REFUSED_CAP or _ages[0] != 1 or _ages[-1] != IOS_REFUSED_CAP:
+        failures.append("FOREIGN[cap]: %d kept, ages %r..%r (want the %d newest)"
+                        % (len(_st2["refused"]), _ages[0], _ages[-1], IOS_REFUSED_CAP))
+
     # 24. BENIGN key=value PRECISION (W-KVPRECISION). Every value below is
     #     SYNTHETIC. (a) benign structured tokens MUST survive verbatim (no
     #     [REDACTED:] anywhere); (b) adversarial secrets in key=value form MUST
@@ -3831,7 +3981,10 @@ def run_selftest():
     out("  secret/slat/salt + bracket group, raw_key, indexed k0=..k5= bytes DROPPED;")
     out("  free-word blocks (base26/base52), kv side channels, identity+measure keys")
     out("  (peerSessionIdMs) masked; unknown words capped per body;")
-    out("  restricted-exec ios-list parser / ios-cat reader accept only uuid paths.")
+    out("  restricted-exec ios-list parser / ios-cat reader accept only uuid paths;")
+    out("  foreign (refused, non-W417) blobs are remembered per mtime+size and")
+    out("  skipped, a changed one is retried, transport errors never recorded,")
+    out("  the memory ages out with the listing window and is capped.")
     out("  VPS host key pinned (vps_known_hosts = the verified prod ED25519 key),")
     out("  client is a RejectPolicy that rejects unknown hosts, no script uses")
     out("  trust-on-first-use.")
@@ -3919,6 +4072,8 @@ def main():
     blobs_skipped_state = 0
     blobs_too_old = 0
     blobs_not_w417 = 0
+    refused_now = set()    # paths the wrapper refused (not W417) in THIS run
+    refused_skipped = refused_new = 0
     lines_shipped = 0
     lines_dropped = 0
     http_results = []  # (blob_path, status)
@@ -3939,16 +4094,30 @@ def main():
         files = order_blobs_oldest_first(files)
 
         sftp = client.open_sftp() if (client is not None and not ro_mode) else None
+        if ro_mode:
+            # foreign (non-W417) blobs the wrapper refused earlier: age out what
+            # left the listing window, cap the rest (state stays bounded)
+            prune_refused(state, args.minutes * 60)
         try:
             for mtime_s, size_s, path in files:
                 if ro_mode and unchanged_since_shipped(state, path, mtime_s,
                                                        size_s):
                     blobs_skipped_state += 1
                     continue
+                if ro_mode and unchanged_since_refused(state, path, mtime_s,
+                                                       size_s):
+                    # refused before with this exact mtime+size: no ios-cat
+                    blobs_skipped_state += 1
+                    refused_skipped += 1
+                    continue
                 txt = read_chunk_blob(sftp, path, size_s, local_map,
-                                      exec_client=client if ro_mode else None)
+                                      exec_client=client if ro_mode else None,
+                                      refused=refused_now)
                 if txt is None:
                     blobs_not_w417 += 1
+                    if ro_mode and path in refused_now:
+                        record_refused(state, path, mtime_s, size_s)
+                        refused_new += 1
                     continue
 
                 sig = chunk_line_signature(txt)
@@ -4027,6 +4196,12 @@ def main():
 
     if not args.dry_run:
         save_state(state_path, state)
+
+    if refused_new or refused_skipped:
+        out()
+        out("  foreign blobs refused by ios-cat (not W417): %d new, %d skipped "
+            "as unchanged, %d remembered"
+            % (refused_new, refused_skipped, len(state.get("refused") or {})))
 
     out()
     out("=" * 72)
