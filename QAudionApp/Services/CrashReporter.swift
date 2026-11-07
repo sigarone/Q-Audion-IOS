@@ -19,13 +19,15 @@ import QAudionEngine
 /// the W417 stdout tee then ships to the server. One reproduction of
 /// the crash therefore makes the stack trace appear in the telemetry.
 ///
-/// This is deliberately NOT a full crash-reporting SDK. The signal
-/// handlers are best-effort: `Thread.callStackSymbols` is not strictly
-/// async-signal-safe (it mallocs), but for a logic crash — which is
-/// not inside the allocator — it completes fine, and that is enough to
-/// identify the crashing function. After persisting, the handler
-/// restores the default disposition and re-raises so the OS still
-/// produces its normal crash report (for App Store Connect too).
+/// This is deliberately NOT a full crash-reporting SDK. The POSIX signal
+/// handler is async-signal-safe: a file opened at launch, a buffer and a
+/// frame array allocated at launch, `backtrace` and `write(2)` (see
+/// `CrashRawCapture` below), writing raw addresses plus the main binary UUID
+/// and load address; the next launch turns that into the report text. The
+/// uncaught-NSException handler runs in normal context and still writes
+/// the text report directly. After persisting, the signal handler restores
+/// the default disposition and re-raises so the OS still produces its normal
+/// crash report (for App Store Connect too).
 enum CrashReporter {
 
     /// Absolute path of the persisted-crash file. Computed ONCE here so
@@ -44,7 +46,7 @@ enum CrashReporter {
     /// "required condition is false: …") with the bare signal stack, losing
     /// the one line that pinpoints the crash. The signal handler now skips
     /// persisting when an exception report is already in flight.
-    private static var exceptionInFlight = false
+    fileprivate static var exceptionInFlight = false
 
     /// W-CRASHTELEMETRY (this task) — the CRASHED build's version, computed
     /// ONCE up front (same "force the lazy path computation up-front" style
@@ -100,14 +102,15 @@ enum CrashReporter {
             CrashReporter.persist(report)
         }
 
+        // Open the crash record and size its buffers NOW, in normal context: the handler below may only copy bytes
+        // and call write(2).
+        CrashRawCapture.install(reportDirectory: rawDirectory, appVersion: capturedAppVersion)
+
         let signalHandler: @convention(c) (Int32) -> Void = { sig in
-            // An uncaught NSException aborts via SIGABRT, firing this handler
-            // too. If the exception handler already persisted a report (with
-            // name + reason), do NOT overwrite it with the bare signal stack —
-            // the reason is what identifies the failure.
-            if !CrashReporter.exceptionInFlight {
-                CrashReporter.persistSignalReport(sig)
-            }
+            // Async-signal-safe: no Swift allocation, no UserDefaults, no Foundation. An uncaught NSException aborts
+            // via SIGABRT, firing this handler too; `CrashRawCapture.record` skips then, so the exception report (with
+            // name + reason) is the one that stays.
+            CrashRawCapture.record(sig)
             // Restore the default disposition and re-raise so the OS
             // still records its own crash report and the process dies.
             signal(sig, SIG_DFL)
@@ -126,9 +129,69 @@ enum CrashReporter {
     /// `.onAppear`), so the crash-streak check that reads this can run
     /// ahead of any call path per spec section B's ordering requirement.
     static func hasPendingCrashReport() -> Bool {
+        if CrashRawCapture.hasPendingRecord(pendingPath: pendingRawPath) { return true }
         guard let data = FileManager.default.contents(atPath: reportPath),
               let text = String(data: data, encoding: .utf8) else { return false }
         return !text.isEmpty
+    }
+
+    /// Directory of the signal handler's crash record (a Caches subfolder `FileProtection.prepareAppContainer` gives
+    /// the after-first-unlock class), the record being written now, and the one the PREVIOUS launch left.
+    fileprivate static let rawDirectory: String = {
+        let base = NSSearchPathForDirectoriesInDomains(
+            .cachesDirectory, .userDomainMask, true).first
+            ?? NSTemporaryDirectory()
+        return (base as NSString).appendingPathComponent("qaudion-crash")
+    }()
+    fileprivate static var pendingRawPath: String {
+        return (rawDirectory as NSString).appendingPathComponent("pending.txt")
+    }
+
+    /// Turns the record the signal handler left in the previous launch into log lines and the `app.crash` stash.
+    /// Called from `QAudionApp.init()` (so a background relaunch ships it too) and again from
+    /// `startServicesBeforeInitialize()`; the second call finds nothing. The record carries addresses and the main
+    /// binary's UUID and load address, no symbols: symbolicate offline with the dSYM of that build.
+    private static func flushPendingRawReport() {
+        let path = pendingRawPath
+        guard let data = FileManager.default.contents(atPath: path), !data.isEmpty else { return }
+        let text = String(decoding: data, as: UTF8.self)
+        guard let report = RawCrashReport.parse(text) else {
+            print("[CrashReporter] ==== CRASH RECORD FROM PREVIOUS LAUNCH (unparsed) ====")
+            for line in text.split(separator: "\n", omittingEmptySubsequences: false).prefix(80) {
+                let out: String = "[CrashReporter] " + String(line)
+                print(out)
+            }
+            print("[CrashReporter] ==== END CRASH REPORT ====")
+            try? FileManager.default.removeItem(atPath: path)
+            return
+        }
+        // The call context survives in UserDefaults until `QAudionApp.init()` clears it, which is after this call.
+        // The in-memory breadcrumb ring does not survive a crash: the signal handler cannot read it safely.
+        let legacy = report.legacyReportText(context: CrashBreadcrumbs.lastCallContext(), breadcrumbs: [])
+        let overrides = TelemetryOverrides(
+            appVer: report.appVersion,
+            crashTsMs: report.timestampSec * 1000,
+            thread: report.mainThread ? "main" : "background")
+        pendingCrashTelemetryAttrs = buildTelemetryAttrs(fromReportText: legacy, overrides: overrides)
+        print("[CrashReporter] ==== CRASH REPORT FROM PREVIOUS LAUNCH ====")
+        for line in report.summaryLines() {
+            let out: String = "[CrashReporter] " + line
+            print(out)
+        }
+        for line in legacy.split(separator: "\n", omittingEmptySubsequences: false) {
+            let out: String = "[CrashReporter] " + String(line)
+            print(out)
+        }
+        print("[CrashReporter] ==== END CRASH REPORT ====")
+        UserDefaults.standard.set(UserDefaults.standard.integer(forKey: "qaudion.crash_count") + 1,
+                                  forKey: "qaudion.crash_count")
+        try? FileManager.default.removeItem(atPath: path)
+    }
+
+    fileprivate struct TelemetryOverrides {
+        let appVer: String
+        let crashTsMs: Int64
+        let thread: String
     }
 
     /// Print any crash report left by the previous launch so the W417
@@ -136,6 +199,7 @@ enum CrashReporter {
     /// AFTER `RuntimeLogSink.attachStdoutTee()` — otherwise the prints
     /// happen before the tee and are never captured.
     static func flushPendingReport() {
+        flushPendingRawReport()
         guard let data = FileManager.default.contents(atPath: reportPath),
               let text = String(data: data, encoding: .utf8),
               !text.isEmpty else { return }
@@ -175,11 +239,17 @@ enum CrashReporter {
     /// result through `CrashTelemetryFormatter`. nil when `text` doesn't
     /// match the expected report shape (see that parser's own doc) — the
     /// stdout-tee flush around this call is unaffected either way.
-    private static func buildTelemetryAttrs(fromReportText text: String) -> [String: Any]? {
+    private static func buildTelemetryAttrs(fromReportText text: String,
+                                            overrides: TelemetryOverrides? = nil) -> [String: Any]? {
         guard let parsed = CrashReportTextParser.parse(text) else { return nil }
-        let appVer = UserDefaults.standard.string(forKey: pendingAppVerKey) ?? capturedAppVersion
-        let crashTsMs = Int64(UserDefaults.standard.integer(forKey: pendingCrashTsKey))
-        let thread = UserDefaults.standard.string(forKey: pendingThreadKey) ?? "unknown"
+        // A signal crash carries its own version, time and thread in the raw record (the handler cannot touch
+        // UserDefaults); an NSException report still uses the scalars `persist()` stored.
+        let appVer = overrides?.appVer
+            ?? UserDefaults.standard.string(forKey: pendingAppVerKey) ?? capturedAppVersion
+        let crashTsMs = overrides?.crashTsMs
+            ?? Int64(UserDefaults.standard.integer(forKey: pendingCrashTsKey))
+        let thread = overrides?.thread
+            ?? UserDefaults.standard.string(forKey: pendingThreadKey) ?? "unknown"
         // Consumed — a stale value must not leak into a LATER, unrelated
         // report (mirrors `CrashBreadcrumbs.clearCallContext()`'s own
         // "consumed whether or not it triggered anything" rationale).
@@ -198,62 +268,6 @@ enum CrashReporter {
             crashTsMs: crashTsMs
         )
         return CrashTelemetryFormatter.attributes(for: report)
-    }
-
-    private static func persistSignalReport(_ sig: Int32) {
-        // CLAUDE.md §13 — incremental `+=` instead of one long `+` chain.
-        var report = "=== QAUDION CRASH — signal "
-        report += sig.description
-        report += " (" + signalName(sig) + ") ===\n"
-        // W574k — a Swift logic trap (force-unwrap nil, index out of range,
-        // precondition, fatalError) raises SIGTRAP. The runtime writes its
-        // pinpoint message ("Fatal error: … file X, line Y") to stderr AND to
-        // the __DATA,__crash_info section BEFORE trapping. stderr is lost (the
-        // async stdout/stderr tee can't drain the pipe before the process dies),
-        // but the section is still in memory: read it here so the persisted
-        // report names the exact crashing line — no dSYM needed.
-        let fatal = swiftCrashInfoMessage()
-        if !fatal.isEmpty {
-            report += "fatal: "
-            report += fatal
-            report += "\n"
-        }
-        report += "stack:\n"
-        report += Thread.callStackSymbols.joined(separator: "\n")
-        persist(report)
-    }
-
-    /// Read the Swift runtime fatal-error message from every loaded image's
-    /// `__DATA,__crash_info` (`crashreporter_annotations_t`: version, then the
-    /// `message` and `message2` `char*` fields). This is the same annotation
-    /// Apple's crash reporter surfaces as "Application Specific Information".
-    /// Best-effort: only pointer reads + `getsectiondata`, adequate for a logic
-    /// crash (which is not inside the allocator).
-    private static func swiftCrashInfoMessage() -> String {
-        var msgs: [String] = []
-        let imageCount = _dyld_image_count()
-        var i: UInt32 = 0
-        while i < imageCount {
-            defer { i += 1 }
-            guard let hdr = _dyld_get_image_header(i) else { continue }
-            let mh = UnsafeRawPointer(hdr).assumingMemoryBound(to: mach_header_64.self)
-            var size: UInt = 0
-            var data = getsectiondata(mh, "__DATA", "__crash_info", &size)
-            if data == nil {
-                data = getsectiondata(mh, "__DATA_DIRTY", "__crash_info", &size)
-            }
-            guard let sect = data, size >= 40 else { continue }
-            let words = UnsafeRawPointer(sect).assumingMemoryBound(to: UInt64.self)
-            // crashreporter_annotations_t: [0]=version [1]=message [4]=message2
-            for idx in [1, 4] {
-                let ptrVal = words[idx]
-                guard ptrVal != 0,
-                      let cstr = UnsafePointer<CChar>(bitPattern: UInt(ptrVal)) else { continue }
-                let s = String(cString: cstr)
-                if !s.isEmpty { msgs.append(s) }
-            }
-        }
-        return msgs.joined(separator: " | ")
     }
 
     private static func persist(_ text: String) {
@@ -296,16 +310,261 @@ enum CrashReporter {
 
     static var crashCount: Int { UserDefaults.standard.integer(forKey: "qaudion.crash_count") }
     static func resetCrashCount() { UserDefaults.standard.set(0, forKey: "qaudion.crash_count") }
+}
 
-    private static func signalName(_ sig: Int32) -> String {
-        switch sig {
-        case SIGABRT: return "SIGABRT"
-        case SIGSEGV: return "SIGSEGV"
-        case SIGBUS:  return "SIGBUS"
-        case SIGILL:  return "SIGILL"
-        case SIGFPE:  return "SIGFPE"
-        case SIGTRAP: return "SIGTRAP"
-        default:      return "SIG?"
+/// The signal handler's side of the crash record (format: `RawCrashReport`, QAudionEngine).
+///
+/// Everything that allocates, formats or touches Foundation happens in `install`, at launch: the file is created with
+/// the after-first-unlock class and opened ONCE (a descriptor opened on a "complete"-class file loses its key when the
+/// phone locks, which is exactly the lost-report case of 7/11), the fixed first lines are rendered into a buffer, the
+/// frame array is allocated, `backtrace` is called once so its lazy set-up is done, and the `__crash_info` sections
+/// (the Swift runtime's fatal-error message) are located. `record`, run from the signal handler, only copies bytes
+/// into that buffer, calls `backtrace` and `write(2)`. It never calls Swift's allocator, `Thread`, `UserDefaults`,
+/// `String` or any Foundation API.
+fileprivate enum CrashRawCapture {
+
+    struct State {
+        var fd: Int32
+        var inHandler: Bool
+        var buffer: UnsafeMutablePointer<UInt8>
+        var preambleLength: Int
+        var frames: UnsafeMutablePointer<UnsafeMutableRawPointer?>
+        var crashInfoCount: Int
+        var crashInfoSections: UnsafeMutablePointer<UnsafeRawPointer?>
+    }
+
+    static let bufferCapacity = 4096
+    static let maxFrames = 64
+    static let maxCrashInfoSections = 16
+    static let maxFatalBytes = 400
+
+    /// Set once at the end of `install`. Plain pointer read in the handler.
+    static var state: UnsafeMutablePointer<State>?
+
+    static func hasPendingRecord(pendingPath: String) -> Bool {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: pendingPath),
+              let size = attrs[.size] as? NSNumber else { return false }
+        return size.intValue > 0
+    }
+
+    // MARK: Launch time
+
+    static func install(reportDirectory: String, appVersion: String) {
+        if state != nil { return }
+        let fm = FileManager.default
+        FileProtection.prepareDirectory(URL(fileURLWithPath: reportDirectory, isDirectory: true))
+        let current = (reportDirectory as NSString).appendingPathComponent("current.txt")
+        let pending = (reportDirectory as NSString).appendingPathComponent("pending.txt")
+
+        // A record left by the previous launch becomes the pending one (replacing an older pending record that was
+        // never flushed); an empty `current.txt` means that launch ended without a crash.
+        if let attrs = try? fm.attributesOfItem(atPath: current),
+           let size = attrs[.size] as? NSNumber, size.intValue > 0 {
+            _ = rename(current, pending)
+        }
+        // Created empty with the after-first-unlock class BEFORE it is opened, so the descriptor stays writable while
+        // the phone is locked.
+        fm.createFile(atPath: current, contents: Data(),
+                      attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+        let fd = open(current, O_WRONLY | O_TRUNC)
+        if fd < 0 { return }
+
+        let image = mainImage()
+        let preamble = RawCrashReport.preamble(
+            appVersion: appVersion, imageName: image.name, imageUUID: image.uuid,
+            loadAddress: image.load, textSize: image.textSize)
+        let preambleBytes = Array(preamble.utf8)
+
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferCapacity)
+        buffer.initialize(repeating: 0, count: bufferCapacity)
+        let preambleLength = min(preambleBytes.count, bufferCapacity / 2)
+        for i in 0..<preambleLength { buffer[i] = preambleBytes[i] }
+
+        let frames = UnsafeMutablePointer<UnsafeMutableRawPointer?>.allocate(capacity: maxFrames)
+        frames.initialize(repeating: nil, count: maxFrames)
+        _ = backtrace(frames, Int32(maxFrames))
+
+        let sections = UnsafeMutablePointer<UnsafeRawPointer?>.allocate(capacity: maxCrashInfoSections)
+        sections.initialize(repeating: nil, count: maxCrashInfoSections)
+        let sectionCount = locateCrashInfoSections(into: sections)
+
+        let st = UnsafeMutablePointer<State>.allocate(capacity: 1)
+        st.initialize(to: State(fd: fd, inHandler: false, buffer: buffer, preambleLength: preambleLength,
+                                frames: frames, crashInfoCount: sectionCount, crashInfoSections: sections))
+        state = st
+    }
+
+    struct MainImage {
+        var name: String
+        var uuid: String
+        var load: UInt64
+        var textSize: UInt64
+    }
+
+    /// Image 0 is the main executable. Name, `LC_UUID`, header address and `__TEXT` size.
+    static func mainImage() -> MainImage {
+        var info = MainImage(name: "QAudionApp", uuid: "", load: 0, textSize: 0)
+        if let exe = Bundle.main.executableURL?.lastPathComponent, !exe.isEmpty { info.name = exe }
+        guard _dyld_image_count() > 0, let hdr = _dyld_get_image_header(0) else { return info }
+        let mh = UnsafeRawPointer(hdr).assumingMemoryBound(to: mach_header_64.self)
+        info.load = UInt64(UInt(bitPattern: hdr))
+        var size: UInt = 0
+        if getsegmentdata(mh, "__TEXT", &size) != nil { info.textSize = UInt64(size) }
+        var cursor = UnsafeRawPointer(mh).advanced(by: MemoryLayout<mach_header_64>.size)
+        var remaining = mh.pointee.ncmds
+        while remaining > 0 {
+            let lc = cursor.load(as: load_command.self)
+            if lc.cmd == UInt32(LC_UUID) {
+                let uc = cursor.load(as: uuid_command.self)
+                info.uuid = UUID(uuid: uc.uuid).uuidString
+                break
+            }
+            if lc.cmdsize == 0 { break }
+            cursor = cursor.advanced(by: Int(lc.cmdsize))
+            remaining -= 1
+        }
+        return info
+    }
+
+    /// `__DATA,__crash_info` of every loaded image that has one (`crashreporter_annotations_t`: version, then the
+    /// `message` and `message2` `char*` fields): the Swift runtime writes its fatal-error text there before it traps.
+    /// Images loaded later are not covered. Returns how many were stored.
+    static func locateCrashInfoSections(into out: UnsafeMutablePointer<UnsafeRawPointer?>) -> Int {
+        var found = 0
+        let imageCount = _dyld_image_count()
+        var i: UInt32 = 0
+        while i < imageCount && found < maxCrashInfoSections {
+            defer { i += 1 }
+            guard let hdr = _dyld_get_image_header(i) else { continue }
+            let mh = UnsafeRawPointer(hdr).assumingMemoryBound(to: mach_header_64.self)
+            var size: UInt = 0
+            var data = getsectiondata(mh, "__DATA", "__crash_info", &size)
+            if data == nil {
+                data = getsectiondata(mh, "__DATA_DIRTY", "__crash_info", &size)
+            }
+            guard let sect = data, size >= 40 else { continue }
+            out[found] = UnsafeRawPointer(sect)
+            found += 1
+        }
+        return found
+    }
+
+    // MARK: Signal handler (async-signal-safe)
+
+    static func record(_ sig: Int32) {
+        guard let st = state else { return }
+        if st.pointee.inHandler { return }
+        st.pointee.inHandler = true
+        // An uncaught NSException aborts through SIGABRT: its own report already holds name and reason.
+        if CrashReporter.exceptionInFlight { return }
+        let fd = st.pointee.fd
+        let buf = st.pointee.buffer
+        let cap = bufferCapacity
+        var pos = st.pointee.preambleLength
+
+        put("sig=", buf, &pos, cap)
+        putDecimal(UInt64(truncatingIfNeeded: Int64(sig)), buf, &pos, cap)
+        put("\nts=", buf, &pos, cap)
+        putDecimal(UInt64(truncatingIfNeeded: Int64(time(nil))), buf, &pos, cap)
+        put("\nmain=", buf, &pos, cap)
+        if pthread_main_np() != 0 { put("1", buf, &pos, cap) } else { put("0", buf, &pos, cap) }
+        let frames = st.pointee.frames
+        var n = Int(backtrace(frames, Int32(maxFrames)))
+        if n < 0 { n = 0 }
+        if n > maxFrames { n = maxFrames }
+        put("\nbt=", buf, &pos, cap)
+        putDecimal(UInt64(n), buf, &pos, cap)
+        put("\n", buf, &pos, cap)
+        var i = 0
+        while i < n {
+            put("0x", buf, &pos, cap)
+            putHex16(UInt64(UInt(bitPattern: frames[i])), buf, &pos, cap)
+            put("\n", buf, &pos, cap)
+            i += 1
+        }
+        writeAll(fd, buf, pos)
+
+        // The Swift runtime message is a separate write: reading those pointers is the one step that can fault.
+        pos = 0
+        put("fatal=", buf, &pos, cap)
+        let headerLength = pos
+        var section = 0
+        while section < st.pointee.crashInfoCount {
+            if let base = st.pointee.crashInfoSections[section] {
+                let words = base.assumingMemoryBound(to: UInt64.self)
+                var which = 0
+                while which < 2 {
+                    let idx = which == 0 ? 1 : 4
+                    which += 1
+                    let ptrVal = words[idx]
+                    if ptrVal == 0 { continue }
+                    guard let text = UnsafePointer<UInt8>(bitPattern: UInt(ptrVal)) else { continue }
+                    if pos > headerLength { put(" | ", buf, &pos, cap) }
+                    var k = 0
+                    while k < maxFatalBytes && pos < cap - 2 {
+                        let c = text[k]
+                        if c == 0 { break }
+                        buf[pos] = (c >= 32 && c < 127) ? c : 63
+                        pos += 1
+                        k += 1
+                    }
+                }
+            }
+            section += 1
+        }
+        if pos > headerLength {
+            put("\n", buf, &pos, cap)
+            writeAll(fd, buf, pos)
+        }
+    }
+
+    @inline(__always)
+    static func put(_ s: StaticString, _ buf: UnsafeMutablePointer<UInt8>, _ pos: inout Int, _ cap: Int) {
+        let n = s.utf8CodeUnitCount
+        if pos + n > cap { return }
+        var i = 0
+        while i < n {
+            buf[pos + i] = s.utf8Start[i]
+            i += 1
+        }
+        pos += n
+    }
+
+    static func putDecimal(_ value: UInt64, _ buf: UnsafeMutablePointer<UInt8>, _ pos: inout Int, _ cap: Int) {
+        var digits = 1
+        var t = value / 10
+        while t > 0 {
+            digits += 1
+            t /= 10
+        }
+        if pos + digits > cap { return }
+        var v = value
+        var i = digits
+        while i > 0 {
+            i -= 1
+            buf[pos + i] = UInt8(truncatingIfNeeded: 48 + v % 10)
+            v /= 10
+        }
+        pos += digits
+    }
+
+    static func putHex16(_ value: UInt64, _ buf: UnsafeMutablePointer<UInt8>, _ pos: inout Int, _ cap: Int) {
+        if pos + 16 > cap { return }
+        var i = 0
+        while i < 16 {
+            let nibble = (value >> UInt64((15 - i) * 4)) & 0xF
+            buf[pos + i] = UInt8(truncatingIfNeeded: nibble < 10 ? 48 + nibble : 87 + nibble)
+            i += 1
+        }
+        pos += 16
+    }
+
+    static func writeAll(_ fd: Int32, _ buf: UnsafeMutablePointer<UInt8>, _ length: Int) {
+        var written = 0
+        while written < length {
+            let r = write(fd, buf + written, length - written)
+            if r <= 0 { return }
+            written += r
         }
     }
 }

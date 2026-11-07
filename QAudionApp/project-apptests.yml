@@ -47,6 +47,7 @@ targets:
           - PeerDiagResponderTests.swift
           - ChatVoiceNoteSenderMaxUsesTests.swift
           - CallCloseReasonRedactionTests.swift
+          - CrashDiagnosticsRedactionTests.swift
           - CallMetricsRedactionTests.swift
           - CallMinimizePolicyTests.swift
           - SasCardPlacementTests.swift

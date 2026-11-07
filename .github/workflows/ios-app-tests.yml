@@ -331,6 +331,7 @@ jobs:
             -only-testing:QAudionAppTests/PeerDiagResponderTests \
             -only-testing:QAudionAppTests/ChatVoiceNoteSenderMaxUsesTests \
             -only-testing:QAudionAppTests/CallCloseReasonRedactionTests \
+            -only-testing:QAudionAppTests/CrashDiagnosticsRedactionTests \
             -only-testing:QAudionAppTests/CallMetricsRedactionTests \
             -only-testing:QAudionAppTests/CallMinimizePolicyTests \
             -only-testing:QAudionAppTests/SasCardPlacementTests \

@@ -221,6 +221,13 @@ struct QAudionApp: App {
                 RTLog.warn("call", "native_srtp_guard tripped build=\(CallCapabilities.currentAppBuild()) reason=crash_streak n=2")
             }
         }
+        // Ship the previous launch's crash record NOW, not from `.onAppear`: a background relaunch (VoIP push, a
+        // wake) never shows the window, so the report used to stay on disk for days. The context line it reads is
+        // cleared right below. The tee is attached first (idempotent) so the lines reach the live-log ring.
+        MainActor.assumeIsolated {
+            RuntimeLogSink.shared.attachStdoutTee()
+            CrashReporter.flushPendingReport()
+        }
         // Consumed (whether or not it triggered the guard above) — a stale
         // "in_call=1" must not survive to be misread by a LATER, unrelated
         // crash (e.g. one on the home screen).

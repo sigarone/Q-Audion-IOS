@@ -63,8 +63,8 @@ public enum FileProtection {
     }
 
     /// Folders (under `Caches`) that receive files while the phone may be locked: received attachments, voice notes,
-    /// file transfer v2 downloads and prepared copies, contact photos.
-    public static let lockedCachesSubfolders = ["files_v2", "file_attachments", "voicenotes", "images", "qaudion-contact-photos"]
+    /// file transfer v2 downloads and prepared copies, contact photos, and the crash record the signal handler writes.
+    public static let lockedCachesSubfolders = ["files_v2", "file_attachments", "voicenotes", "images", "qaudion-contact-photos", "qaudion-crash"]
     /// Folders (under `Application Support`) that receive files while the phone may be locked: avatars.
     public static let lockedApplicationSupportSubfolders = ["qaudion/avatars"]
 
