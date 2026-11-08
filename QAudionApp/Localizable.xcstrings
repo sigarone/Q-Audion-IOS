@@ -4165,44 +4165,44 @@
         }
       }
     },
-    "callkit.encrypted_tag": {
+    "callkit.encrypted_call_tag": {
       "extractionState": "manual",
-      "comment": "Suffix appended to the caller name on the native CallKit incoming-call screen, e.g. 'Marco · lock Encrypted'",
+      "comment": "Suffix appended to the caller name on the native call screen, e.g. 'Marco · lock Encrypted call'",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cifrata"
+            "value": "Chiamata cifrata"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Encrypted"
+            "value": "Encrypted call"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cifrada"
+            "value": "Llamada cifrada"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Chiffré"
+            "value": "Appel chiffré"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verschlüsselt"
+            "value": "Verschlüsselter Anruf"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Criptografado"
+            "value": "Chamada criptografada"
           }
         }
       }

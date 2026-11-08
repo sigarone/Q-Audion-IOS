@@ -8131,8 +8131,8 @@ final class AppState: ObservableObject {
                     // A car shows calls only through CallKit, so with CarPlay connected the foreground
                     // single-dialer suppression does not apply (see `WsIncomingPresentation`).
                     let wsPresentation: WsIncomingPresentation = WsIncomingPresentation.decide(foreground: appForeground, carPlay: wsCarPlay)
-                    let wsDiag: String = "[AppState] W-CALLDIAG WS path uuid=\(callUUID.uuidString.prefix(8))… hasVideo=\(wsDiagVideo) pushKitFirst=\(alreadyRegisteredByPushKit) foreground=\(appForeground) carplay=\(wsCarPlay ? 1 : 0) src=\(wsCarPlayReading.source.rawValue) ring=\(wsPresentation == .callKit ? "callkit" : "inapp")"
-                    print(wsDiag)
+                    let wsDiag: String = "W-CALLDIAG WS path uuid=\(callUUID.uuidString.prefix(8))… hasVideo=\(wsDiagVideo) pushKitFirst=\(alreadyRegisteredByPushKit) foreground=\(appForeground) carplay=\(wsCarPlay ? 1 : 0) src=\(wsCarPlayReading.source.rawValue) ring=\(wsPresentation == .callKit ? "callkit" : "inapp")"
+                    RTLog.info("call", wsDiag)
                     let useCustomUI = CallsGate.callKitFreeMode
                     if !alreadyRegisteredByPushKit {
                         if useCustomUI {
