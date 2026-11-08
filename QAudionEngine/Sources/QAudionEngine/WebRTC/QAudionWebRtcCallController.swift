@@ -1444,12 +1444,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
     }
 
-    /// W383: optional PQC session key for the inner SRTP layer.
-    /// When set BEFORE startOutgoingCall / acceptIncomingCall, the
-    /// controller automatically installs PqcFrameEncryptor /
-    /// PqcFrameDecryptor on every sender + receiver via
-    /// `QAudionPeerConnection.installPqcSealer` (W382). Mid-call
-    /// updates re-install the sealer on next set.
+    /// W383: optional PQC session key of the call (the FrameCryptor keys are derived from it).
     /// W-KEYSLOTROTATE — the call-crypto epoch for the CURRENT
     /// `pqcSessionKey` (0 = first real key, +1 per completed rekey).
     /// Set by AppState BEFORE `pqcSessionKey` at every delivery site; the
@@ -1496,7 +1491,6 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
     public var pqcSessionKey: Data? {
         didSet {
-            applyPqcSealerIfPossible()
             // W539 — when the PQC key arrives (or rotates), retry the
             // video pipeline pick. ensureVideoSealer needs BOTH the
             // peer's negotiated caps AND the round's frame keys to install the
@@ -2102,13 +2096,6 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 startCameraCapture(for: videoSource)
             }
         }
-        // W383: install PQC sealer if a session key was set BEFORE
-        // the call started. (Late arrivals via the
-        // `pqcSessionKey` didSet also call this, but that path
-        // requires the peerConnection already exist — we set both
-        // up in the same task here so the order is safe.)
-        applyPqcSealerIfPossible()
-
         let sdp: String = try await withCheckedThrowingContinuation { cont in
             pc.createOffer(audioOnly: audioOnly) { result in
                 switch result {
@@ -2276,13 +2263,6 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 startCameraCapture(for: videoSource)
             }
         }
-        // W383: install PQC sealer if a session key was set BEFORE
-        // the call started. (Late arrivals via the
-        // `pqcSessionKey` didSet also call this, but that path
-        // requires the peerConnection already exist — we set both
-        // up in the same task here so the order is safe.)
-        applyPqcSealerIfPossible()
-
         // 1. Apply remote offer.
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             pc.setRemoteOffer(sdp: offerSdp) { err in
@@ -2398,7 +2378,6 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         if let videoSource = pc.addLocalVideoTrack() {
             startCameraCapture(for: videoSource)
         }
-        applyPqcSealerIfPossible()
         // 1. Apply the peer's upgrade offer.
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             pc.setRemoteOffer(sdp: remoteSdp) { err in
@@ -4941,32 +4920,6 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     }
 
     // MARK: - Internal
-
-    /// W383 — install (or re-install) the PqcRtpFrameSealer on the
-    /// active peer connection. Safe to call on a nil key (no-op) or
-    /// before the peer connection is up (no-op until next call to
-    /// applyPqcSealerIfPossible after the connection is built).
-    private func applyPqcSealerIfPossible() {
-        guard let key = pqcSessionKey, key.count == 32 else { return }
-        guard let pc = peerConnection else { return }
-        do {
-            // M-15: bind derived key to this call session. pqcCallId is set
-            // by AppState before/alongside pqcSessionKey so both parties
-            // derive the same per-call master key.
-            let sealer = try PqcRtpFrameSealer(pqcSessionKey: key, callId: pqcCallId)
-            pc.installPqcSealer(sealer)
-            // C-1: installPqcSealer is intentionally a no-op on this
-            // WebRTC binary (no RTCFrameEncryptor/Decryptor) — do NOT
-            // claim PQC media protection. Media on the SRTP path is
-            // protected by DTLS-SRTP only.
-            let line: String = "[WebRtcCallController] PQC frame sealing UNAVAILABLE on this WebRTC build — media uses DTLS-SRTP only"
-            print(line)
-        } catch {
-            let edesc: String = error.localizedDescription
-            let eline: String = "[WebRtcCallController] PQC sealer construction failed: " + edesc
-            print(eline)
-        }
-    }
 
     private func fetchIceServers() async -> [RTCIceServer] {
         // W411: when the user has explicitly configured a custom TURN

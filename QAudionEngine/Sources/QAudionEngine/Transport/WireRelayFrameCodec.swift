@@ -55,6 +55,9 @@ public enum WireRelayFrameCodec {
     /// .ControlFrame.KIND_NACK_REQUEST` (0x02). Body is the missing frame's
     /// wire sequence number as an 8-byte big-endian integer.
     public static let controlKindNackRequest: UInt8 = 0x02
+    /// Control frame kind `outer-off-v1` (empty body): the sender runs this call without the outer seal. Sent on the
+    /// DataChannel only and unsealed; see ``OuterLayerPolicy``.
+    public static let controlKindOuterOff: UInt8 = 0x03
 
     public static let nonceSize = 12
     public static let tagSize = 16

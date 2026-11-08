@@ -31,9 +31,14 @@ public struct AeadCipher {
     public init() {}
 
     public func encrypt(plaintext: Data, key: Data, associatedData: Data? = nil) throws -> CipherOutput {
+        try encrypt(plaintext: plaintext, key: key, nonce: nil, associatedData: associatedData)
+    }
+
+    /// `nonce == nil` draws a random 96-bit nonce. A caller that passes one owns its uniqueness per key.
+    public func encrypt(plaintext: Data, key: Data, nonce explicitNonce: Data?, associatedData: Data? = nil) throws -> CipherOutput {
         guard key.count == CryptoConstants.keySizeBytes else { throw AeadCipherError.invalidKeySize(key.count) }
         let symmetricKey = SymmetricKey(data: key)
-        let nonce = AES.GCM.Nonce()
+        let nonce = try explicitNonce.map { try AES.GCM.Nonce(data: $0) } ?? AES.GCM.Nonce()
         let sealedBox: AES.GCM.SealedBox
         if let ad = associatedData {
             sealedBox = try AES.GCM.seal(plaintext, using: symmetricKey, nonce: nonce, authenticating: ad)

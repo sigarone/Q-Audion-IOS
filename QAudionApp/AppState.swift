@@ -1373,6 +1373,12 @@ final class AppState: ObservableObject {
         RTLog.info("call", "saspin mark=\(written ? 1 : 0)")
     }
 
+    /// Caller (true) or callee (false) of the call in progress, from the integration that owns it; nil when no integration is bound.
+    private func currentCallIsCaller() -> Bool? {
+        if let integration = callService.callIntegration { return integration.currentIsCaller }
+        return responderCallIntegration != nil ? false : nil
+    }
+
     /// W-M15ORDER (2026-10-03) — install the M-15 relay sealers SYNCHRONOUSLY, on the handshake
     /// thread, from inside `onRelaySessionReady` (the engine has just been given the session key,
     /// and mic frames can be encrypted from that instant). They used to be installed only by the
@@ -1393,7 +1399,7 @@ final class AppState: ObservableObject {
     nonisolated private static func installRelaySealersEarly(
         callService: CallService?, integration: QAudionCallIntegration?,
         sessionKey: Data, callId: String, selfId: String, peerId: String,
-        isReKeyRound: Bool, generation: Int
+        selfIsCaller: Bool, isReKeyRound: Bool, generation: Int
     ) {
         guard let callService = callService, !callId.isEmpty else { return }
         guard !isReKeyRound else { return }
@@ -1403,7 +1409,7 @@ final class AppState: ObservableObject {
         let roleA: Bool = PqcRtpFrameSealer.selfIsRoleA(selfId, peerId)
         callService.installRelaySealers(
             sessionKey: sessionKey, callId: callId,
-            srtpDirKeyV1: true, selfIsRoleA: roleA,
+            srtpDirKeyV1: true, selfIsRoleA: roleA, selfIsCaller: selfIsCaller,
             isReKeyRound: false,
             expectedGeneration: generation)
     }
@@ -1433,6 +1439,7 @@ final class AppState: ObservableObject {
         let cid = activeCallId.lowercased()
         identityUnverifiedCallIds.remove(cid)
         identityHoldCodeByCallId.removeValue(forKey: cid)
+        callService.sasConfirmedThisCall = true
         awaitingIdentityConfirmation = false
         let actions = pendingIdentityGatedMedia.removeValue(forKey: cid) ?? []
         for action in actions { action() }
@@ -6268,7 +6275,9 @@ final class AppState: ObservableObject {
         // and a real sink must not trust it alone — so this runs the line
         // through the same `LogRedactor.redact` every other egress line gets
         // (defence in depth) before it ever reaches RTLog/Loki.
+        let handshakeLineSink: CallService = callService
         QAudionPeerConnectionFactory.shared.onQaudionSelfReportLine = { line in
+            handshakeLineSink.noteDtlsHandshakeLine(line)
             RTLog.warn("call", LogRedactor.redact(line))
         }
         // W-AUNITCALLDIDINIT (2026-09-10) — see `aunitEventsSeenThisCall`'s
@@ -17424,7 +17433,7 @@ final class AppState: ObservableObject {
             AppState.installRelaySealersEarly(
                 callService: nackEpochCallService, integration: integration,
                 sessionKey: sessionKey, callId: cid, selfId: relayEarlySelfId, peerId: callerId,
-                isReKeyRound: isReKeyRound, generation: firedGeneration)
+                selfIsCaller: false, isReKeyRound: isReKeyRound, generation: firedGeneration)
             Task { @MainActor [weak self, weak integration] in
                 guard let self = self, !cid.isEmpty else { return }
                 // W574x — directional relay-sealer keys when both peers
@@ -17451,7 +17460,7 @@ final class AppState: ObservableObject {
                     // the W-STALESEALER warn itself when it drops the install.
                     self.callService.installRelaySealers(
                         sessionKey: sessionKey, callId: cid,
-                        srtpDirKeyV1: useDir, selfIsRoleA: roleA,
+                        srtpDirKeyV1: useDir, selfIsRoleA: roleA, selfIsCaller: false,
                         isReKeyRound: isReKeyRound,
                         expectedGeneration: firedGeneration)
                 }
@@ -20470,7 +20479,7 @@ final class AppState: ObservableObject {
                     AppState.installRelaySealersEarly(
                         callService: nackEpochCallService, integration: integration,
                         sessionKey: sessionKey, callId: cid, selfId: relayEarlySelfId, peerId: contactId,
-                        isReKeyRound: isReKeyRound, generation: firedGeneration)
+                        selfIsCaller: true, isReKeyRound: isReKeyRound, generation: firedGeneration)
                     Task { @MainActor [weak self, weak integration] in
                         guard let self = self, !cid.isEmpty else { return }
                         // W574x — directional relay-sealer keys when both peers
@@ -20501,7 +20510,7 @@ final class AppState: ObservableObject {
                             // atomically with the sealer-slot publish and logs the warn.
                             self.callService.installRelaySealers(
                                 sessionKey: sessionKey, callId: cid,
-                                srtpDirKeyV1: useDir, selfIsRoleA: roleA,
+                                srtpDirKeyV1: useDir, selfIsRoleA: roleA, selfIsCaller: true,
                                 isReKeyRound: isReKeyRound,
                                 expectedGeneration: firedGeneration)
                         }
@@ -25096,6 +25105,7 @@ extension AppState {
                         ?? self.activeCallKitId?.uuidString.lowercased() ?? ""
                     let videoSelfIsRoleA = pinned?.selfIsRoleA
                         ?? PqcRtpFrameSealer.selfIsRoleA(self.currentUserId ?? "", self.callContactId ?? "")
+                    let videoSelfIsCaller = self.currentCallIsCaller()
                     // P0-3 follow-up (post-remediation audit, 2026-08-05) — video
                     // was never covered by the identity-hold gate: this rotate
                     // ran unconditionally even when the handshake verdict was
@@ -25103,7 +25113,7 @@ extension AppState {
                     // (audio already deferred via pendingIdentityGatedMedia). Same
                     // stash-and-replay pattern as the audio install closures.
                     let rotateVideo: () -> Void = { [weak pipeline] in
-                        pipeline?.rotatePqcSealer(key, callId: videoCallId, selfIsRoleA: videoSelfIsRoleA)
+                        pipeline?.rotatePqcSealer(key, callId: videoCallId, selfIsRoleA: videoSelfIsRoleA, selfIsCaller: videoSelfIsCaller)
                         print("[AppState] video pipeline PQC sealer rotated (\(key.count) bytes)")
                     }
                     if self.identityUnverifiedCallIds.contains(videoCallId.lowercased()) {
@@ -29016,7 +29026,7 @@ extension AppState {
         let initialRotateVideo: () -> Void = { [weak pipeline, weak self] in
             // G7 — feeds a sealer: assert against `videoCallId`, the same
             // id passed alongside it to `rotatePqcSealer` itself.
-            pipeline?.rotatePqcSealer(self?.callPqcSessionKey(forCallId: videoCallId), callId: videoCallId, selfIsRoleA: videoSelfIsRoleA)
+            pipeline?.rotatePqcSealer(self?.callPqcSessionKey(forCallId: videoCallId), callId: videoCallId, selfIsRoleA: videoSelfIsRoleA, selfIsCaller: self?.currentCallIsCaller())
         }
         if self.identityUnverifiedCallIds.contains(videoCallId.lowercased()) {
             self.pendingIdentityGatedMedia[videoCallId.lowercased(), default: []].append(initialRotateVideo)

@@ -963,8 +963,13 @@ final class CallService: @unchecked Sendable {
     // the active call_id at receipt, per handleIncomingDataChannelAudio)
     // replays as before — it cannot be proven foreign, and dropping it would
     // recreate the ratchet off-by-one this buffer exists to prevent.
-    private var rxPreBuffer: [(frame: Data, callId: String?)] = []
+    //
+    // Each entry also remembers the leg it arrived on (the `outer-off-v1` rule and the relay
+    // rule depend on it) and whether it is held for want of the outer sealer rather than for
+    // want of the call integration (those are dropped when they get stale, see the drain).
+    private var rxPreBuffer: [(frame: Data, callId: String?, leg: OuterLayerLeg, heldForSealer: Bool, atMs: Int64)] = []
     private static let rxPreBufferCap = 20
+    private static let rxSealerHoldMaxAgeMs: Int64 = 2000
 
     // MARK: - W469 — cross-platform audio wire format
     //
@@ -1482,6 +1487,13 @@ final class CallService: @unchecked Sendable {
     private var relaySealerSend: PqcRtpFrameSealer?
     private var relaySealerRecv: PqcRtpFrameSealer?
 
+    /// The call runs without the outer seal because one side could not install it (`outer-off-v1`).
+    /// nil while the outer layer is as negotiated. Guarded by `relaySlotLock`; cleared at teardown.
+    private var outerOffMode: OuterLayerMode?
+    /// Announcements of `outer-off-v1` still to send on the DataChannel (the first at the moment of the failure, the
+    /// rest with the first inner-sealed frames, in case one is lost). Guarded by `relaySlotLock`.
+    private var outerOffAnnounceRemaining: Int = 0
+
     /// W574h — the (lowercased) callId the current relay sealers are bound to.
     /// The M-15 seal key is `HKDF(pqcSessionKey, info="…:<callId>")`, so the
     /// sealer is only valid for ONE call. Tracking the bound callId lets the
@@ -1728,6 +1740,7 @@ final class CallService: @unchecked Sendable {
     /// match/mismatch decision has exactly one implementation and one test suite.
     public func installRelaySealers(sessionKey: Data, callId: String,
                                     srtpDirKeyV1: Bool = false, selfIsRoleA: Bool = false,
+                                    selfIsCaller: Bool? = nil,
                                     isReKeyRound: Bool = false,
                                     expectedGeneration: Int) {
         let cid = callId.lowercased()
@@ -1819,7 +1832,7 @@ final class CallService: @unchecked Sendable {
             // the lexicographically-smaller userId (computed by the caller, same
             // rule as Android/Desktop).
             let pair = try PqcRtpFrameSealer.createDirectional(
-                pqcSessionKey: sessionKey, callId: cid, selfIsRoleA: selfIsRoleA)
+                pqcSessionKey: sessionKey, callId: cid, selfIsRoleA: selfIsRoleA, selfIsCaller: selfIsCaller)
             let send = pair.send
             let recv = pair.recv
             // W-STALESEALER — re-validate the generation ATOMICALLY with the
@@ -1856,9 +1869,175 @@ final class CallService: @unchecked Sendable {
             let roleStr: String = selfIsRoleA ? "A" : "B"
             let line: String = "[CallService] PQC_DIAG W574x-iOS sealers " + verb + " callId=" + p + "… keyfp=" + kfp + " dirKeys=" + dirStr + " role=" + roleStr
             print(line)
+            // Frames that arrived before the sealer existed were held: open them now.
+            DispatchQueue.main.async { [weak self] in self?.drainRxPreBuffer() }
         } catch {
-            print("[CallService] W574e: relay sealer install failed: \(error) — relay runs unsealed (Android interop will fail)")
+            print("[CallService] W574e: relay sealer install failed: \(error) — the call runs without the outer seal")
+            noteLocalOuterInstallFailure(callId: cid)
         }
+    }
+
+    // MARK: - Protection level line (QA-PQLEVEL)
+
+    /// Group of the PeerConnection's DTLS handshake (`pq` hybrid, `cl` otherwise), from its own report line. nil until seen.
+    /// Guarded by `relaySlotLock` (written from WebRTC's logging thread); cleared at teardown.
+    private var dtlsGroupToken: String?
+    private var lastPqLevelLine: String?
+    /// The user confirmed the safety code of this call. Set by AppState, cleared at teardown.
+    public var sasConfirmedThisCall: Bool = false
+
+    /// Fed with the native `Q-AUDION dtls ... group=...` line. Any thread.
+    public func noteDtlsHandshakeLine(_ line: String) {
+        guard let token = PqDtlsGroup.token(fromHandshakeLine: line) else { return }
+        relaySlotLock.withLock { dtlsGroupToken = token }
+    }
+
+    /// Logs the call's protection level once media flows and again whenever a field changes. Computed from the layers of the
+    /// paths the call actually used (never claims more than was observed). Main thread; does nothing before the outcome of the
+    /// outer-layer negotiation is known or before any path carried media.
+    private func emitPqLevelIfChanged() {
+        guard let cid = getCallId?(), let integration = callIntegration else { return }
+        let mode = currentOuterMode(integration: integration)
+        guard mode != .unknown else { return }
+        let dtls: String? = relaySlotLock.withLock { dtlsGroupToken }
+        let dtlsPq: Bool = dtls == "pq"
+        let outerState: PqOuterState = (mode == .sealed) ? .same : .off
+        let nativeRtp: Bool = getUsesNativeAudioSrtp?() == true && !audioSrtpFallbackActive
+        let rtpUsed: Bool = nativeRtp && (getAudioRtpPacketsReceived?() ?? 0) > 0
+        let dcUsed: Bool = txFramesDc + rxFramesDc > 0
+        let relayUsed: Bool = txFramesWs + rxFramesWs > 0
+        var paths: [[PqSecret]] = []
+        if rtpUsed { paths.append(PqLevelCalc.rtp(dtlsPq: dtlsPq)) }
+        if dcUsed { paths.append(PqLevelCalc.dcmux(dtlsPq: dtlsPq, innerPq: true, outer: outerState)) }
+        if relayUsed { paths.append(PqLevelCalc.relay(innerPq: true, outer: outerState)) }
+        guard let level = PqLevelCalc.callLevel(paths: paths) else { return }
+        var out = PqLevelLine()
+        out.call = Self.short8(cid) == "none" ? "" : Self.short8(cid)
+        out.level = level.token
+        out.sas = sasConfirmedThisCall ? "1" : "0"
+        out.dtls = dtls ?? ""
+        out.frame = rtpUsed ? "v5" : ""
+        out.relay = outerState.rawValue
+        out.dcmux = outerState.rawValue
+        out.inner = "legacy"
+        out.hold = integration.isMediaHeld(callId: cid) ? "1" : "0"
+        out.outer = mode == .sealed ? "sealed" : "off"
+        switch mode {
+        case .offPeerInstall: out.reason = "peer_install"
+        case .offLocalInstall: out.reason = "local_install"
+        default: break
+        }
+        let line = out.format()
+        guard line != lastPqLevelLine else { return }
+        lastPqLevelLine = line
+        RTLog.info("call", line)
+    }
+
+    // MARK: - Outer layer of the sealed-audio legs (one decision per call, both legs)
+
+    /// The call's outer-layer mode, read per frame. `outer-off-v1` (either side's install failure) wins; otherwise it follows
+    /// the negotiation of the per-direction keys once the peer bundle has been read, and is `.unknown` (nothing held, nothing
+    /// closed) before that.
+    private func currentOuterMode(integration: QAudionCallIntegration?) -> OuterLayerMode {
+        if let off = relaySlotLock.withLock({ outerOffMode }) { return off }
+        guard let integration = integration, integration.srtpNegotiationKnown else { return .unknown }
+        return integration.negotiatedSrtpDirKey ? .sealed : .noOuter
+    }
+
+    private static func outerLeg(_ t: AudioRxTransport) -> OuterLayerLeg {
+        t == .dataChannel ? .dataChannel : .wsRelay
+    }
+
+    /// The ONE place the outer seal of an outgoing frame is applied (audio, hang-up, NACK request). Returns the bytes to put
+    /// on the wire and whether the relay leg may carry them, or nil when the frame must not be sent at all: sealed call whose
+    /// sealer is not installed yet (held), or the seal failed. A frame of a sealed call is never sent plain.
+    private func outerTx(_ frame: Data, integration: QAudionCallIntegration?) -> (wire: Data, relayAllowed: Bool)? {
+        let sealer: PqcRtpFrameSealer? = relaySlotLock.withLock { relaySealerSend }
+        switch OuterLayerPolicy.tx(mode: currentOuterMode(integration: integration), sealerInstalled: sealer != nil) {
+        case .seal:
+            guard let sealer = sealer, let wire = try? sealer.seal(frame) else { return nil }
+            return (wire, true)
+        case .hold:
+            return nil
+        case .plainDataChannelOnly:
+            return (frame, false)
+        case .plainEitherLeg:
+            return (frame, true)
+        }
+    }
+
+    private enum OuterRxResult {
+        case inner(Data)
+        case held
+        case openFailed
+        case closedLeg
+    }
+
+    /// The receive side of the same decision. A frame of a sealed call is opened or held, never delivered raw.
+    private func outerRx(_ data: Data, leg: OuterLayerLeg, integration: QAudionCallIntegration?) -> OuterRxResult {
+        let installed: Bool = relaySlotLock.withLock { relaySealerRecv != nil }
+        switch OuterLayerPolicy.rx(mode: currentOuterMode(integration: integration), leg: leg, recvSealerInstalled: installed) {
+        case .open:
+            guard let inner = unsealRelayFrame(data) else { return .openFailed }
+            return .inner(inner)
+        case .hold:
+            return .held
+        case .passThrough:
+            return .inner(data)
+        case .drop:
+            return .closedLeg
+        }
+    }
+
+    /// Keep one inbound frame of a sealed call until the outer sealer is installed (bounded, main thread).
+    private func holdForSealer(_ frame: Data, callId: String?, leg: OuterLayerLeg) {
+        // Full: the oldest entry goes, the newest audio is the one worth keeping.
+        if rxPreBuffer.count >= Self.rxPreBufferCap { rxPreBuffer.removeFirst() }
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        rxPreBuffer.append((frame: frame, callId: callId, leg: leg, heldForSealer: true, atMs: nowMs))
+    }
+
+    /// This side could not build its outer sealers. The call goes on without the outer seal: the DataChannel carries the
+    /// inner-sealed frames inside DTLS, the relay leg is closed, and the peer is told once with `outer-off-v1` on the
+    /// DataChannel (repeated with the first inner-sealed frames).
+    private func noteLocalOuterInstallFailure(callId: String) {
+        let first: Bool = relaySlotLock.withLock {
+            guard outerOffMode == nil else { return false }
+            outerOffMode = .offLocalInstall
+            outerOffAnnounceRemaining = 1 + OuterLayerPolicy.outerOffRepeats
+            return true
+        }
+        guard first else { return }
+        RTLog.warn("call", "outer=off reason=local_install")
+        announceOuterOffIfNeeded()
+        DispatchQueue.main.async { [weak self] in self?.emitPqLevelIfChanged() }
+    }
+
+    /// Send one `outer-off-v1` announcement on the DataChannel when one is owed. Unsealed, never on the relay, only to a
+    /// peer that advertised the tag for this call.
+    private func announceOuterOffIfNeeded() {
+        let owed: Bool = relaySlotLock.withLock {
+            guard outerOffMode == .offLocalInstall, outerOffAnnounceRemaining > 0 else { return false }
+            outerOffAnnounceRemaining -= 1
+            return true
+        }
+        guard owed else { return }
+        let peerCaps = getPeerCapabilities?(getCallId?())
+        guard peerCaps?.contains(CallCapabilities.outerOffV1) == true else { return }
+        _ = sendAudioOverDataChannel?(OuterLayerPolicy.outerOffFrame)
+    }
+
+    /// The peer sent `outer-off-v1` on the DataChannel: the call runs without the outer seal from now on.
+    private func honourPeerOuterOff() {
+        let changed: Bool = relaySlotLock.withLock {
+            guard outerOffMode == nil else { return false }
+            outerOffMode = .offPeerInstall
+            return true
+        }
+        guard changed else { return }
+        RTLog.warn("call", "outer=off reason=peer_install")
+        drainRxPreBuffer()
+        emitPqLevelIfChanged()
     }
 
     // MARK: - Mute / Hold
@@ -1995,6 +2174,8 @@ final class CallService: @unchecked Sendable {
             let dur = Date().timeIntervalSince(started)
             self.callDurationSeconds = dur
             self.onDurationTick?(dur)
+            // The protection-level line is re-evaluated every 5 s and logged only when it changes.
+            if Int(dur) % 5 == 0 { self.emitPqLevelIfChanged() }
         }
     }
 
@@ -2852,26 +3033,13 @@ final class CallService: @unchecked Sendable {
         print(line)
     }
 
-    /// W-M15ORDER — the ONE place the relay sender's outer M-15 seal is applied (audio, hang-up
-    /// control frame, NACK request). Returns the bytes to put on the wire, or nil when the frame
-    /// must NOT be sent: M-15 negotiated for the call but the send sealer is not installed yet
-    /// (`RelaySealTxPolicy.hold`), or sealing itself failed. A frame that has to be sealed is
-    /// never sent plain: the peer's receive sealer exists already and an unsealed frame cannot
-    /// authenticate. Without M-15 (legacy peer) the frame passes through exactly as before.
-    private func sealForRelay(_ frame: Data, m15Negotiated: Bool) -> Data? {
-        // W-SLOTLOCK — copy the send sealer under the lock; seal() runs unlocked.
-        let sealer: PqcRtpFrameSealer? = relaySlotLock.withLock { relaySealerSend }
-        return RelaySealTxPolicy.frameForWire(frame, m15Negotiated: m15Negotiated, sealer: sealer)
-    }
-
     /// W-M15ORDER — is this call's outgoing relay traffic currently held for want of the M-15 send
     /// sealer? Cheap (one lock + one flag): checked BEFORE the mic frame is encoded and encrypted,
     /// so a held frame does not advance the inner audio sequence (the peer sees no gap to NACK).
     private func relayTxHeldForSealer(integration: QAudionCallIntegration?) -> Bool {
         let installed: Bool = relaySlotLock.withLock { relaySealerSend != nil }
         if installed { return false }
-        let negotiated: Bool = integration?.negotiatedSrtpDirKey ?? false
-        return RelaySealTxPolicy.decide(m15Negotiated: negotiated, sealerInstalled: false) == .hold
+        return OuterLayerPolicy.tx(mode: currentOuterMode(integration: integration), sealerInstalled: false) == .hold
     }
 
     /// W-M15ORDER — count one held outgoing audio frame; log the first of the call.
@@ -2997,7 +3165,17 @@ final class CallService: @unchecked Sendable {
         let n: String = frames.count.description
         print("[CallService] RX W481: draining " + n + " pre-buffered frame(s)")
         let activeId = getCallId?()
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        var stillHeld: [(frame: Data, callId: String?, leg: OuterLayerLeg, heldForSealer: Bool, atMs: Int64)] = []
+        defer {
+            // Frames still waiting for the outer sealer go back, in order, ahead of anything buffered meanwhile.
+            if !stillHeld.isEmpty {
+                rxPreBuffer.insert(contentsOf: stillHeld.prefix(Self.rxPreBufferCap), at: 0)
+            }
+        }
         for entry in frames {
+            // A frame held for the outer sealer that has waited too long is not played late.
+            if entry.heldForSealer, nowMs - entry.atMs > Self.rxSealerHoldMaxAgeMs { continue }
             // W-DCHANGUP — a buffered entry whose stored envelope id provably
             // names ANOTHER call is a leftover from a race against teardown,
             // not this call's early audio. Replaying it would at best cost a
@@ -3016,7 +3194,18 @@ final class CallService: @unchecked Sendable {
             // so they are normally unsealed pass-through; unsealRelayFrame
             // returns them unchanged when the sealer isn't installed yet, or
             // strips the seal / drops if it is.
-            guard let inner = unsealRelayFrame(frame) else {
+            let inner: Data
+            switch outerRx(frame, leg: entry.leg, integration: integration) {
+            case .inner(let opened):
+                inner = opened
+            case .held:
+                var again = entry
+                if !again.heldForSealer { again.heldForSealer = true; again.atMs = nowMs }
+                stillHeld.append(again)
+                continue
+            case .closedLeg:
+                continue
+            case .openFailed:
                 rxDecryptErrorCount &+= 1
                 continue
             }
@@ -3274,19 +3463,19 @@ final class CallService: @unchecked Sendable {
         // let such a frame wreck its replay window): the control frame is skipped. This channel
         // is the third, best-effort one; the `call_hangup` WS envelope and the `HANGUP:` opaque
         // piggy-back (both signalling, not media frames) carry the hang-up as before.
-        let m15Negotiated: Bool = callIntegration?.negotiatedSrtpDirKey ?? false
-        guard let sealed = sealForRelay(frame, m15Negotiated: m15Negotiated) else {
+        guard let outFrame = outerTx(frame, integration: callIntegration) else {
             print("[CallService] dchangup tx skipped — M-15 send sealer not installed (call_hangup envelope still sent)")
             RTLog.info("call", "dchangup tx=0 why=nosealer")
             return
         }
+        let sealed: Data = outFrame.wire
         // W-DCWEDGE — a control frame is not audio: one the back-pressure gate SHED went
         // on no leg at all (it used to be counted as sent, and lost), so it goes on the
         // relay like one the channel refused (kill switch on; off = dropped as before).
         let dcOutcome: AudioDcSendOutcome = sendAudioOverDataChannel?(sealed) ?? .useRelay
         let divertOn: Bool = DcWedgeKillSwitch.shared.divertEnabled
         let sentOnDc: Bool = !dcOutcome.controlFrameNeedsRelay(divertEnabled: divertOn)
-        if !sentOnDc {
+        if !sentOnDc && outFrame.relayAllowed {
             let (cachedWs, cachedPeer): (BCryptoWebSocketClient?, String?) =
                 relaySlotLock.withLock { (wsClient, peerUserId) }
             let effectiveWs = getWsClient?() ?? cachedWs
@@ -3326,8 +3515,8 @@ final class CallService: @unchecked Sendable {
         // W-M15ORDER — same rule as the hang-up control frame: held, never sent plain, when M-15
         // is negotiated and the send sealer is not installed yet. A NACK request is best-effort;
         // the loss it would have repaired simply goes unrepaired.
-        let m15Negotiated: Bool = callIntegration?.negotiatedSrtpDirKey ?? false
-        guard let sealed = sealForRelay(frame, m15Negotiated: m15Negotiated) else { return }
+        guard let outFrame = outerTx(frame, integration: callIntegration) else { return }
+        let sealed: Data = outFrame.wire
         // W-DCWEDGE — a request on a wedged (or merely back-pressured) channel used to be
         // shed and still log `tx=1` (7727f262: 117 requests logged, none delivered). With
         // the kill switch on, anything that was not queued on the channel goes on the
@@ -3335,7 +3524,7 @@ final class CallService: @unchecked Sendable {
         let dcOutcome: AudioDcSendOutcome = sendAudioOverDataChannel?(sealed) ?? .useRelay
         let divertOn: Bool = DcWedgeKillSwitch.shared.divertEnabled
         let sentOnDc: Bool = !dcOutcome.controlFrameNeedsRelay(divertEnabled: divertOn)
-        if !sentOnDc {
+        if !sentOnDc && outFrame.relayAllowed {
             let (cachedWs, cachedPeer): (BCryptoWebSocketClient?, String?) =
                 relaySlotLock.withLock { (wsClient, peerUserId) }
             let effectiveWs = getWsClient?() ?? cachedWs
@@ -3364,7 +3553,8 @@ final class CallService: @unchecked Sendable {
         let dcOutcome: AudioDcSendOutcome = sendAudioOverDataChannel?(envelope) ?? .useRelay
         let divertOn: Bool = DcWedgeKillSwitch.shared.divertEnabled
         let sentOnDc: Bool = !dcOutcome.controlFrameNeedsRelay(divertEnabled: divertOn)
-        if !sentOnDc {
+        // The cached bytes are resent as they are (no seal here); the relay leg only carries them while it is open.
+        if !sentOnDc && !currentOuterMode(integration: callIntegration).isOuterOff {
             let (cachedWs, cachedPeer): (BCryptoWebSocketClient?, String?) =
                 relaySlotLock.withLock { (wsClient, peerUserId) }
             guard let ws = getWsClient?() ?? cachedWs, let peer = cachedPeer ?? getPeerId?() else { return }
@@ -3578,6 +3768,13 @@ final class CallService: @unchecked Sendable {
                 let line: String = "[CallService] RX: first audio_frame received from peer (" + bytes + " bytes)"
                 print(line)
             }
+            // `outer-off-v1`: exactly two bytes, and only from the DataChannel. Checked before anything is
+            // buffered or opened. The same bytes on the relay take the normal path below and fail there.
+            let leg: OuterLayerLeg = Self.outerLeg(rxTransport)
+            if OuterLayerPolicy.isOuterOffFromDataChannel(serializedFrame, leg: leg) {
+                self.honourPeerOuterOff()
+                return
+            }
             guard let integration = self.callIntegration else {
                 // W481 — buffer instead of drop. Dropping silently advances
                 // the peer's TX ratchet without advancing our RX ratchet,
@@ -3588,7 +3785,7 @@ final class CallService: @unchecked Sendable {
                     // W-DCHANGUP — keep the envelope's call_id with the bytes so
                     // the drain can refuse provably-foreign replays (see the
                     // buffer's own doc comment).
-                    self.rxPreBuffer.append((frame: serializedFrame, callId: callId))
+                    self.rxPreBuffer.append((frame: serializedFrame, callId: callId, leg: leg, heldForSealer: false, atMs: 0))
                 }
                 if !self.loggedRxNoIntegration {
                     self.loggedRxNoIntegration = true
@@ -3600,7 +3797,18 @@ final class CallService: @unchecked Sendable {
             // decode. Android wraps every relay frame in this seal; once our
             // recv sealer is installed an open failure means replay/forgery →
             // drop (counts as a decrypt error). Pre-install → pass through.
-            guard let inner = self.unsealRelayFrame(serializedFrame) else {
+            let inner: Data
+            switch self.outerRx(serializedFrame, leg: leg, integration: integration) {
+            case .inner(let opened):
+                inner = opened
+            case .held:
+                // Sealed call, sealer not installed yet: keep the frame (bounded), never deliver it raw.
+                self.holdForSealer(serializedFrame, callId: callId, leg: leg)
+                return
+            case .closedLeg:
+                // Relay leg of a call without the outer seal.
+                return
+            case .openFailed:
                 // W-M15ORDER — `unsealRelayFrame` already counted the cause (replay vs
                 // authentication) and logged it; rx_dec_err keeps the total.
                 self.rxDecryptErrorCount &+= 1
@@ -4266,6 +4474,8 @@ final class CallService: @unchecked Sendable {
         }
         txFallbackCount = 0
         rxPreBuffer.removeAll()  // W481
+        lastPqLevelLine = nil
+        sasConfirmedThisCall = false
         // W-SETUPRETRY + W-MEDIADEAD — per-call RX liveness state. The
         // one-shot first-decode latch re-arms for the next call, the decode
         // stamp zeroes so a new call never inherits a dead call's "alive
@@ -4323,6 +4533,9 @@ final class CallService: @unchecked Sendable {
         relaySlotLock.withLock {
             relaySealerSend = nil  // W574e — fresh M-15 sealers per call (new key)
             relaySealerRecv = nil
+            outerOffMode = nil
+            outerOffAnnounceRemaining = 0
+            dtlsGroupToken = nil
             relaySealerCallId = nil  // W574h — unbind so the next call re-keys cleanly
             relaySealerKeyFp = nil   // W574l
             // W67: reset transport binding. Nota: NON disconnect-iamo il
@@ -5340,13 +5553,16 @@ final class CallService: @unchecked Sendable {
                 // sealer is installed (key-established), mirroring Android's
                 // `pqcSend?.seal(payload) ?: payload`. iOS↔iOS (both new)
                 // seal↔open; iOS↔Android now interops.
-                // W-M15ORDER — `sealForRelay` never returns a plain frame for a call that
+                // W-M15ORDER — `outerTx` never returns a plain frame for a call that
                 // negotiated M-15 (held until the sealer exists); a nil here means the frame must
                 // not be sent at all.
-                guard let sealedFrame = sealForRelay(wireFrame, m15Negotiated: integration.negotiatedSrtpDirKey) else {
+                guard let outFrame = outerTx(wireFrame, integration: integration) else {
                     noteTxHeldNoSealer()
                     return
                 }
+                let sealedFrame: Data = outFrame.wire
+                // `outer-off-v1`: the first inner-sealed frames repeat the announcement (DataChannel only).
+                announceOuterOffIfNeeded()
                 // W-AUDIONACK — cache the EXACT final wire bytes, keyed by
                 // the inner wire sequence number, so a peer's retransmit
                 // request can be answered by replaying them verbatim (never
@@ -5375,7 +5591,7 @@ final class CallService: @unchecked Sendable {
                 // Each frame goes on exactly ONE leg — never both.
                 let dcOutcome: AudioDcSendOutcome = sendAudioOverDataChannel?(sealedFrame) ?? .useRelay
                 let sentOnDc: Bool = !dcOutcome.needsRelay
-                if !sentOnDc {
+                if !sentOnDc && outFrame.relayAllowed {
                     ws.sendAudioFrame(recipientId: peer, frame: sealedFrame, callId: cid)
                 }
                 // W-DCMUX — record WHICH transport carried this frame, and log

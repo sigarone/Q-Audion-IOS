@@ -553,6 +553,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `onRelaySessionReady` fires).
     private var peerAdvertisedSrtpDirKey: Bool = false
 
+    /// True once a peer bundle of this call has been read, i.e. `peerAdvertisedSrtpDirKey` is a decided answer and not the
+    /// initial `false`. Reset with the other per-call state.
+    private var peerBundleSeen: Bool = false
+
+    /// Whether the outcome of the outer-seal negotiation is known for this call (a peer bundle has been read).
+    public var srtpNegotiationKnown: Bool {
+        lock.withLock { peerBundleSeen }
+    }
+
     /// MEDIA-3/4/5 — whether the PEER advertised `innerAudioAadV1` in its last
     /// received OFFER/ACCEPT bundle. Same set-site/timing as
     /// `peerAdvertisedSrtpDirKey` immediately above.
@@ -1941,7 +1950,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // unauthenticated claim alone.
         let peerSrtpDirKeyAdvertised: Bool = (bundle.capabilities?.srtpDirKeyV1 ?? false)
             || (isPeerSrtpDirKeyV1Pinned?(callerId) ?? false)
-        lock.withLock { self.peerAdvertisedSrtpDirKey = peerSrtpDirKeyAdvertised }
+        lock.withLock {
+            self.peerAdvertisedSrtpDirKey = peerSrtpDirKeyAdvertised
+            self.peerBundleSeen = true
+        }
         // Phase 18 — capture the peer's v4 advertisement so the v4 bootstrap is
         // gated on the negotiated AND (`negotiatedRatchetV4`). A bundle that omits
         // the field (older peer / un-opted-in) decodes nil → false → v4 stays off
@@ -2527,7 +2539,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 let innerAadEpoch = UInt32(max(1, min(bundle.rekeyRound ?? 1, Int(UInt32.max))))
                 try engine.initSession(sharedSecret: combined, adaptivePadding: true,
                                        innerAudioAadV1: innerAadNegotiated, callId: callId,
-                                       selfIsRoleA: innerAadSelfIsRoleA, epoch: innerAadEpoch)
+                                       selfIsRoleA: innerAadSelfIsRoleA, epoch: innerAadEpoch,
+                                       selfIsCaller: currentIsCaller)
                 recordKeyRound(callId: callId, key: combined, round: innerAadEpoch, transcriptHash: acceptBinding)
                 // W-M15SEALERONCE: a re-key round must NOT rebuild the M-15 outer pair.
                 fireRelaySessionReady(combined, callId: callId, isReKey: isReKeyRound, generation: entryGeneration)
@@ -3035,7 +3048,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let innerAadEpochCaller = UInt32(max(1, min(bundle.rekeyRound ?? 1, Int(UInt32.max))))
             try engine.initSession(sharedSecret: combined, adaptivePadding: true,
                                    innerAudioAadV1: innerAadNegotiatedCaller, callId: callId,
-                                   selfIsRoleA: innerAadSelfIsRoleACaller, epoch: innerAadEpochCaller)
+                                   selfIsRoleA: innerAadSelfIsRoleACaller, epoch: innerAadEpochCaller,
+                                   selfIsCaller: currentIsCaller)
             recordKeyRound(callId: callId, key: combined, round: innerAadEpochCaller, transcriptHash: acceptBinding)
             // W-M15SEALERONCE: a re-key round must NOT rebuild the M-15 outer pair.
             // W-M15ORDER (2026-10-03) — fired RIGHT HERE, straight after `engine.initSession` and
@@ -4478,6 +4492,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         state = .idle
         localKeyPair = nil
         isCaller = false
+        peerBundleSeen = false
         isLocallyRinging = false
         pendingResponderCallId = nil
         pendingResponderCallerId = nil

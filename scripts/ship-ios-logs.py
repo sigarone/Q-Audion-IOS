@@ -1317,6 +1317,25 @@ _RE_HANDSHAKE_FULL = re.compile(
     r" level=-?[0-9]{1,2} pqc_req=[01] ok=[01]\Z"
 )
 
+# PROTECTION LEVEL SUMMARY (call / stdout tags): the one line per call that reports which layers carried the media
+# (CallService.emitPqLevelIfChanged, built by PqLevelLine.format). Every field is a member of a closed set, a flag, a short
+# decimal or the 8 hex characters of the call prefix, so the line carries no name, address or key by construction. The generic
+# gate cannot read it (the line name is a bare word, `pin=` is an identity-word key, `inner=legacy` and `outer=sealed` are
+# 12 characters), so it is accepted here by the whole-line match only: one extra word, a value outside its set or any suffix
+# and it is not this line and goes through the ordinary gates as before. Pinned by test_ship_ios_pqlevel_vocab.py.
+_PQLEVEL_CAPS = r"(?:capsBindV1|innerSealV2|rekeyChainV1|frameKeyV6|relayKemV1|relayRotV1|sigHybridV1)"
+_RE_PQLEVEL_FULL = re.compile(
+    r"\AQA-PQLEVEL v=1 call=[0-9a-f]{8} kind=(?:1to1|group) level=(?:PQ2|PQ2S|PQ1|CL) auth=[HC] sas=[01]"
+    r" dtls=(?:pq|cl|-) frame=(?:v5|v6|-) relay=(?:off|same|ind|indrot|-) dcmux=(?:off|same|ind|indrot|none|-)"
+    r" inner=(?:legacy|v2|-) rvideo=(?:two|one|-) pin=(?:ok|anomaly|-) hold=[01-] withdraw=(?:ok|ignored|-)"
+    r" caps=(?:-|" + _PQLEVEL_CAPS + r"(?:," + _PQLEVEL_CAPS + r"){0,6})"
+    r" pqstate=(?:pinned|withdrawn-unsigned|invalid|other-key|-)"
+    r" pq_sig=(?:valid|absent|unavailable|invalid|otherkey|anomaly_confirmed|-)"
+    r" outer=(?:sealed|off|-) reason=(?:peer_install|local_install|x25519_zero|chain_base|-)"
+    r" rekey=(?:ok|refused|-) round=(?:[0-9]{1,9}|-)"
+    r"(?: tl=(?:pq|cl|-) kd=(?:pq|cl|-) unk=[0-9]{1,3})?\Z"
+)
+
 
 def _is_closed_grammar_line(tag, norm_body):
     """True if `tag` is the mesh scope and `norm_body` is, in full, one of the mesh diagnostic events, or `tag` is a
@@ -1328,7 +1347,7 @@ def _is_closed_grammar_line(tag, norm_body):
     if t.startswith(_MESH_TAG_PREFIXES):
         return bool(_RE_MESH_FULL.match(norm_body))
     if t.startswith(_HANDSHAKE_TAG_PREFIXES):
-        return bool(_RE_HANDSHAKE_FULL.match(norm_body))
+        return bool(_RE_HANDSHAKE_FULL.match(norm_body) or _RE_PQLEVEL_FULL.match(norm_body))
     return False
 
 

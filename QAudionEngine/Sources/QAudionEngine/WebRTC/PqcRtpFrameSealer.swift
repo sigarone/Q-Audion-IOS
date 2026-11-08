@@ -59,11 +59,8 @@ import CryptoKit
 /// spaces and risks (key, nonce) reuse, which is catastrophic for
 /// AES-GCM confidentiality.
 ///
-/// To protect both directions of a call build two independent
-/// instances that share the same derived master key but keep
-/// separate counters: construct the send sealer with
-/// `init(pqcSessionKey:)` and the recv sealer with
-/// ``makeSibling()`` (see `QAudionPeerConnection.installPqcSealer`).
+/// Production code builds the two directions with ``createDirectional(pqcSessionKey:callId:selfIsRoleA:selfIsCaller:)``.
+/// `init(pqcSessionKey:)` and ``makeSibling()`` (one shared key for both directions) are internal and used by the tests only.
 public final class PqcRtpFrameSealer: @unchecked Sendable {
 
     public static let nonceSize = 12
@@ -84,6 +81,11 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
     private let masterKey: SymmetricKey
     private let nonceLock = NSLock()
     private var counter: UInt64 = 0
+    /// Nonce byte 0 of a frame this sealer writes: 0x01 when the sender is the caller of the call, 0x02
+    /// for the callee, 0 when the role is not known (tests, older callers). Bytes 1..3 stay zero and the
+    /// counter stays in bytes 4..11, which is all a receiver reads, so every receiver opens the frame
+    /// unchanged. Two senders that end up with the same key and the same counter still differ in byte 0.
+    private let nonceDirTag: UInt8
 
     // MARK: - Replay protection (open path only — M-14)
     //
@@ -169,7 +171,7 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
     ///     for backward-compat / tests where the callId is unknown.
     ///     ⚠️ Both parties MUST supply the SAME callId; mismatched
     ///     callIds produce different master keys and interop fails.
-    public init(pqcSessionKey: Data, callId: String = "") throws {
+    init(pqcSessionKey: Data, callId: String = "") throws {
         guard pqcSessionKey.count == 32 else {
             throw SealerError.wrongKeyLength(pqcSessionKey.count)
         }
@@ -185,6 +187,7 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
             outputByteCount: Self.masterKeySize
         )
         self.masterKey = derived
+        self.nonceDirTag = 0
     }
 
     /// SECURITY (W574x) — directional per-direction keys.
@@ -205,7 +208,8 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
     public static func createDirectional(
         pqcSessionKey: Data,
         callId: String,
-        selfIsRoleA: Bool
+        selfIsRoleA: Bool,
+        selfIsCaller: Bool? = nil
     ) throws -> (send: PqcRtpFrameSealer, recv: PqcRtpFrameSealer) {
         guard pqcSessionKey.count == 32 else {
             throw SealerError.wrongKeyLength(pqcSessionKey.count)
@@ -224,9 +228,10 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
             inputKeyMaterial: ikm, salt: Self.salt, info: infoB2A,
             outputByteCount: Self.masterKeySize
         )
+        let tag: UInt8 = selfIsCaller.map { $0 ? 0x01 : 0x02 } ?? 0
         let send = selfIsRoleA
-            ? PqcRtpFrameSealer(reusingMasterKey: keyA2B, info: infoA2B)
-            : PqcRtpFrameSealer(reusingMasterKey: keyB2A, info: infoB2A)
+            ? PqcRtpFrameSealer(reusingMasterKey: keyA2B, info: infoA2B, nonceDirTag: tag)
+            : PqcRtpFrameSealer(reusingMasterKey: keyB2A, info: infoB2A, nonceDirTag: tag)
         let recv = selfIsRoleA
             ? PqcRtpFrameSealer(reusingMasterKey: keyB2A, info: infoB2A)
             : PqcRtpFrameSealer(reusingMasterKey: keyA2B, info: infoA2B)
@@ -251,9 +256,10 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
     /// Private designated init reusing an already-derived master key —
     /// used by ``makeSibling()`` so the recv direction shares the key
     /// material AND the call-bound info string (M-13, M-15).
-    private init(reusingMasterKey key: SymmetricKey, info: Data) {
+    private init(reusingMasterKey key: SymmetricKey, info: Data, nonceDirTag: UInt8 = 0) {
         self.masterKey = key
         self.info = info
+        self.nonceDirTag = nonceDirTag
     }
 
     /// M-13 — produce an independent sealer that shares this sealer's
@@ -261,7 +267,7 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
     /// fresh counter (starts at 0). Use the original for one direction
     /// (seal) and the sibling for the other (open) so the two counter
     /// spaces never collide.
-    public func makeSibling() -> PqcRtpFrameSealer {
+    func makeSibling() -> PqcRtpFrameSealer {
         return PqcRtpFrameSealer(reusingMasterKey: masterKey, info: info)
     }
 
@@ -426,6 +432,7 @@ public final class PqcRtpFrameSealer: @unchecked Sendable {
         counter &+= 1
         nonceLock.unlock()
         var bytes = Data(count: Self.nonceSize)
+        bytes[bytes.startIndex] = nonceDirTag
         // Big-endian 8-byte counter at the END of the 12-byte nonce
         // (first 4 bytes = 0). Same layout SRTP uses for AES-GCM.
         for i in 0..<8 {
