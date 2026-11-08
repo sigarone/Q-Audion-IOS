@@ -4667,6 +4667,14 @@ final class AppState: ObservableObject {
         // Device unlock: a frame deferred because the key vault was unreadable is otherwise only
         // redelivered at the next reconnect. Once per unlock, and only if something was deferred.
         #if canImport(UIKit) && os(iOS)
+        // Voice-check inference stays idle while protected data is unreadable (phone locked).
+        ProtectedDataFlag.shared.set(isAvailable: UIApplication.shared.isProtectedDataAvailable)
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.protectedDataWillBecomeUnavailableNotification, object: nil, queue: nil
+        ) { _ in ProtectedDataFlag.shared.set(isAvailable: false) }
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: nil
+        ) { _ in ProtectedDataFlag.shared.set(isAvailable: true) }
         NotificationCenter.default.addObserver(
             forName: UIApplication.protectedDataDidBecomeAvailableNotification,
             object: nil,
