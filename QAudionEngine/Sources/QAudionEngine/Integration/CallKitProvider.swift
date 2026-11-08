@@ -136,11 +136,16 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         }
     }
 
-    /// The name the system call UI shows: the caller, a separator and the encrypted tag, as plain text. No
-    /// padlock character: the system UI already shows the app's own glyph (`iconTemplateImageData`), and a
-    /// character in the name was shown instead of the logo.
+    /// The name the system call UI shows: the caller, a separator, a padlock and the encrypted-call tag. The
+    /// app glyph (`iconTemplateImageData`) is not shown everywhere (CarPlay has none), so the padlock and the
+    /// words carry the meaning in the name itself.
     public static func callerDisplayName(_ callerName: String, encryptedTag: String) -> String {
-        callerName + " · " + encryptedTag
+        callerName + " · 🔒 " + encryptedTag
+    }
+
+    /// The localized tag for `callerDisplayName`, shared by incoming and outgoing calls.
+    static func encryptedCallTag() -> String {
+        String(localized: "callkit.encrypted_call_tag", defaultValue: "Chiamata cifrata", comment: "Suffix appended to the caller name on the native call screen, e.g. 'Marco · Encrypted call'")
     }
 
     /// W-VOIPSYNC (2026-10-08) — synchronous form of `reportIncomingCall`: hands
@@ -172,8 +177,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         // here since String(localized:) resolves against the main app
         // bundle's own Localizable.xcstrings at runtime regardless of which
         // module the call site lives in.
-        let encryptedTag = String(localized: "callkit.encrypted_tag", defaultValue: "Cifrata", comment: "Suffix appended to the caller name on the native CallKit incoming-call screen, e.g. 'Marco · Encrypted'")
-        update.localizedCallerName = Self.callerDisplayName(callerName, encryptedTag: encryptedTag)
+        update.localizedCallerName = Self.callerDisplayName(callerName, encryptedTag: Self.encryptedCallTag())
         // W-CALLDIAG: every native report attempt logged (uuid + hasVideo). Two
         // reports for the same uuid ⇒ Code=2 below (the "seconda chiamata in
         // chiaro" duplicate the user sees on voice + video). The source (PushKit
@@ -441,6 +445,11 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
         let txn = CXTransaction(action: action)
         try await controller.request(txn)
         ledger.recordOutstanding(uuid)
+        // The start action carries only the raw handle: label the outgoing call like an incoming one so the
+        // system UI and CarPlay show the lock and the encrypted-call tag. Report-only, no change to the flow.
+        let update = CXCallUpdate()
+        update.localizedCallerName = Self.callerDisplayName(handle, encryptedTag: Self.encryptedCallTag())
+        provider.reportCall(with: uuid, updated: update)
         return uuid
     }
 
