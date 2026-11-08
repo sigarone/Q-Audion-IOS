@@ -112,6 +112,9 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     private var loadedContactId: String?
     private var scoreTimer: BackgroundAwareTimer?
     private let backgroundFlag: AppBackgroundFlag
+    private let protectedData: ProtectedDataFlag
+    /// Whether the last tick was skipped because protected data was unavailable (only for the one-line log).
+    private var pausedForProtectedData = false
     private let foregroundIntervalSeconds: Double
     private let backgroundIntervalSeconds: Double
     private let armTimer: BackgroundAwareTimer.Arm
@@ -213,6 +216,7 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
             store: store,
             cohortNormalizer: cohortNormalizer,
             backgroundFlag: .shared,
+            protectedData: .shared,
             foregroundIntervalSeconds: ContactVoiceVerifier.scoreIntervalSeconds,
             backgroundIntervalSeconds: ContactVoiceVerifier.backgroundScoreIntervalSeconds,
             armTimer: BackgroundAwareTimer.dispatchArm,
@@ -227,6 +231,7 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
         store: VoiceprintStore,
         cohortNormalizer: SpeakerCohortNormalizer?,
         backgroundFlag: AppBackgroundFlag,
+        protectedData: ProtectedDataFlag = ProtectedDataFlag(),
         foregroundIntervalSeconds: Double,
         backgroundIntervalSeconds: Double,
         armTimer: @escaping BackgroundAwareTimer.Arm,
@@ -235,6 +240,7 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
         self.verifier = SpeakerVerifier(embedder: embedder, cohortNormalizer: cohortNormalizer)
         self.store = store
         self.backgroundFlag = backgroundFlag
+        self.protectedData = protectedData
         self.foregroundIntervalSeconds = foregroundIntervalSeconds
         self.backgroundIntervalSeconds = backgroundIntervalSeconds
         self.armTimer = armTimer
@@ -394,7 +400,19 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     private func runTick() {
         lock.lock()
         guard !tickInFlight else { lock.unlock(); return }
+        // Locked phone: no inference. The model's compiled copies live in the default (complete) Data Protection
+        // class and are memory-mapped, so a run after the lock can fault. Nothing is fed, the last score stays, and
+        // the ticks resume on their own once the data is readable again (one log line per change).
+        let dataReadable = protectedData.isAvailable
+        let logChange = pausedForProtectedData == dataReadable
+        pausedForProtectedData = !dataReadable
         lock.unlock()
+        if logChange {
+            // pd = protected data (0 locked and paused, 1 readable); words the phone-log shipper admits, see
+            // `scripts/test_ship_ios_display_vocab.py`.
+            print("[Voice] pd=\(dataReadable ? 1 : 0)")
+        }
+        guard dataReadable else { return }
 
         // CPU governor (background only, see `BackgroundCpuGovernor`). A tick held back ends here, before it
         // touches anything: the voiceprint gate, the speaker-change monitor and the callbacks are not fed, so the
@@ -445,6 +463,15 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
 
         Task { [weak self] in
             guard let self else { return }
+            // The tick was gated at its start; the phone may have locked since, so check again right before inference.
+            guard self.protectedData.isAvailable else {
+                self.scoreQueue.async {
+                    self.lock.lock()
+                    self.tickInFlight = false
+                    self.lock.unlock()
+                }
+                return
+            }
             let genuineProb: Float
             do {
                 let result = try await DeepfakeClassifier.shared.score(pcm16kMono: window)

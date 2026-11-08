@@ -68,7 +68,8 @@ def shipped(line, tag="call"):
 LINES = ["display bg=1", "display bg=0"]
 
 # Same text as ContactVoiceVerifier.cadenceLine (whole seconds), shipped under the stdout tee's tag.
-CADENCE_LINES = ["[Voice] bg=1 every=10", "[Voice] bg=0 every=3", "[Voice] bg=1 every=12", "[Voice] bg=1 every=9"]
+CADENCE_LINES = ["[Voice] bg=1 every=10", "[Voice] bg=0 every=3", "[Voice] bg=1 every=12", "[Voice] bg=1 every=9",
+                 "[Voice] pd=0", "[Voice] pd=1"]
 
 GOVERNOR_LINES = [
     "[Voice] bg=1 every=10 cpu=42 skip=3 run=2 high=0",
