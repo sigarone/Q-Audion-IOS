@@ -62,6 +62,7 @@ targets:
           - CarPlayListModelTests.swift
           - CarPlayLinkTests.swift
           - ConfidenceToneTests.swift
+          - VersionInfoTests.swift
           - DesignSystemAccessibilityTests.swift
           - DeviceSymbolTests.swift
           - EarbudCompileConditionTests.swift

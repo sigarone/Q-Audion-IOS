@@ -29,10 +29,10 @@ final class DiagnosticsExportContainer: ObservableObject {
 
     /// Build info dal main bundle Info.plist + git commit short.
     private var bundleVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        AppVersionInfo.marketing()
     }
     private var buildNumber: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        AppVersionInfo.build()
     }
 
     func generate(snapshot: DiagnosticsSnapshot) async {

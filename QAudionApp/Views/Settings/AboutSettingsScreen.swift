@@ -14,7 +14,20 @@ import AVFAudio
 @MainActor
 final class AboutSettingsContainer: ObservableObject {
     @Published var viewModel: AboutSettingsViewModel
-    init(initial: AboutSettingsViewModel = .mock) { self.viewModel = initial }
+    init(initial: AboutSettingsViewModel = AboutSettingsContainer.running) { self.viewModel = initial }
+
+    /// Version, build and commit of the running bundle; the other rows
+    /// keep the fixed values of the engine's default model.
+    nonisolated static var running: AboutSettingsViewModel {
+        let base = AboutSettingsViewModel.mock
+        return AboutSettingsViewModel(
+            appVersion: AppVersionInfo.marketing(),
+            buildNumber: AppVersionInfo.build(),
+            gitCommitShort: AppVersionInfo.commit(),
+            iosDeploymentTarget: base.iosDeploymentTarget,
+            mlKem1024Enabled: base.mlKem1024Enabled,
+            onnxruntimeVersion: base.onnxruntimeVersion)
+    }
 }
 
 /// Read-only "Informazioni" screen. W26 design-token refactor: replaces
@@ -235,7 +248,7 @@ struct AboutSettingsScreen: View {
                             #if canImport(UIKit)
                             let v = container.viewModel.appVersion
                             let b = container.viewModel.buildNumber
-                            let subject = "Q-Audion v\(v) (build \(b)) — segnalazione"
+                            let subject = "Q-Audion " + AppVersionInfo.format(version: v, build: b) + " — segnalazione"
                             let encoded = subject
                                 .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
                             if let url = URL(string: "mailto:info@bcrypto.com?subject=" + encoded) {
@@ -358,7 +371,7 @@ struct AboutSettingsScreen: View {
                             // See CLAUDE.md §13 — no multi-segment
                             // interpolation inside the closure.
                             let line: String =
-                                "Q-Audion v" + v + " (build " + b + ") · "
+                                "Q-Audion " + AppVersionInfo.format(version: v, build: b) + " · "
                                 + device + " · " + ios
                             UIPasteboard.general.string = line
                             #endif

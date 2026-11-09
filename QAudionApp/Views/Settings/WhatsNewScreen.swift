@@ -2,14 +2,14 @@ import SwiftUI
 import QAudionEngine
 
 /// "Cosa c'è di nuovo" — elenco delle novità per versione.
-/// Lista scritta a mano di release entries (versione + data + punti
-/// principali), quindi non serve alcun fetch di rete. Si aggiorna
-/// aggiungendo un `ReleaseNote` in `ReleaseNote.releaseNotes`
-/// (`WhatsNewData.swift`). Non sostituisce l'OTA catalog (W42), che
+/// Elenco delle ultime versioni, generato in fase di build dalla storia
+/// delle release (`scripts/gen_ios_changelog.py` -> `changelog.json`,
+/// letto da `ChangelogStore`), quindi nessun fetch di rete e nessuna voce
+/// scritta a mano. Non sostituisce l'OTA catalog (W42), che
 /// gestisce release firmate Ed25519; questo è puramente informativo.
 public struct ReleaseNote: Identifiable, Equatable {
-    public let id: String   // tag, es. "v1.0.96"
-    public let date: String // ISO short, es. "2026-04-30"
+    public let id: String   // release tag, prefixed with v
+    public let date: String // ISO short date
     public let title: String
     public let bullets: [String]
 
@@ -18,9 +18,10 @@ public struct ReleaseNote: Identifiable, Equatable {
     }
 }
 
-// W302: extension ReleaseNote { releaseNotes: [...] } moved to
-// WhatsNewData.swift to keep this file under the type-checker
-// danger zone — see TODO_AUDIT.md §6 + CLAUDE.md §13.
+extension ReleaseNote {
+    /// Last releases, newest first, from the build-time changelog data.
+    public static var releaseNotes: [ReleaseNote] { ChangelogStore.notes() }
+}
 
 struct WhatsNewScreen: View {
     @Environment(\.qaudionScheme) private var scheme
@@ -83,7 +84,7 @@ struct WhatsNewScreen: View {
         lines.append("")
         for note in entries {
             lines.append("## " + note.id + " — " + note.date)
-            lines.append(note.title)
+            if !note.title.isEmpty { lines.append(note.title) }
             lines.append("")
             for bullet in note.bullets {
                 lines.append("- " + bullet)
@@ -118,24 +119,26 @@ struct WhatsNewScreen: View {
     private func releaseCard(_ note: ReleaseNote) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(note.id)
+                Text(verbatim: note.id)
                     .qaudionScaledFont(size: 16, weight: .semibold, design: .monospaced)
                     .foregroundStyle(scheme.onSurface)
                 Spacer(minLength: 0)
-                Text(note.date)
+                Text(verbatim: note.date)
                     .qaudionScaledFont(size: 12, weight: .regular, design: .monospaced, family: .label)
                     .foregroundStyle(scheme.onSurfaceVariant)
             }
-            Text(note.title)
-                .qaudionStyle(type.titleSmall)
-                .fontWeight(.semibold)
-                .foregroundStyle(scheme.primary)
+            if !note.title.isEmpty {
+                Text(note.title)
+                    .qaudionStyle(type.titleSmall)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(scheme.primary)
+            }
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(note.bullets, id: \.self) { bullet in
                     HStack(alignment: .top, spacing: 6) {
                         Text("•")
                             .foregroundStyle(scheme.primary)
-                        Text(bullet)
+                        Text(verbatim: bullet)
                             .qaudionStyle(type.bodySmall)
                             .foregroundStyle(scheme.onSurface)
                             .frame(maxWidth: .infinity, alignment: .leading)
