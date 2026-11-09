@@ -742,7 +742,7 @@ public final class VideoCallPipeline: NSObject {
     ///   - selfIsRoleA: `PqcRtpFrameSealer.selfIsRoleA(selfUserId, peerUserId)`
     ///     — same rule Android/Desktop use, so both legs agree without
     ///     extra signalling.
-    public func rotatePqcSealer(_ newKey: Data?, callId: String, selfIsRoleA: Bool) {
+    public func rotatePqcSealer(_ newKey: Data?, callId: String, selfIsRoleA: Bool, selfIsCaller: Bool? = nil) {
         #if canImport(WebRTC)
         sealerLock.lock()
         defer { sealerLock.unlock() }
@@ -754,7 +754,7 @@ public final class VideoCallPipeline: NSObject {
         do {
             let videoCallId = "\(callId.lowercased()):video"
             let pair = try PqcRtpFrameSealer.createDirectional(
-                pqcSessionKey: key, callId: videoCallId, selfIsRoleA: selfIsRoleA)
+                pqcSessionKey: key, callId: videoCallId, selfIsRoleA: selfIsRoleA, selfIsCaller: selfIsCaller)
             pqcEncryptor = PqcFrameEncryptor(sealer: pair.send)
             pqcDecryptor = PqcFrameDecryptor(sealer: pair.recv)
         } catch {

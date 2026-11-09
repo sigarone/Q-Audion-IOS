@@ -56,3 +56,5 @@ QAudionEngine/Tests/QAudionEngineTests/Mesh/Resources/mesh-vectors.json -text
 # holds (test/kat/group_promotion_token_v1/promotion-token-kat.json, generated there by tools/katgen/grouptoken) and the tests pin its
 # SHA-256: git must never rewrite its line endings.
 QAudionEngine/Tests/QAudionEngineTests/Resources/kat/promotion-token-kat.json -text
+# The call-media layer known-answer vectors are a byte-for-byte copy of the server repository file; the tests pin its SHA-256: git must never rewrite its line endings.
+QAudionEngine/Tests/QAudionEngineTests/Resources/kat/pqc-hardening-v1-kat.json -text

@@ -961,51 +961,6 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
         return dc.readyState.rawValue
     }
 
-    /// W386 — placeholder for the W382 PQC sealer install hook.
-    ///
-    /// The stasel/WebRTC 131.0.0 binary build doesn't expose the
-    /// `frameEncryptor` / `frameDecryptor` properties on
-    /// `RTCRtpSender` / `RTCRtpReceiver` (insertable-streams API
-    /// stripped from the binary). The PqcRtpFrameSealer engine
-    /// (W376) and the engine-side adapters (W386) remain in place
-    /// for non-SRTP transports (BcryptoWsRelay etc.); the SRTP path
-    /// will pick this up automatically when a WebRTC iOS build with
-    /// the insertable-streams protocols becomes available.
-    ///
-    /// Until then this method is a no-op so existing call sites
-    /// (W383 `applyPqcSealerIfPossible`) keep compiling without
-    /// breaking the SRTP layer.
-    ///
-    /// ⚠️ SECURITY (C-1) — THIS METHOD DOES NOT PROVIDE PQC MEDIA
-    /// PROTECTION. It is intentionally a no-op for the SRTP path: the
-    /// WebRTC binary linked here ships WITHOUT the insertable-streams
-    /// `frameEncryptor`/`frameDecryptor` slots, so there is nowhere to
-    /// attach the sealer. It only retains the adapter pair so the
-    /// non-SRTP BcryptoWsRelay transport can reach the engine. Callers
-    /// MUST NOT log or display "PQC sealer installed" — media on the
-    /// SRTP path is protected by DTLS-SRTP only until a WebRTC build
-    /// exposing the insertable-streams protocols is adopted.
-    public func installPqcSealer(_ sealer: PqcRtpFrameSealer) {
-        guard peerConnection != nil else { return }
-        // Hold a strong reference to the adapter pair so the engine
-        // is reachable for the non-SRTP transports while we wait for
-        // a WebRTC binary that exposes the insertable-streams API.
-        // M-13: never share one PqcRtpFrameSealer between the
-        // encryptor (seal/counter-advancing) and the decryptor
-        // (open/counter-reflecting). Use an independent sibling that
-        // shares the master key but keeps its own counter so the two
-        // directions can never collide on (key, nonce).
-        let recvSealer = sealer.makeSibling()
-        installedPqcEncryptor = PqcFrameEncryptor(sealer: sealer)
-        installedPqcDecryptor = PqcFrameDecryptor(sealer: recvSealer)
-    }
-
-    /// Held so the seal/open closures stay alive as long as the
-    /// peer connection. Read by the BcryptoWsRelay path when it
-    /// switches to PQC-augmented frames in a future commit.
-    public private(set) var installedPqcEncryptor: PqcFrameEncryptor?
-    public private(set) var installedPqcDecryptor: PqcFrameDecryptor?
-
     // MARK: - Capability handshake (commit 540b79c0 parity)
 
     /// Capability negotiation result for THIS call, computed by

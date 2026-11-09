@@ -1,0 +1,1217 @@
+{
+  "common": {
+    "callId": "kat-call-0001",
+    "calleeUserId": "bob",
+    "callerUserId": "alice",
+    "dirTag": {
+      "a2o": 2,
+      "o2a": 1
+    },
+    "envelopeLayout": "0x01 || nonce(12) || BE64(seq) || BE16(ctLen) || ct ; ct = AES-256-GCM(key, nonce, no AAD, paddedBlock) = 272 bytes",
+    "innerPaddedBlock": "00280104070a0d101316191c1f2225282b2e3134373a3d404346494c4f5255585b5e6164676a6d7073760d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0",
+    "innerPlaintext": "0104070a0d101316191c1f2225282b2e3134373a3d404346494c4f5255585b5e6164676a6d707376",
+    "innerPlaintextNote": "40 bytes, b[i] = (3*i + 1) mod 256. Padded block = BE16(40) || body || tail, 256 bytes, tail[i] = (7*i + 13) mod 256 for i = 0.. (production tails are random).",
+    "outerKeyA2B": "050f31dc6862764b67328a0e703d6459749fe35afcd53ebfab5ef1fda108b1b0",
+    "outerKeyB2A": "544a5c7719db57c4b76a9b61aef298d07dd815411101d9efb32617294e1b32ae",
+    "outerKeyDerivation": "HKDF-SHA256(IKM = sessionKey, salt = \"qaudion-srtp-salt-v1\", info = \"q-audion-srtp-master-v1:\" + callId + \":a2b\"|\":b2a\", L = 32)",
+    "outerLayout": "nonce(12) || AES-256-GCM(key, nonce, no AAD, plaintext) ; the counter is nonce bytes 4..11, first counter is 0",
+    "sessionKey1": "914314883e029126a57cc35ad822962128ee6640a8fc3a21756e6fc1e5decbd6",
+    "sessionKey2": "b5a8bd3689ad835c434492ade1895ee74c899c4027090b9c7815ac6ca92cdb8b",
+    "sessionKeyNote": "sessionKeyN = SHA-256(\"pqc-hardening-v1/kat/sessionKey/N\")"
+  },
+  "covers": [
+    "innerNonceV1",
+    "legacyOuterNonce",
+    "roleTie",
+    "nackResend",
+    "outerOffV1",
+    "level"
+  ],
+  "deferred": {
+    "note": "Defined by later steps (S8-S17), added to this file when those steps start; the sha256 pin changes then.",
+    "sections": [
+      "capsx",
+      "extx",
+      "kcmacExt",
+      "innerSealV2",
+      "relayKemV1",
+      "relayRotV1",
+      "frameKeyV6",
+      "pinPolicy",
+      "rekeyChain",
+      "mldsaSeed",
+      "xcert",
+      "sigHybrid",
+      "leafV2",
+      "bundle-max",
+      "roleTie vectors with R-ROLE keys (relayKemV1)",
+      "nackResend under B2+B4 and the E=0 erase negative"
+    ]
+  },
+  "format": "pqc-hardening-v1-kat",
+  "generator": "tools/kat/pqc-hardening-v1/gen (Go, reference); recomputed by verify_test.go (Go) and verify_kat.py (Python)",
+  "innerNonceV1": {
+    "counterAcrossRekeyRevert": {
+      "asserted": "all nonces of the sequence are pairwise distinct; ctr increases by one at each seal across rekey, revert, profile latch and leg swap",
+      "body": "innerPlaintext",
+      "direction": "o2a",
+      "events": [
+        {
+          "ct": "989199e2eb510c7fbb4c47eb1b932ac0008555a0472acedb0d16c9ad90ce83f415e5d5acc3043c97ac6eef3c044c3b53eff7a5185ce653bb1c97a75925fbb201f4c6a407e19c4ca6356b1d544a74471f64871633260f4fa100f7623bafd85fa82e122fe716e06d8f29d650676fe24d2f4c007f26f110cc997248c0f88b5eefe4ce24b31a38cde1e020515756f8486c381dd49aafd46d4f0f9b262696dc8f6589a4b301523e5702da83f9a5efc47c88b33876ca679b9fa81986ddfdfc741214db6b517fc152d56448605d3ddb32ae3d4bcba4d4bdd06c1c243afef061af803e65ce345e97c3bbaaa9ca28ac63c4e19e27eff3ca5c07bbc475aac04dde0afc835ac868d0ff526ec76a1d68ff878c99b6ec",
+          "ctr": "1",
+          "event": "seal",
+          "nonce": "010000000000000000000001",
+          "round": 1
+        },
+        {
+          "ct": "4d6c0391cc41e3c485d9473d8b94f469f085fd97016eea2f33bd01dda2ea6d7047050c627fac8b4fe1553d6f1d6715b95f596a64808bb214f45b0120b138d6c93bde59652bb9c1b77ce9aab7122067fd8f4da512096f6d1d08b115ea0d095ead3cdafcd56e3a8b9949b73c000ffad6bf9c49c5c52fcf4afa15a15b85c8ea8a787eca8d65ebb3569fcdcb93c8891fb078ede7fb8ab536d5086b28c620bb561a840fc980796cd1310e7b092f82d87a011e52c9798c3437a09dd9ac25ae49d660eed65d3f9a4de2fec49c49a4139216992dbc80b5007814697feed762c9f568b26eaca4db730ec945bcfed6ede40a62254667fbd81a0df41ef33521eb92fccd021c06ea12137d45ab5eed424dc901d8af76",
+          "ctr": "2",
+          "event": "seal",
+          "nonce": "010000000000000000000002",
+          "round": 1
+        },
+        {
+          "ct": "c31c43f546c0f829a170ca349cb8fac8f48a35847ecd01851ca954b29598238139a32d76efb0974283e4fda5ca1414428d63a76b00554c333da338cf85e682ffe1fbc51c17e9d4a4954e71aace8ac9d4d38264f398a2cd5a8e9c6a033620a17345f6163f3aef79f08f5581d1f23b8090081af544b43c5ef371a8c345d07e8e485c67ad8673fc7eb6793f9bf0922a898da2c586fb02113083d1e371046d7f71a1007fe396b22956a735a663f4776e478bc3a142278afa1295d35575c6d4e019f21a0325fd254e6f90fde0cd980df93ce38b6e537eb55275d9698f62abd5a9206ef72c657d7a7aabf2913773b06569010fecc6fbd6e66b1fec2f3d975a2e29ade060a34c3b06cbd87ff63326219b0c28ad",
+          "ctr": "3",
+          "event": "seal",
+          "nonce": "010000000000000000000003",
+          "round": 1
+        },
+        {
+          "event": "rekey",
+          "round": 2
+        },
+        {
+          "ct": "0462b50222425d3671b191c05845daace91168264b18d0056cddcbd5e5ca7847f829b2463e8899faffa34079227a84439e4828d12b9ad0da4e983431eed49ed6bebf74faea37cee5492f62a396c8fdb6852e3a0c47205d7331b01c5361312543e8dd65ef53d65ffeed377bafade39444fc24c4a0b76cf46c9206af6b298c9a989615ea9ae0592b497e78e14a94af33423d8b82dc94e6a047f7fd2717a78d912a41b968dbfe148d1120e47df3f7641a2b96c7607730521796656210dcfda112bb658f9c9540d239432c0e62631fd916d2496c3f29b0f4ecbbe4b9c0c036012c5b0046a6db7ca02b8bb33be3d172fe10e3e40e938553ae4b7c3bf2f54bf45af237ff2e1c28136bedf019964e042fb962e8",
+          "ctr": "4",
+          "event": "seal",
+          "nonce": "010000000000000000000004",
+          "round": 2
+        },
+        {
+          "ct": "e08cdabc87c187ef2a8821c4604a1519357b86808c3ee95268035ea458191d07402d2801b0534ae070f17b75214fb3dbc308187fcc18795e1d7403c4347206d58dc555c88b3b018dd0f729128ad5c94c51a98fb2b3226311409cc9a822e6717bce87ba51e1a46146e508cc3454cedf253cd704f85d7264f555db3f7ec227b630bcea7290a0d465de8305519f1b3730c035fd13dbed1b941d57bda60c7e5776a23b892354d2c22da80210ce44d2ac787c51762190c47a8562e1c04b40f56639d694c028e6eb6e673640a5c3d13be9454185ae912abef7b9d9ac63a624f3a24f659bd5da8bc5079443d39d528d1661d7003b1fb7c3903538c2ff7d7b1f25c5af7566948e072396d1c724e5835f56205706",
+          "ctr": "5",
+          "event": "seal",
+          "nonce": "010000000000000000000005",
+          "round": 2
+        },
+        {
+          "event": "revertToRound1",
+          "round": 1
+        },
+        {
+          "ct": "bd2b3ebc29961b37a9ed2a3ea93c272940a6c535f344b8133a7fe20df48f45071b2e7cbba6b013ed77d416c4f8a54fbabf6304cae8c582cc63be2b5ca9fca53701f08cfe310afadbeee998440f8b512009e2307d1162f205296df34cba8b7020bbb76f8d6576703658be3ff56d80ae522882c9c10e85cc014421b2259551ee23d20d7d894963d45b2bbbcc5673d17707155e98f0ee459a47fa011a7c0339c0ffb668ca89508be27ffa972f97d34486e4301a0bf1976b51c45fd621ab0be25004b7baac8cc26de8e75e6091649816c05b0e6bfd2a4100cd3655d4cc786838c3ba380b4eb99a8c98e5216f11291a16fc6da19d406b4a4717eb9253c30d49ba1f07da1885c9c76d5117b8080a883e791ee7",
+          "ctr": "6",
+          "event": "seal",
+          "nonce": "010000000000000000000006",
+          "round": 1
+        },
+        {
+          "ct": "1f8ae4789ce7b2d8619931d5025795e81ed4c2bdc741850f44ab0d9f9f979d3a596e398a79ef6dcd5e567a1e82bbc445aa135ab763b924ce18aea8a6148078a542406b4d4707042eea7ae04f8a278780c049755743e32a27782049b891b00cda08261ce72bf4eb9b71d8ec0c1d55115c238b44d3df08adbef710238fdf04ec835cc31a7b32bd60799fa055cfb760d53bac4549d60856b3871efc3b3342f43175647420972479235abc36589adf5727dfdd95a59877c4efd1fbb387119014a9f6e75d4560cd9b0ddbac85f7cac4f13e17c28c6ddaaff74888a3a6d73997a45e316a9a2a3491a256cec0d7dfb9600d0523606080a046df41fa2aab774e1b391ebf7051ada55e391f916c72afc7f9256963",
+          "ctr": "7",
+          "event": "seal",
+          "nonce": "010000000000000000000007",
+          "round": 1
+        },
+        {
+          "event": "profileLatch",
+          "round": 1
+        },
+        {
+          "ct": "0ea41b9922102c687432925b35790ab387916fbad904118741adb1940dc7910ab966f77e695ea4bffc434fa396e1a7e5b3cd86fd8ed943acdf88072749328edfec88cc9929506745b01da743a4da720e62cfa9e256e0cc0b84b395cd88b4e545441dcb9d989c06dd5236f10892eab1ef962972b5b097cb9ce79d7203fe786e4993b541851f1f708b419928a24dffc0ee3fdc467361d3bea572c7e3870cab76b077f5fa5577bc1f4e0c80d0093dba0448e222c42e5c6b447de44c60df403cca3aee66a3994fe991c4dba5ee0ea9aeeae60501ef86ebb0589b2c93ffcdc219f29966eb75b85d50273837d8c5dd89bdda0fe211e4b72cdfe885a59af771460dee7ffd6dbf8a13f9af49e893b835832bb9ad",
+          "ctr": "8",
+          "event": "seal",
+          "nonce": "010000000000000000000008",
+          "round": 1
+        },
+        {
+          "event": "legSwap",
+          "round": 1
+        },
+        {
+          "ct": "0afc2a4c1a0de5f69ca7db38dc2ab6f1d582280e8935b634f9f11abfda4ff6b06bb8e043b739320385d755ce2c0adb557ee81b8332d102f79925362d28f3e0d86b625b1ac1424671366791d6d8a408edf075dd2d760dfc96d4ce6ad1bca83a268acef824255a42799773e3f7c0621178d6bb2af7d801daa8e022ca53c32c6b871778e21e1d9fd633ec6ee625597f811ff5ace1923b658d1101b6ecbd4910e6d0dea1b6fc5dab9e3bd065532d1bc72aba71409a6476c17566fe29174cbb613950708b8ae63b72d896168bb02ecc330329bfd7fc9fe21ace5cac1333b1c2c39d19ff35194d179d047cedb2a7350d304d45ee161674ec8e2832225d973e80dcfac832df1b6a65b37b2ba67360172ca35223",
+          "ctr": "9",
+          "event": "seal",
+          "nonce": "010000000000000000000009",
+          "round": 1
+        }
+      ],
+      "keys": {
+        "1": "sessionKey1",
+        "2": "sessionKey2"
+      }
+    },
+    "envelope": {
+      "ct": "989199e2eb510c7fbb4c47eb1b932ac0008555a0472acedb0d16c9ad90ce83f415e5d5acc3043c97ac6eef3c044c3b53eff7a5185ce653bb1c97a75925fbb201f4c6a407e19c4ca6356b1d544a74471f64871633260f4fa100f7623bafd85fa82e122fe716e06d8f29d650676fe24d2f4c007f26f110cc997248c0f88b5eefe4ce24b31a38cde1e020515756f8486c381dd49aafd46d4f0f9b262696dc8f6589a4b301523e5702da83f9a5efc47c88b33876ca679b9fa81986ddfdfc741214db6b517fc152d56448605d3ddb32ae3d4bcba4d4bdd06c1c243afef061af803e65ce345e97c3bbaaa9ca28ac63c4e19e27eff3ca5c07bbc475aac04dde0afc835ac868d0ff526ec76a1d68ff878c99b6ec",
+      "ctr": "1",
+      "dir": 1,
+      "envelope": "0101000000000000000000000100000000000000010110989199e2eb510c7fbb4c47eb1b932ac0008555a0472acedb0d16c9ad90ce83f415e5d5acc3043c97ac6eef3c044c3b53eff7a5185ce653bb1c97a75925fbb201f4c6a407e19c4ca6356b1d544a74471f64871633260f4fa100f7623bafd85fa82e122fe716e06d8f29d650676fe24d2f4c007f26f110cc997248c0f88b5eefe4ce24b31a38cde1e020515756f8486c381dd49aafd46d4f0f9b262696dc8f6589a4b301523e5702da83f9a5efc47c88b33876ca679b9fa81986ddfdfc741214db6b517fc152d56448605d3ddb32ae3d4bcba4d4bdd06c1c243afef061af803e65ce345e97c3bbaaa9ca28ac63c4e19e27eff3ca5c07bbc475aac04dde0afc835ac868d0ff526ec76a1d68ff878c99b6ec",
+      "key": "sessionKey1",
+      "nonce": "010000000000000000000001"
+    },
+    "fullChain": {
+      "note": "inner envelope above sealed by the legacy outer layer of the caller (role A: key outerKeyA2B, nonce prefix dirTag o2a = 0x01, outer counter 0)",
+      "wire": "010000000000000000000000dc4fbee30dc74d7400d7efb11d298b148a2de682cec7351723da5171fd674ad79a5755a414940666301ac3ea2c3ae26f87420bb3d04a03bc71ef7cae85aedfb58a2fd8fdb444098425772767c0142a715d587e330b45f8170cad2a6bfb66b09d299c066a2168e22bbd983c2a87e364216b41ea7fe53bf396b180a7f81b304a9bf33766fd1277a2444038875d02b6259147587b49c8e5d66f19d481a82a87e445fcfaa94337431038168a2d85bec6f094a52806b89237b493f3b131e23f856ca3f3e1f240000203abf312b4e1598194e1f0d613ab820a060661f387efdfbe290a41a4ec9bf8c9224e775d28c462c7cfef2ce1ac1f99aa74f46e1022df72543142452059860f2577051ee7d84317517bc77fbaf8269acff1a77575a2e73e29bed3d50c5470a3f1465d13373e1e45beff43a50658d3f79017"
+    },
+    "nonces": [
+      {
+        "ctr": "1",
+        "dir": 1,
+        "iosWireSeqLow32": 1,
+        "nonce": "010000000000000000000001"
+      },
+      {
+        "ctr": "1",
+        "dir": 2,
+        "iosWireSeqLow32": 1,
+        "nonce": "020000000000000000000001"
+      },
+      {
+        "ctr": "4294967296",
+        "dir": 1,
+        "iosWireSeqLow32": 0,
+        "nonce": "010000000000000100000000"
+      },
+      {
+        "ctr": "9223372036854775806",
+        "dir": 2,
+        "iosWireSeqLow32": 4294967294,
+        "nonce": "020000007ffffffffffffffe"
+      }
+    ],
+    "rule": "N = dirTag(self) || 0x00 0x00 0x00 || BE64(ctr_in); ctr_in starts at 1, is incremented before each seal, never reset",
+    "stopAtCounter": {
+      "ctr": "9223372036854775807",
+      "previousCtr": "9223372036854775806",
+      "previousSealingAllowed": true,
+      "sealingAllowed": false
+    }
+  },
+  "legacyOuterNonce": {
+    "distinctNonceProperty": "two senders under the same key and the same counter (a tie, same key) differ in byte 0 when one is caller and one callee",
+    "plaintext": "0101000000000000000000000100000000000000010110989199e2eb510c7fbb4c47eb1b932ac0008555a0472acedb0d16c9ad90ce83f415e5d5acc3043c97ac6eef3c044c3b53eff7a5185ce653bb1c97a75925fbb201f4c6a407e19c4ca6356b1d544a74471f64871633260f4fa100f7623bafd85fa82e122fe716e06d8f29d650676fe24d2f4c007f26f110cc997248c0f88b5eefe4ce24b31a38cde1e020515756f8486c381dd49aafd46d4f0f9b262696dc8f6589a4b301523e5702da83f9a5efc47c88b33876ca679b9fa81986ddfdfc741214db6b517fc152d56448605d3ddb32ae3d4bcba4d4bdd06c1c243afef061af803e65ce345e97c3bbaaa9ca28ac63c4e19e27eff3ca5c07bbc475aac04dde0afc835ac868d0ff526ec76a1d68ff878c99b6ec",
+    "rule": "current sender: byte 0 = dirTag by R-ROLE (0x01 caller, 0x02 callee), bytes 1..3 = 0, bytes 4..11 = BE64(counter). Old sender: bytes 0..3 = 0.",
+    "vectors": [
+      {
+        "ctr": "0",
+        "nonce": "010000000000000000000000",
+        "opens": true,
+        "opensNote": "receivers take the IV from the wire and read only bytes 4..11 (W7); bytes 0..3 are never checked",
+        "prefixByte": 1,
+        "receiverReadsCounter": "0",
+        "sealedWithOuterKeyA2B": "010000000000000000000000dc4fbee30dc74d7400d7efb11d298b148a2de682cec7351723da5171fd674ad79a5755a414940666301ac3ea2c3ae26f87420bb3d04a03bc71ef7cae85aedfb58a2fd8fdb444098425772767c0142a715d587e330b45f8170cad2a6bfb66b09d299c066a2168e22bbd983c2a87e364216b41ea7fe53bf396b180a7f81b304a9bf33766fd1277a2444038875d02b6259147587b49c8e5d66f19d481a82a87e445fcfaa94337431038168a2d85bec6f094a52806b89237b493f3b131e23f856ca3f3e1f240000203abf312b4e1598194e1f0d613ab820a060661f387efdfbe290a41a4ec9bf8c9224e775d28c462c7cfef2ce1ac1f99aa74f46e1022df72543142452059860f2577051ee7d84317517bc77fbaf8269acff1a77575a2e73e29bed3d50c5470a3f1465d13373e1e45beff43a50658d3f79017",
+        "sender": "caller"
+      },
+      {
+        "ctr": "1",
+        "nonce": "010000000000000000000001",
+        "opens": true,
+        "opensNote": "receivers take the IV from the wire and read only bytes 4..11 (W7); bytes 0..3 are never checked",
+        "prefixByte": 1,
+        "receiverReadsCounter": "1",
+        "sealedWithOuterKeyA2B": "010000000000000000000001155bf97d0bbbda32a8fec58fbae1e0c56ca9ac93944d7a8e076b16a39d66628e1667e3ec9d616e7684c00893ffa9c8bc556da78f8dac30853703137a9a585df83c985311d4a919ff1ba96492e45a315a7774a398ee831db334662a3ceba8240e8e894911eb7513d1c977ea9867bbcff1d615c95a5e13693a8f213e4a7e9a9cf3126fe2c2c509cdf17387ebe755cf14c4786fe88036a302543836458675ead9a377b4d5e01efdf27b44fe8eb32f0647c053e5b800b00c55b7236cf63b20d83b2bee0f16e8056a1e4d995d83d193c99cc5148fd84585c523e7f50a83b8d3340eb40269894f3e63b068c148c08f81def349e4d87cad7ee7a57bd8460e9dea73822a21d5c9958d38b1c4b5683dcbe354b0bea4cea6d18248ba813df76db4acb2653d25c57208ab45b43bac1f5cd0b908b26b9a866c0c3670da",
+        "sender": "caller"
+      },
+      {
+        "ctr": "0",
+        "nonce": "020000000000000000000000",
+        "opens": true,
+        "opensNote": "receivers take the IV from the wire and read only bytes 4..11 (W7); bytes 0..3 are never checked",
+        "prefixByte": 2,
+        "receiverReadsCounter": "0",
+        "sealedWithOuterKeyA2B": "020000000000000000000000d086ee80e0471a54ee33062470c9e6a06603f68e0d8bec064a3df7371e93b5d7a63ebff84ec7909bed1e704349cfdd3297123c1aa7133e8f7fbd1169975e4c55dd8da9e5daac0c3b571da96b0dd5ca39fb6daf9a8156fc0e3398dbc0a2cd4e12ab57aa58733cc4e92b5cc1fe400828eed5240eaed319d39117e1b0b21d632535501930b30d88f1f2bc408ea88bdcce8f7723a44a831d5b7861f37d6b4c3aaef065fb1adccdf2e6d3dd9dea7e72e98ad8179677c9df39b102b48b97a3b0fb63c4fcf81f510e85700ecf0aa23688e473f5b3984c51f24527b46c5542031e900873e4126e38c393927811a6f21e9d0854723420b541b425d0d9197137b272a49a4730d0c4dc3d5377b96c98007facfb6874e5a16a4b946fbda6b5b3432a26f8e2d1ec31027170a3215aa20b6035b2da3ab35fd978caa1790b",
+        "sender": "callee"
+      },
+      {
+        "ctr": "1099511627776",
+        "nonce": "020000000000010000000000",
+        "opens": true,
+        "opensNote": "receivers take the IV from the wire and read only bytes 4..11 (W7); bytes 0..3 are never checked",
+        "prefixByte": 2,
+        "receiverReadsCounter": "1099511627776",
+        "sealedWithOuterKeyA2B": "0200000000000100000000000a92d5701b543481ade0a2366d06211a648471bc5067412937318b7157cdc21696d4d37668301c86c7a112be4ef7c6efd4496e3ab0309e31c093fc5b198ea716dc5b6553b159b1d47675cda248375bda11fec331ff0c57684eb0e0f37794676b292fb5435ba5007c1a270dea6f18808693806213dc511350ee205720ba69d167f6797c60c66fdf39bfdc61ace4229919d9774b888b9ca09bcf7559534fa2d1d5fe06c81a86fb1ce813caffc8748d723573c676fa6132d0029f3005ae54f6693e499099a0510f7133e9d2f525404eec8bb29e6120f80a5da4191ccf9377473057959f49ddb85855011bcdff60307c22eb7752d1a8baf0f233364b6894c81c568d0cd4801d00109ada1728fdd5c68fe5d19618265748a89d215692a17117db1ce53ed154a2ba9c1c26f086a4d475c0c8fb00b675a03bb98c",
+        "sender": "callee"
+      },
+      {
+        "ctr": "0",
+        "nonce": "000000000000000000000000",
+        "opens": true,
+        "opensNote": "receivers take the IV from the wire and read only bytes 4..11 (W7); bytes 0..3 are never checked",
+        "prefixByte": 0,
+        "receiverReadsCounter": "0",
+        "sealedWithOuterKeyA2B": "0000000000000000000000004d07e3376f8eeb3df9826fe4b60b678183112f9a74f05e62db520d48e445faf018897ef07404d5c69c1b8570656fdd002371e17d07b69d91e481695fe62060f278c0b1fc674718837d8ce57fd2ce389048aa303e3a89830722d9de1b31bbbb5ac40dc17e19e576522fd7882e4628c90cc6cb0142013e82f8fe2be55e45bd726bdd2ec0e590b8f33cec203bb21539d01ace182862d7018debbd91c31820726502a92649ceca8f0ba3f522f97785f800f892cc4074ee8ff7fd28d58c148a6f7a9139637cd851a97b0fddc7a87659c0a8be84fd213fb98890d3c351559bca0cff99bc0db3fb4aca00a8b7734839caedc8d00a185c175103e31a3571286020b1943e4165d8329b3364d5c74700a15b8e522af108ed6cdff58533c298a0fe2f698653c874a85eea14d8b992243af58f313d184740aaa19efe33",
+        "sender": "oldSender"
+      },
+      {
+        "ctr": "77",
+        "nonce": "00000000000000000000004d",
+        "opens": true,
+        "opensNote": "receivers take the IV from the wire and read only bytes 4..11 (W7); bytes 0..3 are never checked",
+        "prefixByte": 0,
+        "receiverReadsCounter": "77",
+        "sealedWithOuterKeyA2B": "00000000000000000000004ddefa8dbd48584b80c97f3e7a97c0ec0f3ec7e20307ab6a9904126e8c2a1e7d6c528ad66cb3458e5e279638d31b0369262bd65ab2bddaad60ae9f3f56c61d3ff412b1647a7411eea5d030e415b9b7868c49748c418bd92f4252a38626b5b485c18b32541fe47fa12aa8d2ad4b8d23470924137bc42a8a93a40706918cddd7c62685c0526278175286adb3697990051d44745c5c1f978352c3aa86bdd21b1c51b1b118d81c4accc11ad45ee8558c5fb2079352019ec22b33a465c88a73279a5846e81afa6fcdb5836df2fa3ec23e24b7966ed042493829d96dc4bacf107ebbb4627ee146f3ab2aa6182da408d0d9f6bdd087d6273587934f1d33a9eb75ea9fbea4d8e5581e5f643a9c4b13c6d37752b3ea892b2182709ea98dcd943d83a367c268db018c01f47335c4c2c74354100f8891959f9da003c06f",
+        "sender": "oldSender"
+      }
+    ]
+  },
+  "level": {
+    "group": [
+      {
+        "H": true,
+        "K": true,
+        "level": "PQ2",
+        "name": "all pq",
+        "others": [
+          {
+            "kd": "pq",
+            "tl": "pq"
+          },
+          {
+            "kd": "pq",
+            "tl": "pq"
+          }
+        ],
+        "own": {
+          "kd": "pq",
+          "tl": "pq"
+        },
+        "unk": 0
+      },
+      {
+        "H": false,
+        "K": true,
+        "level": "PQ1",
+        "name": "one member hop classical",
+        "others": [
+          {
+            "kd": "pq",
+            "tl": "pq"
+          },
+          {
+            "kd": "pq",
+            "tl": "cl"
+          }
+        ],
+        "own": {
+          "kd": "pq",
+          "tl": "pq"
+        },
+        "unk": 0
+      },
+      {
+        "H": false,
+        "K": true,
+        "level": "PQ1",
+        "name": "own hop classical",
+        "others": [
+          {
+            "kd": "pq",
+            "tl": "pq"
+          },
+          {
+            "kd": "pq",
+            "tl": "pq"
+          }
+        ],
+        "own": {
+          "kd": "pq",
+          "tl": "cl"
+        },
+        "unk": 0
+      },
+      {
+        "H": true,
+        "K": false,
+        "level": "PQ1",
+        "name": "one media key over v1 fallback",
+        "others": [
+          {
+            "kd": "cl",
+            "tl": "pq"
+          },
+          {
+            "kd": "pq",
+            "tl": "pq"
+          }
+        ],
+        "own": {
+          "kd": "pq",
+          "tl": "pq"
+        },
+        "unk": 0
+      },
+      {
+        "H": false,
+        "K": false,
+        "level": "CL",
+        "name": "one fallback key and one classical hop, same member",
+        "others": [
+          {
+            "kd": "cl",
+            "tl": "cl"
+          },
+          {
+            "kd": "pq",
+            "tl": "pq"
+          }
+        ],
+        "own": {
+          "kd": "pq",
+          "tl": "pq"
+        },
+        "unk": 0
+      },
+      {
+        "H": false,
+        "K": false,
+        "level": "CL",
+        "name": "classical hop and fallback key, different members",
+        "others": [
+          {
+            "kd": "pq",
+            "tl": "cl"
+          },
+          {
+            "kd": "cl",
+            "tl": "pq"
+          }
+        ],
+        "own": {
+          "kd": "pq",
+          "tl": "pq"
+        },
+        "unk": 0
+      },
+      {
+        "H": false,
+        "K": false,
+        "level": "CL",
+        "name": "old member announces nothing",
+        "others": [
+          {
+            "kd": "pq",
+            "tl": "pq"
+          },
+          {}
+        ],
+        "own": {
+          "kd": "pq",
+          "tl": "pq"
+        },
+        "unk": 1
+      },
+      {
+        "H": false,
+        "K": false,
+        "level": "CL",
+        "name": "two old members",
+        "others": [
+          {},
+          {}
+        ],
+        "own": {
+          "kd": "pq",
+          "tl": "pq"
+        },
+        "unk": 2
+      },
+      {
+        "H": true,
+        "K": false,
+        "level": "PQ1",
+        "name": "own kd classical",
+        "others": [
+          {
+            "kd": "pq",
+            "tl": "pq"
+          }
+        ],
+        "own": {
+          "kd": "cl",
+          "tl": "pq"
+        },
+        "unk": 0
+      },
+      {
+        "H": true,
+        "K": true,
+        "level": "PQ2",
+        "name": "alone in the room",
+        "others": [],
+        "own": {
+          "kd": "pq",
+          "tl": "pq"
+        },
+        "unk": 0
+      }
+    ],
+    "groupRule": "H = own tl pq and every other member announced tl pq; K = same for kd; PQ2 if H and K, PQ1 if exactly one, CL if none; a member that announces nothing makes both facts false and counts once in unk. A member that announces only one of tl/kd is not covered by a vector (the spec does not define unk for it).",
+    "layerRule": "A path's PQ layers, each tagged with its secret: dtls (DTLS hop, only when group = pq); session (FrameCryptor of rtp, the inner layer of dcmux/relay/rvideo when inner = pq, and a 'same' outer layer); relaySS (an 'ind' or 'indrot' outer layer). Path level: 2+ distinct secrets -\u003e PQ2; 2+ layers sharing one secret -\u003e PQ2S; one layer -\u003e PQ1; none -\u003e CL.",
+    "logLine": {
+      "note": "single line, tokens separated by one space, in the order of section 6.4; an empty value prints as '-'; the group tokens tl, kd and unk follow only when kind=group",
+      "vectors": [
+        {
+          "fields": {
+            "auth": "C",
+            "call": "kat-call",
+            "caps": "",
+            "dcmux": "same",
+            "dtls": "pq",
+            "frame": "v5",
+            "hold": "0",
+            "inner": "legacy",
+            "kind": "1to1",
+            "level": "PQ2",
+            "outer": "sealed",
+            "pin": "ok",
+            "pq_sig": "-",
+            "pqstate": "-",
+            "reason": "-",
+            "rekey": "ok",
+            "relay": "same",
+            "round": "-",
+            "rvideo": "-",
+            "sas": "1",
+            "v": "1",
+            "withdraw": "ok"
+          },
+          "line": "QA-PQLEVEL v=1 call=kat-call kind=1to1 level=PQ2 auth=C sas=1 dtls=pq frame=v5 relay=same dcmux=same inner=legacy rvideo=- pin=ok hold=0 withdraw=ok caps=- pqstate=- pq_sig=- outer=sealed reason=- rekey=ok round=-"
+        },
+        {
+          "fields": {
+            "auth": "C",
+            "call": "kat-call",
+            "caps": "",
+            "dcmux": "off",
+            "dtls": "cl",
+            "frame": "-",
+            "hold": "0",
+            "inner": "legacy",
+            "kind": "1to1",
+            "level": "PQ1",
+            "outer": "off",
+            "pin": "-",
+            "pq_sig": "-",
+            "pqstate": "-",
+            "reason": "peer_install",
+            "rekey": "-",
+            "relay": "off",
+            "round": "-",
+            "rvideo": "-",
+            "sas": "0",
+            "v": "1",
+            "withdraw": "-"
+          },
+          "line": "QA-PQLEVEL v=1 call=kat-call kind=1to1 level=PQ1 auth=C sas=0 dtls=cl frame=- relay=off dcmux=off inner=legacy rvideo=- pin=- hold=0 withdraw=- caps=- pqstate=- pq_sig=- outer=off reason=peer_install rekey=- round=-"
+        },
+        {
+          "fields": {
+            "auth": "C",
+            "call": "kat-grp0",
+            "caps": "",
+            "dcmux": "none",
+            "dtls": "pq",
+            "frame": "-",
+            "hold": "0",
+            "inner": "-",
+            "kd": "pq",
+            "kind": "group",
+            "level": "CL",
+            "outer": "-",
+            "pin": "-",
+            "pq_sig": "-",
+            "pqstate": "-",
+            "reason": "-",
+            "rekey": "-",
+            "relay": "-",
+            "round": "-",
+            "rvideo": "-",
+            "sas": "0",
+            "tl": "pq",
+            "unk": "2",
+            "v": "1",
+            "withdraw": "-"
+          },
+          "line": "QA-PQLEVEL v=1 call=kat-grp0 kind=group level=CL auth=C sas=0 dtls=pq frame=- relay=- dcmux=none inner=- rvideo=- pin=- hold=0 withdraw=- caps=- pqstate=- pq_sig=- outer=- reason=- rekey=- round=- tl=pq kd=pq unk=2"
+        }
+      ]
+    },
+    "oneToOne": [
+      {
+        "level": "PQ2",
+        "name": "rtp pq dtls",
+        "paths": [
+          {
+            "dtls": "pq",
+            "path": "rtp"
+          }
+        ],
+        "perPath": [
+          "PQ2"
+        ]
+      },
+      {
+        "level": "PQ1",
+        "name": "rtp cl dtls",
+        "paths": [
+          {
+            "dtls": "cl",
+            "path": "rtp"
+          }
+        ],
+        "perPath": [
+          "PQ1"
+        ]
+      },
+      {
+        "level": "PQ2",
+        "name": "dcmux pq ind",
+        "paths": [
+          {
+            "dtls": "pq",
+            "inner": "pq",
+            "outer": "ind",
+            "path": "dcmux"
+          }
+        ],
+        "perPath": [
+          "PQ2"
+        ]
+      },
+      {
+        "level": "PQ2",
+        "name": "dcmux pq same",
+        "paths": [
+          {
+            "dtls": "pq",
+            "inner": "pq",
+            "outer": "same",
+            "path": "dcmux"
+          }
+        ],
+        "perPath": [
+          "PQ2"
+        ]
+      },
+      {
+        "level": "PQ2",
+        "name": "dcmux pq off",
+        "paths": [
+          {
+            "dtls": "pq",
+            "inner": "pq",
+            "outer": "off",
+            "path": "dcmux"
+          }
+        ],
+        "perPath": [
+          "PQ2"
+        ]
+      },
+      {
+        "level": "PQ2",
+        "name": "dcmux cl ind",
+        "paths": [
+          {
+            "dtls": "cl",
+            "inner": "pq",
+            "outer": "ind",
+            "path": "dcmux"
+          }
+        ],
+        "perPath": [
+          "PQ2"
+        ]
+      },
+      {
+        "level": "PQ2",
+        "name": "dcmux cl indrot",
+        "paths": [
+          {
+            "dtls": "cl",
+            "inner": "pq",
+            "outer": "indrot",
+            "path": "dcmux"
+          }
+        ],
+        "perPath": [
+          "PQ2"
+        ]
+      },
+      {
+        "level": "PQ2S",
+        "name": "dcmux cl same",
+        "paths": [
+          {
+            "dtls": "cl",
+            "inner": "pq",
+            "outer": "same",
+            "path": "dcmux"
+          }
+        ],
+        "perPath": [
+          "PQ2S"
+        ]
+      },
+      {
+        "level": "PQ1",
+        "name": "dcmux cl off",
+        "paths": [
+          {
+            "dtls": "cl",
+            "inner": "pq",
+            "outer": "off",
+            "path": "dcmux"
+          }
+        ],
+        "perPath": [
+          "PQ1"
+        ]
+      },
+      {
+        "level": "PQ2",
+        "name": "relay ind",
+        "paths": [
+          {
+            "inner": "pq",
+            "outer": "ind",
+            "path": "relay"
+          }
+        ],
+        "perPath": [
+          "PQ2"
+        ]
+      },
+      {
+        "level": "PQ2S",
+        "name": "relay same",
+        "paths": [
+          {
+            "inner": "pq",
+            "outer": "same",
+            "path": "relay"
+          }
+        ],
+        "perPath": [
+          "PQ2S"
+        ]
+      },
+      {
+        "level": "PQ1",
+        "name": "relay off",
+        "paths": [
+          {
+            "inner": "pq",
+            "outer": "off",
+            "path": "relay"
+          }
+        ],
+        "perPath": [
+          "PQ1"
+        ]
+      },
+      {
+        "level": "PQ2",
+        "name": "rvideo ind inner pq",
+        "paths": [
+          {
+            "inner": "pq",
+            "outer": "ind",
+            "path": "rvideo"
+          }
+        ],
+        "perPath": [
+          "PQ2"
+        ]
+      },
+      {
+        "level": "PQ1",
+        "name": "rvideo ind no inner",
+        "paths": [
+          {
+            "inner": "none",
+            "outer": "ind",
+            "path": "rvideo"
+          }
+        ],
+        "perPath": [
+          "PQ1"
+        ]
+      },
+      {
+        "level": "PQ2S",
+        "name": "rvideo same inner pq",
+        "paths": [
+          {
+            "inner": "pq",
+            "outer": "same",
+            "path": "rvideo"
+          }
+        ],
+        "perPath": [
+          "PQ2S"
+        ]
+      },
+      {
+        "level": "PQ1",
+        "name": "rvideo same no inner",
+        "paths": [
+          {
+            "inner": "none",
+            "outer": "same",
+            "path": "rvideo"
+          }
+        ],
+        "perPath": [
+          "PQ1"
+        ]
+      },
+      {
+        "level": "PQ1",
+        "name": "rvideo off inner pq",
+        "paths": [
+          {
+            "inner": "pq",
+            "outer": "off",
+            "path": "rvideo"
+          }
+        ],
+        "perPath": [
+          "PQ1"
+        ]
+      },
+      {
+        "level": "CL",
+        "name": "rvideo off no inner",
+        "paths": [
+          {
+            "inner": "none",
+            "outer": "off",
+            "path": "rvideo"
+          }
+        ],
+        "perPath": [
+          "CL"
+        ]
+      },
+      {
+        "level": "PQ2S",
+        "name": "rtp pq + relay same: weakest wins",
+        "paths": [
+          {
+            "dtls": "pq",
+            "path": "rtp"
+          },
+          {
+            "inner": "pq",
+            "outer": "same",
+            "path": "relay"
+          }
+        ],
+        "perPath": [
+          "PQ2",
+          "PQ2S"
+        ]
+      },
+      {
+        "level": "PQ1",
+        "name": "rtp cl + dcmux pq ind: weakest wins",
+        "paths": [
+          {
+            "dtls": "cl",
+            "path": "rtp"
+          },
+          {
+            "dtls": "pq",
+            "inner": "pq",
+            "outer": "ind",
+            "path": "dcmux"
+          }
+        ],
+        "perPath": [
+          "PQ1",
+          "PQ2"
+        ]
+      },
+      {
+        "level": "PQ2",
+        "name": "rtp pq + dcmux pq ind + relay ind",
+        "paths": [
+          {
+            "dtls": "pq",
+            "path": "rtp"
+          },
+          {
+            "dtls": "pq",
+            "inner": "pq",
+            "outer": "ind",
+            "path": "dcmux"
+          },
+          {
+            "inner": "pq",
+            "outer": "ind",
+            "path": "relay"
+          }
+        ],
+        "perPath": [
+          "PQ2",
+          "PQ2",
+          "PQ2"
+        ]
+      },
+      {
+        "level": "CL",
+        "name": "rtp pq + rvideo off no inner",
+        "paths": [
+          {
+            "dtls": "pq",
+            "path": "rtp"
+          },
+          {
+            "inner": "none",
+            "outer": "off",
+            "path": "rvideo"
+          }
+        ],
+        "perPath": [
+          "PQ2",
+          "CL"
+        ]
+      }
+    ],
+    "rank": "CL \u003c PQ1 \u003c PQ2S \u003c PQ2; the level of a call is the weakest of its used paths"
+  },
+  "nackResend": {
+    "direction": "caller to callee (o2a), outer key outerKeyA2B, prefix 0x01; frame i uses body b[j] = (3*j + 1 + seq) mod 256",
+    "events": [
+      {
+        "byteIdentical": true,
+        "innerSeq": "1",
+        "op": "nack",
+        "outerCounterAfter": "3",
+        "outerCounterBefore": "3",
+        "resendBytes": "010000000000000000000000dc4fbee30dc74d7400d7efb11d298b148a2de682cec7351723d9507efc644bd09b54549b159707613119c2e52d39e36886410aacd14902bb70ec7da184addeb28b2fd8fdb444098425772767c0142a715d587e330b45f8170cad2a6bfb66b09d299c066a2168e22bbd983c2a87e364216b41ea7fe53bf396b180a7f81b304a9bf33766fd1277a2444038875d02b6259147587b49c8e5d66f19d481a82a87e445fcfaa94337431038168a2d85bec6f094a52806b89237b493f3b131e23f856ca3f3e1f240000203abf312b4e1598194e1f0d613ab820a060661f387efdfbe290a41a4ec9bf8c9224e775d28c462c7cfef2ce1ac1f99aa74f46e1022df72543142452059860f2577051ee7d84317517bc77fbaf8269acff110d8cc86e5d2d93abb7ee47f9e624849891793444c4d50ee2b56f8175742cc2c",
+        "result": "resend"
+      },
+      {
+        "byteIdentical": true,
+        "innerSeq": "2",
+        "op": "nack",
+        "outerCounterAfter": "3",
+        "outerCounterBefore": "3",
+        "resendBytes": "010000000000000000000001155bf97d0bbbda32a8fec58fb9e1e0c56ca9ac93974d7a5bfaf3678a8b8bdbb68d6537429cbdc5809a6a3ddbbd8f3e84f0a7d5a3af40b6d1e9d8dfc834ed87b3094a0008ff87f34fb566184e89bb9eb2bbd2da0c2de7d57c2c9b48f6ce2535470c3eaa49bf55f13a03c4cbb7079973f9906218f88f126c2847f20c32a47c8a93730385a2dd925d213a3d08398a4977a391f495c382c69ee4d6083a550b5da64eed704b914921b28b779fabd2749c40305d050e676973581c59eddd69a6ebefd31e857bf403e3b32726ee687e3bc1189a65578a7841b1165af94ad8a7e4ae824816f041ef86c7d61fe5297d27f9aba89dcd4ad4f7966bae1948c3ea50989c971edf944e5b0e83d04cbd7a7bc1ac8e36214568ea27b3c9fc9073e13a684c8c76269ab0eb4989101ffa770d327289d3e492e634c6c5d208b0",
+        "result": "resend"
+      },
+      {
+        "op": "sendSwitch",
+        "result": "cache cleared",
+        "toRound": 2
+      },
+      {
+        "innerSeq": "2",
+        "op": "nack",
+        "reason": "entry of round 1 dropped at the send switch",
+        "result": "none"
+      },
+      {
+        "byteIdentical": true,
+        "innerSeq": "4",
+        "op": "nack",
+        "outerCounterAfter": "4",
+        "outerCounterBefore": "4",
+        "resendBytes": "010000000000000000000003ca348acbabce5a5f9e976488e604fd2bdf42aa3084c077d079859e4bdf3c94f6071cc4ba4d044265d613b72d8cdf945274a4e38c3e859493924a851e978fce98a3bfa16dc0d18a6d0fd19a931d2394dd7e53b3bcb444e6f3ab1601cfc4ee4ebaf865f0974f0e15d9e9f4358f8d00f0852393627efa44f58c286869e61d05fc9f0e81a2a0e1ad48f663444175a38776034fe3497f72c1cfb9874230e27edb9ca118c545f456803b9a07e26da8ecd552f10b54cb95273c2dbd824370e919617816fedfc01c284a4e7f1fe665207606520646c2b65df3436abd616375a759f03fe9749b358ed4595cb245b605a3f75cb9413925e5ea5579ab1fb6a75988051b31ef9d98332eed7be12382fdfe861b4aba97196585dac7c8204af85c389a2f2b6ae8798d18d1785e72b040f67d40221a31e53c98ba270a1405",
+        "result": "resend"
+      },
+      {
+        "innerSeq": "99",
+        "op": "nack",
+        "reason": "never sent",
+        "result": "none"
+      }
+    ],
+    "eventsNote": "frames 1..3 are sent in round 1 (outer counters 0..2); events 1-2 happen before the send switch; frame 4 is sent after the switch (inner seq continues, outer counter 3).",
+    "forbiddenReseal": {
+      "bytes": "0100000000000000000000047ee7299ed886b53e43b46ccd480e7aa0fafce8b2d05fac3a4a3d034de363ac2813348d37a4b6f2be4f092cc95bc10434fd844f7c833f3401f024768cc9811c366222a700d430d4dda12bd8287ecd1e87513306b2ed3fcc6d248909e78d832754fb1bbbae085cc0918dc159c81bba7ab69f81663d1ed5048fbfc9aa06bad1dfab18cbe59284d1990a8ec3649294ebb49df5fd9d86bd21fae06fa4933c2b8ed32ae4611f90482a25fd605d915eed1a028341ef83185990f96877bc0a25ddb2ef8061c399758271dfd536059728ee491850fea5ca8701bb9fe47226930bbe40df4d6b8d5b57ecd188681cd5b6d662ab43eb5a6044955253c8d72763bd16cf283ed39f7e380b07d4486a344ccaa26dc74c85795d558cee4c5e68c905b149a4895d477ef42638a93d5ab78cfa68b8dfc86752f4071b76897cac",
+      "mustNotEqualOriginal": true,
+      "note": "re-sealing the cached inner envelope of frame 1 through the outer sealer (old Android behaviour) consumes a new outer counter and yields different bytes; a conforming sender never does it",
+      "outerCtrUsed": "4"
+    },
+    "frames": [
+      {
+        "innerEnvelope": "010100000000000000000000010000000000000001011098919ae3e4500f7ebc4d44ea249229c1078456a1482bcdda0a17caac8fcf80f512e4d6adcc053f96ab6fef3c044c3b53eff7a5185ce653bb1c97a75925fbb201f4c6a407e19c4ca6356b1d544a74471f64871633260f4fa100f7623bafd85fa82e122fe716e06d8f29d650676fe24d2f4c007f26f110cc997248c0f88b5eefe4ce24b31a38cde1e020515756f8486c381dd49aafd46d4f0f9b262696dc8f6589a4b301523e5702da83f9a5efc47c88b33876ca679b9fa81986ddfdfc741214db6b517fc152d56448605d3ddb32ae3d4bcba4d4bdd06c1c243afef061af803e65ce345e97c3bbaaa9ca28ac63c4e19e27eff3ca5c07bbc475aac04dde0afc835a7fc569db508237ee75c317ac62580fe3",
+        "innerSeq": "1",
+        "outerCtr": "0",
+        "round": 1,
+        "wire": "010000000000000000000000dc4fbee30dc74d7400d7efb11d298b148a2de682cec7351723d9507efc644bd09b54549b159707613119c2e52d39e36886410aacd14902bb70ec7da184addeb28b2fd8fdb444098425772767c0142a715d587e330b45f8170cad2a6bfb66b09d299c066a2168e22bbd983c2a87e364216b41ea7fe53bf396b180a7f81b304a9bf33766fd1277a2444038875d02b6259147587b49c8e5d66f19d481a82a87e445fcfaa94337431038168a2d85bec6f094a52806b89237b493f3b131e23f856ca3f3e1f240000203abf312b4e1598194e1f0d613ab820a060661f387efdfbe290a41a4ec9bf8c9224e775d28c462c7cfef2ce1ac1f99aa74f46e1022df72543142452059860f2577051ee7d84317517bc77fbaf8269acff110d8cc86e5d2d93abb7ee47f9e624849891793444c4d50ee2b56f8175742cc2c"
+      },
+      {
+        "innerEnvelope": "01010000000000000000000002000000000000000201104d6c0193c247e1c683d7453fb592f66bf69bff950f68e82d35b303dfbcec6f72413b0e6071aa894de75b3d6f1d6715b95f596a64808bb214f45b0120b138d6c93bde59652bb9c1b77ce9aab7122067fd8f4da512096f6d1d08b115ea0d095ead3cdafcd56e3a8b9949b73c000ffad6bf9c49c5c52fcf4afa15a15b85c8ea8a787eca8d65ebb3569fcdcb93c8891fb078ede7fb8ab536d5086b28c620bb561a840fc980796cd1310e7b092f82d87a011e52c9798c3437a09dd9ac25ae49d660eed65d3f9a4de2fec49c49a4139216992dbc80b5007814697feed762c9f568b26eaca4db730ec945bcfed6ede40a62254667fbd81a0df41ef33521eb92fccd021cd926c6a88e8ef97906d78a1ecdbbe347",
+        "innerSeq": "2",
+        "outerCtr": "1",
+        "round": 1,
+        "wire": "010000000000000000000001155bf97d0bbbda32a8fec58fb9e1e0c56ca9ac93974d7a5bfaf3678a8b8bdbb68d6537429cbdc5809a6a3ddbbd8f3e84f0a7d5a3af40b6d1e9d8dfc834ed87b3094a0008ff87f34fb566184e89bb9eb2bbd2da0c2de7d57c2c9b48f6ce2535470c3eaa49bf55f13a03c4cbb7079973f9906218f88f126c2847f20c32a47c8a93730385a2dd925d213a3d08398a4977a391f495c382c69ee4d6083a550b5da64eed704b914921b28b779fabd2749c40305d050e676973581c59eddd69a6ebefd31e857bf403e3b32726ee687e3bc1189a65578a7841b1165af94ad8a7e4ae824816f041ef86c7d61fe5297d27f9aba89dcd4ad4f7966bae1948c3ea50989c971edf944e5b0e83d04cbd7a7bc1ac8e36214568ea27b3c9fc9073e13a684c8c76269ab0eb4989101ffa770d327289d3e492e634c6c5d208b0"
+      },
+      {
+        "innerEnvelope": "0101000000000000000000000300000000000000030110c31c46f64bc7e52aa47fcf37a1bff7cbf195308773ca7c8619a651b1889f2e823c9c2875e2b78a4186ebfda5ca1414428d63a76b00554c333da338cf85e682ffe1fbc51c17e9d4a4954e71aace8ac9d4d38264f398a2cd5a8e9c6a033620a17345f6163f3aef79f08f5581d1f23b8090081af544b43c5ef371a8c345d07e8e485c67ad8673fc7eb6793f9bf0922a898da2c586fb02113083d1e371046d7f71a1007fe396b22956a735a663f4776e478bc3a142278afa1295d35575c6d4e019f21a0325fd254e6f90fde0cd980df93ce38b6e537eb55275d9698f62abd5a9206ef72c657d7a7aabf2913773b06569010fecc6fbd6e66b1fec2f3d975a2e29ade0a9d7aeb5c7742d2a677690a83136a658",
+        "innerSeq": "3",
+        "outerCtr": "2",
+        "round": 1,
+        "wire": "010000000000000000000002517bd74b00a359548b14ed6bb3308e51710e49e68b88cc9cdfc1c4827a0459dfd60486465b2c95fc4113b821509d5e78946bd98ef16a02a7dadd077546986b36caf6bfe55a58eb6404feedb2c69fd0c6c11270f155426d51810f3616873844cda3be94dfce400f58163e979b6aa4e8281e0c53945ad744465152ad78e70c692f2235876346d61fe14bf123c8abcb0ba51c3698b3e0850242611caf52cc0baf8d1cb89690f53e363c99f516215719b63392fe5aae66446a799c9bcc7972534ae769659fd561889eff6fe9ac8e4dd14451cc8f80cecbec1c8c9846ef7363f137039f855f96f5957c820c98d56d8ba00bf7d1a58919cf006577d28d64f5aac896ab77441203b33aaabbe8f4697b85cea7e61f50e56e7983eb8ff0d25e765c5d2cb8d89e4544efd197bfeeab1390b333b78e97475b29e2bf35"
+      },
+      {
+        "innerEnvelope": "01010000000000000000000004000000000000000401100462b10e2e46413275bd95fc6441d6a8ed0d6c2a471cac0168d1cfc9f9ce7443fc15b64a328c85fefbaf4079227a84439e4828d12b9ad0da4e983431eed49ed6bebf74faea37cee5492f62a396c8fdb6852e3a0c47205d7331b01c5361312543e8dd65ef53d65ffeed377bafade39444fc24c4a0b76cf46c9206af6b298c9a989615ea9ae0592b497e78e14a94af33423d8b82dc94e6a047f7fd2717a78d912a41b968dbfe148d1120e47df3f7641a2b96c7607730521796656210dcfda112bb658f9c9540d239432c0e62631fd916d2496c3f29b0f4ecbbe4b9c0c036012c5b0046a6db7ca02b8bb33be3d172fe10e3e40e938553ae4b7c3bf2f54bf45af237752ecadbaaefa9cbbacb2f18053a5f72",
+        "innerSeq": "4",
+        "outerCtr": "3",
+        "round": 2,
+        "wire": "010000000000000000000003ca348acbabce5a5f9e976488e604fd2bdf42aa3084c077d079859e4bdf3c94f6071cc4ba4d044265d613b72d8cdf945274a4e38c3e859493924a851e978fce98a3bfa16dc0d18a6d0fd19a931d2394dd7e53b3bcb444e6f3ab1601cfc4ee4ebaf865f0974f0e15d9e9f4358f8d00f0852393627efa44f58c286869e61d05fc9f0e81a2a0e1ad48f663444175a38776034fe3497f72c1cfb9874230e27edb9ca118c545f456803b9a07e26da8ecd552f10b54cb95273c2dbd824370e919617816fedfc01c284a4e7f1fe665207606520646c2b65df3436abd616375a759f03fe9749b358ed4595cb245b605a3f75cb9413925e5ea5579ab1fb6a75988051b31ef9d98332eed7be12382fdfe861b4aba97196585dac7c8204af85c389a2f2b6ae8798d18d1785e72b040f67d40221a31e53c98ba270a1405"
+      }
+    ],
+    "layers": "legacy inner (sessionKey of the round, B1 nonce, plaintext opusStandIn(40, seq)) + legacy outer (round-1 keys, never rotated)",
+    "receiver": {
+      "neverSawOriginal": {
+        "frame": "1",
+        "plaintext": "010100000000000000000000010000000000000001011098919ae3e4500f7ebc4d44ea249229c1078456a1482bcdda0a17caac8fcf80f512e4d6adcc053f96ab6fef3c044c3b53eff7a5185ce653bb1c97a75925fbb201f4c6a407e19c4ca6356b1d544a74471f64871633260f4fa100f7623bafd85fa82e122fe716e06d8f29d650676fe24d2f4c007f26f110cc997248c0f88b5eefe4ce24b31a38cde1e020515756f8486c381dd49aafd46d4f0f9b262696dc8f6589a4b301523e5702da83f9a5efc47c88b33876ca679b9fa81986ddfdfc741214db6b517fc152d56448605d3ddb32ae3d4bcba4d4bdd06c1c243afef061af803e65ce345e97c3bbaaa9ca28ac63c4e19e27eff3ca5c07bbc475aac04dde0afc835a7fc569db508237ee75c317ac62580fe3",
+        "result": "accept"
+      },
+      "sawOriginal": {
+        "frame": "1",
+        "reason": "replay (outer counter already committed)",
+        "result": "drop"
+      }
+    },
+    "rule": "the cache stores the final wire bytes after every layer; a resend sends them unchanged and calls no sealer; the cache is zero-filled and dropped when the send switch moves to a new round"
+  },
+  "outerOffV1": {
+    "capabilityString": "outer-off-v1",
+    "classification": "checked before the outer open: exactly the two bytes 0x03 0x03 on the DC-mux leg -\u003e honour; the same bytes on the relay leg -\u003e ignore (dropped); anything else -\u003e normal path (outer open)",
+    "frame": "0303",
+    "honourEffects": "rule 3 for the call: stop the outer seal on the DC-mux leg, disarm the relay leg, accept inner-sealed frames unwrapped on the DC-mux leg only",
+    "layout": "control mux byte 0x03 || kind 0x03, empty body; kinds: hangup 0x01, NACK request 0x02, outer-off-v1 0x03",
+    "minSealedFrameLength": 28,
+    "sendSide": "DC-mux leg only, never through the outer sealer or the relay; repeated with the first three inner-sealed frames",
+    "vectors": [
+      {
+        "action": "honour",
+        "bytes": "0303",
+        "leg": "dc"
+      },
+      {
+        "action": "ignore",
+        "bytes": "0303",
+        "leg": "relay"
+      },
+      {
+        "action": "normal",
+        "bytes": "03",
+        "leg": "dc"
+      },
+      {
+        "action": "normal",
+        "bytes": "030300",
+        "leg": "dc"
+      },
+      {
+        "action": "normal",
+        "bytes": "0302",
+        "leg": "dc"
+      },
+      {
+        "action": "normal",
+        "bytes": "0301",
+        "leg": "dc"
+      },
+      {
+        "action": "normal",
+        "bytes": "0103",
+        "leg": "dc"
+      },
+      {
+        "action": "normal",
+        "bytes": "",
+        "leg": "dc"
+      },
+      {
+        "action": "normal",
+        "bytes": "010000000000000000000000dc4fbee30dc74d7400d7efb11d298b148a2de682cec7351723da5171fd674ad79a5755a414940666301ac3ea2c3ae26f87420bb3d04a03bc71ef7cae85aedfb58a2fd8fdb444098425772767c0142a715d587e330b45f8170cad2a6bfb66b09d299c066a2168e22bbd983c2a87e364216b41ea7fe53bf396b180a7f81b304a9bf33766fd1277a2444038875d02b6259147587b49c8e5d66f19d481a82a87e445fcfaa94337431038168a2d85bec6f094a52806b89237b493f3b131e23f856ca3f3e1f240000203abf312b4e1598194e1f0d613ab820a060661f387efdfbe290a41a4ec9bf8c9224e775d28c462c7cfef2ce1ac1f99aa74f46e1022df72543142452059860f2577051ee7d84317517bc77fbaf8269acff1a77575a2e73e29bed3d50c5470a3f1465d13373e1e45beff43a50658d3f79017",
+        "leg": "dc"
+      },
+      {
+        "action": "normal",
+        "bytes": "010000000000000000000000dc4fbee30dc74d7400d7efb11d298b148a2de682cec7351723da5171fd674ad79a5755a414940666301ac3ea2c3ae26f87420bb3d04a03bc71ef7cae85aedfb58a2fd8fdb444098425772767c0142a715d587e330b45f8170cad2a6bfb66b09d299c066a2168e22bbd983c2a87e364216b41ea7fe53bf396b180a7f81b304a9bf33766fd1277a2444038875d02b6259147587b49c8e5d66f19d481a82a87e445fcfaa94337431038168a2d85bec6f094a52806b89237b493f3b131e23f856ca3f3e1f240000203abf312b4e1598194e1f0d613ab820a060661f387efdfbe290a41a4ec9bf8c9224e775d28c462c7cfef2ce1ac1f99aa74f46e1022df72543142452059860f2577051ee7d84317517bc77fbaf8269acff1a77575a2e73e29bed3d50c5470a3f1465d13373e1e45beff43a50658d3f79017",
+        "leg": "relay"
+      }
+    ]
+  },
+  "phase": "1 (steps S0-S7, no wire change)",
+  "roleTie": {
+    "note": "Keys are the legacy outer keys of common; role A sends with outerKeyA2B and opens outerKeyB2A, role B the opposite. The last scenario (both A) cannot open each other's frames: the documented denial; the nonces still differ in byte 0. Frames are outer counter 0.",
+    "plaintext": "0101000000000000000000000100000000000000010110989199e2eb510c7fbb4c47eb1b932ac0008555a0472acedb0d16c9ad90ce83f415e5d5acc3043c97ac6eef3c044c3b53eff7a5185ce653bb1c97a75925fbb201f4c6a407e19c4ca6356b1d544a74471f64871633260f4fa100f7623bafd85fa82e122fe716e06d8f29d650676fe24d2f4c007f26f110cc997248c0f88b5eefe4ce24b31a38cde1e020515756f8486c381dd49aafd46d4f0f9b262696dc8f6589a4b301523e5702da83f9a5efc47c88b33876ca679b9fa81986ddfdfc741214db6b517fc152d56448605d3ddb32ae3d4bcba4d4bdd06c1c243afef061af803e65ce345e97c3bbaaa9ca28ac63c4e19e27eff3ca5c07bbc475aac04dde0afc835ac868d0ff526ec76a1d68ff878c99b6ec",
+    "roleA": [
+      {
+        "peer": "bob",
+        "self": "alice",
+        "selfIsRoleA": true,
+        "tie": false
+      },
+      {
+        "peer": "alice",
+        "self": "bob",
+        "selfIsRoleA": false,
+        "tie": false
+      },
+      {
+        "peer": "abc",
+        "self": "ab",
+        "selfIsRoleA": true,
+        "tie": false
+      },
+      {
+        "peer": "ab",
+        "self": "abc",
+        "selfIsRoleA": false,
+        "tie": false
+      },
+      {
+        "peer": "alpha",
+        "self": "Zed",
+        "selfIsRoleA": false,
+        "tie": false
+      },
+      {
+        "peer": "abc",
+        "self": "AbC",
+        "selfIsRoleA": true,
+        "tie": true
+      },
+      {
+        "peer": "AbC",
+        "self": "abc",
+        "selfIsRoleA": true,
+        "tie": true
+      }
+    ],
+    "rule": "tie iff lowercased user ids are equal; non-tie: role A iff the lowercased byte string of self sorts before peer (a prefix sorts first, equal counts as A). Tie: table of B7.2 change 2. Ids in the vectors are ASCII.",
+    "tieScenarios": [
+      {
+        "callee": {
+          "advertisesCapsBindV1": false,
+          "frameCounter0": "020000000000000000000000d086ee80e0471a54ee33062470c9e6a06603f68e0d8bec064a3df7371e93b5d7a63ebff84ec7909bed1e704349cfdd3297123c1aa7133e8f7fbd1169975e4c55dd8da9e5daac0c3b571da96b0dd5ca39fb6daf9a8156fc0e3398dbc0a2cd4e12ab57aa58733cc4e92b5cc1fe400828eed5240eaed319d39117e1b0b21d632535501930b30d88f1f2bc408ea88bdcce8f7723a44a831d5b7861f37d6b4c3aaef065fb1adccdf2e6d3dd9dea7e72e98ad8179677c9df39b102b48b97a3b0fb63c4fcf81f510e85700ecf0aa23688e473f5b3984c51f24527b46c5542031e900873e4126e38c393927811a6f21e9d0854723420b541b425d0d9197137b272a49a4730d0c4dc3d5377b96c98007facfb6874e5a16a4b946fbda6b5b3432a26f8e2d1ec31027170a3215aa20b6035b2da3ab35fd978caa1790b",
+          "nonceByte0": 2,
+          "peerAdvertisesCapsBindV1": true,
+          "role": "A",
+          "sendKey": "outerKeyA2B",
+          "userId": "abc"
+        },
+        "calleeFrameOpensAtCaller": true,
+        "caller": {
+          "advertisesCapsBindV1": true,
+          "frameCounter0": "0100000000000000000000004f023c3616f40bab67ed0a11f8098ed790b3c55db4a3e63f70f3ec7ada4404d1dac43748cc540a27323e04f0e8e7d4ac05e774a074ccb365ce8662def56fe87a3c3defe63cfcd4cd8cbbb50127cb5c42f97bbe9e1a1e29ced4cf6ad388318b430d9dd488fd78e509cae6dd6214e9deab235eb7ea16b3b60a5ab11a1a3afc7b4fbe338e9dfc27eb3a8cb57f3084b229df55060e741a22c40ab5f443097146d3dc4f8721295248a0451b38e721991bddb4b055d8995364a539fa57bbf81587d02e5a4a86679b2e6a35dd129fcf658d89afc99fdcf71768697d73eecaed58d56456d2e685ef62a1740d2cc23dbececa3cf26ac24d48962a997c8d341af3690d162d9459e227c5ff22e109d283fa377b606d5a768fb06104f9f898ca4abbad76ee4d76d895af514dbeeb0986861a6f9440f34c7308ab1767fd",
+          "nonceByte0": 1,
+          "peerAdvertisesCapsBindV1": false,
+          "role": "B",
+          "sendKey": "outerKeyB2A",
+          "userId": "AbC"
+        },
+        "callerFrameOpensAtCallee": true,
+        "name": "caller advertises capsBindV1, callee (old build) does not",
+        "nonceDiffersInByte0": true
+      },
+      {
+        "callee": {
+          "advertisesCapsBindV1": true,
+          "frameCounter0": "02000000000000000000000042e84830c06482d1b0b12aaf3aa1dd6a6b64d2f5c9fc5023a71c4ea222333e8c15186697d5c9ad70f946cf0f14471e85a99f33a7f0620f403edc5b22b84cca4e66784d0f77b9a5493bb6aba9006f1d7e94b9bb0af0e52de050afa7c6b34c2c1b743560768bfa020f2da34c5d5fcebd815b136a3a3bd78cf4b6fe23322bf0c476619cf41518fe09a2ac10e93560cee50eb185eb5cd1727b1a3f4dde3b64eeeb4e14acda40ac79b4c31abdc1a042156c20b46a0ab0fb54194a82a74920a95c87b9d5591705e2e1111585b0357ebc64cab9c3ae373419c769fb572e9131785f53d067f2155982c92c8ddb7df772a6bbeb9d66e757ed814329d8d7ed382dc56851531c1a320dce2d70f9d9b3a8fade21e79c2b71525ffe67b9e9fc40f49e50d036b88575f79e93aba6bb3b3c8d1a031cd2e533e349c64356b1",
+          "nonceByte0": 2,
+          "peerAdvertisesCapsBindV1": true,
+          "role": "B",
+          "sendKey": "outerKeyB2A",
+          "userId": "abc"
+        },
+        "calleeFrameOpensAtCaller": true,
+        "caller": {
+          "advertisesCapsBindV1": true,
+          "frameCounter0": "010000000000000000000000dc4fbee30dc74d7400d7efb11d298b148a2de682cec7351723da5171fd674ad79a5755a414940666301ac3ea2c3ae26f87420bb3d04a03bc71ef7cae85aedfb58a2fd8fdb444098425772767c0142a715d587e330b45f8170cad2a6bfb66b09d299c066a2168e22bbd983c2a87e364216b41ea7fe53bf396b180a7f81b304a9bf33766fd1277a2444038875d02b6259147587b49c8e5d66f19d481a82a87e445fcfaa94337431038168a2d85bec6f094a52806b89237b493f3b131e23f856ca3f3e1f240000203abf312b4e1598194e1f0d613ab820a060661f387efdfbe290a41a4ec9bf8c9224e775d28c462c7cfef2ce1ac1f99aa74f46e1022df72543142452059860f2577051ee7d84317517bc77fbaf8269acff1a77575a2e73e29bed3d50c5470a3f1465d13373e1e45beff43a50658d3f79017",
+          "nonceByte0": 1,
+          "peerAdvertisesCapsBindV1": true,
+          "role": "A",
+          "sendKey": "outerKeyA2B",
+          "userId": "AbC"
+        },
+        "callerFrameOpensAtCallee": true,
+        "name": "both advertise",
+        "nonceDiffersInByte0": true
+      },
+      {
+        "callee": {
+          "advertisesCapsBindV1": true,
+          "frameCounter0": "02000000000000000000000042e84830c06482d1b0b12aaf3aa1dd6a6b64d2f5c9fc5023a71c4ea222333e8c15186697d5c9ad70f946cf0f14471e85a99f33a7f0620f403edc5b22b84cca4e66784d0f77b9a5493bb6aba9006f1d7e94b9bb0af0e52de050afa7c6b34c2c1b743560768bfa020f2da34c5d5fcebd815b136a3a3bd78cf4b6fe23322bf0c476619cf41518fe09a2ac10e93560cee50eb185eb5cd1727b1a3f4dde3b64eeeb4e14acda40ac79b4c31abdc1a042156c20b46a0ab0fb54194a82a74920a95c87b9d5591705e2e1111585b0357ebc64cab9c3ae373419c769fb572e9131785f53d067f2155982c92c8ddb7df772a6bbeb9d66e757ed814329d8d7ed382dc56851531c1a320dce2d70f9d9b3a8fade21e79c2b71525ffe67b9e9fc40f49e50d036b88575f79e93aba6bb3b3c8d1a031cd2e533e349c64356b1",
+          "nonceByte0": 2,
+          "peerAdvertisesCapsBindV1": false,
+          "role": "B",
+          "sendKey": "outerKeyB2A",
+          "userId": "abc"
+        },
+        "calleeFrameOpensAtCaller": true,
+        "caller": {
+          "advertisesCapsBindV1": false,
+          "frameCounter0": "010000000000000000000000dc4fbee30dc74d7400d7efb11d298b148a2de682cec7351723da5171fd674ad79a5755a414940666301ac3ea2c3ae26f87420bb3d04a03bc71ef7cae85aedfb58a2fd8fdb444098425772767c0142a715d587e330b45f8170cad2a6bfb66b09d299c066a2168e22bbd983c2a87e364216b41ea7fe53bf396b180a7f81b304a9bf33766fd1277a2444038875d02b6259147587b49c8e5d66f19d481a82a87e445fcfaa94337431038168a2d85bec6f094a52806b89237b493f3b131e23f856ca3f3e1f240000203abf312b4e1598194e1f0d613ab820a060661f387efdfbe290a41a4ec9bf8c9224e775d28c462c7cfef2ce1ac1f99aa74f46e1022df72543142452059860f2577051ee7d84317517bc77fbaf8269acff1a77575a2e73e29bed3d50c5470a3f1465d13373e1e45beff43a50658d3f79017",
+          "nonceByte0": 1,
+          "peerAdvertisesCapsBindV1": true,
+          "role": "A",
+          "sendKey": "outerKeyA2B",
+          "userId": "AbC"
+        },
+        "callerFrameOpensAtCallee": true,
+        "name": "caller does not advertise, callee does",
+        "nonceDiffersInByte0": true
+      },
+      {
+        "callee": {
+          "advertisesCapsBindV1": false,
+          "frameCounter0": "020000000000000000000000d086ee80e0471a54ee33062470c9e6a06603f68e0d8bec064a3df7371e93b5d7a63ebff84ec7909bed1e704349cfdd3297123c1aa7133e8f7fbd1169975e4c55dd8da9e5daac0c3b571da96b0dd5ca39fb6daf9a8156fc0e3398dbc0a2cd4e12ab57aa58733cc4e92b5cc1fe400828eed5240eaed319d39117e1b0b21d632535501930b30d88f1f2bc408ea88bdcce8f7723a44a831d5b7861f37d6b4c3aaef065fb1adccdf2e6d3dd9dea7e72e98ad8179677c9df39b102b48b97a3b0fb63c4fcf81f510e85700ecf0aa23688e473f5b3984c51f24527b46c5542031e900873e4126e38c393927811a6f21e9d0854723420b541b425d0d9197137b272a49a4730d0c4dc3d5377b96c98007facfb6874e5a16a4b946fbda6b5b3432a26f8e2d1ec31027170a3215aa20b6035b2da3ab35fd978caa1790b",
+          "nonceByte0": 2,
+          "peerAdvertisesCapsBindV1": false,
+          "role": "A",
+          "sendKey": "outerKeyA2B",
+          "userId": "abc"
+        },
+        "calleeFrameOpensAtCaller": false,
+        "caller": {
+          "advertisesCapsBindV1": false,
+          "frameCounter0": "010000000000000000000000dc4fbee30dc74d7400d7efb11d298b148a2de682cec7351723da5171fd674ad79a5755a414940666301ac3ea2c3ae26f87420bb3d04a03bc71ef7cae85aedfb58a2fd8fdb444098425772767c0142a715d587e330b45f8170cad2a6bfb66b09d299c066a2168e22bbd983c2a87e364216b41ea7fe53bf396b180a7f81b304a9bf33766fd1277a2444038875d02b6259147587b49c8e5d66f19d481a82a87e445fcfaa94337431038168a2d85bec6f094a52806b89237b493f3b131e23f856ca3f3e1f240000203abf312b4e1598194e1f0d613ab820a060661f387efdfbe290a41a4ec9bf8c9224e775d28c462c7cfef2ce1ac1f99aa74f46e1022df72543142452059860f2577051ee7d84317517bc77fbaf8269acff1a77575a2e73e29bed3d50c5470a3f1465d13373e1e45beff43a50658d3f79017",
+          "nonceByte0": 1,
+          "peerAdvertisesCapsBindV1": false,
+          "role": "A",
+          "sendKey": "outerKeyA2B",
+          "userId": "AbC"
+        },
+        "callerFrameOpensAtCallee": false,
+        "name": "neither advertises",
+        "nonceDiffersInByte0": true
+      }
+    ],
+    "tieTable": [
+      {
+        "own": "yes",
+        "peer": "no",
+        "role": "B"
+      },
+      {
+        "own": "yes",
+        "peer": "yes",
+        "role": "caller A, callee B"
+      },
+      {
+        "own": "no",
+        "peer": "yes",
+        "role": "A"
+      },
+      {
+        "own": "no",
+        "peer": "no",
+        "role": "A"
+      }
+    ]
+  },
+  "spec": "docs/PQC_HARDENING_V1.md section 7, merged d17bce1e (PR #307)",
+  "version": 1
+}

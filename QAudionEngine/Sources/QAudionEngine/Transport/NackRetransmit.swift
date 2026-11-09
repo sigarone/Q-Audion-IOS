@@ -48,9 +48,7 @@ public final class NackRetransmitRing {
     /// (and zero-fills) whatever previously occupied that slot.
     public func record(seq: Int64, envelope: Data) {
         let idx = index(for: seq)
-        if var previous = slots[idx] {
-            previous.resetBytes(in: 0..<previous.count)
-        }
+        zeroFill(slot: idx)
         slots[idx] = envelope
         slotSeq[idx] = seq
     }
@@ -66,12 +64,17 @@ public final class NackRetransmitRing {
     /// Zero-fill and forget every entry. Call on every re-key.
     public func clear() {
         for i in 0..<capacity {
-            if var existing = slots[i] {
-                existing.resetBytes(in: 0..<existing.count)
-            }
+            zeroFill(slot: i)
             slots[i] = nil
             slotSeq[i] = -1
         }
+    }
+
+    /// Zero the bytes held by one slot IN PLACE. (Zeroing a local copy of the `Data` would trigger copy-on-write and leave the
+    /// slot's own buffer untouched.)
+    private func zeroFill(slot i: Int) {
+        guard let count = slots[i]?.count, count > 0 else { return }
+        slots[i]?.resetBytes(in: 0..<count)
     }
 }
 

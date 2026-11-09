@@ -63,6 +63,16 @@ public final class QAudionEngine: @unchecked Sendable {
     // Internal, not private, only so tests can position the counter near
     // UInt32.max; production code writes it solely under `lock`.
     var txSeqAdaptive: UInt64 = 0          // monotonic TX counter for adaptive path
+    // Legacy (static key, no AAD) adaptive seal: ONE send counter for the whole call. Last value
+    // used, so the first frame carries 1. Never reset by `initSession` (re-key, revert); only
+    // `initialize()` (a new call) and `destroySession()` clear it. With `innerNonceDirTag` it forms
+    // the GCM nonce `dirTag || 0 0 0 || BE64(ctr)`, so no (key, nonce) pair repeats within a call.
+    // Internal, not private, only so tests can position it; production code writes it under `lock`.
+    var txInnerCtr: UInt64 = 0
+    /// 0x01 caller, 0x02 callee. nil when the caller of `initSession` did not say: the nonce is then random.
+    private var innerNonceDirTag: UInt8?
+    /// A counter value of this size or more is never sealed with (the sender stops one step earlier).
+    static let innerCtrLimit: UInt64 = (UInt64(1) << 63) - 1
 
     // ── MEDIA-3/MEDIA-4/MEDIA-5 (W-INNERAUDIOAAD, 2026-09-02) ──
     //
@@ -175,6 +185,8 @@ public final class QAudionEngine: @unchecked Sendable {
         useAdaptivePadding = false
         sessionKey = nil
         txSeqAdaptive = 0
+        txInnerCtr = 0
+        innerNonceDirTag = nil
         // W-INNERAUDIOAAD — reset the directional-key/AAD/replay state too;
         // a new call must never inherit the previous one's keys or window.
         resetInnerAudioAadState()
@@ -268,7 +280,8 @@ public final class QAudionEngine: @unchecked Sendable {
                             innerAudioAadV1: Bool = false,
                             callId: String = "",
                             selfIsRoleA: Bool = false,
-                            epoch: UInt32 = 1) throws {
+                            epoch: UInt32 = 1,
+                            selfIsCaller: Bool? = nil) throws {
         lock.lock(); defer { lock.unlock() }
         guard state == .initialized || state == .sessionActive else {
             throw QAudionEngineError.invalidStateTransition(from: state, to: .sessionActive)
@@ -299,6 +312,8 @@ public final class QAudionEngine: @unchecked Sendable {
         // processOutgoingAudio never reads a half-initialised flag.
         useAdaptivePadding = adaptivePadding
         txSeqAdaptive = 0
+        // The legacy send counter (`txInnerCtr`) is deliberately NOT reset here.
+        if let c = selfIsCaller { innerNonceDirTag = c ? 0x01 : 0x02 }
         // W-INNERAUDIOAAD (MEDIA-3/4/5) — every (re-)install of the adaptive
         // path restarts the sequence space (txSeqAdaptive above), so the
         // directional keys and replay window must restart with it, whether
@@ -337,6 +352,14 @@ public final class QAudionEngine: @unchecked Sendable {
         // (the handshake fires from several sites) must not leave a window open.
         clearSkippedKeys()
         state = .sessionActive
+    }
+
+    /// Inner relay nonce (spec B1): `dirTag || 0x00 0x00 0x00 || BE64(ctr)`, 12 bytes. Bytes 4..11 equal
+    /// the envelope seq widened to 64 bits, which is what every receiver reads.
+    static func innerNonce(dirTag: UInt8, ctr: UInt64) -> Data {
+        var n = Data([dirTag, 0, 0, 0])
+        for shift in stride(from: 56, through: 0, by: -8) { n.append(UInt8((ctr >> UInt64(shift)) & 0xFF)) }
+        return n
     }
 
     /// W-INNERAUDIOAAD — extract a derived `HKDF` `SymmetricKey`'s raw bytes.
@@ -429,8 +452,23 @@ public final class QAudionEngine: @unchecked Sendable {
             // callId||direction||epoch||seq as AAD instead — same cipher call,
             // same ciphertext framing, only the key and the `associatedData`
             // argument differ.
-            let seq = UInt32(truncatingIfNeeded: txSeqAdaptive)
-            txSeqAdaptive &+= 1
+            let seq: UInt32
+            var legacyNonce: Data?
+            if innerAudioAadActive {
+                seq = UInt32(truncatingIfNeeded: txSeqAdaptive)
+                txSeqAdaptive &+= 1
+            } else {
+                // Legacy static-key seal: the per-call counter feeds the wire seq (low 32 bits)
+                // and, with the role tag, the nonce. Checked before any state moves.
+                guard txInnerCtr &+ 1 < Self.innerCtrLimit else {
+                    throw QAudionEngineError.txSequenceExhausted
+                }
+                txInnerCtr &+= 1
+                seq = UInt32(truncatingIfNeeded: txInnerCtr)
+                if let tag = innerNonceDirTag {
+                    legacyNonce = Self.innerNonce(dirTag: tag, ctr: txInnerCtr)
+                }
+            }
             let aad: Data? = innerAudioAadActive
                 ? Self.innerAudioAad(
                     callIdBytes: adaptiveCallIdBytes,
@@ -443,7 +481,8 @@ public final class QAudionEngine: @unchecked Sendable {
                     // the receiver rebuilds from `frame.sequenceNumber`.
                     seq: UInt64(seq))
                 : nil
-            let encrypted = try cipher.encrypt(plaintext: padded, key: key, associatedData: aad)
+            let encrypted = try cipher.encrypt(plaintext: padded, key: key, nonce: legacyNonce,
+                                               associatedData: aad)
             let frame = EncryptedFrame(
                 sequenceNumber: seq,
                 timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
@@ -796,6 +835,8 @@ public final class QAudionEngine: @unchecked Sendable {
         sessionKey = nil
         useAdaptivePadding = false
         txSeqAdaptive = 0
+        txInnerCtr = 0
+        innerNonceDirTag = nil
         // W-INNERAUDIOAAD — zeroize the directional keys too and drop the
         // replay window; no reason to hold either past the session's end.
         resetInnerAudioAadState()

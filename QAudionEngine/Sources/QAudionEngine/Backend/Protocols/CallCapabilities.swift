@@ -553,6 +553,11 @@ public enum CallCapabilities {
     /// behaves exactly as it does today.
     public static let audioNackV1: String = "audio-nack-v1"
 
+    /// `outer-off-v1`: this endpoint honours the two-byte control frame `0x03 0x03` when it arrives on the sealed-audio
+    /// DataChannel (never from the relay): the peer runs the call without the outer seal, so this side stops sealing on the
+    /// DataChannel, closes its relay leg and accepts inner-sealed frames on the DataChannel. Byte-exact ASCII string.
+    public static let outerOffV1: String = "outer-off-v1"
+
     // ── W-LONGAUDIO (2026-08-10): the negotiated 60 ms / 256-byte profile ──
     //
     // Two tags, byte-exact, identical on Android, iOS, Desktop. They are
@@ -708,7 +713,7 @@ public enum CallCapabilities {
         // teardown as call_hangup), so advertising is honest; ungated and
         // never stripped, matching Android's registry (`add(DC_HANGUP_V1)`,
         // no kill switch — sending is itself best-effort and additive).
-        var caps: [String] = [sframeV1, ratchetV3, vkeyV1, upgradeIntentRecvV1, iceBatchV1, dcHangupV1, audioNackV1]
+        var caps: [String] = [sframeV1, ratchetV3, vkeyV1, upgradeIntentRecvV1, iceBatchV1, dcHangupV1, audioNackV1, outerOffV1]
         if v4SFrameAes256Enabled { caps.append(sframeAes256V1) }
         // W-LONGAUDIO — receive support, then send support. Both gated; both
         // ship absent. See the two kill switches above for why the RECEIVE one

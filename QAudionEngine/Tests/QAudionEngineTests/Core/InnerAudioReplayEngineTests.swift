@@ -232,7 +232,8 @@ final class InnerAudioReplayEngineTests: XCTestCase {
     func test_legacyPathKeepsTruncatingTheWireSeq() throws {
         let a = try makeEngine(roleA: true, innerAad: false)
         let b = try makeEngine(roleA: false, innerAad: false)
-        a.txSeqAdaptive = UInt64(UInt32.max) + 1
+        // The legacy counter is the per-call one: the next frame is counter 2^32, and the wire carries its low half.
+        a.txInnerCtr = UInt64(UInt32.max)
         let wire = try seal(a)[0]
         XCTAssertEqual(try wireSeq(wire), 0)
         XCTAssertNoThrow(try b.processIncomingAudio(serializedFrame: wire))
