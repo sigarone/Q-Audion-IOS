@@ -43,7 +43,7 @@ public struct VerifiedRelease: Identifiable, Equatable {
 /// `AppUpdateChecker` esteso (engine W42).
 @MainActor
 final class OtaUpdateContainer: ObservableObject {
-    @Published private(set) var currentVersion: String = "1.0.88"
+    @Published private(set) var currentVersion: String = AppVersionInfo.marketing()
     @Published private(set) var currentVersionCode: Int64 = 88
     @Published var betaOptIn: Bool = false {
         didSet { applyChannel() }
@@ -71,12 +71,8 @@ final class OtaUpdateContainer: ObservableObject {
 
     init() {
         // Read real version from bundle instead of hardcoding old values.
-        let info = Bundle.main.infoDictionary
-        if let v = info?["CFBundleShortVersionString"] as? String {
-            currentVersion = v
-        }
-        if let b = info?["CFBundleVersion"] as? String,
-           let code = Int64(b) {
+        currentVersion = AppVersionInfo.marketing()
+        if let code = Int64(AppVersionInfo.build()) {
             currentVersionCode = code
         }
         load()

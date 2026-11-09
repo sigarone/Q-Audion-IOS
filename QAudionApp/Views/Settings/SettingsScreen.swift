@@ -80,14 +80,11 @@ struct SettingsScreen: View {
     @State private var recoveryReminderNeeded: Bool = false
 
     /// W118+W134: footer with version + build + uptime tagline.
-    /// Format: "v1.0.200 (build 105) · sessione 3h 12m"
+    /// Format: "<version> (build <n>) · sessione 3h 12m"
     /// Uptime is computed from a process-launch timestamp captured
     /// when SettingsScreen first appears (StaticUptimeAnchor).
     private var versionFooter: some View {
-        let info = Bundle.main.infoDictionary
-        // Shared with the OTA chip above so the two cannot drift.
-        let v = SecurityChipsRow.buildString
-        let b = (info?["CFBundleVersion"] as? String) ?? "?"
+        let versionLine = AppVersionInfo.display()
         let uptime = ProcessInfo.processInfo.systemUptime
             - StaticUptimeAnchor.processStartedAt
         let uptimeStr: String = {
@@ -99,12 +96,12 @@ struct SettingsScreen: View {
         // W156: copy-friendly bundle string. Tapping the version row
         // pops a confirmation snackbar after writing it to the
         // pasteboard — handy for bug reports against a specific build.
-        let bundleSummary = "Q-Audion v\(v) (build \(b))"
+        let bundleSummary = "Q-Audion " + versionLine
         return VStack(spacing: 4) {
             Text("Q-Audion")
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
-            Text("v\(v) (build \(b))")
+            Text(verbatim: versionLine)
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .monospacedDigit()
@@ -1132,14 +1129,12 @@ struct SettingsScreen: View {
 
     // MARK: - Top-bar Menu actions (W292)
 
-    /// W292: copy 'Q-Audion v1.0.X (build N)' to UIPasteboard.
+    /// W292: copy the app version and build line to UIPasteboard.
     /// Sister of W179 in About — this is reachable from the top-bar
     /// `⋯` Menu without scrolling to ASSISTENZA.
     private func copyBuildIdToPasteboard() {
         #if canImport(UIKit)
-        let v = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "?"
-        let b = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String) ?? "?"
-        let line: String = "Q-Audion v" + v + " (build " + b + ")"
+        let line: String = "Q-Audion " + AppVersionInfo.display()
         UIPasteboard.general.string = line
         cacheClearedMessage = String(localized: "settings.cache.copied", defaultValue: "Copiato: \(line)", comment: "Settings, alert text after copying the app version and build to the clipboard, %@ is the copied text")
         cacheClearedAlertVisible = true

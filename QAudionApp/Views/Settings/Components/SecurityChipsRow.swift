@@ -72,7 +72,7 @@ struct SecurityChipsRow: View {
     /// The running bundle's marketing version — the one value on this strip
     /// that genuinely differs between two installs.
     static var buildString: String {
-        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "?"
+        AppVersionInfo.marketing()
     }
 }
 

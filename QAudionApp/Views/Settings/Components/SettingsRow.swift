@@ -152,7 +152,7 @@ private struct MonoIfNeeded: ViewModifier {
                     subtitle: "PSK rotazione attiva",
                     trailingBadge: "ATTIVO")
         SettingsRow(icon: "info.circle", title: "Versione",
-                    subtitle: "1.0.66 · build 122",
+                    subtitle: LocalizedStringKey(AppVersionInfo.display()),
                     mono: true)
         SettingsRow(icon: "rectangle.portrait.and.arrow.right", title: "Esci",
                     destructive: true)

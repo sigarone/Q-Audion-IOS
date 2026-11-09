@@ -1,0 +1,284 @@
+[
+  {
+    "version": "1.0.1279",
+    "notes": {
+      "it": [
+        "Chiamate con latenza ridotta e qualità più costante"
+      ],
+      "en": [
+        "Calls with lower latency and steadier quality"
+      ],
+      "de": [
+        "Anrufe mit geringerer Latenz und gleichmäßigerer Qualität"
+      ],
+      "es": [
+        "Llamadas con menor latencia y calidad más constante"
+      ],
+      "fr": [
+        "Appels avec une latence réduite et une qualité plus régulière"
+      ],
+      "pt-BR": [
+        "Chamadas com latência menor e qualidade mais constante"
+      ]
+    }
+  },
+  {
+    "version": "1.0.1278",
+    "notes": {
+      "it": [
+        "Comportamento più fluido quando il telefono è bloccato"
+      ],
+      "en": [
+        "Smoother behaviour while the phone is locked"
+      ],
+      "de": [
+        "Flüssigeres Verhalten bei gesperrtem Telefon"
+      ],
+      "es": [
+        "Comportamiento más fluido con el teléfono bloqueado"
+      ],
+      "fr": [
+        "Comportement plus fluide lorsque le téléphone est verrouillé"
+      ],
+      "pt-BR": [
+        "Comportamento mais fluido com o telefone bloqueado"
+      ]
+    }
+  },
+  {
+    "version": "1.0.1276",
+    "notes": {
+      "it": [
+        "Le chiamate in arrivo suonano con l'interfaccia di sistema anche in auto con CarPlay"
+      ],
+      "en": [
+        "Incoming calls ring through the system interface in the car with CarPlay too"
+      ],
+      "de": [
+        "Eingehende Anrufe klingeln über die Systemoberfläche, auch im Auto mit CarPlay"
+      ],
+      "es": [
+        "Las llamadas entrantes suenan con la interfaz del sistema también en el coche con CarPlay"
+      ],
+      "fr": [
+        "Les appels entrants sonnent via l'interface système, aussi en voiture avec CarPlay"
+      ],
+      "pt-BR": [
+        "As chamadas recebidas tocam pela interface do sistema, também no carro com CarPlay"
+      ]
+    }
+  },
+  {
+    "version": "1.0.1275",
+    "notes": {
+      "it": [
+        "Maggiore stabilità durante le chiamate"
+      ],
+      "en": [
+        "Greater stability during calls"
+      ],
+      "de": [
+        "Mehr Stabilität während der Anrufe"
+      ],
+      "es": [
+        "Mayor estabilidad durante las llamadas"
+      ],
+      "fr": [
+        "Plus de stabilité pendant les appels"
+      ],
+      "pt-BR": [
+        "Mais estabilidade durante as chamadas"
+      ]
+    }
+  },
+  {
+    "version": "1.0.1274",
+    "notes": {
+      "it": [
+        "Qualità audio e video delle chiamate migliorata"
+      ],
+      "en": [
+        "Improved call audio and video quality"
+      ],
+      "de": [
+        "Verbesserte Audio- und Videoqualität bei Anrufen"
+      ],
+      "es": [
+        "Mejor calidad de audio y vídeo en las llamadas"
+      ],
+      "fr": [
+        "Qualité audio et vidéo des appels améliorée"
+      ],
+      "pt-BR": [
+        "Qualidade de áudio e vídeo das chamadas melhorada"
+      ]
+    }
+  },
+  {
+    "version": "1.0.1273",
+    "notes": {
+      "it": [
+        "Avvio delle chiamate ancora più affidabile"
+      ],
+      "en": [
+        "Even more dependable call start"
+      ],
+      "de": [
+        "Noch zuverlässigerer Anrufstart"
+      ],
+      "es": [
+        "Inicio de llamadas aún más fiable"
+      ],
+      "fr": [
+        "Démarrage des appels encore plus fiable"
+      ],
+      "pt-BR": [
+        "Início de chamadas ainda mais confiável"
+      ]
+    }
+  },
+  {
+    "version": "1.0.1272",
+    "notes": {
+      "it": [
+        "Indicatore di chiamata cifrata più chiaro"
+      ],
+      "en": [
+        "A clearer encrypted-call indicator"
+      ],
+      "de": [
+        "Deutlicherer Hinweis auf verschlüsselte Anrufe"
+      ],
+      "es": [
+        "Indicador de llamada cifrada más claro"
+      ],
+      "fr": [
+        "Indicateur d'appel chiffré plus clair"
+      ],
+      "pt-BR": [
+        "Indicador de chamada criptografada mais claro"
+      ]
+    }
+  },
+  {
+    "version": "1.0.1271",
+    "notes": {
+      "it": [
+        "Nuova icona di chiamata, più riconoscibile"
+      ],
+      "en": [
+        "New call icon that is easier to recognise"
+      ],
+      "de": [
+        "Neues, besser erkennbares Anrufsymbol"
+      ],
+      "es": [
+        "Nuevo icono de llamada, más fácil de reconocer"
+      ],
+      "fr": [
+        "Nouvelle icône d'appel, plus reconnaissable"
+      ],
+      "pt-BR": [
+        "Novo ícone de chamada, mais fácil de reconhecer"
+      ]
+    }
+  },
+  {
+    "version": "1.0.1270",
+    "notes": {
+      "it": [
+        "Sezione di verifica della chiamata ridisegnata, più leggibile"
+      ],
+      "en": [
+        "Redesigned call verification section, easier to read"
+      ],
+      "de": [
+        "Neu gestalteter Überprüfungsbereich im Anruf, besser lesbar"
+      ],
+      "es": [
+        "Sección de verificación de la llamada rediseñada y más legible"
+      ],
+      "fr": [
+        "Section de vérification de l'appel repensée, plus lisible"
+      ],
+      "pt-BR": [
+        "Seção de verificação da chamada redesenhada e mais legível"
+      ]
+    }
+  },
+  {
+    "version": "1.0.1269",
+    "notes": {
+      "it": [
+        "Schermata di chiamata più ordinata, con testi che seguono la dimensione scelta"
+      ],
+      "en": [
+        "A tidier call screen, with text that follows your chosen size"
+      ],
+      "de": [
+        "Übersichtlicherer Anrufbildschirm, dessen Texte der gewählten Größe folgen"
+      ],
+      "es": [
+        "Pantalla de llamada más ordenada, con textos que siguen el tamaño elegido"
+      ],
+      "fr": [
+        "Écran d'appel plus net, avec des textes qui suivent la taille choisie"
+      ],
+      "pt-BR": [
+        "Tela de chamada mais organizada, com textos que seguem o tamanho escolhido"
+      ]
+    }
+  },
+  {
+    "version": "1.0.1268",
+    "notes": {
+      "it": [
+        "I testi si adattano alla dimensione scelta nelle impostazioni di iOS",
+        "Avvisi e verifica delle chiamate più chiari"
+      ],
+      "en": [
+        "Text follows the size you choose in iOS settings",
+        "Clearer call notices and verification"
+      ],
+      "de": [
+        "Texte folgen der in den iOS-Einstellungen gewählten Größe",
+        "Verständlichere Anrufhinweise und Überprüfung"
+      ],
+      "es": [
+        "Los textos se adaptan al tamaño elegido en los ajustes de iOS",
+        "Avisos y verificación de llamadas más claros"
+      ],
+      "fr": [
+        "Les textes suivent la taille choisie dans les réglages iOS",
+        "Avis et vérification des appels plus clairs"
+      ],
+      "pt-BR": [
+        "Os textos seguem o tamanho escolhido nos ajustes do iOS",
+        "Avisos e verificação de chamadas mais claros"
+      ]
+    }
+  },
+  {
+    "version": "1.0.1267",
+    "notes": {
+      "it": [
+        "Accesso più fluido e rapido"
+      ],
+      "en": [
+        "Smoother, faster sign-in"
+      ],
+      "de": [
+        "Reibungsloserer und schnellerer Login"
+      ],
+      "es": [
+        "Inicio de sesión más fluido y rápido"
+      ],
+      "fr": [
+        "Connexion plus fluide et plus rapide"
+      ],
+      "pt-BR": [
+        "Login mais fluido e rápido"
+      ]
+    }
+  }
+]

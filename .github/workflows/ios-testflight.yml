@@ -245,6 +245,9 @@ jobs:
       #     even if the job times out or fails -- so each run makes
       #     progress until the cache is fully warm.
       # ----------------------------------------------------------
+      - name: Generate changelog data
+        run: python3 scripts/gen_ios_changelog.py
+
       - name: Cache SPM packages
         id: cache-spm
         uses: actions/cache@v5
@@ -544,6 +547,7 @@ jobs:
 
           plutil -replace CFBundleShortVersionString -string "$MARKETING_VERSION" Info.plist
           plutil -replace CFBundleVersion            -string "$NEW_BUILD"        Info.plist
+          plutil -replace QAGitCommit                -string "$(git rev-parse --short=7 HEAD)" Info.plist
 
           # Sync extension version with the host. Apple validation rejects
           # archives where extension and host CFBundleVersion differ. The
