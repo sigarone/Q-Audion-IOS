@@ -952,6 +952,11 @@ public final class AudioCapture {
     // the speaker category.
     private var engineBuiltForSpeaker = false
     private var pendingRouteRestart: DispatchWorkItem?
+    // Timed re-attempt of Voice-Processing after an error bypass (VpioRetryPolicy).
+    private var vpioRetryTimer: DispatchWorkItem?
+    private var vpioRetryAttempt = 0
+    private var vpioRetryInFlight = false
+    private var vpioRetryGaveUp = false
 
     // ── W-AUDIORESUME / W-MEDIARESET / W-AUDIOBEACON (2026-09-01) ──────────
     // Evidence: audit memory reference_ios_stability_audit_2026_09_01, P1
@@ -1014,6 +1019,7 @@ public final class AudioCapture {
         // not just the CallService entry points the v807 guard covered.
         if isGroupCallActive?() == true {
             print("[AudioCapture] start SKIPPED — group call owns VP-IO; refusing 1:1 engine to avoid setVoiceProcessingEnabled SIGABRT")
+            vpioRetryInFlight = false
             return
         }
         // W475 — start each capture session with an empty re-chunk
@@ -1270,6 +1276,7 @@ public final class AudioCapture {
         // capture is alive (no-op for .passive owners; no-op if already armed
         // by a previous start() of this same call).
         armStateBeaconIfNeeded()
+        reconcileVpioRetryTimer()
         startEndedAtMs = Self.monotonicNowMs()  // W-VPIOOBS — origin of the watchdog window
         builtRoute = Self.currentRouteSignature()  // W-VPIOWD — what an `.override` echo of this start is compared to
 
@@ -2357,6 +2364,94 @@ public final class AudioCapture {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
     }
 
+    // MARK: - Timed Voice-Processing retry
+
+    private func cancelVpioRetryTimer(resetAttempts: Bool) {
+        vpioRetryTimer?.cancel()
+        vpioRetryTimer = nil
+        if resetAttempts { vpioRetryAttempt = 0; vpioRetryInFlight = false; vpioRetryGaveUp = false }
+    }
+
+    /// Called at the end of every engine start. Any restart (route change,
+    /// watchdog, recovery) already re-evaluates Voice-Processing in
+    /// `enableVoiceProcessing`; this adds a bounded timer for the case where no
+    /// restart follows (nothing changes on the route, VP-IO stays off).
+    private func reconcileVpioRetryTimer() {
+        if let hw = audioPipeline.lastVpioHardwareFormat {
+            emitDiagLine(VpioRetryPolicy.formatLine(gen: vpioWatchdogGen, hw: hw,
+                                                    ready: audioPipeline.lastVpioFormatReady))
+        }
+        let active = audioPipeline.voiceProcessingIsActive
+        if vpioRetryInFlight {
+            vpioRetryInFlight = false
+            emitDiagLine(VpioRetryPolicy.fireLine(gen: vpioWatchdogGen, attempt: vpioRetryAttempt,
+                                                  result: active ? .ok : .fail))
+        } else if active, vpioRetryAttempt > 0 {
+            emitDiagLine(VpioRetryPolicy.fireLine(gen: vpioWatchdogGen, attempt: vpioRetryAttempt, result: .ok))
+        }
+        if active || !audioPipeline.voiceProcessingDegradedByError {
+            cancelVpioRetryTimer(resetAttempts: true)
+            return
+        }
+        // Every successful start re-arms from now, so a timer armed before a
+        // route-driven rebuild cannot fire right after it and rebuild again.
+        cancelVpioRetryTimer(resetAttempts: false)
+        guard VpioRetryPolicy.shouldArm(vpioActive: active, degradedByError: true,
+                                        attemptsMade: vpioRetryAttempt) else {
+            if !vpioRetryGaveUp {
+                vpioRetryGaveUp = true
+                emitDiagLine(VpioRetryPolicy.fireLine(gen: vpioWatchdogGen, attempt: vpioRetryAttempt, result: .stop))
+            }
+            return
+        }
+        armVpioRetryTimer()
+    }
+
+    private func armVpioRetryTimer() {
+        let delay = VpioRetryPolicy.delayMs(attempt: vpioRetryAttempt)
+        let work = DispatchWorkItem { [weak self] in self?.fireVpioRetry() }
+        vpioRetryTimer = work
+        emitDiagLine(VpioRetryPolicy.armLine(gen: vpioWatchdogGen, attempt: vpioRetryAttempt, delayMs: delay))
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay), execute: work)
+    }
+
+    private func fireVpioRetry() {
+        vpioRetryTimer = nil
+        guard isRunning, audioPipeline.voiceProcessingDegradedByError,
+              !audioPipeline.voiceProcessingIsActive else { return }
+        // Inside the route-restart throttle window: wait again, no attempt used.
+        if shouldSkipRouteRestart() {
+            armVpioRetryTimer()
+            return
+        }
+        vpioRetryAttempt += 1
+        let attempt = vpioRetryAttempt
+        // Do not rebuild the engine while the hardware still has no input
+        // format or while a group call owns VP-IO: that would only glitch audio.
+        let inputReady: Bool = {
+            guard let engine = engine else { return false }
+            var rate = 0.0
+            var ch = 0
+            _ = QAudionRunCatchingNSException({
+                let f = engine.inputNode.inputFormat(forBus: 0)
+                rate = f.sampleRate
+                ch = Int(f.channelCount)
+            }, nil)
+            let hw = VpioRetryPolicy.HardwareFormat(sessionRate: AVAudioSession.sharedInstance().sampleRate,
+                                                    inputRate: rate, inputChannels: ch)
+            return VpioRetryPolicy.selectFormat(hw, preferredRate: Double(AudioConstants.sampleRate)).ready
+        }()
+        if !inputReady || isGroupCallActive?() == true {
+            emitDiagLine(VpioRetryPolicy.fireLine(gen: vpioWatchdogGen, attempt: attempt, result: .skip))
+            armVpioRetryTimer()
+            return
+        }
+        vpioRetryInFlight = true
+        audioPipeline.noteVoiceProcessingRetry()
+        // start() reconciles: success logs res=ok and clears the timer, failure re-arms it.
+        restartEngineForRoute(routeDriven: false)
+    }
+
     /// W574o — skip a route-driven engine restart if we just restarted (the route
     /// change is the echo of our own `setActive`) or if we restarted < 1s ago (a
     /// flapping Bluetooth link). Keeps the genuine isolated headset plug/unplug case
@@ -2379,6 +2474,8 @@ public final class AudioCapture {
     /// stop being permanent.
     private func restartEngineForRoute(routeDriven: Bool = false) {
         guard isRunning else { return }
+        vpioRetryAttempt = VpioRetryPolicy.attemptsAfterRestart(current: vpioRetryAttempt, routeDriven: routeDriven)
+        if routeDriven { vpioRetryGaveUp = false }
         if audioPipeline.forceDisableVoiceProcessing,
            Self.shouldRetryVoiceProcessing(bypassCount: audioPipeline.voiceProcessingBypassCount,
                                            restartIsRouteDriven: routeDriven) {
@@ -2758,6 +2855,7 @@ public final class AudioCapture {
         // fire after the call has torn down the engine.
         pendingRouteRestart?.cancel()
         pendingRouteRestart = nil
+        cancelVpioRetryTimer(resetAttempts: true)
         // W-AUDIORESUME / W-AUDIOBEACON / W-MEDIARESET — same discipline for
         // the resume ladder, the beacon timer and the reset observer.
         cancelPendingResumeRetry()

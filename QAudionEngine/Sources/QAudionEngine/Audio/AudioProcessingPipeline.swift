@@ -173,6 +173,7 @@ public final class AudioProcessingPipeline {
 
         // Match engine sample rate
         try session.setPreferredSampleRate(config.preferredSampleRate)
+        sessionRateAligned = false
 
         // W574c — pin the built-in mic as preferred input. On iPad the
         // voice-processing path expects the bottom (voice-chat) mic; when
@@ -376,6 +377,17 @@ public final class AudioProcessingPipeline {
     // between an acceptable call and call 1de9935f.
     private var vpioBypassCountThisCall: Int = 0
     private var vpioRetryCountThisCall: Int = 0
+    /// True while VP-IO is off ONLY because enabling it failed (invalid hardware
+    /// format or an ObjC exception). Not set by the starve watchdog's latch or
+    /// by the user override. AudioCapture re-attempts on a timer while it is true.
+    public private(set) var voiceProcessingDegradedByError: Bool = false
+    /// What the hardware looked like at the last enable attempt.
+    public private(set) var lastVpioHardwareFormat: VpioRetryPolicy.HardwareFormat?
+    public private(set) var lastVpioFormatReady: Bool = true
+    /// True while the session preferred rate was moved to the hardware rate
+    /// (hands-free route); restored once the route leaves Bluetooth. Restarts do
+    /// not run configureForVoIP, so nothing else would put 48 kHz back.
+    private var sessionRateAligned = false
     // W-IOSECHO (2026-07-22) — iOS port of Android's `route_changes`/
     // `speaker_ms` (see AudioCapture's EchoBucketTotals for the sibling
     // echo_active/idle port). `routeChangesThisCall` counts ROUTE-DRIVEN
@@ -579,6 +591,7 @@ public final class AudioProcessingPipeline {
 
     public func enableVoiceProcessing(on engine: AVAudioEngine) throws {
         let inputNode = engine.inputNode
+        voiceProcessingDegradedByError = false
 
         // W-CANONICAL (2026-07-12) — VP-IO ON EVERYWHERE by default.
         //
@@ -634,6 +647,41 @@ public final class AudioProcessingPipeline {
                 // captures, just without HW AEC/NS/AGC) instead of killing the
                 // process — the same "working call beats dead engine" fallback
                 // the starve watchdog already uses.
+                // Use the hardware's real format, not the fixed preferred rate: on a
+                // 16/24 kHz hands-free route the input node has no usable format for a
+                // moment after a restart and the enable call raises "format". Check first.
+                let session = AVAudioSession.sharedInstance()
+                if sessionRateAligned,
+                   !session.currentRoute.inputs.contains(where: { $0.portType == .bluetoothHFP }) {
+                    try? session.setPreferredSampleRate(config.preferredSampleRate)
+                    sessionRateAligned = false
+                }
+                var inRate = 0.0
+                var inCh = 0
+                _ = QAudionRunCatchingNSException({
+                    let f = inputNode.inputFormat(forBus: 0)
+                    inRate = f.sampleRate
+                    inCh = Int(f.channelCount)
+                }, nil)
+                let hw = VpioRetryPolicy.HardwareFormat(sessionRate: session.sampleRate,
+                                                        inputRate: inRate, inputChannels: inCh)
+                let selection = VpioRetryPolicy.selectFormat(hw, preferredRate: config.preferredSampleRate)
+                lastVpioHardwareFormat = hw
+                lastVpioFormatReady = selection.ready
+                if !selection.ready {
+                    print("[AudioProcessingPipeline] input format not ready (\(Int(inRate)) Hz/\(inCh)ch) — VP-IO deferred, will retry")
+                    voiceProcessingActive = false
+                    voiceProcessingDegradedByError = true
+                    vpioBypassedEverThisCall = true
+                    vpioBypassCountThisCall += 1
+                    latchAudioDiag(vpioEnabled: false, agcEnabled: false)
+                    emitSessionDiagnostics(vpioEnabled: false)
+                    return
+                }
+                if selection.alignSessionPreference {
+                    try? session.setPreferredSampleRate(selection.sampleRate)
+                    sessionRateAligned = true
+                }
                 var vpioError: NSError?
                 var vpioSwiftError: Error?
                 let ran = QAudionRunCatchingNSException({
@@ -644,6 +692,7 @@ public final class AudioProcessingPipeline {
                     voiceProcessingActive = false
                     vpioBypassedEverThisCall = true
                     vpioBypassCountThisCall += 1   // W-VPIORETRY
+                    voiceProcessingDegradedByError = true
                     latchAudioDiag(vpioEnabled: false, agcEnabled: false)
                     emitSessionDiagnostics(vpioEnabled: false)
                     return
