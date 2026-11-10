@@ -1,5 +1,74 @@
 [
   {
+    "version": "1.0.1282",
+    "notes": {
+      "it": [
+        "Messa in attesa delle chiamate con indicazione chiara e tono di attesa"
+      ],
+      "en": [
+        "Call hold with a clear on-hold indicator and hold tone"
+      ],
+      "de": [
+        "Anrufe halten mit klarer Anzeige und Warteton"
+      ],
+      "es": [
+        "Llamadas en espera con indicación clara y tono de espera"
+      ],
+      "fr": [
+        "Mise en attente des appels avec indication claire et tonalité d'attente"
+      ],
+      "pt-BR": [
+        "Chamadas em espera com indicação clara e tom de espera"
+      ]
+    }
+  },
+  {
+    "version": "1.0.1281",
+    "notes": {
+      "it": [
+        "Versione dell'app sempre visibile e aggiornata"
+      ],
+      "en": [
+        "App version always visible and up to date"
+      ],
+      "de": [
+        "App-Version immer sichtbar und aktuell"
+      ],
+      "es": [
+        "Versión de la app siempre visible y actualizada"
+      ],
+      "fr": [
+        "Version de l'app toujours visible et à jour"
+      ],
+      "pt-BR": [
+        "Versão do app sempre visível e atualizada"
+      ]
+    }
+  },
+  {
+    "version": "1.0.1280",
+    "notes": {
+      "it": [
+        "Miglioramenti all'audio in auto"
+      ],
+      "en": [
+        "Improved audio in the car"
+      ],
+      "de": [
+        "Verbesserter Klang im Auto"
+      ],
+      "es": [
+        "Mejoras en el audio en el coche"
+      ],
+      "fr": [
+        "Amélioration de l'audio en voiture"
+      ],
+      "pt-BR": [
+        "Melhorias no áudio no carro"
+      ]
+    }
+  },
+  {
     "version": "1.0.1279",
     "notes": {
       "it": [
