@@ -1435,7 +1435,7 @@ final class CallService: @unchecked Sendable {
     private var holdAudioCauseCap: HoldCancel?
     /// Causes recorded before the call is connected (a CallKit hold that arrives while it still rings or connects). The
     /// privacy effects apply at once (video paused, sender muted); CALL_HOLD goes out when the call becomes active.
-    private var holdPendingCauses: [UInt8] = []
+    private var holdLedger = HoldCauseLedger()
     /// W-AUDIOAEADREKEY (2026-09-02) — B3: fired when
     /// `AudioAeadFailureRekeyPolicy` judges the recent audio AEAD decrypt
     /// failures a real burst (persistent key drift), not an isolated bad
@@ -3497,35 +3497,28 @@ final class CallService: @unchecked Sendable {
     /// Adds a hold cause (16.3). The first cause makes this side HELD: audio stops being fed to the wire (frame path: no
     /// frame; native SRTP: the outbound track is disabled) and CALL_HOLD goes out. Only while the call is connected.
     func holdAddCause(_ cause: UInt8) {
-        guard isCallActive?() == true else {
-            // Not connected yet: the stop of the outbound media does not wait for it.
-            if !holdPendingCauses.contains(cause) { holdPendingCauses.append(cause) }
-            guard !holdLocalActive else { return }
-            holdLocalActive = true
+        let active: Bool = isCallActive?() == true
+        if active { holdFlushPendingCauses() }
+        holdLocalActive = true  // the outbound media stops first
+        let result = holdLedger.add(cause, callActive: active)
+        if result.toSender {
+            holdTone.stop()  // 16.4: the tone stops when the local user puts the call on hold
+            ensureHoldSender().addCause(cause)
+        }
+        if result.change == .held {
             if NativeAudioSessionGate.isArmed { reapplyNativeSenderMute(site: 7) }
             onLocalHoldActiveChanged?(true)
-            return
         }
-        holdLocalActive = true
-        if NativeAudioSessionGate.isArmed { reapplyNativeSenderMute(site: 7) }
-        holdTone.stop()  // 16.4: the tone stops when the local user puts the call on hold
-        if ensureHoldSender().addCause(cause) { onLocalHoldActiveChanged?(true) }
     }
 
-    /// Removes a hold cause. When it was the last one, CALL_HOLD RESUMED is written BEFORE audio restarts (16.3).
+    /// Removes a hold cause. Pending causes and the sender's causes are ONE set: the gates (audio, video, native mute) are
+    /// released only when both are empty, and then CALL_HOLD RESUMED has been written BEFORE audio restarts (16.3).
     func holdRemoveCause(_ cause: UInt8) {
-        if let index = holdPendingCauses.firstIndex(of: cause) {
-            holdPendingCauses.remove(at: index)
-            if holdPendingCauses.isEmpty && holdSender?.held != true {
-                holdLocalActive = false
-                if NativeAudioSessionGate.isArmed { reapplyNativeSenderMute(site: 7) }
-                onLocalHoldActiveChanged?(false)
-            }
-            return
-        }
-        guard let sender = holdSender else { return }
-        // The first RESUMED frame is written before this returns; false while another cause is still active.
-        guard sender.removeCause(cause) else { return }
+        if isCallActive?() == true { holdFlushPendingCauses() }
+        let result = holdLedger.remove(cause)
+        // The first RESUMED frame is written inside this call, when it was the sender's last cause.
+        if result.fromSender { _ = holdSender?.removeCause(cause) }
+        guard result.change == .released else { return }
         holdLocalActive = false
         if NativeAudioSessionGate.isArmed { reapplyNativeSenderMute(site: 7) }
         onLocalHoldActiveChanged?(false)
@@ -3667,11 +3660,16 @@ final class CallService: @unchecked Sendable {
 
     /// The call became active with causes recorded before: they enter the sender now (video and mute already applied).
     private func holdFlushPendingCauses() {
-        guard !holdPendingCauses.isEmpty else { return }
-        let causes = holdPendingCauses
-        holdPendingCauses.removeAll()
+        let causes = holdLedger.flush()
+        guard !causes.isEmpty else { return }
         let sender = ensureHoldSender()
         for cause in causes { sender.addCause(cause) }
+        // The effective state does not change on a flush, but the gates must reflect it whatever happened before.
+        if !holdLocalActive {
+            holdLocalActive = true
+            if NativeAudioSessionGate.isArmed { reapplyNativeSenderMute(site: 7) }
+            onLocalHoldActiveChanged?(true)
+        }
     }
 
     private func holdTick() {
@@ -3797,7 +3795,7 @@ final class CallService: @unchecked Sendable {
         holdAudioCauseCap = nil
         holdSender?.close()
         holdSender = nil
-        holdPendingCauses.removeAll()
+        holdLedger.reset()
         holdReceiver.reset()
         holdHint.reset()
         holdSilenceGate.reset()
