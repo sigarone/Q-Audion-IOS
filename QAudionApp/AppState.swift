@@ -15200,7 +15200,8 @@ final class AppState: ObservableObject {
             conversationId: conv.id,
             lastMessagePreview: friendly,
             lastActivity: Date(),
-            incrementUnread: !isMuted
+            incrementUnread: !isMuted,
+            selfDestructing: ephemeral.expiresAt != nil || ephemeral.isViewOnce == true
         )
         NotificationCenter.default.post(
             name: AppState.chatRefreshNotification,

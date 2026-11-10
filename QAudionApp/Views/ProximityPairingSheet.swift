@@ -37,8 +37,8 @@ struct ProximityPairingDisplayScreen: View {
         // protection is in the engine driver: the code is hidden and the
         // session stopped while the screen is recorded, mirrored or shared,
         // and a screenshot replaces the session (spec §6).
-        .onAppear { ScreenshotLockService.lock() }
-        .onDisappear { ScreenshotLockService.unlock() }
+        .onAppear { ScreenshotLockService.lock(owner: "pairing") }
+        .onDisappear { ScreenshotLockService.unlock(owner: "pairing") }
     }
 }
 

@@ -417,7 +417,8 @@ final class ChatContainer: ObservableObject {
             conversationId: conversationId,
             lastMessagePreview: preview,
             lastActivity: Date(),
-            incrementUnread: false
+            incrementUnread: false,
+            selfDestructing: ephExpiry != nil || isViewOnce
         )
         if clearsComposer {
             composerText = ""
@@ -1620,7 +1621,8 @@ final class ChatContainer: ObservableObject {
             conversationId: convId,
             lastMessagePreview: displayText,
             lastActivity: Date(),
-            incrementUnread: false
+            incrementUnread: false,
+            selfDestructing: ephExpiry != nil || isViewOnce
         )
         uploadProgress[msgId] = 0
         refreshFromStore()

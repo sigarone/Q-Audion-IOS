@@ -153,13 +153,18 @@ public final class ConversationStore {
     public func recordNewMessage(conversationId id: UUID,
                                  lastMessagePreview: String,
                                  lastActivity: Date,
-                                 incrementUnread: Bool) {
+                                 incrementUnread: Bool,
+                                 selfDestructing: Bool = false) {
+        let lockEnabled = ChatProtectionPolicy.lockPreferenceEnabled(defaults)
         do {
             try db.writer.write { db in
                 if var conv = try Conversation.fetchOne(db, key: id) {
-                    let truncated = lastMessagePreview.count > 120
-                        ? String(lastMessagePreview.prefix(120)) + "…"
-                        : lastMessagePreview
+                    let truncated = ChatProtectionPolicy.storedPreview(
+                        lastMessagePreview.count > 120
+                            ? String(lastMessagePreview.prefix(120)) + "…"
+                            : lastMessagePreview,
+                        protected: ChatProtectionPolicy.isProtected(
+                            conv, lockEnabled: lockEnabled, selfDestructingMessage: selfDestructing))
 
                     conv = Conversation(
                         id: conv.id,
@@ -409,9 +414,22 @@ public final class ConversationStore {
                 return .refusedServiceShaped
             }
         }
-        let truncatedPreview = preview.count > 120 ? String(preview.prefix(120)) + "…" : preview
+        let plainPreview = preview.count > 120 ? String(preview.prefix(120)) + "…" : preview
+        let selfDestructing = ChatProtectionPolicy.isSelfDestructing(message)
+        let lockEnabled = ChatProtectionPolicy.lockPreferenceEnabled(defaults)
         do {
             return try db.writer.write { (db: Database) -> InboundRecordResult in
+                // A protected conversation never stores message text as its list preview.
+                // The undecryptable placeholder is a fixed label, not content: it stays, because
+                // the replacement logic below recognises it by its text.
+                var truncatedPreview = plainPreview
+                if kind != .placeholder,
+                   let target = try Conversation.fetchOne(db, key: message.conversationId) {
+                    truncatedPreview = ChatProtectionPolicy.storedPreview(
+                        plainPreview,
+                        protected: ChatProtectionPolicy.isProtected(
+                            target, lockEnabled: lockEnabled, selfDestructingMessage: selfDestructing))
+                }
                 // Any incoming row already stored under this (sender, client_msg_id): a
                 // placeholder, a real row, or a tombstone. Looked up WITHOUT the placeholder
                 // filter so a deleted or edited row can never be mistaken for "nothing here".

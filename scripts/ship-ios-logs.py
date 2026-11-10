@@ -877,7 +877,12 @@ APP_VOCAB = frozenset("""
     micperm st ask
 
     callhold
+
+    canvas hosted capcover
 """.split())
+# SECURE CANVAS (2026-11-10) -- "canvas hosted capcover": tag "privacy" lines of the screen protection:
+#   canvas hosted=<0|1> [why=1]        capcover shown=1
+# Pinned by test_ship_ios_canvas_vocab.py.
 # CALL HOLD (WIRE_SPEC 16, 2026-11-10) -- "callhold" (the line right above) is the one new word, for the "call"-tagged RTLog
 # lines of the hold signal; every value is a number or a short enum word, never an id:
 #   callhold tx st=<1 held|2 resumed> c=<cause 0-3> seq=<n> m=<mode 1-3>

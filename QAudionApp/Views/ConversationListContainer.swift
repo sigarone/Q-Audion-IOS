@@ -22,6 +22,7 @@ final class ConversationListContainer: ObservableObject {
         // server, il filter forza unreadCount = 0 finché lastActivity
         // non è successiva al marked-read timestamp.
         let readMarks = Self.loadReadMarks()
+        let lockEnabled = ChatProtectionPolicy.lockPreferenceEnabled()
         let items = conversations.map { conv -> ConversationListViewModel.Item in
             var unread = conv.unreadCount
             if let markedAt = readMarks[conv.id.uuidString],
@@ -32,7 +33,11 @@ final class ConversationListContainer: ObservableObject {
                 conversationId: conv.id,
                 peerUserId: conv.peerUserId,
                 peerDisplayName: conv.peerDisplayName,
-                lastMessagePreview: conv.lastMessagePreview,
+                // Protected conversations show a label, never text (also masks previews stored earlier).
+                lastMessagePreview: ChatProtectionPolicy.displayPreview(
+                    conv.lastMessagePreview,
+                    protected: ChatProtectionPolicy.isProtected(conv, lockEnabled: lockEnabled),
+                    placeholder: ChatProtectionPolicy.protectedPreviewMarker),
                 lastActivity: conv.lastActivity,
                 unreadCount: unread,
                 pinned: conv.pinned,

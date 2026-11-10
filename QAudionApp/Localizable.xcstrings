@@ -1,6 +1,132 @@
 {
   "sourceLanguage": "it",
   "strings": {
+    "chat_list.protected_preview": {
+      "extractionState": "manual",
+      "comment": "Conversation list row: shown instead of the last message text when the conversation is protected (screenshot lock on, or self-destructing content).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Messaggio protetto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protected message"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geschützte Nachricht"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mensaje protegido"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Message protégé"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mensagem protegida"
+          }
+        }
+      }
+    },
+    "chat.screenshot_notice": {
+      "extractionState": "manual",
+      "comment": "Local notice after the user takes a screenshot inside a protected chat.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screenshot rilevato: il contenuto di questa chat è protetto e può risultare nero."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screenshot detected: the content of this chat is protected and may appear black."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screenshot erkannt: Der Inhalt dieses Chats ist geschützt und kann schwarz erscheinen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Captura detectada: el contenido de este chat está protegido y puede verse negro."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture d’écran détectée : le contenu de ce chat est protégé et peut apparaître noir."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Captura de tela detectada: o conteúdo deste chat está protegido e pode aparecer preto."
+          }
+        }
+      }
+    },
+    "privacy.capture_cover": {
+      "extractionState": "manual",
+      "comment": "Full-screen notice shown instead of a protected screen while the screen is being recorded or mirrored.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Registrazione schermo attiva: contenuto nascosto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen recording active: content hidden"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bildschirmaufnahme aktiv: Inhalt ausgeblendet"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grabación de pantalla activa: contenido oculto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrement d’écran actif : contenu masqué"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gravação de tela ativa: conteúdo oculto"
+          }
+        }
+      }
+    },
     "call.peer_on_hold": {
       "extractionState": "manual",
       "comment": "Call screen and the call bar: the other person has put the call on hold (WIRE_SPEC 16.4).",

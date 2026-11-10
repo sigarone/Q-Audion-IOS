@@ -101,7 +101,7 @@ final class InCallChatPolicyTests: XCTestCase {
     func testTheHostPresentsTheChatAndRestoresTheSecureWindow() throws {
         let host = try code("QAudionApp/Views/Call/InCallChatCover.swift")
         XCTAssertEqual(occurrences(of: ".fullScreenCover(item: $chat.target", in: host), 1)
-        XCTAssertTrue(host.contains("onDismiss: { ScreenshotLockService.lock()"))
+        XCTAssertTrue(host.contains("onDismiss: { ScreenshotLockService.lock(owner: \"call\")"))
         XCTAssertTrue(host.contains("InCallChatCover(target: target)"))
         XCTAssertTrue(host.contains("ChatDetailScreen( conversationId: target.conversationId"))
     }

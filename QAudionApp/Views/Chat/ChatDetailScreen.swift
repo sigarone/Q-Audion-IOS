@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import PhotosUI
 import QAudionEngine
 
@@ -299,7 +300,16 @@ struct ChatDetailScreen: View {
         .onAppear { ScreenshotDemo.chatOpened = true }
         #endif
         .onDisappear(perform: handleScreenDisappear)
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.userDidTakeScreenshotNotification)) { _ in
+            handleScreenshotTaken()
+        }
         .onChange(of: container.screenshotGrantedByPeer) { _ in
+            handleScreenAppear()
+        }
+        .onChange(of: container.viewModel.conversation.ephemeralTimerSeconds) { _ in
+            handleScreenAppear()
+        }
+        .onChange(of: container.viewModel.messages.count) { _ in
             handleScreenAppear()
         }
         // W-SSREQ: live approve/deny dialog for an incoming ss_req, mirroring
@@ -1389,16 +1399,29 @@ struct ChatDetailScreen: View {
 
     private func handleScreenAppear() {
         // Lock screenshots unless the peer has explicitly granted permission.
-        let peerGranted = container.screenshotGrantedByPeer == true
-        if screenshotLockEnabled() && !peerGranted {
-            ScreenshotLockService.lock()
+        // Protected = lock on and no grant by the peer, or a conversation timer (self-destructing content).
+        let protected = ChatProtectionPolicy.isProtected(
+            lockEnabled: screenshotLockEnabled(),
+            peerGranted: container.screenshotGrantedByPeer,
+            ephemeralTimerSeconds: container.viewModel.conversation.ephemeralTimerSeconds,
+            selfDestructingMessage: container.viewModel.messages.contains(where: ChatProtectionPolicy.isSelfDestructing))
+        if protected {
+            ScreenshotLockService.lock(owner: "chat_detail")
         } else {
-            ScreenshotLockService.unlock()
+            ScreenshotLockService.unlock(owner: "chat_detail")
         }
     }
 
     private func handleScreenDisappear() {
-        ScreenshotLockService.unlock()
+        ScreenshotLockService.unlock(owner: "chat_detail")
+    }
+
+    /// A screenshot taken inside a protected chat: tell the user (local notice only, nothing is sent to the peer).
+    private func handleScreenshotTaken() {
+        guard ChatProtectionPolicy.screenshotLockActive(lockEnabled: screenshotLockEnabled(),
+                                                        peerGranted: container.screenshotGrantedByPeer) else { return }
+        let notice = String(localized: "chat.screenshot_notice", defaultValue: "Screenshot rilevato: il contenuto di questa chat è protetto e può risultare nero.", comment: "Local notice after the user takes a screenshot inside a protected chat.")
+        snackbar?.show(.init(text: notice, severity: .warning, durationSeconds: 4))
     }
 
     // MARK: - W445: forward message handler
@@ -2227,7 +2250,7 @@ private struct ForwardMessageSheet: View {
                             ? DisplayName.forUser(conv.peerUserId, contacts: rubrica)
                             : conv.peerDisplayName)
                             .foregroundStyle(scheme.onSurface)
-                        if let preview = conv.lastMessagePreview, !preview.isEmpty {
+                        if let preview = ProtectedPreview.text(for: conv), !preview.isEmpty {
                             Text(preview)
                                 .font(.caption)
                                 .foregroundStyle(scheme.onSurfaceVariant)
