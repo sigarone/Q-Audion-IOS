@@ -151,6 +151,9 @@ public final class VideoCallPipeline: NSObject {
     /// arm64 so the worst-case race is one stale frame emitted right
     /// at toggle time.
     private nonisolated(unsafe) var paused: Bool = false
+    /// WIRE_SPEC 16.3 privacy — true while this side is HELD (any hold cause). Read live on every frame: the primary,
+    /// fail-closed gate. Camera and screen-share frames are dropped while it answers true, whatever `setVideoPaused` did.
+    public nonisolated(unsafe) var isLocalHeld: (() -> Bool)?
     /// W-CAPTUREDIAG (2026-07-28) — throttled counter for the one-shot
     /// diagnostic log in `captureOutput`, root-causing a black-video
     /// upgrade where the peer's transport connects fine (ICE/DTLS healthy
@@ -663,7 +666,7 @@ public final class VideoCallPipeline: NSObject {
     public nonisolated func submitExternalFrame(
         _ pixelBuffer: CVPixelBuffer, presentationTimeNs: Int64
     ) {
-        if self.paused { return }
+        if OutboundVideoGate.drops(paused: self.paused, locallyHeld: self.isLocalHeld?() ?? false) { return }
         self.onCapturedPixelBuffer?(pixelBuffer, presentationTimeNs)
         let bw = CVPixelBufferGetWidth(pixelBuffer)
         let bh = CVPixelBufferGetHeight(pixelBuffer)
@@ -1003,7 +1006,7 @@ extension VideoCallPipeline: AVCaptureVideoDataOutputSampleBufferDelegate {
         // conditions. Skip BOTH the WebRTC bridge and the HEVC
         // encoder so the peer sees a clean stall, not garbled
         // partial frames at the bottom of the bitrate floor.
-        if self.paused { return }
+        if OutboundVideoGate.drops(paused: self.paused, locallyHeld: self.isLocalHeld?() ?? false) { return }
         // Screen share owns the encoder while active — drop camera frames
         // (see externalFeedActive docs).
         if self.externalFeedActive { return }

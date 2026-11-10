@@ -1,6 +1,90 @@
 {
   "sourceLanguage": "it",
   "strings": {
+    "call.peer_on_hold": {
+      "extractionState": "manual",
+      "comment": "Call screen and the call bar: the other person has put the call on hold (WIRE_SPEC 16.4).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In attesa"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On hold"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En espera"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En attente"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In Wartestellung"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Em espera"
+          }
+        }
+      }
+    },
+    "call.peer_not_audible": {
+      "extractionState": "manual",
+      "comment": "Call screen: no audio has arrived from the other person for more than 10 seconds and no hold was signalled (WIRE_SPEC 16.6).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interlocutore non udibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Peer not audible"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interlocutor no audible"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interlocuteur inaudible"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gegenstelle nicht hörbar"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interlocutor inaudível"
+          }
+        }
+      }
+    },
     "Build · device · stato · share": {
       "extractionState": "manual",
       "comment": "Label of the hardware test console and diagnostic screens.",

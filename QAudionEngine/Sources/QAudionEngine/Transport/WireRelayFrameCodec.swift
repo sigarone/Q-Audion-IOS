@@ -58,6 +58,10 @@ public enum WireRelayFrameCodec {
     /// Control frame kind `outer-off-v1` (empty body): the sender runs this call without the outer seal. Sent on the
     /// DataChannel only and unsealed; see ``OuterLayerPolicy``.
     public static let controlKindOuterOff: UInt8 = 0x03
+    /// WIRE_SPEC 16.2 control frame kinds of the call hold signal, gated on `call-hold-v1`. `0x03` is taken by
+    /// `outer-off-v1`, so the hold kinds start at `0x04`. Bodies and arithmetic: ``CallHoldWire``.
+    public static let controlKindCallHold: UInt8 = 0x04
+    public static let controlKindCallHoldAck: UInt8 = 0x05
 
     public static let nonceSize = 12
     public static let tagSize = 16

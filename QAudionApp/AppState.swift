@@ -3634,6 +3634,19 @@ final class AppState: ObservableObject {
     /// back on for them the moment the hold clears — the opposite of what
     /// they asked for. Reset per call alongside `callMuted`.
     private var holdPausedLocalVideo = false
+    /// An unpause of the outbound video that arrived while the call was held (WIRE_SPEC 16.3 privacy), applied when the last
+    /// hold cause is removed. See `unpauseOutboundVideo`.
+    private var videoUnpauseDeferral = VideoUnpauseDeferral()
+
+    /// The ONE place that lifts the outbound pause of a pipeline (consent, caller's initial video, call finalised, promotion,
+    /// screen share). While the call is held it is deferred, never applied; the pipeline's own gate drops the frames anyway.
+    private func unpauseOutboundVideo(_ pipeline: VideoCallPipeline?) {
+        guard videoUnpauseDeferral.request(locallyHeld: callService.isLocalHeld) else {
+            print("[AppState] callhold: outbound video unpause deferred while held")
+            return
+        }
+        pipeline?.setVideoPaused(false)
+    }
     /// In-app ring (foreground, CallKit UI suppressed): the chosen ringtone looped at the user's ring volume.
     private lazy var inAppRing = InAppRingPlayer(inCall: { [weak self] in self?.callSoundsInCall ?? false })
     /// Cues played as system sounds: the start tick (before CallKit activates the audio session) and the
@@ -5097,6 +5110,7 @@ final class AppState: ObservableObject {
                 // Another call may have begun while the round was awaiting its ACCEPT: clear only our own mark.
                 if ownsRound && self.reKeyInFlightCallId == cid { self.reKeyInFlightCallId = nil }
                 RTLog.info("rekey", "tick #" + seq + " performPqcReKey result=" + String(ok))
+                if ok { self.callService.holdNoteEvent("rekey") }  // WIRE_SPEC 16.7
             }
         }
 
@@ -5239,33 +5253,12 @@ final class AppState: ObservableObject {
                     // diverging from it. Idempotent: a self-initiated hold
                     // already set the same value before this fires.
                     self.callService.setOnHold(isOnHold)
-                    // Video: `CallService.isOnHold` never touches the video
-                    // pipeline (today's Hold is audio-only by design), so
-                    // decide separately whether THIS call should pause its
-                    // camera too — CallHoldPolicy is the pure decision (see
-                    // its doc comment for the full rationale); this closure
-                    // only carries out what it returns.
-                    let video = CallHoldPolicy.videoAction(
-                        isOnHold: isOnHold,
-                        isGroupCall: self.groupCallKitId != nil,
-                        isVideoCall: self.isVideoCall,
-                        localVideoAlreadyPaused: self.localVideoPaused,
-                        videoPausedByPriorHold: self.holdPausedLocalVideo)
-                    // `videoSetCameraEnabled` is the SAME path the user's
-                    // own Cam ON/OFF button drives (W393 — pauses the
-                    // capture pipeline without tearing it down, and sends
-                    // WIRE_SPEC §8.9 `call_video_state` so the peer sees an
-                    // intentional pause instead of a stall).
-                    if video.pauseLocalVideo {
-                        self.holdPausedLocalVideo = true
-                        self.videoSetCameraEnabled(false)
-                    }
-                    if video.resumeLocalVideo {
-                        self.videoSetCameraEnabled(true)
-                    }
-                    if !isOnHold {
-                        self.holdPausedLocalVideo = false
-                    }
+                    // WIRE_SPEC 16.3 — the hold signal (cause 0x01) and the stop of the outbound audio: CALL_HOLD goes to
+                    // the peer, RESUMED is written before the audio restarts. Whichever side triggered this action.
+                    self.callService.holdSetSystemHold(isOnHold)
+                    // Video: paused and restored on the FIRST / LAST hold cause of any kind, see
+                    // `callService.onLocalHoldActiveChanged` below (a CallKit unhold must not resume video while another
+                    // cause, an audio interruption, is still active).
                 }
             }
             // W464 — CallKit owns the shared AVAudioSession. The audio
@@ -6323,6 +6316,39 @@ final class AppState: ObservableObject {
         // `media-lost` (live: call 50d86a9f, 2026-08-29).
         callService.getAudioRtpBytesReceived = { [weak self] in
             (self?.webRtcController as? QAudionWebRtcCallController)?.audioRtpBytesReceived ?? -1
+        }
+        // WIRE_SPEC 16.6 — the "peer not audible" hint is not shown while media is deliberately held by the identity gate
+        // (the iOS app has no peer-mute indication of its own to add here).
+        callService.holdHintSuppressed = { [weak self] in
+            self?.awaitingIdentityConfirmation ?? false
+        }
+        // WIRE_SPEC 16.3 privacy — while this side is HELD, whatever the cause (CallKit hold, audio interruption, session
+        // deactivation), the camera is paused as well; it is restored only when the LAST cause is removed, and only if the
+        // video was active and not paused by the user before. `CallHoldPolicy` is the pure decision.
+        callService.onLocalHoldActiveChanged = { [weak self] held in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                // A stale event (the hold changed again before this ran): the latest one decides.
+                guard held == self.callService.isLocalHeld else { return }
+                let video = CallHoldPolicy.videoAction(
+                    isOnHold: held,
+                    isGroupCall: self.groupCallKitId != nil,
+                    isVideoCall: self.isVideoCall,
+                    localVideoAlreadyPaused: self.localVideoPaused,
+                    videoPausedByPriorHold: self.holdPausedLocalVideo)
+                if video.pauseLocalVideo {
+                    self.holdPausedLocalVideo = true
+                    self.videoSetCameraEnabled(false)
+                }
+                if video.resumeLocalVideo {
+                    self.videoSetCameraEnabled(true)
+                }
+                if !held {
+                    self.holdPausedLocalVideo = false
+                    // An unpause that arrived while held (consent, initial video, promotion, screen share) is applied now.
+                    if self.videoUnpauseDeferral.released() { self.videoPipeline?.setVideoPaused(false) }
+                }
+            }
         }
         // W-SRTPWIREMETRICS (2026-08-29) — the outbound twin; see
         // `CallService.sampleWireThroughput` for why the UI needs both on an
@@ -7991,6 +8017,7 @@ final class AppState: ObservableObject {
             // "cannot prove it belongs to this call" → STANDARD.
             self.peerCapabilityBinding.store(callId: callIdStr,
                                              capabilities: self.pendingPeerCapabilities)
+            self.callService.holdNoteEvent("tag")  // WIRE_SPEC 16.3 — a hold state waiting for the peer tag goes out now
             // W77: bind the inbound call_id on the calling impl so the
             // subsequent `sendCallAnswer` / `sendCallHangup` envelopes
             // use the SAME id the server registered for this call.
@@ -9469,7 +9496,7 @@ final class AppState: ObservableObject {
         if isCameraUpgrade {
             videoConsentGranted = true
             // Frames were held back (paused preview) until this consent.
-            videoPipeline?.setVideoPaused(false)
+            unpauseOutboundVideo(videoPipeline)
         }
         // VIDEODIAG — upgrade accepted: video is expected from here on.
         startVideoDiagWatchdogIfNeeded()
@@ -11113,6 +11140,7 @@ final class AppState: ObservableObject {
                         : ((self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?
                             .getActiveCallId() ?? "")
                     self.peerCapabilityBinding.store(callId: cid, capabilities: pc)
+                    self.callService.holdNoteEvent("tag")  // WIRE_SPEC 16.3
                 }
             }
             // R-EARBUD: no earbud counterparty handshake on the answer either (retired, see the
@@ -16687,6 +16715,8 @@ final class AppState: ObservableObject {
     /// silently (duplicate rule), and the sender-device rule is unaffected (the copy comes from the same device).
     @MainActor
     private func handleSocketReauthForConfirmation() {
+        // WIRE_SPEC 16.3 — the signalling socket re-authenticated: an unacknowledged hold state is sent again.
+        callService.holdNoteEvent("reauth")
         guard let cid = canonicalActiveCallId()?.lowercased(), !cid.isEmpty else { return }
         for integration in [callService.callIntegration, responderCallIntegration].compactMap({ $0 }) {
             integration.noteSocketReauth(callId: cid)
@@ -20855,7 +20885,7 @@ final class AppState: ObservableObject {
                        startedPaused: videoStartedPaused,
                        callFinalizedNow: callFinalizedCallId == nativeSrtpOutgoingCallId) {
                     RTLog.info("call", "video start unpaused finalized=1")
-                    startedPipeline.setVideoPaused(false)
+                    unpauseOutboundVideo(startedPipeline)
                 }
             }
             // W347: also kick off a WebRTC outgoing call. This rides in
@@ -21618,6 +21648,9 @@ final class AppState: ObservableObject {
     /// NEXT call and end it.
     @MainActor
     private func cancelIceDisconnectGrace() {
+        // WIRE_SPEC 16.7 — ICE is carrying again (a restart ended, the leg changed): an unacknowledged hold state is
+        // sent again on both legs. A no-op unless this side holds and the last state was not acknowledged.
+        callService.holdNoteEvent("ice")
         iceDisconnectGraceTask?.cancel()
         iceDisconnectGraceTask = nil
         iceGraceExtendedForRestart = false
@@ -21701,7 +21734,7 @@ final class AppState: ObservableObject {
             self.outgoingRingtone.play(.callConnected)
             self.callService.handleCallAnswered()
             if self.isVideoCall {
-                self.videoPipeline?.setVideoPaused(false)
+                self.unpauseOutboundVideo(self.videoPipeline)
             }
             // W-TELEMANSWERED (2026-09-14) — moved here from `startCall()`.
             // This function only runs once the callee's device has
@@ -22414,7 +22447,7 @@ extension AppState {
                     guard let self else { return }
                     await self.startVideoPipeline(for: peerId, startPaused: true)
                     guard self.videoPipeline != nil else { return }
-                    self.videoPipeline?.setVideoPaused(false)
+                    self.unpauseOutboundVideo(self.videoPipeline)
                     #if os(iOS)
                     // W-VIDPRIVACY pixel-buffer wiring race — `webrtcPixel
                     // BufferCapturer` is created inside `handleIncoming
@@ -22673,7 +22706,7 @@ extension AppState {
             announceVideoState(force: false)
             return
         }
-        newPipeline.setVideoPaused(false)
+        unpauseOutboundVideo(newPipeline)
         #if os(iOS)
         wirePixelBufferCapturerWithRetry(retriesRemaining: 5)
         #endif
@@ -23759,6 +23792,7 @@ extension AppState {
         // must not leave the next call's resume logic believing IT paused
         // the camera.
         holdPausedLocalVideo = false
+        videoUnpauseDeferral.reset()
         // W-ICEGRACE — kill any pending ICE-disconnect countdown for the call
         // being torn down here. Without this a grace armed at the very end of
         // one call could fire 3s later, find the NEXT call live in
@@ -24523,6 +24557,8 @@ extension AppState {
     /// Toggle the local camera for video calls. Pauses/resumes the
     /// video capture pipeline. No-op when there is no active video call.
     func setCamera(_ enabled: Bool) {
+        // WIRE_SPEC 16.3 privacy: no camera while the call is held.
+        if enabled, !OutboundVideoGate.mayEnableCamera(locallyHeld: callService.isLocalHeld) { return }
         videoPipeline?.setCameraEnabled(enabled)
     }
 
@@ -24787,6 +24823,11 @@ extension AppState {
     ///   - The WebRTC controller is live so its `webrtcPixelBuffer
     ///     Capturer` is non-nil.
     public func startScreenShare() async {
+        // WIRE_SPEC 16.3 privacy: no screen share while the call is held.
+        guard OutboundVideoGate.mayStartScreenShare(locallyHeld: callService.isLocalHeld) else {
+            print("[AppState] callhold: screen share refused while held")
+            return
+        }
         #if os(iOS)
         guard isInCall else {
             RTLog.warn("call", "startScreenShare: not in a call — refusing")
@@ -24862,7 +24903,7 @@ extension AppState {
         videoPipeline?.externalFeedActive = true
         // Screen frames must flow even if the camera path was consent-paused
         // (sharing the screen is itself the user's explicit choice).
-        videoPipeline?.setVideoPaused(false)
+        unpauseOutboundVideo(videoPipeline)
         screenShareController.onFrame = { [weak self] pixelBuffer, ts in
             self?.videoPipeline?.submitExternalFrame(pixelBuffer, presentationTimeNs: ts)
         }
@@ -28951,6 +28992,8 @@ extension AppState {
         let startSerial = videoPipelineStartSerial
 
         let pipeline = VideoCallPipeline()
+        // WIRE_SPEC 16.3 privacy — the pipeline asks the call, live on every frame, whether this side is held.
+        pipeline.isLocalHeld = { [weak self] in self?.callService.isLocalHeld ?? false }
         // media-consent v1:
         //  - sourceMode .external = no camera ever (screen-share encode, or
         //    decode-only rendering of a WS peer's screen).
@@ -29286,6 +29329,11 @@ extension AppState {
     /// whether the send succeeds — never blocks, never throws into the UI.
     @MainActor
     func videoSetCameraEnabled(_ enabled: Bool) {
+        // WIRE_SPEC 16.3 privacy: refused while the call is held; the release restores the camera only if it was active.
+        if enabled, !OutboundVideoGate.mayEnableCamera(locallyHeld: callService.isLocalHeld) {
+            print("[AppState] callhold: camera enable refused while held")
+            return
+        }
         videoPipeline?.setCameraEnabled(enabled)
         videoTransitionCause = enabled ? "local-camera-start" : "local-camera-stop"
         localVideoPaused = !enabled

@@ -18,6 +18,8 @@ struct CallInProgressBar: View {
     let contactName: String?
     /// How long the call has lasted, in seconds; read again on every tick of the one-second clock.
     let elapsedSeconds: () -> TimeInterval
+    /// The peer holds the call (WIRE_SPEC 16.4): the title says "In attesa" / "On hold"; read again on every tick.
+    let peerOnHold: () -> Bool
     /// The bar was tapped.
     let onReturn: () -> Void
 
@@ -85,9 +87,15 @@ struct CallInProgressBar: View {
             .accessibilityHidden(true)
     }
 
+    @ViewBuilder
     private var titleText: some View {
-        Text("Chiamata in corso")
-            .font(.subheadline.weight(.semibold))
+        if peerOnHold() {
+            Text("call.peer_on_hold")
+                .font(.subheadline.weight(.semibold))
+        } else {
+            Text("Chiamata in corso")
+                .font(.subheadline.weight(.semibold))
+        }
     }
 
     @ViewBuilder

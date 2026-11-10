@@ -801,7 +801,7 @@ final class CallerAcceptLatchTests: XCTestCase {
         let abandonAt = try XCTUnwrap(tail.range(of: "if !CallerOutgoingStatePolicy.shouldContinueSetupAfterVideoStart("))
         let stopAt = try XCTUnwrap(tail.range(of: "if let startedPipeline { startedPipeline.stop()"))
         let unpauseAt = try XCTUnwrap(tail.range(of: "CallerOutgoingStatePolicy.shouldUnpauseAfterVideoStart( startedPaused: videoStartedPaused, callFinalizedNow: callFinalizedCallId == nativeSrtpOutgoingCallId)"))
-        let setAt = try XCTUnwrap(tail.range(of: "startedPipeline.setVideoPaused(false)"))
+        let setAt = try XCTUnwrap(tail.range(of: "unpauseOutboundVideo(startedPipeline)"))
         XCTAssertLessThan(abandonAt.lowerBound, stopAt.lowerBound)
         XCTAssertLessThan(stopAt.lowerBound, unpauseAt.lowerBound, "the un-pause is after the torn-down check")
         XCTAssertLessThan(unpauseAt.lowerBound, setAt.lowerBound)

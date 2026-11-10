@@ -558,6 +558,12 @@ public enum CallCapabilities {
     /// DataChannel, closes its relay leg and accepts inner-sealed frames on the DataChannel. Byte-exact ASCII string.
     public static let outerOffV1: String = "outer-off-v1"
 
+    /// `call-hold-v1` (WIRE_SPEC 16.2), byte-exact lowercase ASCII: this endpoint RECEIVES control kinds `0x04` and `0x05`,
+    /// shows the held state ("In attesa" / "On hold"), plays the local hold tone and answers every valid `CALL_HOLD` with a
+    /// `CALL_HOLD_ACK`. It does not say that the endpoint sends a `CALL_HOLD`. Sending is gated on the PEER's tag, never on
+    /// `dc-hangup-v1`. Not part of the signed `CAPS9` (no control kind carries a security decision).
+    public static let callHoldV1: String = "call-hold-v1"
+
     // ── W-LONGAUDIO (2026-08-10): the negotiated 60 ms / 256-byte profile ──
     //
     // Two tags, byte-exact, identical on Android, iOS, Desktop. They are
@@ -713,7 +719,7 @@ public enum CallCapabilities {
         // teardown as call_hangup), so advertising is honest; ungated and
         // never stripped, matching Android's registry (`add(DC_HANGUP_V1)`,
         // no kill switch — sending is itself best-effort and additive).
-        var caps: [String] = [sframeV1, ratchetV3, vkeyV1, upgradeIntentRecvV1, iceBatchV1, dcHangupV1, audioNackV1, outerOffV1]
+        var caps: [String] = [sframeV1, ratchetV3, vkeyV1, upgradeIntentRecvV1, iceBatchV1, dcHangupV1, audioNackV1, outerOffV1, callHoldV1]
         if v4SFrameAes256Enabled { caps.append(sframeAes256V1) }
         // W-LONGAUDIO — receive support, then send support. Both gated; both
         // ship absent. See the two kill switches above for why the RECEIVE one

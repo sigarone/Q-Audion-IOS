@@ -875,7 +875,17 @@ APP_VOCAB = frozenset("""
     alone promo
 
     micperm st ask
+
+    callhold
 """.split())
+# CALL HOLD (WIRE_SPEC 16, 2026-11-10) -- "callhold" (the line right above) is the one new word, for the "call"-tagged RTLog
+# lines of the hold signal; every value is a number or a short enum word, never an id:
+#   callhold tx st=<1 held|2 resumed> c=<cause 0-3> seq=<n> m=<mode 1-3>
+#   callhold rx st=<1|2> c=<0-3> seq=<n> ap=<0 old or equal|1 applied>
+#   callhold ackrx=1 seq=<n>         callhold acktx=1 seq=<n> leg=<1 dc|2 relay>
+#   callhold unacked=1 seq=<n>       callhold expiry=1        callhold clear=1 why=1   (3 s of real audio; an expiry is "callhold expiry=1")
+#   callhold hint=<0|1>              callhold tone=1
+# Pinned by test_ship_ios_callhold_vocab.py.
 # GROUP CALL PROMOTION AND ADMISSION (2026-10-23) -- "alone" (the line right above) is for the lone-call timer of a group call:
 #   grp alone phase=<1-4> ms=<n>        (1 armed, 2 cancelled, 3 left, 4 ended; ms = the timer's length)
 # Every other new group line uses words that were already vocabulary and only numbers:

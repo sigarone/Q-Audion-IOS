@@ -499,7 +499,9 @@ struct LiveInCallScreen: View {
                 // calibrated yet (see `UncalibratedVoiceIndicators`).
                 peerOwnerContinuityLevel: appState.peerOwnerContinuityLevel,
                 contactVoiceLevel: appState.contactVoiceLevel,
-                speakerChange: appState.speakerChangeVerdict
+                speakerChange: appState.speakerChangeVerdict,
+                peerOnHold: appState.callService.peerOnHold,
+                peerNotAudible: appState.callService.peerNotAudible
             )
             .sheetOnly(isSecuritySheetHost)
     }

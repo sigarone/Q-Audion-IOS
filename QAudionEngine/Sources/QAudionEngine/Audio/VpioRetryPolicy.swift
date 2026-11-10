@@ -10,9 +10,29 @@ public enum VpioRetryPolicy {
     /// Timed attempts per call (2 s, 5 s, 15 s, 30 s, 30 s); a route-driven restart starts a fresh budget.
     public static let maxTimedAttempts: Int = 5
 
+    /// Timer fires that found the hardware not ready (or a group call owning VP-IO) and so rebuilt nothing. They do not use
+    /// an attempt, but they are capped too, so a timer that keeps finding the same obstacle stops instead of re-arming for
+    /// ever with a log line every 30 s.
+    public static let maxSkips: Int = 5
+
     /// May another timed attempt be armed after `attemptsMade` attempts?
     public static func hasBudget(attemptsMade: Int) -> Bool {
         attemptsMade < maxTimedAttempts
+    }
+
+    /// May another timer be armed after `skipsMade` skipped fires?
+    public static func hasSkipBudget(skipsMade: Int) -> Bool {
+        skipsMade < maxSkips
+    }
+
+    /// Skip counter after a restart: a route-driven one starts a fresh budget, like the attempt counter.
+    public static func skipsAfterRestart(current: Int, routeDriven: Bool) -> Int {
+        routeDriven ? 0 : current
+    }
+
+    /// Delay before the next timer: the ramp advances with attempts and skips together, so a skip never re-arms at 2 s again.
+    public static func delayMs(attempt: Int, skips: Int) -> Int {
+        delayMs(attempt: attempt + max(0, skips))
     }
 
     /// Attempt counter after a restart: a route-driven one starts a fresh budget.
@@ -27,9 +47,9 @@ public enum VpioRetryPolicy {
     }
 
     /// Should a timer be armed after an engine start?
-    public static func shouldArm(vpioActive: Bool, degradedByError: Bool, attemptsMade: Int) -> Bool {
+    public static func shouldArm(vpioActive: Bool, degradedByError: Bool, attemptsMade: Int, skipsMade: Int = 0) -> Bool {
         guard !vpioActive, degradedByError else { return false }
-        return hasBudget(attemptsMade: attemptsMade)
+        return hasBudget(attemptsMade: attemptsMade) && hasSkipBudget(skipsMade: skipsMade)
     }
 
     /// What the hardware looks like right before Voice-Processing is enabled.

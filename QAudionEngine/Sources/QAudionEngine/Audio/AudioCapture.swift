@@ -955,6 +955,8 @@ public final class AudioCapture {
     // Timed re-attempt of Voice-Processing after an error bypass (VpioRetryPolicy).
     private var vpioRetryTimer: DispatchWorkItem?
     private var vpioRetryAttempt = 0
+    /// Fires that found the hardware not ready or a group call on VP-IO: no attempt used, capped by `VpioRetryPolicy.maxSkips`.
+    private var vpioRetrySkips = 0
     private var vpioRetryInFlight = false
     private var vpioRetryGaveUp = false
 
@@ -2369,7 +2371,7 @@ public final class AudioCapture {
     private func cancelVpioRetryTimer(resetAttempts: Bool) {
         vpioRetryTimer?.cancel()
         vpioRetryTimer = nil
-        if resetAttempts { vpioRetryAttempt = 0; vpioRetryInFlight = false; vpioRetryGaveUp = false }
+        if resetAttempts { vpioRetryAttempt = 0; vpioRetrySkips = 0; vpioRetryInFlight = false; vpioRetryGaveUp = false }
     }
 
     /// Called at the end of every engine start. Any restart (route change,
@@ -2397,7 +2399,7 @@ public final class AudioCapture {
         // route-driven rebuild cannot fire right after it and rebuild again.
         cancelVpioRetryTimer(resetAttempts: false)
         guard VpioRetryPolicy.shouldArm(vpioActive: active, degradedByError: true,
-                                        attemptsMade: vpioRetryAttempt) else {
+                                        attemptsMade: vpioRetryAttempt, skipsMade: vpioRetrySkips) else {
             if !vpioRetryGaveUp {
                 vpioRetryGaveUp = true
                 emitDiagLine(VpioRetryPolicy.fireLine(gen: vpioWatchdogGen, attempt: vpioRetryAttempt, result: .stop))
@@ -2408,7 +2410,7 @@ public final class AudioCapture {
     }
 
     private func armVpioRetryTimer() {
-        let delay = VpioRetryPolicy.delayMs(attempt: vpioRetryAttempt)
+        let delay = VpioRetryPolicy.delayMs(attempt: vpioRetryAttempt, skips: vpioRetrySkips)
         let work = DispatchWorkItem { [weak self] in self?.fireVpioRetry() }
         vpioRetryTimer = work
         emitDiagLine(VpioRetryPolicy.armLine(gen: vpioWatchdogGen, attempt: vpioRetryAttempt, delayMs: delay))
@@ -2424,8 +2426,6 @@ public final class AudioCapture {
             armVpioRetryTimer()
             return
         }
-        vpioRetryAttempt += 1
-        let attempt = vpioRetryAttempt
         // Do not rebuild the engine while the hardware still has no input
         // format or while a group call owns VP-IO: that would only glitch audio.
         let inputReady: Bool = {
@@ -2441,11 +2441,20 @@ public final class AudioCapture {
                                                     inputRate: rate, inputChannels: ch)
             return VpioRetryPolicy.selectFormat(hw, preferredRate: Double(AudioConstants.sampleRate)).ready
         }()
+        // A skip uses no attempt (the increment comes after this check) and has a budget of its own: once it is spent the
+        // timer is not re-armed and the existing stop line is written once.
         if !inputReady || isGroupCallActive?() == true {
-            emitDiagLine(VpioRetryPolicy.fireLine(gen: vpioWatchdogGen, attempt: attempt, result: .skip))
-            armVpioRetryTimer()
+            vpioRetrySkips += 1
+            emitDiagLine(VpioRetryPolicy.fireLine(gen: vpioWatchdogGen, attempt: vpioRetryAttempt + 1, result: .skip))
+            if VpioRetryPolicy.hasSkipBudget(skipsMade: vpioRetrySkips) {
+                armVpioRetryTimer()
+            } else if !vpioRetryGaveUp {
+                vpioRetryGaveUp = true
+                emitDiagLine(VpioRetryPolicy.fireLine(gen: vpioWatchdogGen, attempt: vpioRetryAttempt, result: .stop))
+            }
             return
         }
+        vpioRetryAttempt += 1
         vpioRetryInFlight = true
         audioPipeline.noteVoiceProcessingRetry()
         // start() reconciles: success logs res=ok and clears the timer, failure re-arms it.
@@ -2475,6 +2484,7 @@ public final class AudioCapture {
     private func restartEngineForRoute(routeDriven: Bool = false) {
         guard isRunning else { return }
         vpioRetryAttempt = VpioRetryPolicy.attemptsAfterRestart(current: vpioRetryAttempt, routeDriven: routeDriven)
+        vpioRetrySkips = VpioRetryPolicy.skipsAfterRestart(current: vpioRetrySkips, routeDriven: routeDriven)
         if routeDriven { vpioRetryGaveUp = false }
         if audioPipeline.forceDisableVoiceProcessing,
            Self.shouldRetryVoiceProcessing(bypassCount: audioPipeline.voiceProcessingBypassCount,

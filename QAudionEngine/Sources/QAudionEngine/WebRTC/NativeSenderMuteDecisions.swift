@@ -59,10 +59,13 @@ public enum NativeSenderMuteDecisions {
     ///   - relayStartPending: the fallback is engaged but the relay capture is not confirmed
     ///     running yet (or the start was given up): the native sender stays as it is for the
     ///     fallback's sake, so the call is never left without a sender.
+    ///   - localHold: this side is HELD (WIRE_SPEC 16.3, a system hold or an audio interruption): the outbound track is
+    ///     disabled for as long as it lasts. A held sender may still emit DTX or comfort packets; the receiver relies on the
+    ///     CALL_HOLD frame, never on RTP silence.
     public static func shouldMute(
-        peerAnswered: Bool, userMuted: Bool, fallbackActive: Bool, relayStartPending: Bool = false
+        peerAnswered: Bool, userMuted: Bool, fallbackActive: Bool, relayStartPending: Bool = false, localHold: Bool = false
     ) -> Bool {
-        !peerAnswered || userMuted || (fallbackActive && !relayStartPending)
+        !peerAnswered || userMuted || localHold || (fallbackActive && !relayStartPending)
     }
 
     /// What a mute/unmute request should do to the actual
