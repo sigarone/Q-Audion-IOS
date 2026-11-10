@@ -123,7 +123,7 @@ struct InCallChatHost<Content: View>: View {
         content
             .environment(\.inCallChat, access)
             .fullScreenCover(item: $chat.target, onDismiss: {
-                ScreenshotLockService.lock()
+                ScreenshotLockService.lock(owner: "call")
                 chat.refreshUnread(peerUserId: appState.callContactId)
             }) { target in
                 InCallChatCover(target: target)

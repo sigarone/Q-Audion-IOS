@@ -595,7 +595,10 @@ struct ChatListScreen: View {
         .onAppear {
             updateGroupRows()
             handleListAppear()
+            syncListLock()
         }
+        .onDisappear { ScreenshotLockService.unlock(owner: Self.listLockOwner) }
+        .onChange(of: listShowsProtectedPreview) { _ in syncListLock() }
         .onChange(of: container.viewModel.items.count) { _ in dropSelectionIfGone() }
         // A live location share of a previous run was ended at launch (it is never resumed): the user is told once.
         .locationInterruptedAlert()
@@ -851,7 +854,7 @@ struct ChatListScreen: View {
                 name: DisplayName.forGroup(id: e.id, name: e.name),
                 memberCount: e.members.count,
                 epoch: Int(e.epoch),
-                preview: Self.groupPreviewText(for: last),
+                preview: Self.protectedGroupPreview(Self.groupPreviewText(for: last), last: last),
                 lastActivity: last?.ts ?? e.joinedAt,
                 unread: GroupMessageStore.shared.unreadCount(forGroupHex: e.id),
                 avatarUrl: e.avatarRef.flatMap {
@@ -861,6 +864,16 @@ struct ChatListScreen: View {
         .sorted { $0.lastActivity > $1.lastActivity }
 
         groupRows = result
+    }
+
+    /// A protected group (screenshot lock on, or a self-destructing last message) never keeps message text in its row.
+    private static func protectedGroupPreview(_ text: String?, last: GroupMessageStore.Stored?) -> String? {
+        guard let text, !text.isEmpty else { return text }
+        let selfDestructing = last.map { $0.isViewOnce == true || $0.expiresAt != nil } ?? false
+        let protected = ChatProtectionPolicy.isProtected(
+            lockEnabled: ChatProtectionPolicy.lockPreferenceEnabled(), peerGranted: nil,
+            ephemeralTimerSeconds: nil, selfDestructingMessage: selfDestructing)
+        return protected ? ChatProtectionPolicy.protectedPreviewMarker : text
     }
 
     /// Fase 1B — chat-list row preview text for a group's newest message.
@@ -1138,12 +1151,30 @@ struct ChatListScreen: View {
         }
     }
 
+    private static let listLockOwner = "chat_list"
+
+    /// True while a row of this list stands for a protected conversation, so the list itself must be kept out of captures.
+    private var listShowsProtectedPreview: Bool {
+        if container.viewModel.items.contains(where: { $0.lastMessagePreview == ChatProtectionPolicy.protectedPreviewMarker }) {
+            return true
+        }
+        return groupRows.contains(where: { $0.preview == ChatProtectionPolicy.protectedPreviewMarker })
+    }
+
+    private func syncListLock() {
+        if listShowsProtectedPreview {
+            ScreenshotLockService.lock(owner: Self.listLockOwner)
+        } else {
+            ScreenshotLockService.unlock(owner: Self.listLockOwner)
+        }
+    }
+
     /// Preview line for a group row: the last message (truncated like the
     /// 1:1 preview) when present, else the member-count/epoch subtitle the
     /// group previously showed as its only signal.
     private func groupPreviewText(_ row: GroupRowUi) -> String {
         if let preview = row.preview, !preview.isEmpty {
-            return preview.count > 120 ? String(preview.prefix(120)) + "…" : preview
+            return ProtectedPreview.groupText(preview.count > 120 ? String(preview.prefix(120)) + "…" : preview)
         }
         return String(localized: "chat_list.group_preview_member_epoch", defaultValue: "\(row.memberCount) membri · epoch \(row.epoch)", comment: "Group chat row subtitle shown when there is no message yet; %lld = member count, %lld = epoch number.")
     }
@@ -1317,7 +1348,7 @@ struct ChatListScreen: View {
                         // first line.
                         HStack(spacing: 4) {
                             rowExtensionPrefix(item, title: rowTitle)
-                            Text(preview)
+                            Text(ProtectedPreview.text(preview))
                                 .qaudionStyle(type.bodySmall)
                                 .foregroundStyle(scheme.onSurfaceVariant)
                                 .lineLimit(2)

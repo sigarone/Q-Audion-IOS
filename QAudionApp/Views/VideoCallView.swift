@@ -206,7 +206,7 @@ struct VideoCallView: View {
         .animation(.easeInOut(duration: 0.25), value: appState.showPeerVideoInviteBanner)
         .statusBarHidden(!showControls)
         .onAppear {
-            ScreenshotLockService.lock()
+            ScreenshotLockService.lock(owner: "call_video")
             resolveDisplayName()
             // W-AUDIOUILIE (2026-07-24) — mute/speaker are still local @State and
             // so still need a remount re-sync (the camera no longer does: it is
@@ -221,7 +221,7 @@ struct VideoCallView: View {
             isSpeaker = appState.callSpeakerOn
         }
         .onDisappear {
-            ScreenshotLockService.unlock()
+            ScreenshotLockService.unlock(owner: "call_video")
         }
         .onChange(of: appState.callContactId) { _ in
             resolveDisplayName()

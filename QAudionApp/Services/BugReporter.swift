@@ -236,10 +236,9 @@ public final class BugReporter: ObservableObject {
     /// dev/TestFlight-only screenshot-lock bypass described in `triggerManual`.
     private func captureScreenForReport() -> UIImage? {
         #if QAUDION_DEV_TOOLS
-        let wasLocked = ScreenshotLockService.isLocked
-        if wasLocked { ScreenshotLockService.unlock() }
+        let held = ScreenshotLockService.suspendAll()
         let screenshot = captureScreen()
-        if wasLocked { ScreenshotLockService.lock() }
+        ScreenshotLockService.resume(held)
         return screenshot
         #else
         return captureScreen()

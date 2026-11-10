@@ -191,10 +191,10 @@ struct RecoverySeedContainerView: View {
         // shown. `.verify` mode (the user TYPES a phrase they already hold)
         // takes no lock, and therefore releases none either.
         .onAppear {
-            if container.mode == .setup { ScreenshotLockService.lock() }
+            if container.mode == .setup { ScreenshotLockService.lock(owner: "recovery") }
         }
         .onDisappear {
-            if container.mode == .setup { ScreenshotLockService.unlock() }
+            if container.mode == .setup { ScreenshotLockService.unlock(owner: "recovery") }
         }
     }
 }

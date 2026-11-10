@@ -168,7 +168,7 @@ struct LiveInCallScreen: View {
             // peer identity. Mirror ChatDetailScreen's secure-window
             // lifecycle so screenshots / screen recording / AirPlay
             // mirroring of that material are blocked while it is up.
-            ScreenshotLockService.lock()
+            ScreenshotLockService.lock(owner: "call")
             resolvePeerDisplayName()
             // W-AUDIOUILIE (2026-07-24) — this surface is REMOUNTED mid-call
             // every time the pair transitions to/from both-paused, and both
@@ -185,7 +185,7 @@ struct LiveInCallScreen: View {
             // SECURITY F-3: release the secure window when the call
             // surface unmounts (same unconditional unlock pattern as
             // ChatDetailScreen.handleScreenDisappear).
-            ScreenshotLockService.unlock()
+            ScreenshotLockService.unlock(owner: "call")
         }
         .onChange(of: appState.callContactId) { _ in
             // Re-resolve when the call peer changes (e.g. switching

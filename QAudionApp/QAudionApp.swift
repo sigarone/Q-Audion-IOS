@@ -131,6 +131,8 @@ struct QAudionApp: App {
     @State private var currentLanguageCode = AppLanguageManager.effectiveLanguageCode
 
     init() {
+        // A protected conversation never stores message text as its list preview.
+        ChatProtectionPolicy.maskStoredPreviews = true
         // The app's default Data Protection class is "complete" (see QAudion.entitlements): name the class of the few folders
         // that receive files while the phone is locked (after the first unlock) first.
         // Only the Siri bridge and notification containers are read while locked; the vpn and share containers keep the default.
@@ -425,6 +427,8 @@ struct QAudionApp: App {
                 // screen-recording/mirroring session and warn in the log,
                 // same gate + scheme as the screenshot observer above.
                 registerScreenRecordingObserver()
+                // Blur for the App Switcher and a cover while a protected screen is recorded or mirrored.
+                PrivacyShield.start()
                 // W-APPSTORAGEDEADLOCK — keep the root-level @State in sync
                 // with the real (Keychain-backed) value without SwiftUI's
                 // own @AppStorage/UserDefaults-observer machinery. See
