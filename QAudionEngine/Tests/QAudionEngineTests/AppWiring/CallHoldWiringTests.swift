@@ -65,9 +65,10 @@ final class CallHoldWiringTests: XCTestCase {
         XCTAssertTrue(tx.contains("guard !holdLocalActive else { return }"), "sealed-frame path: no frame at all")
         XCTAssertTrue(service.contains("localHold: holdLocalActive"), "native SRTP path: the outbound track is disabled")
         let remove = try slice(service, from: "func holdRemoveCause(", to: "func holdSetSystemHold(")
-        let resumedFirst = try XCTUnwrap(remove.range(of: "guard sender.removeCause(cause) else { return }"))
+        let resumedFirst = try XCTUnwrap(remove.range(of: "holdSender?.removeCause(cause)"))
         let afterResumed = String(remove[resumedFirst.upperBound...])
-        XCTAssertTrue(afterResumed.contains("holdLocalActive = false"), "RESUMED is written before audio restarts")
+        XCTAssertTrue(afterResumed.contains("guard result.change == .released else { return } holdLocalActive = false"),
+                      "RESUMED is written before audio restarts, and only when both cause sets are empty")
     }
 
     func testTheSilenceWatchdogAsksTheHoldGateAndTheSessionTriggersAreWired() throws {
@@ -97,7 +98,8 @@ final class CallHoldWiringTests: XCTestCase {
         XCTAssertFalse(hold.contains("videoSetCameraEnabled"), "the CallKit handler no longer decides video")
         XCTAssertTrue(app.contains("callService.onLocalHoldActiveChanged = {"))
         let service = try code("QAudionApp/Services/CallService.swift")
-        XCTAssertTrue(service.contains("if ensureHoldSender().addCause(cause) { onLocalHoldActiveChanged?(true) }"))
+        XCTAssertTrue(service.contains("ensureHoldSender().addCause(cause)"))
+        XCTAssertTrue(service.contains("if result.change == .held {"))
         XCTAssertTrue(service.contains("onLocalHoldActiveChanged?(false)"))
     }
 
@@ -117,9 +119,10 @@ final class CallHoldWiringTests: XCTestCase {
     func testASystemHoldBeforeTheCallIsActiveStillPausesVideoAndMutes() throws {
         let service = try code("QAudionApp/Services/CallService.swift")
         let add = try slice(service, from: "func holdAddCause(", to: "func holdRemoveCause(")
-        let pending = try XCTUnwrap(add.range(of: "holdPendingCauses.append(cause)"))
+        let pending = try XCTUnwrap(add.range(of: "holdLedger.add(cause, callActive: active)"))
         let video = try XCTUnwrap(add.range(of: "onLocalHoldActiveChanged?(true)"))
         XCTAssertLessThan(pending.lowerBound, video.lowerBound)
+        XCTAssertTrue(add.contains("if active { holdFlushPendingCauses() }"), "pending causes flush first when the call is active")
         XCTAssertTrue(add.contains("reapplyNativeSenderMute(site: 7)"))
         XCTAssertTrue(service.contains("holdFlushPendingCauses()"), "CALL_HOLD goes out when the call becomes active")
     }

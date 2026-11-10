@@ -576,6 +576,58 @@ final class CallHoldTests: XCTestCase {
         XCTAssertFalse(d.released())
     }
 
+    // MARK: - Pending and sender causes are one set
+
+    func testAPendingCallKitCauseAndAnActiveInterruptionCauseHoldTogether() {
+        var l = HoldCauseLedger()
+        // CallKit hold before the call is active: pending
+        XCTAssertEqual(l.add(CallHoldWire.causeSystemCall, callActive: false).change, .held)
+        // the call becomes active, an audio interruption arrives: pending flushes first, then the new cause joins
+        XCTAssertEqual(l.flush(), [CallHoldWire.causeSystemCall])
+        XCTAssertEqual(l.add(CallHoldWire.causeAudioInterruption, callActive: true).change, .none, "already held")
+        // removing one keeps the call held: no release, so video and audio stay stopped
+        XCTAssertEqual(l.remove(CallHoldWire.causeAudioInterruption).change, .none)
+        XCTAssertTrue(l.isHeld)
+        XCTAssertEqual(l.remove(CallHoldWire.causeSystemCall).change, .released)
+        XCTAssertFalse(l.isHeld)
+    }
+
+    func testRemovingTheSenderCauseWhileAnotherIsPendingDoesNotRelease() {
+        var l = HoldCauseLedger()
+        _ = l.add(CallHoldWire.causeAudioInterruption, callActive: true)
+        // the call flaps inactive and a system hold is recorded as pending
+        XCTAssertEqual(l.add(CallHoldWire.causeSystemCall, callActive: false).change, .none)
+        let r = l.remove(CallHoldWire.causeAudioInterruption)
+        XCTAssertEqual(r.change, .none, "the pending cause still holds")
+        XCTAssertTrue(r.fromSender)
+        XCTAssertTrue(l.isHeld)
+        let r2 = l.remove(CallHoldWire.causeSystemCall)
+        XCTAssertEqual(r2.change, .released)
+        XCTAssertFalse(r2.fromSender, "it was pending: the sender never had it")
+    }
+
+    func testAFlushAfterActivationKeepsTheCallHeldAndNeverReleases() {
+        var l = HoldCauseLedger()
+        XCTAssertEqual(l.add(CallHoldWire.causeSystemCall, callActive: false).change, .held)
+        XCTAssertEqual(l.add(CallHoldWire.causeAudioInterruption, callActive: false).change, .none)
+        XCTAssertEqual(l.flush(), [CallHoldWire.causeSystemCall, CallHoldWire.causeAudioInterruption])
+        XCTAssertTrue(l.isHeld, "still held after the flush: video stays paused")
+        XCTAssertTrue(l.pending.isEmpty)
+        XCTAssertEqual(l.flush(), [], "nothing to flush twice")
+        XCTAssertEqual(l.remove(CallHoldWire.causeSystemCall).change, .none)
+        XCTAssertEqual(l.remove(CallHoldWire.causeAudioInterruption).change, .released)
+    }
+
+    func testRemovingAnUnknownCauseChangesNothing() {
+        var l = HoldCauseLedger()
+        XCTAssertEqual(l.remove(3).change, .none)
+        _ = l.add(1, callActive: true)
+        XCTAssertEqual(l.remove(3).change, .none)
+        XCTAssertTrue(l.isHeld)
+        l.reset()
+        XCTAssertFalse(l.isHeld)
+    }
+
     // MARK: - Receive trust
 
     func testAHoldFrameActsOnlyWhenTheSealWasOpenedOrItCameOverDtlsInOff() {
