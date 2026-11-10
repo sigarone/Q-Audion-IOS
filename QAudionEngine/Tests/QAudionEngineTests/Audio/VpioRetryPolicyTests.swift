@@ -30,6 +30,58 @@ final class VpioRetryPolicyTests: XCTestCase {
         XCTAssertEqual(VpioRetryPolicy.attemptsAfterRestart(current: 3, routeDriven: false), 3)
     }
 
+    // MARK: - Skipped fires (the timer found the hardware not ready or a group call on VP-IO)
+
+    /// Simulates the timer of `AudioCapture.fireVpioRetry` when every fire finds the same obstacle: a skip counts against its own
+    /// budget, re-arms while the budget lasts, and the fire that spends it writes the stop line and arms nothing.
+    private func simulateSkippingTimer(fires: Int) -> (skips: Int, rearms: Int, stopLines: Int) {
+        var skips = 0
+        var rearms = 0
+        var stopLines = 0
+        var timerArmed = true
+        for _ in 0..<fires where timerArmed {
+            skips += 1
+            if VpioRetryPolicy.hasSkipBudget(skipsMade: skips) {
+                rearms += 1
+            } else {
+                stopLines += 1
+                timerArmed = false
+            }
+        }
+        return (skips, rearms, stopLines)
+    }
+
+    func testSkipsDoNotBurnTheAttemptBudget() {
+        let r = simulateSkippingTimer(fires: 3)
+        XCTAssertEqual(r.skips, 3)
+        XCTAssertEqual(r.rearms, 3)
+        XCTAssertTrue(VpioRetryPolicy.shouldArm(vpioActive: false, degradedByError: true, attemptsMade: 0, skipsMade: 3))
+    }
+
+    func testSkipsAreCappedAndTheTimerStopsOnceTheBudgetIsSpent() {
+        XCTAssertEqual(VpioRetryPolicy.maxSkips, 5)
+        let r = simulateSkippingTimer(fires: 50)
+        XCTAssertEqual(r.skips, 5, "the sixth fire never happens: no timer is armed after the fifth skip")
+        XCTAssertEqual(r.rearms, 4)
+        XCTAssertEqual(r.stopLines, 1, "the existing stop line is written once")
+        XCTAssertFalse(VpioRetryPolicy.hasSkipBudget(skipsMade: 5))
+        XCTAssertFalse(VpioRetryPolicy.shouldArm(vpioActive: false, degradedByError: true, attemptsMade: 0, skipsMade: 5),
+                       "an engine start after the budget is spent does not arm a new timer either")
+    }
+
+    func testRouteDrivenRestartGivesTheSkipBudgetBackOthersKeepIt() {
+        XCTAssertEqual(VpioRetryPolicy.skipsAfterRestart(current: 5, routeDriven: true), 0)
+        XCTAssertEqual(VpioRetryPolicy.skipsAfterRestart(current: 3, routeDriven: false), 3)
+    }
+
+    func testTheDelayRampAdvancesWithSkipsToo() {
+        XCTAssertEqual(VpioRetryPolicy.delayMs(attempt: 0, skips: 0), 2_000)
+        XCTAssertEqual(VpioRetryPolicy.delayMs(attempt: 0, skips: 1), 5_000)
+        XCTAssertEqual(VpioRetryPolicy.delayMs(attempt: 1, skips: 1), 15_000)
+        XCTAssertEqual(VpioRetryPolicy.delayMs(attempt: 0, skips: 40), 30_000)
+        XCTAssertEqual(VpioRetryPolicy.delayMs(attempt: 2, skips: -3), 15_000)
+    }
+
     func testStopLine() {
         XCTAssertEqual(VpioRetryPolicy.fireLine(gen: 2, attempt: 5, result: .stop),
                        "audioVp ev=fire gen=2 retry=1 n=5 res=stop")

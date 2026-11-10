@@ -509,6 +509,7 @@ struct ContentView: View {
             CallInProgressBar(
                 contactName: outgoingDisplayName.isEmpty ? nil : outgoingDisplayName,
                 elapsedSeconds: { appState.callService.callDurationSeconds },
+                peerOnHold: { appState.callService.peerOnHold },
                 onReturn: onCallBarTapped)
         }
     }

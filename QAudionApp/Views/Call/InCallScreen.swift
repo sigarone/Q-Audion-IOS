@@ -467,6 +467,12 @@ struct InCallScreen: View {
     /// make a strong, self-referential measurement inherit the credibility
     /// of an absolute threshold never validated against a real impostor.
     let speakerChange: RemoteSpeakerChangeMonitor.Verdict
+    /// WIRE_SPEC 16.4 — the peer holds the call ("In attesa" / "On hold"). The timer and the rest of the call state are
+    /// unchanged.
+    let peerOnHold: Bool
+    /// WIRE_SPEC 16.6 — no inbound audio evidence for more than 10 s on a connected call, and no hold signal: the neutral
+    /// "Interlocutore non udibile" / "Peer not audible" hint. Local only, never shown while the peer holds the call.
+    let peerNotAudible: Bool
 
     init(peerDisplayName: String,
          avatarUrl: URL? = nil,
@@ -529,7 +535,9 @@ struct InCallScreen: View {
          voiceConfidenceHistory: [Float] = [],
          peerOwnerContinuityLevel: ContactVoiceContinuityGate.Level = .unknown,
          contactVoiceLevel: ContactVoiceContinuityGate.Level = .unknown,
-         speakerChange: RemoteSpeakerChangeMonitor.Verdict = .init(level: .unknown)) {
+         speakerChange: RemoteSpeakerChangeMonitor.Verdict = .init(level: .unknown),
+         peerOnHold: Bool = false,
+         peerNotAudible: Bool = false) {
         self.peerDisplayName = peerDisplayName
         self.avatarUrl = avatarUrl
         self.durationSeconds = durationSeconds
@@ -592,6 +600,8 @@ struct InCallScreen: View {
         self.peerOwnerContinuityLevel = peerOwnerContinuityLevel
         self.contactVoiceLevel = contactVoiceLevel
         self.speakerChange = speakerChange
+        self.peerOnHold = peerOnHold
+        self.peerNotAudible = peerNotAudible
     }
 
     // MARK: - Body
@@ -714,6 +724,33 @@ struct InCallScreen: View {
                 .fill(extras.pqcAccent.opacity(0.92))
                 .shadow(color: .black.opacity(0.18), radius: 6, x: 0, y: 2)
         )
+    }
+
+    /// WIRE_SPEC 16.4 / 16.6 — one pill under the peer name: the peer holds the call, or (without a hold signal) no audio
+    /// arrives. The hold wins; the two never show together.
+    @ViewBuilder
+    private var peerCallStateBadge: some View {
+        if peerOnHold {
+            peerCallStateCapsule(text: Text("call.peer_on_hold"), icon: "pause.circle.fill")
+        } else if peerNotAudible {
+            peerCallStateCapsule(text: Text("call.peer_not_audible"), icon: "speaker.slash.fill")
+        }
+    }
+
+    private func peerCallStateCapsule(text: Text, icon: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .qaudionScaledFont(size: 14, weight: .semibold, maxSize: .xLarge)
+                .foregroundStyle(extras.onSuccess)
+            text
+                .qaudionStyle(type.labelSmall)
+                .tracking(0.4)
+                .foregroundStyle(extras.onSuccess)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Capsule().fill(extras.pqcAccent.opacity(0.92)))
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - D11 identity-change advisory banner (non-blocking)
@@ -964,6 +1001,9 @@ struct InCallScreen: View {
                     .italic()
                     .foregroundStyle(scheme.onBackground)
                     .multilineTextAlignment(.center)
+
+                peerCallStateBadge
+                    .padding(.top, 6)
 
                 if Self.demoBadgeShown(keyInfoPresent: keyInfo != nil, sessionKeyPresent: hasSessionKey) {
                     stubBadge

@@ -3983,7 +3983,272 @@ message, a group message, a sender id with non-ASCII characters) with `device_pr
 to open. A client copies the file into its tests, recomputes the public keys, opens every positive blob with
 `device_priv` and compares the plaintext byte for byte, and checks that the negative blob is refused.
 
-Latest: 2026-10-28 (new §15 notification envelope: a device key registered with PUT /account/notify-key (local alert-token record required), a sealed sender
+## 16. In-call control frames and call hold (1:1) — cross-platform contract
+
+This section documents the sealed in-call control lane that already exists on every platform (§16.1) and defines on it
+the hold signal of a 1:1 call (§16.2 to §16.9). It covers 1:1 calls only; group calls (§10) are out of scope. No server
+change is involved: the server never sees, parses or stores any frame of this section.
+
+### 16.1 The control lane (existing, now normative)
+
+A control frame is a message on the same leg as the sealed audio frames (the DataChannel when open, otherwise the
+`audio_frame` relay leg), distinguished from audio by its first byte:
+
+```
+control_frame = 0x03 || kind(1) || body            // no nonce, no seq, no length: the transport keeps message boundaries
+```
+
+- Sealing. A control frame is written at the same single seal site as an audio frame (Android `writeOuterSealed` and
+  `outerWireFor` in `CallTransportFactory.kt`; iOS `outerTx` in `CallService.swift`; Desktop the same rule) and the
+  receiver removes the seal first, then peeks the first byte of the inner bytes: `0x03` means control, never audio. The
+  outer layer of a call is in one of three states:
+  - SEALED (`srtpDirKeyV1` negotiated, sealer pair installed): every frame of both legs carries the outer seal, so a
+    control frame is authenticated end to end and unreadable by the server (the relay sees only that a small sealed
+    frame was sent, not what it says).
+  - OFF (outer = none: the peer lacks `srtpDirKeyV1`, or either side failed to install the seal): the DataChannel
+    carries the bare inner frame inside DTLS, which the signed fingerprints (§3.8) authenticate; the relay leg is
+    disarmed and a control frame is never written to it.
+  - UNDECIDED (before the session key installs the sealers): nothing is sent; the frame is skipped (HANGUP, NACK) or
+    remembered and sent once the state is decided (CALL_HOLD, §16.3).
+
+  Rule: a hold frame is never written unsealed on the relay leg, and never written at all on the relay leg unless
+  the call is SEALED. A hold frame is never sent "plain" because a sealer is missing. A path that hands final bytes
+  straight to a lower transport without this seal site (Android `sealingPeer.sendRaw`, which passes the owner's bytes
+  through) MUST NOT be used for kinds `0x04` and `0x05`. In OFF a hold frame goes through the normal DataChannel
+  audio write path (the bare inner frame, inside DTLS, exactly as an audio frame does) and never on the relay; only the
+  dedicated unsealed write of the `outer-off-v1` frame (`03 03`) is forbidden for kinds `0x04` and `0x05`. Testable:
+  in OFF a hold send is observed on the DataChannel and never on the relay leg. On Android
+  main (Phase 1 PR #295, `affe7e05`) `sendControl` already goes through `writeOuterSealed`, which returns no bytes for a
+  relay write in OFF and in UNDECIDED, so the rule holds there; it is a requirement, not a description of one
+  implementation.
+
+  This is also why this lane is used and not the plaintext `<callId>|<TOKEN>:<value>` `opaque_message` piggy-backs
+  (`VOICE_KEY:`, `SPKCHG:`, `SCREEN_SHARE:`, `HANGUP:`), which the server relays as readable text.
+- Body limit: 255 bytes; a longer body is truncated by the sender. An unknown `kind` is dropped silently.
+- Gating. A sender emits a kind only when the peer advertised the capability tag of that kind for this call (symmetric
+  intersection of the `capabilities` strings of the call signalling; absent or not yet known means do not send).
+  Receiving is unconditional for every kind the endpoint implements. These tags are not part of the signed `CAPS9`
+  (§3.7): no control kind carries a security decision.
+- Delivery is best effort. A control frame is never the only channel for anything that must happen.
+
+| kind | name | tag | body |
+|---|---|---|---|
+| `0x01` | HANGUP | `dc-hangup-v1` | UTF-8 reason |
+| `0x02` | NACK_REQUEST | `audio-nack-v1` | missing audio wire sequence, 8 bytes big endian |
+| `0x03` | OUTER_OFF | `outer-off-v1` | empty. The whole frame is exactly `03 03`, sent on the DataChannel leg only and WITHOUT the outer seal (PQC hardening B3 rule 4b); recognised by length and content before any open. Not a hold frame and never to be confused with one |
+| `0x04` | CALL_HOLD | `call-hold-v1` | §16.2 |
+| `0x05` | CALL_HOLD_ACK | `call-hold-v1` | §16.2 |
+
+Kinds are never reused: `0x03` is taken by OUTER_OFF, so the hold kinds start at `0x04`.
+
+Reference code: Android `FrameRelayTransport.kt` (`MUX_BYTE_CONTROL`, `ControlFrame`) and `CallTransportFactory.kt`
+(`sendControl` gate, RX peek on both legs). Android's `sendControl` maps every kind other than NACK_REQUEST to the
+`dc-hangup-v1` gate (`requiredTag`, `CallTransportFactory.kt:2347-2360` on main): an implementation of the hold kinds
+MUST add its own branch there, so that `0x04` and `0x05` are gated on `call-hold-v1` and never on `dc-hangup-v1` (a
+peer with `dc-hangup-v1` and no `call-hold-v1` must receive no hold frame). iOS `WireRelayFrameCodec.swift` (`muxControl`, `encodeControl`,
+`decodeControl`) and `CallService.swift` (`consumeInboundControlFrame`); Desktop `MediaTransport.ts` and
+`CallMediaSession.ts` (control frame relay).
+
+### 16.2 Hold frames
+
+Capability tag `call-hold-v1` (byte exact, lowercase ASCII) means exactly: this endpoint RECEIVES kinds `0x04` and
+`0x05`, shows the held state of §16.4 and answers every valid `CALL_HOLD` with a `CALL_HOLD_ACK`. It does not mean that
+the endpoint ever sends a `CALL_HOLD` (Desktop need not, §16.8). An endpoint MUST NOT advertise the tag before the
+receive side, the UI and the tone are implemented.
+
+```
+CALL_HOLD      (0x04) body = ver(1) || state(1) || cause(1) || seq(2, big endian)      // 5 bytes
+CALL_HOLD_ACK  (0x05) body = ver(1) || seq(2, big endian)                              // 3 bytes
+
+ver   = 0x01. A body with another ver is dropped and not acknowledged.
+state = 0x01 HELD, 0x02 RESUMED. Any other value: drop, no ACK.
+cause = 0x01 system call (CallKit hold, Telecom hold), 0x02 audio interruption (iOS session interruption, Android
+        audio focus loss), 0x03 user, 0x00 unspecified. An unknown cause is read as unspecified. The cause never
+        changes behaviour; it is for the log and telemetry only.
+seq   = per call, per direction counter of hold state changes: 1 for the first CALL_HOLD of the call, +1 for each new
+        state, modulo 65536. The same state re-sent keeps its seq.
+```
+
+A body shorter than the table is dropped. Extra trailing bytes are ignored (a later revision may append fields).
+
+### 16.3 Sender rules
+
+State. The sender keeps a set of active hold causes. The call is HELD while the set is not empty and RESUMED when it
+becomes empty again. A change between HELD and RESUMED is one state change: it gets the next seq and the sender emits
+`CALL_HOLD` immediately. Adding or removing a cause while the state stays HELD sends nothing.
+
+While HELD the sender stops capture and stops feeding the outbound audio:
+- On a call that carries audio as sealed frames (DC-mux or relay) it MUST NOT transmit audio frames at all (no silence
+  frames, no comfort noise).
+- On a native SRTP call (`audio-srtp-v1`, the usual call type) it stops capture and disables the outbound audio track
+  (or removes its source). libwebrtc may still emit DTX or comfort-noise packets on a disabled track, so the
+  receiver never relies on RTP silence to detect a hold (§16.4, §16.6): the signal is the frame.
+- In both cases the media leg stays open and keepalives and every other control or signalling message continue. This
+  is what lets the receiver tell a hold from a muted microphone (an Android peer keeps sending silence while muted).
+
+Legs. The DataChannel is created on every call, including native SRTP calls, but it is unordered with
+`maxRetransmits = 0` (Android `PeerConnectionHolder.kt` DataChannel init, iOS `QAudionPeerConnection.swift`), so a frame
+can be lost even when it is open; and on a native SRTP call the transport never moves to the relay on its own (no mode
+downgrade of the call, and the wedge detector that diverts control frames never fires), so a frame written to a
+DataChannel that is not open is silently lost. Hold frames therefore do not rely on the DataChannel alone:
+
+1. The first send of a state goes on the DataChannel when it is OPEN and ICE is carrying; otherwise it goes on the
+   sealed relay leg.
+2. If the matching ACK has not arrived by the first retry (0.4 s), and for every later retry, the frame goes on BOTH
+   legs, so a hold is not lost to an unreliable or dead DataChannel.
+3. The relay leg is used only when it exists and is allowed: the call is SEALED (§16.1), the leg is armed and the
+   signalling socket is up. Otherwise the DataChannel is the only leg and the schedule below is all there is.
+
+The two copies carry the same seq and are de-duplicated by the receiver (§16.4). The relay carries only the sealed bytes.
+
+Retransmission. A frame is repeated until the `CALL_HOLD_ACK` with the same seq arrives or a newer state change
+supersedes it: sent at t=0, then after 0.4 s, 1 s, 2 s, 4 s and 8 s (six sends in all), then it stops. If the last
+state change was never acknowledged, the same frame (same seq) is sent once more, on both legs, after each of these
+events: the leg changed, an ICE restart completed, a rekey completed (§16.7), the signalling socket was
+re-authenticated, the outer layer left UNDECIDED. The sender never blocks any call operation on an ACK.
+
+Per platform, on a native SRTP call:
+- Android. The relay leg is built at the start of the call and both receive pumps are live (except under FORCE_P2P and
+  in OFF), but `sendControl` picks the DataChannel unless the wedge detector fires, which it does not on an SRTP
+  call. A hold send MUST therefore address the relay leg explicitly (`wsLeg`) under rules 1 to 3, through
+  `writeOuterSealed`.
+- iOS. The control send path already puts a frame on the WS relay when the DataChannel cannot carry it
+  (`sendAudioOverDataChannel` answers `useRelay` for a channel that is absent, not open, not carrying ICE or wedged) and
+  only when `outerTx` allows the relay (`relayAllowed`): rule 1 exists. Rule 2 (both legs from the first retry
+  while the channel is open) is new.
+- Desktop. Receives on whichever leg; it MUST deliver a control frame that arrives on the relay leg as well as one
+  that arrives on the DataChannel (§16.8).
+
+Gating. The sender checks the peer's `call-hold-v1` tag (and never the tag of another kind) for this call before the first send (§16.1). If the tag is not known at that
+moment, the state change is remembered and sent as soon as the tag is known; the sender does not poll.
+
+Triggers by platform:
+
+- iOS. HELD with cause `0x01` on `provider(_:perform: CXSetHeldCallAction)` with `onHold == true` (the existing
+  `onHoldChanged` callback of `CallKitProvider.swift`, which today only pauses local video through `CallHoldPolicy`),
+  RESUMED when the action arrives with `onHold == false`. Cause `0x02` while an `AVAudioSession` interruption of type
+  `began` is pending, removed on `ended`, and also removed when the system activates the audio session again
+  (`didActivate`) with no interruption pending. Capture stopping because the system deactivated the session is a hold
+  even if no CallKit hold action arrived: this is the observed case of a cellular call answered during a Q-Audion call.
+- Android. `Connection.onHold()` of `QAudionConnectionService` MUST stop refusing the system hold (today it answers
+  W-NOHOLD and stays ACTIVE): advertise `CAPABILITY_HOLD | CAPABILITY_SUPPORT_HOLD`, call `setOnHold()`, stop the capture
+  and transmission of audio (cause `0x01`) and play nothing from the peer; `onUnhold()` calls `setActive()` and restores
+  both. Cause `0x02` on an audio focus loss that stops capture, removed on gain. The capability is advertised only
+  together with the transmit stop: advertising hold while the microphone keeps streaming is forbidden (that was the
+  reason for W-NOHOLD).
+- Desktop. Not required in v1 (§16.8).
+
+A hang up while HELD needs no RESUMED first. A sender returning to RESUMED sends `CALL_HOLD` RESUMED before its first
+audio frame, then restarts audio.
+
+### 16.4 Receiver rules
+
+On a valid `CALL_HOLD` (ver, state, length) the receiver ALWAYS answers with `CALL_HOLD_ACK` carrying the same seq, also
+for a duplicate or an old seq, on the leg the frame arrived on (each copy of a frame, whatever leg, gets its own ACK). Hold frames are accepted from either
+leg and de-duplicated by seq alone; no state is kept per leg. It applies the state only if the seq is
+newer than the last applied one by serial number arithmetic (`(seq - last) mod 65536` in `1..32767`); the first frame
+of a call is always applied; an older or equal seq is acknowledged and ignored. The receiver ignores a
+`CALL_HOLD_ACK` whose seq it never sent. A hold frame never changes the call state except as written here: it cannot
+end the call, mute a microphone, rekey or change a key.
+
+HELD effects at the receiver:
+
+1. UI. Every surface that shows call status (call screen, notification, Android Auto, CarPlay, Watch, Desktop window)
+   shows the peer as on hold: Italian "In attesa", English "On hold". The timer and the rest of the call state are
+   unchanged.
+2. Hold tone, local only. The receiver plays a short tone through the call output, never over the network and never
+   mixed into transmitted audio: one beep of 350 ms at 425 Hz, about 24 dB below full scale, 10 ms fades, at t=0 and
+   every 4 s while HELD. It stops at once on RESUMED, hangup, expiry (item 4) or when the local user puts the call on
+   hold.
+3. Silence-based watchdogs are suspended. Every timer or decision whose input is "no inbound audio for N seconds" does
+   not count while HELD and restarts from zero when HELD ends. This covers at least W-MEDIADEAD (Android
+   `CallController.kt` W-MEDIADEAD block, iOS `MediaDeadDecisions.swift`), the no-media inputs of W-DCWEDGE, the
+   half-open media guard and the hint of §16.6. Everything that rests on the transport and not on audio stays in force
+   unchanged: ICE disconnected/failed handling and ICE restart, DTLS or relay loss, the server's disconnect grace, the
+   signalling hangups, every handshake, KCMAC and rekey deadline.
+4. Expiry. The 30 minute limit is anchored to the moment HELD was first applied (the HELD that follows a RESUMED
+   or the start of the call) and is not extended by anything later: not by a repeated HELD, not by a duplicate, not by
+   a change of cause. A new HELD after a RESUMED is a new hold and starts a new 30 minutes. When the limit passes, HELD
+   is dropped and the silence watchdogs count again from that moment. Two consequences are accepted on purpose: a peer
+   that died while held is still ended by W-MEDIADEAD after its own timeout, and a legitimate hold longer than 30
+   minutes plus that timeout (a long cellular call answered during a Q-Audion call) can be ended by the receiver's W-MEDIADEAD.
+
+HELD ends on `CALL_HOLD` RESUMED (applied by seq), on expiry, and on media: when real decoded inbound audio is seen in
+each of 3 consecutive seconds after HELD was applied (the decode stamp of W-MEDIADEAD, never concealment and never
+transport byte growth), the receiver treats it as a lost RESUMED, because a held sender sends no audio. On a call that
+carries audio as native SRTP (`audio-srtp-v1`), a held sender may still emit DTX or comfort packets (§16.3) and the
+only decode evidence is packet counting, so HELD ends there on RESUMED or expiry only; this is why the frame is retried
+on both legs. The state is per call: a new call starts RESUMED.
+
+### 16.5 Both sides held
+
+Each side tracks its own held state and the peer's separately. If both are HELD, the local UI shows the local state, the
+peer indication remains and no tone is played.
+
+### 16.6 Peer not audible (no hold signal)
+
+Independently of §16.2, and also for peers without `call-hold-v1`: when a Connected call has had no inbound audio
+evidence for more than 10 s, the receiver shows a neutral hint in place of plain silence
+(Italian "Interlocutore non udibile", English "Peer not audible") and removes it on the first real decoded audio. The hint:
+
+- takes its input from the call's audio mode, never from transport bytes: on a call that carries sealed audio frames
+  (DC-mux or relay), the real decode stamp of W-MEDIADEAD (frames really decoded, never concealment); on a native SRTP
+  call (`audio-srtp-v1`, where no such frame reaches the app), the packet count of the inbound audio RTP stream
+  (`getStats` `inbound-rtp`, kind audio, `packetsReceived`; RTCP, STUN, DTLS and SCTP are not in it and concealment does
+  not change it). No growth of that count for more than 10 s is the same condition as no decoded frame. Audio level or
+  energy (`audioLevel`, `totalAudioEnergy`) is NOT used: a peer who is simply quiet is audible, and the hint must not
+  appear for a pause in speech. The hint is best effort on SRTP: a peer without `call-hold-v1` that keeps sending
+  comfort or DTX packets (for example an Android muted microphone, or a disabled track) is not flagged;
+- is local only and sends nothing; it changes no timer and ends no call;
+- is not shown while the peer holds the call (§16.4), while the peer's microphone is known to be muted by the existing
+  mute indication, before the first inbound audio of the call (the connect window has its own guards), or while media
+  is deliberately held by the identity gate (Desktop `mediaHeld`);
+- is not a diagnosis. It covers a transport that is alive with no audio arriving, which is what a hold without the
+  signal looks like: in the call of 2026-11-09 17:44Z iOS deactivated its audio session, nothing was signalled, and
+  Android heard 18 s of silence and hung up.
+
+### 16.7 Rekey and ICE restart
+
+- Rekey. A hold neither starts, delays nor cancels a rekey, and extends no handshake, KCMAC or rekey deadline (§3): a
+  hold is not a reason to stretch any security time limit. A hold frame is sealed under the keys in force when it is
+  sent. A frame lost at the key switch is covered by the retransmission of §16.3; an endpoint that cannot seal at that
+  moment skips the send, as for HANGUP (§16.1). After the rekey completes an unacknowledged state is sent again.
+- ICE restart and leg change. A hold does not suppress an ICE restart caused by lost connectivity (§16.4 item 3), and an
+  ICE restart is never started because a held peer sends no audio. When the media leg changes or an ICE restart ends,
+  an unacknowledged state is sent again on both legs (§16.3). A hold frame follows the leg rules of §16.3 and not the
+  audio's leg choice: on a native SRTP call the audio never moves to the relay, and the hold frame still reaches it.
+- Video (§8). Hold does not change the media upgrade state machine. A local hold keeps pausing local video through
+  `CallHoldPolicy` on iOS; nothing in this section sends a video message.
+
+### 16.8 Desktop
+
+Desktop in v1 receives and shows: it advertises `call-hold-v1`, accepts kinds `0x04` and `0x05` on both legs (the control
+frame relay of `CallMediaSession.ts`), answers with `CALL_HOLD_ACK`, shows "In attesa" / "On hold", plays the local hold
+tone, suspends the silence watchdogs as in §16.4 and shows the hint of §16.6. It MUST also deliver a hold frame that
+arrives on the relay leg when the DataChannel is the live transport (as it does for HANGUP across `swapTransport`);
+this was not verified in the Desktop code for this revision and is a requirement of the implementation PR. Sending `CALL_HOLD` from Desktop is not
+required in v1 (there is no system hold on Desktop). A Desktop that does not yet implement the receive side MUST NOT
+advertise the tag, so no phone waits for an ACK that cannot come.
+
+### 16.9 Compatibility and tests
+
+- An endpoint without `call-hold-v1` is never sent a hold frame (gated on the tag) and never sends one; a frame that
+  reaches it anyway has an unknown kind and is dropped silently (§16.1). The hint of §16.6 still works against it.
+- Nothing here changes an existing wire format: kinds `0x01`, `0x02` and `0x03` are unchanged, and a new kind never alters the
+  audio decode path because the first byte is peeked before it.
+- Tests every platform carries: encode and decode of both bodies byte for byte (`03 04 01 01 01 00 07` is HELD, cause
+  system call, seq 7; `03 05 01 00 07` is its ACK; `03 03` is OUTER_OFF and is never read as a hold frame); wrong `ver`, wrong `state`, a short body, a trailing byte; seq wrap
+  from 65535 to 0 and an old seq; a duplicate is acknowledged and applied once; a missing ACK gives exactly six sends and
+  stops; with the DataChannel closed the first send goes on the relay, with it open the first retry goes on both legs, and
+  in OFF nothing is ever written to the relay; Android gates `0x04` and `0x05` on `call-hold-v1` and not on
+  `dc-hangup-v1`; a lost RESUMED is cleared by three seconds of real audio; expiry after 30 minutes; the silence watchdogs do not
+  fire during HELD and fire after it; the 10 s hint appears, is suppressed while HELD and while peer-muted, and clears
+  on audio.
+- Telemetry: one event per applied or sent state change with `cause` and seq (nothing beyond the call id already
+  logged) and a counter of CALL_HOLD sends that were never acknowledged.
+
+Latest: 2026-11-09 (new section 16: the sealed in-call control lane 0x03 documented (HANGUP dc-hangup-v1, NACK_REQUEST audio-nack-v1, OUTER_OFF outer-off-v1) and CALL_HOLD / CALL_HOLD_ACK (kinds 0x04 / 0x05) defined on it, sent on both legs when needed so native SRTP calls are covered under the capability tag call-hold-v1: In attesa on the other side, a local hold tone, silence watchdogs suspended while held, a peer-not-audible hint after 10 s without a hold signal; Android stops refusing system hold; no server change).
+Previous: 2026-10-28 (new §15 notification envelope: a device key registered with PUT /account/notify-key (local alert-token record required), a sealed sender
 blob `qn` of fixed padded length next to the generic message alert (no collapse id on the envelope form), known-answer vectors in internal/push/testdata).
 Previous: 2026-10-23 (third review round of §14: the outcome of a write is put on the step that seals the frame in the
 `sender_sequences` (`"write":"fails"` on a `tick` or a `stop`, applied by the harness during that step, so that a client that

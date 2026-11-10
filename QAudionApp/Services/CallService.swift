@@ -1394,6 +1394,48 @@ final class CallService: @unchecked Sendable {
     /// reaches its answered state (both `peerAnswered = true` sites),
     /// cancelled + cleared in `teardownAudioStack()`.
     private var mediaDeadWatchdogTask: Task<Void, Never>?
+
+    // MARK: Call hold (WIRE_SPEC 16) — state of one call, reset in `teardownAudioStack()`
+    //
+    // The pure parts (frame bodies, seq arithmetic, sender and receiver state machines, leg rules, hint, tone, audio
+    // triggers) live in `QAudionEngine/Call/CallHold.swift`; this class feeds them and carries out their decisions.
+    // Everything below runs on the main queue except `holdLocalActive`, which the capture thread reads.
+    /// Created on the first local hold of the call; nil while this side never held.
+    private var holdSender: CallHoldSender?
+    private let holdReceiver = CallHoldReceiver()
+    private let holdHint = PeerAudibleHint()
+    private let holdSilenceGate = HoldSilenceGate()
+    private var holdAudioTriggers = AudioHoldTriggerState()
+    private var holdDeactivationCancel: HoldCancel?
+    private var holdTicker: Timer?
+    private var holdInterruptionObserver: NSObjectProtocol?
+    private let holdTone = HoldTonePlayer()
+    private var holdLastBeepAtMs: Int64 = HoldToneSynth.never
+    /// The last real-decode stamp the hint has seen (sealed-frame calls).
+    private var holdLastHintStamp: Int64 = 0
+    private var holdHintWasShown = false
+    private let holdFlagLock = NSLock()
+    private var _holdLocalActive = false
+    /// This side is HELD (16.3): no audio is fed to the wire, whatever its path. Read by the capture thread.
+    private var holdLocalActive: Bool {
+        get { holdFlagLock.lock(); defer { holdFlagLock.unlock() }; return _holdLocalActive }
+        set { holdFlagLock.lock(); _holdLocalActive = newValue; holdFlagLock.unlock() }
+    }
+    /// The peer holds the call (16.4): drives "In attesa" on the call screen. Read by the 1 Hz screen clock.
+    public var peerOnHold: Bool { holdReceiver.held }
+    /// This side is HELD (any cause, a pending one included): the single source of the outbound video gate.
+    public var isLocalHeld: Bool { holdLocalActive }
+    /// 16.6: the neutral "peer not audible" hint is up. Local only.
+    public var peerNotAudible: Bool { holdHint.shown }
+    /// Wired by AppState: true while the peer's mute is known or media is held by the identity gate (16.6 suppressions).
+    public var holdHintSuppressed: (() -> Bool)?
+    /// Fired on the main queue when this side becomes HELD (first cause, any cause) and when it stops being HELD (last cause
+    /// removed, after CALL_HOLD RESUMED was written). AppState pauses and restores the outbound video on it.
+    public var onLocalHoldActiveChanged: ((Bool) -> Void)?
+    private var holdAudioCauseCap: HoldCancel?
+    /// Causes recorded before the call is connected (a CallKit hold that arrives while it still rings or connects). The
+    /// privacy effects apply at once (video paused, sender muted); CALL_HOLD goes out when the call becomes active.
+    private var holdPendingCauses: [UInt8] = []
     /// W-AUDIOAEADREKEY (2026-09-02) — B3: fired when
     /// `AudioAeadFailureRekeyPolicy` judges the recent audio AEAD decrypt
     /// failures a real burst (persistent key drift), not an isolated bad
@@ -1870,7 +1912,12 @@ final class CallService: @unchecked Sendable {
             let line: String = "[CallService] PQC_DIAG W574x-iOS sealers " + verb + " callId=" + p + "… keyfp=" + kfp + " dirKeys=" + dirStr + " role=" + roleStr
             print(line)
             // Frames that arrived before the sealer existed were held: open them now.
-            DispatchQueue.main.async { [weak self] in self?.drainRxPreBuffer() }
+            DispatchQueue.main.async { [weak self] in
+                self?.drainRxPreBuffer()
+                // WIRE_SPEC 16.3 — the outer layer left UNDECIDED, or the keys were switched (a rekey completed): an
+                // unacknowledged hold state goes out again.
+                self?.holdNoteEvent(hadSealer ? "rekey" : "outer")
+            }
         } catch {
             print("[CallService] W574e: relay sealer install failed: \(error) — the call runs without the outer seal")
             noteLocalOuterInstallFailure(callId: cid)
@@ -1967,7 +2014,9 @@ final class CallService: @unchecked Sendable {
     }
 
     private enum OuterRxResult {
-        case inner(Data)
+        /// `authenticated`: decided for THIS frame by `outerRx` (the seal was opened, or an OFF call's DTLS DataChannel
+        /// frame passed through); the hold kinds act only on it.
+        case inner(Data, authenticated: Bool)
         case held
         case openFailed
         case closedLeg
@@ -1975,15 +2024,19 @@ final class CallService: @unchecked Sendable {
 
     /// The receive side of the same decision. A frame of a sealed call is opened or held, never delivered raw.
     private func outerRx(_ data: Data, leg: OuterLayerLeg, integration: QAudionCallIntegration?) -> OuterRxResult {
-        let installed: Bool = relaySlotLock.withLock { relaySealerRecv != nil }
-        switch OuterLayerPolicy.rx(mode: currentOuterMode(integration: integration), leg: leg, recvSealerInstalled: installed) {
+        // One reading of the sealer slot and of the mode, used for the decision and for the opening of this frame.
+        let sealer: PqcRtpFrameSealer? = relaySlotLock.withLock { relaySealerRecv }
+        let mode: OuterLayerMode = currentOuterMode(integration: integration)
+        let decision = OuterLayerPolicy.rx(mode: mode, leg: leg, recvSealerInstalled: sealer != nil)
+        let authenticated: Bool = HoldRxTrust.frameIsAuthenticated(rx: decision, mode: mode, leg: leg)
+        switch decision {
         case .open:
-            guard let inner = unsealRelayFrame(data) else { return .openFailed }
-            return .inner(inner)
+            guard let inner = unsealRelayFrame(data, with: sealer) else { return .openFailed }
+            return .inner(inner, authenticated: authenticated)
         case .hold:
             return .held
         case .passThrough:
-            return .inner(data)
+            return .inner(data, authenticated: authenticated)
         case .drop:
             return .closedLeg
         }
@@ -2010,7 +2063,10 @@ final class CallService: @unchecked Sendable {
         guard first else { return }
         RTLog.warn("call", "outer=off reason=local_install")
         announceOuterOffIfNeeded()
-        DispatchQueue.main.async { [weak self] in self?.emitPqLevelIfChanged() }
+        DispatchQueue.main.async { [weak self] in
+            self?.emitPqLevelIfChanged()
+            self?.holdNoteEvent("outer")
+        }
     }
 
     /// Send one `outer-off-v1` announcement on the DataChannel when one is owed. Unsealed, never on the relay, only to a
@@ -2038,6 +2094,7 @@ final class CallService: @unchecked Sendable {
         RTLog.warn("call", "outer=off reason=peer_install")
         drainRxPreBuffer()
         emitPqLevelIfChanged()
+        holdNoteEvent("outer")
     }
 
     // MARK: - Mute / Hold
@@ -2100,7 +2157,8 @@ final class CallService: @unchecked Sendable {
     func reapplyNativeSenderMute(site: Int) {
         let intent = NativeSenderMuteDecisions.shouldMute(
             peerAnswered: peerAnswered, userMuted: isMuted,
-            fallbackActive: audioSrtpFallbackActive, relayStartPending: fallbackRelayPending)
+            fallbackActive: audioSrtpFallbackActive, relayStartPending: fallbackRelayPending,
+            localHold: holdLocalActive)
         nativeSenderMuteIntent = intent
         // W-CALLERUNMUTELOST (2026-09-27) — see `nativeSenderMuteSource`'s
         // own kdoc: set BEFORE invoking the closure below, on the same
@@ -2256,7 +2314,10 @@ final class CallService: @unchecked Sendable {
     /// Called by AppState whenever the active call's route tier resolves or
     /// changes. See `currentRouteTier`'s kdoc.
     func updateRouteTier(_ tier: RouteTier) {
+        let changed: Bool = currentRouteTier != tier
         currentRouteTier = tier
+        // WIRE_SPEC 16.3 — the leg changed: an unacknowledged hold state goes out again on both legs.
+        if changed { holdNoteEvent("leg") }
     }
 
     /// W-PLPFEEDBACK — consume the PEER's `PLP:<percent>` report: drive our
@@ -3001,10 +3062,10 @@ final class CallService: @unchecked Sendable {
     /// drops on SecurityException). Before install (sealer nil) the frame
     /// passes through unchanged — the pre-handshake window where neither
     /// side seals yet.
-    private func unsealRelayFrame(_ data: Data) -> Data? {
+    private func unsealRelayFrame(_ data: Data, with fixedSealer: PqcRtpFrameSealer? = nil) -> Data? {
         // W-SLOTLOCK — copy the recv sealer under the lock (installRelaySealers /
         // teardown write it from other threads); open() runs unlocked.
-        guard let sealer = relaySlotLock.withLock({ relaySealerRecv }) else { return data }
+        guard let sealer = fixedSealer ?? relaySlotLock.withLock({ relaySealerRecv }) else { return data }
         do {
             return try sealer.open(data)
         } catch {
@@ -3195,9 +3256,11 @@ final class CallService: @unchecked Sendable {
             // returns them unchanged when the sealer isn't installed yet, or
             // strips the seal / drops if it is.
             let inner: Data
+            var innerAuthenticated = false
             switch outerRx(frame, leg: entry.leg, integration: integration) {
-            case .inner(let opened):
+            case .inner(let opened, let authenticated):
                 inner = opened
+                innerAuthenticated = authenticated
             case .held:
                 var again = entry
                 if !again.heldForSealer { again.heldForSealer = true; again.atMs = nowMs }
@@ -3213,7 +3276,7 @@ final class CallService: @unchecked Sendable {
             // control frame buffered pre-bind must not reach the Opus
             // decoder as garbage on replay.
             if inner.first == WireRelayFrameCodec.muxControl {
-                consumeInboundControlFrame(inner)
+                consumeInboundControlFrame(inner, leg: entry.leg, authenticated: innerAuthenticated)
                 continue
             }
             // W-NETVIS — same layer as the live RX path above. These bytes did
@@ -3335,6 +3398,7 @@ final class CallService: @unchecked Sendable {
     /// watchdog stays); cancelled in `teardownAudioStack()`. Runs on the
     /// main actor: every field it reads is main-queue state.
     private func armMediaDeadWatchdog() {
+        startHoldTicker()  // WIRE_SPEC 16 — the 1 Hz clock of the hold tone, expiry and the 10 s hint (idempotent)
         guard mediaDeadWatchdogTask == nil else { return }
         var lastAliveAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         // W-MEDIADEADSRTP (2026-08-29) — previous tick's audio RX byte count,
@@ -3357,6 +3421,17 @@ final class CallService: @unchecked Sendable {
                 guard self.isCallActive?() == true else {
                     lastAliveAtMs = now
                     continue
+                }
+                // WIRE_SPEC 16.4 item 3 — the silence count does not run while the peer holds the call and restarts from
+                // zero when the hold ends (a held sender sends no audio). Only this silence input is suspended: the
+                // transport deadlines (ICE, DTLS, relay, handshakes) never ask this gate.
+                switch self.holdSilenceGate.step(peerHeld: self.holdReceiver.held) {
+                case .skip, .restart:
+                    lastAliveAtMs = now
+                    lastAudioRxBytes = -1
+                    continue
+                case .evaluate:
+                    break
                 }
                 // R-EARBUD: no earbud exemption. The earbud-relay-v1 path is retired, and the
                 // capability is an unsigned field the server relays: honouring it here would let
@@ -3396,18 +3471,361 @@ final class CallService: @unchecked Sendable {
         }
     }
 
+    // MARK: - Call hold (WIRE_SPEC 16)
+
+    /// Whether the peer advertised `call-hold-v1` for THIS call. The tag of this kind only, never `dc-hangup-v1`.
+    private func peerHasCallHoldTag() -> Bool {
+        getPeerCapabilities?(getCallId?())?.contains(CallCapabilities.callHoldV1) == true
+    }
+
+    private func holdOuterState() -> HoldOuterState {
+        let sealerInstalled: Bool = relaySlotLock.withLock { relaySealerSend != nil }
+        return HoldOuterState.from(mode: currentOuterMode(integration: callIntegration), sealerInstalled: sealerInstalled)
+    }
+
+    private func ensureHoldSender() -> CallHoldSender {
+        if let existing = holdSender { return existing }
+        let created = CallHoldSender(
+            peerHasTag: { [weak self] in self?.peerHasCallHoldTag() ?? false },
+            send: { [weak self] kind, body, route in self?.sendHoldControl(kind: kind, body: body, route: route) ?? false },
+            onStateChange: { [weak self] held, cause, seq in self?.holdSenderStateChanged(held: held, cause: cause, seq: seq) },
+            onNeverAcked: { [weak self] seq in self?.holdSenderNeverAcked(seq: seq) })
+        holdSender = created
+        return created
+    }
+
+    /// Adds a hold cause (16.3). The first cause makes this side HELD: audio stops being fed to the wire (frame path: no
+    /// frame; native SRTP: the outbound track is disabled) and CALL_HOLD goes out. Only while the call is connected.
+    func holdAddCause(_ cause: UInt8) {
+        guard isCallActive?() == true else {
+            // Not connected yet: the stop of the outbound media does not wait for it.
+            if !holdPendingCauses.contains(cause) { holdPendingCauses.append(cause) }
+            guard !holdLocalActive else { return }
+            holdLocalActive = true
+            if NativeAudioSessionGate.isArmed { reapplyNativeSenderMute(site: 7) }
+            onLocalHoldActiveChanged?(true)
+            return
+        }
+        holdLocalActive = true
+        if NativeAudioSessionGate.isArmed { reapplyNativeSenderMute(site: 7) }
+        holdTone.stop()  // 16.4: the tone stops when the local user puts the call on hold
+        if ensureHoldSender().addCause(cause) { onLocalHoldActiveChanged?(true) }
+    }
+
+    /// Removes a hold cause. When it was the last one, CALL_HOLD RESUMED is written BEFORE audio restarts (16.3).
+    func holdRemoveCause(_ cause: UInt8) {
+        if let index = holdPendingCauses.firstIndex(of: cause) {
+            holdPendingCauses.remove(at: index)
+            if holdPendingCauses.isEmpty && holdSender?.held != true {
+                holdLocalActive = false
+                if NativeAudioSessionGate.isArmed { reapplyNativeSenderMute(site: 7) }
+                onLocalHoldActiveChanged?(false)
+            }
+            return
+        }
+        guard let sender = holdSender else { return }
+        // The first RESUMED frame is written before this returns; false while another cause is still active.
+        guard sender.removeCause(cause) else { return }
+        holdLocalActive = false
+        if NativeAudioSessionGate.isArmed { reapplyNativeSenderMute(site: 7) }
+        onLocalHoldActiveChanged?(false)
+    }
+
+    /// CallKit hold (16.3, cause 0x01): `CXSetHeldCallAction`, from the system or from the in-app Hold button.
+    func holdSetSystemHold(_ onHold: Bool) {
+        if onHold { holdAddCause(CallHoldWire.causeSystemCall) } else { holdRemoveCause(CallHoldWire.causeSystemCall) }
+    }
+
+    /// An event after which an unacknowledged state is sent again on both legs (leg change, ICE recovered, rekey done,
+    /// signalling socket re-authenticated, outer layer decided, peer tag known).
+    func holdNoteEvent(_ event: String) {
+        holdSender?.resendAfter(event)
+    }
+
+    private func holdSenderStateChanged(held: Bool, cause: UInt8, seq: UInt16) {
+        let st: Int = held ? 1 : 2
+        let outer = holdOuterState()
+        let mode: Int = outer == .sealed ? 1 : (outer == .off ? 2 : 3)
+        RTLog.info("call", "callhold tx st=" + String(st) + " c=" + String(cause) + " seq=" + String(seq) + " m=" + String(mode))
+        holdEmitTelemetry(kind: "call_hold", attrs: ["dir": "tx", "state": st, "cause": Int(cause), "seq": Int(seq)])
+    }
+
+    private func holdSenderNeverAcked(seq: UInt16) {
+        RTLog.warn("call", "callhold unacked=1 seq=" + String(seq))
+        holdEmitTelemetry(kind: "call_hold_unacked", attrs: ["seq": Int(seq)])
+    }
+
+    private func holdEmitTelemetry(kind: String, attrs: [String: Any]) {
+        let cid = getCallId?()
+        Task { @MainActor in
+            TelemetryService.shared.emit(kind: kind, callId: cid, attrs: attrs)
+        }
+    }
+
+    /// One control frame of the hold kinds, sealed at the single seal site (`outerTx`) once per leg and written on the legs
+    /// `HoldLegPolicy` picks: never unsealed on the relay, never on the relay at all unless the call is SEALED, nothing
+    /// while the outer layer is undecided, and in OFF only the DataChannel audio write path (not the unsealed
+    /// `outer-off-v1` write). Each leg gets its own seal (the receiver's replay window would reject a second copy of the
+    /// same sealed bytes). Returns whether anything was written.
+    @discardableResult
+    private func sendHoldControl(kind: UInt8, body: Data, route: HoldRoute) -> Bool {
+        let integration = callIntegration
+        let outer = holdOuterState()
+        let (cachedWs, cachedPeer): (BCryptoWebSocketClient?, String?) =
+            relaySlotLock.withLock { (wsClient, peerUserId) }
+        let ws: BCryptoWebSocketClient? = getWsClient?() ?? cachedWs
+        let peer: String? = cachedPeer ?? getPeerId?()
+        let relayAllowed: Bool = ws?.state == .authenticated && peer != nil
+        // The DataChannel is open and carrying: raw state 1 (open) with no gate closed (the negatives of
+        // `audioDataChannelDiag` are pinned, no channel, ICE gate and wedge).
+        let dcOpenCarrying: Bool = (audioDataChannelDiag?() ?? -2) == 1
+        let legs = HoldLegPolicy.select(route: route, dcOpenCarrying: dcOpenCarrying, relayAllowed: relayAllowed, outer: outer)
+        guard !legs.isEmpty else { return false }
+        let frame = WireRelayFrameCodec.encodeControl(kind: kind, body: body)
+        let cid = getCallId?()
+        var wrote = false
+        var legCode = 0
+        for leg in legs {
+            guard let out = outerTx(frame, integration: integration) else { continue }
+            switch leg {
+            case .dc:
+                let outcome: AudioDcSendOutcome = sendAudioOverDataChannel?(out.wire) ?? .useRelay
+                if outcome == .queued {
+                    wrote = true
+                    legCode |= 1
+                }
+            case .relay:
+                guard out.relayAllowed, outer == .sealed, let ws = ws, let peer = peer else { continue }
+                ws.sendAudioFrame(recipientId: peer, frame: out.wire, callId: cid)
+                wrote = true
+                legCode |= 2
+            }
+        }
+        if kind == WireRelayFrameCodec.controlKindCallHoldAck {
+            RTLog.info("call", "callhold acktx=1 seq=" + String(CallHoldWire.decodeAck(body) ?? 0) + " leg=" + String(legCode))
+        }
+        return wrote
+    }
+
+    /// An inbound CALL_HOLD or CALL_HOLD_ACK (16.4). A valid CALL_HOLD is ALWAYS answered, also a duplicate or old seq, on
+    /// the leg it arrived on; the state is applied only when its seq is newer. An ACK for a seq this side never sent is
+    /// ignored. Nothing here can end the call, mute a microphone, rekey or change a key.
+    private func consumeHoldControlFrame(kind: UInt8, body: Data, leg: OuterLayerLeg, authenticated: Bool) {
+        // Only an authenticated frame acts: the outer seal was opened, or the call has no outer seal and the frame came over
+        // the DTLS DataChannel, as decided for THIS frame by `outerRx` (never re-read here); and only when `call-hold-v1`
+        // was negotiated for this call.
+        guard authenticated, peerHasCallHoldTag() else {
+            print("[CallService] RX hold frame not authenticated or not negotiated — dropped")
+            return
+        }
+        if kind == WireRelayFrameCodec.controlKindCallHoldAck {
+            guard let seq = CallHoldWire.decodeAck(body) else { return }
+            if holdSender?.onAck(seq) == true {
+                RTLog.info("call", "callhold ackrx=1 seq=" + String(seq))
+            }
+            return
+        }
+        guard let hold = CallHoldWire.decodeHold(body) else { return }
+        // The ACK first, always: a valid CALL_HOLD is answered also when it is a duplicate or an old seq, on the leg it
+        // arrived on (each copy gets its own ACK). A peer that sends this frame has shown it implements the kind.
+        sendHoldControl(kind: WireRelayFrameCodec.controlKindCallHoldAck,
+                        body: CallHoldWire.encodeAck(seq: hold.seq),
+                        route: leg == .dataChannel ? .replyDc : .replyRelay)
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let outcome = holdReceiver.onFrame(hold, nowMs: nowMs)
+        RTLog.info("call", "callhold rx st=" + String(hold.state) + " c=" + String(hold.cause)
+            + " seq=" + String(hold.seq) + " ap=" + (outcome.applied ? "1" : "0"))
+        guard outcome.applied else { return }
+        holdEmitTelemetry(kind: "call_hold", attrs: ["dir": "rx", "state": Int(hold.state), "cause": Int(hold.cause),
+                                                      "seq": Int(hold.seq)])
+        guard outcome.changed else { return }
+        holdLastBeepAtMs = HoldToneSynth.never
+        if hold.held {
+            holdTick()  // the tone plays at t=0 of HELD
+        } else {
+            holdTone.stop()
+        }
+    }
+
+    // MARK: Hold clock (tone, expiry, lost RESUMED, 10 s hint)
+
+    private func startHoldTicker() {
+        if holdInterruptionObserver == nil {
+            holdInterruptionObserver = NotificationCenter.default.addObserver(
+                forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+            ) { [weak self] note in
+                guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                      let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+                self?.holdNoteInterruption(began: type == .began)
+            }
+        }
+        guard holdTicker == nil else { return }
+        holdTicker = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.holdTick()
+        }
+    }
+
+    /// The call became active with causes recorded before: they enter the sender now (video and mute already applied).
+    private func holdFlushPendingCauses() {
+        guard !holdPendingCauses.isEmpty else { return }
+        let causes = holdPendingCauses
+        holdPendingCauses.removeAll()
+        let sender = ensureHoldSender()
+        for cause in causes { sender.addCause(cause) }
+    }
+
+    private func holdTick() {
+        guard isCallActive?() == true else { return }
+        holdFlushPendingCauses()
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        // 16.4 item 4: the 30 minute limit, anchored to the first HELD.
+        if holdReceiver.expireIfDue(nowMs: nowMs) {
+            holdTone.stop()
+            holdLastBeepAtMs = HoldToneSynth.never
+            RTLog.info("call", "callhold expiry=1")
+        }
+        let nativeSrtp: Bool = getUsesNativeAudioSrtp?() == true && !audioSrtpFallbackActive
+        // 16.4: three consecutive seconds of REAL decoded audio on a sealed-frame call clear a lost RESUMED.
+        if holdReceiver.observeDecode(nowMs: nowMs, lastDecodeAtMs: lastRealInboundDecodeAtMs, sealedFrameCall: !nativeSrtp) {
+            holdTone.stop()
+            holdLastBeepAtMs = HoldToneSynth.never
+            RTLog.info("call", "callhold clear=1 why=1")
+        }
+        // 16.6: audio evidence is the real decode stamp (sealed frames) or the growth of the inbound RTP packet count
+        // (native SRTP); never audio level and never transport bytes.
+        if nativeSrtp {
+            let packets: Int64 = getAudioRtpPacketsReceived?() ?? -1
+            holdHint.onPacketCount(nowMs: nowMs, packetsReceived: packets >= 0 ? packets : nil)
+        } else if lastRealInboundDecodeAtMs > holdLastHintStamp {
+            holdLastHintStamp = lastRealInboundDecodeAtMs
+            holdHint.onEvidence(nowMs: nowMs)
+        }
+        let peerHeld: Bool = holdReceiver.held
+        let suppressed: Bool = peerHeld || (holdHintSuppressed?() ?? false)
+        let shown: Bool = holdHint.evaluate(nowMs: nowMs, suppressed: suppressed)
+        if shown != holdHintWasShown {
+            holdHintWasShown = shown
+            RTLog.info("call", "callhold hint=" + (shown ? "1" : "0"))
+        }
+        // 16.4 item 2 / 16.5: the local tone at t=0 and every 4 s while the peer holds, never while this side is held too.
+        // Only on an active session: `play()` must never activate the session by itself.
+        if audioSessionActive,
+           HoldToneSynth.due(peerHeld: peerHeld, localHeld: holdLocalActive, nowMs: nowMs, lastBeepAtMs: holdLastBeepAtMs) {
+            holdLastBeepAtMs = nowMs
+            holdTone.beep()
+            RTLog.info("call", "callhold tone=1")
+        }
+    }
+
+    // MARK: Hold triggers from the audio session (cause 0x02)
+
+    private func holdNoteInterruption(began: Bool) {
+        guard isCallActive?() == true else { return }
+        var triggers = holdAudioTriggers
+        let action = began ? triggers.interruptionBegan() : triggers.interruptionEnded()
+        holdAudioTriggers = triggers
+        holdRun(action)
+    }
+
+    /// `didDeactivate` while a connected call owns the session. It only counts once it lasts (a transient deactivation,
+    /// like the release of the system call UI after a push wake, is re-activated at once); a route change by itself is never
+    /// a trigger.
+    private func holdNoteSessionDeactivated(pairedGeneration: Int?) {
+        guard isCallActive?() == true else { return }
+        // A late `didDeactivate` of the PREVIOUS call of a back-to-back pair is not this call's: same stale check as the
+        // native branch of `handleAudioSessionDeactivated`, applied on both branches before the debounce is armed.
+        let owner = NativeAudioUnitGateDecisions.callKitDeactivationOwner(
+            pairedActivationGeneration: pairedGeneration, currentGeneration: currentCallGeneration())
+        guard owner != .endedCall else { return }
+        var triggers = holdAudioTriggers
+        let action = triggers.sessionDeactivated()
+        holdAudioTriggers = triggers
+        holdRun(action)
+    }
+
+    private func holdNoteSessionActivated() {
+        holdDeactivationCancel?()
+        holdDeactivationCancel = nil
+        var triggers = holdAudioTriggers
+        let action = triggers.sessionActivated()
+        holdAudioTriggers = triggers
+        holdRun(action)
+    }
+
+    private func holdRun(_ action: AudioHoldTriggerState.Action) {
+        switch action {
+        case .none, .cancelTimer:
+            break
+        case .add:
+            holdAddCause(CallHoldWire.causeAudioInterruption)
+            // Bounded: cause 0x02 ends after 30 minutes whatever the session does.
+            holdAudioCauseCap?()
+            holdAudioCauseCap = HoldSchedulers.mainQueue(AudioHoldTriggerState.maxHoldSeconds) { [weak self] in
+                guard let self = self else { return }
+                self.holdAudioCauseCap = nil
+                self.holdAudioTriggers.reset()
+                self.holdRemoveCause(CallHoldWire.causeAudioInterruption)
+            }
+        case .remove:
+            holdAudioCauseCap?()
+            holdAudioCauseCap = nil
+            holdRemoveCause(CallHoldWire.causeAudioInterruption)
+        case .armTimer:
+            holdDeactivationCancel?()
+            holdDeactivationCancel = HoldSchedulers.mainQueue(AudioHoldTriggerState.deactivationDebounceSeconds) { [weak self] in
+                guard let self = self else { return }
+                self.holdDeactivationCancel = nil
+                var triggers = self.holdAudioTriggers
+                let next = triggers.deactivationTimerFired()
+                self.holdAudioTriggers = triggers
+                self.holdRun(next)
+            }
+        }
+    }
+
+    /// A new call starts RESUMED (16.4): no causes, no seq seen, no tone, no hint.
+    private func resetHoldState() {
+        holdTicker?.invalidate()
+        holdTicker = nil
+        if let observer = holdInterruptionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            holdInterruptionObserver = nil
+        }
+        holdDeactivationCancel?()
+        holdDeactivationCancel = nil
+        holdAudioCauseCap?()
+        holdAudioCauseCap = nil
+        holdSender?.close()
+        holdSender = nil
+        holdPendingCauses.removeAll()
+        holdReceiver.reset()
+        holdHint.reset()
+        holdSilenceGate.reset()
+        holdAudioTriggers.reset()
+        holdTone.stop()
+        holdLastBeepAtMs = HoldToneSynth.never
+        holdLastHintStamp = 0
+        holdHintWasShown = false
+        holdLocalActive = false
+    }
+
     /// W-DCHANGUP (2026-08-25) — decode one inbound control frame (leading
     /// byte already peeked as `muxControl`) and route by kind. HANGUP hands
     /// the UTF-8 reason to ``onInboundControlHangup``; any other kind is
     /// dropped silently (forward-compat). Runs on the main queue (both call
     /// sites are there).
-    private func consumeInboundControlFrame(_ inner: Data) {
+    private func consumeInboundControlFrame(_ inner: Data, leg: OuterLayerLeg, authenticated: Bool) {
         guard let (kind, body) = try? WireRelayFrameCodec.decodeControl(inner) else {
             print("[CallService] RX control frame decode failed (\(inner.count) bytes) — dropped")
             return
         }
         if kind == WireRelayFrameCodec.controlKindNackRequest {
             handleInboundNackRequest(body)
+            return
+        }
+        // WIRE_SPEC 16.4 — the hold kinds are received unconditionally (the tag only gates SENDING), on either leg.
+        if kind == WireRelayFrameCodec.controlKindCallHold || kind == WireRelayFrameCodec.controlKindCallHoldAck {
+            consumeHoldControlFrame(kind: kind, body: body, leg: leg, authenticated: authenticated)
             return
         }
         guard kind == WireRelayFrameCodec.controlKindHangup else {
@@ -3798,9 +4216,11 @@ final class CallService: @unchecked Sendable {
             // recv sealer is installed an open failure means replay/forgery →
             // drop (counts as a decrypt error). Pre-install → pass through.
             let inner: Data
+            var innerAuthenticated = false
             switch self.outerRx(serializedFrame, leg: leg, integration: integration) {
-            case .inner(let opened):
+            case .inner(let opened, let authenticated):
                 inner = opened
+                innerAuthenticated = authenticated
             case .held:
                 // Sealed call, sealer not installed yet: keep the frame (bounded), never deliver it raw.
                 self.holdForSealer(serializedFrame, callId: callId, leg: leg)
@@ -3823,7 +4243,7 @@ final class CallService: @unchecked Sendable {
             // unknown kinds drop silently (forward-compat, same contract as
             // unknown opaque piggy-back tags).
             if inner.first == WireRelayFrameCodec.muxControl {
-                self.consumeInboundControlFrame(inner)
+                self.consumeInboundControlFrame(inner, leg: leg, authenticated: innerAuthenticated)
                 return
             }
             // W-NETVIS — the FLUSSO rx counter, at Android's exact layer: the
@@ -4484,6 +4904,7 @@ final class CallService: @unchecked Sendable {
         lastRealInboundDecodeAtMs = 0
         mediaDeadWatchdogTask?.cancel()
         mediaDeadWatchdogTask = nil
+        resetHoldState()  // WIRE_SPEC 16 — a new call starts RESUMED, with no hold causes and no seq seen
         // W464 — drop the session-active flag so the NEXT call starts
         // from a clean slate and waits for its own CallKit `didActivate`.
         audioSessionActive = false
@@ -5255,6 +5676,9 @@ final class CallService: @unchecked Sendable {
     /// W469 self-activation) meaning what it meant; `CallKitProvider` passes
     /// the real source. Only a manual-mode (native-SRTP) call reads it.
     public func handleAudioSessionActivated(source: AudioSessionActivationSource = .selfManaged) {
+        // WIRE_SPEC 16.3 — the system activated the session again: a hold caused by its deactivation ends here, BEFORE
+        // the audio below restarts (RESUMED is written first).
+        holdNoteSessionActivated()
         // W-DEACTOWN (2026-09-27) — pair CallKit's own activation with the call
         // it was handled in, for the identity-less `didDeactivate` that follows
         // it (see `handleAudioSessionDeactivated`). Bookkeeping only.
@@ -5343,6 +5767,7 @@ final class CallService: @unchecked Sendable {
                 RTLog.info("call", "admgate W-DEACTOWN stale=1 own=\(pairedCode) cur=\(currentGeneration)")
                 return
             }
+            holdNoteSessionDeactivated(pairedGeneration: pairedGeneration)
             // This call's own deactivation: its unit off with the session
             // (the reference implementations do exactly this), owner-checked
             // against the arm this call's enable switched on — atomically with
@@ -5357,6 +5782,7 @@ final class CallService: @unchecked Sendable {
             resetNativeAudioUnitGateState()
             return
         }
+        holdNoteSessionDeactivated(pairedGeneration: pairedGeneration)
         // W-ADMGATE (2026-09-26) — FIRST: WebRTC's unit off with the session
         // (the reference implementations do exactly this at didDeactivate).
         // No-op unless a native-SRTP call armed manual mode. (Calls with native
@@ -5450,6 +5876,8 @@ final class CallService: @unchecked Sendable {
         // Hold: suppress TX entirely so the peer hears silence without
         // the ratchet advancing out-of-step.
         guard !isOnHold else { return }
+        // WIRE_SPEC 16.3 — HELD on a sealed-frame call: no audio frame at all (no silence, no comfort noise).
+        guard !holdLocalActive else { return }
         // W-M15ORDER — M-15 negotiated but the send sealer is not installed yet: hold the frame
         // BEFORE it is encoded/encrypted (it would otherwise leave unsealed and poison the peer's
         // replay window; see `RelaySealTxPolicy`). The authoritative check is repeated at the seal
