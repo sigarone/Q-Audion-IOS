@@ -118,3 +118,31 @@ before merging. This is a manual checkpoint today; if a real CI-enforced
 gate is wanted, wire the same two commands into a workflow step that fails
 the build on mismatch (not yet done — flagged as a follow-up, not silently
 assumed to already exist).
+
+## mldsa-native (ML-DSA-87, FIPS 204) — added 2026-11-11
+
+`src/mldsa/` is [`pq-code-package/mldsa-native`](https://github.com/pq-code-package/mldsa-native) tag
+`v2.0.0`, commit `834a90d5e846ffa1e1611bd24e160bb2e9b86d35` (Apache-2.0 OR ISC OR MIT; the upstream `LICENSE` is
+kept next to the sources). `src/mldsa/MANIFEST.sha256` lists the SHA-256 of every file as it is in that tag
+(`cd src/mldsa && sha256sum -c MANIFEST.sha256` verifies them, apart from `mldsa_native_config.h`, see below).
+
+What is taken: the contents of upstream `mldsa/` (the single-compilation-unit build `mldsa_native.c`, its public
+header and `src/*.c|*.h|zetas.inc`, portable C only) plus the upstream `LICENSE`. What is left out: the
+`native/` backends (arm64 / x86_64 assembly), the upstream `src/fips202/` Keccak copy and `mldsa_native_asm.S`.
+
+What is local (not upstream):
+- `src/mldsa/mldsa_native_config.h` replaces the upstream config: parameter set 87, namespace prefix
+  `qa_mldsa87`, core API only (`keypair_internal`, `signature_internal`, `verify_internal`; no randomized API, so
+  no random number generator is linked and the caller supplies the seed and the signing randomness), serial
+  FIPS-202 use, no native backend.
+- `src/mldsa/mldsa_fips202_glue.h` maps the SHAKE interface mldsa-native expects onto the `OQS_SHA3_*` functions of
+  this target. There is one Keccak implementation in CLiboqs, shared with ML-KEM.
+- `src/qa_mldsa87.c` and `include/oqs/qa_mldsa87.h`: three plain-C entry points (key generation from a seed,
+  pure-mode sign with caller-supplied randomness, pure-mode verify) used by `Crypto/Pqsig.swift`.
+
+`Package.swift` excludes `src/mldsa/src` from compilation (it is included by `mldsa_native.c`) and adds
+`src/mldsa` to the header search paths. Updating the tree means re-vendoring a tag, regenerating the manifest and
+re-running `PqsigKatTests`.
+
+The integrity checkpoint above is the one of 2026-08-21 and does not cover `src/mldsa/` and the three files
+listed above; the vendored tree has its own `MANIFEST.sha256`.

@@ -5,12 +5,12 @@ import CryptoKit
 /// The call-media layer vectors (phase 1) of the server repository: `tools/kat/pqc-hardening-v1/pqc-hardening-v1-kat.json`, a
 /// BYTE-FOR-BYTE copy. Its SHA-256 is pinned here. The file is read as untyped JSON on purpose: its sections have very different
 /// shapes. Sections run here: the inner nonce, the legacy outer nonce prefix, the `outer-off-v1` frame, the retransmit cache and the
-/// protection level with its log line. The sections of later steps are not in the file yet.
+/// protection level with its log line. The sections mldsaSeed, xcert and sigHybrid are run by PqsigKatTests.
 ///
 /// This code was written on a machine that cannot compile Swift for iOS: the macOS CI job is what runs it.
 final class PqcHardeningV1KatTests: XCTestCase {
 
-    static let pinnedSHA256 = "eb1e25c1acd0212588d8f90bc11b369a20b1fa07827b377bbcf5413ecdfd54f3"
+    static let pinnedSHA256 = "75976b4c72bc09226faffa78123082093447df1fe32f496ad9e637ca5de4c694"
 
     // MARK: - Loading
 

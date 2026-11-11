@@ -1,0 +1,37 @@
+# SHA-256 of each file as in pq-code-package/mldsa-native tag v2.0.0 (commit 834a90d5e846ffa1e1611bd24e160bb2e9b86d35).
+# Paths are relative to this directory; upstream layout: mldsa/<path> (LICENSE: repository root).
+# LOCAL, NOT UPSTREAM: mldsa_native_config.h is the Q-Audion local configuration. Its hash is the SHA-256 of the local file as committed here; the upstream mldsa_native_config.h is not used.
+# LOCAL, NOT UPSTREAM: mldsa_fips202_glue.h is Q-Audion local glue code with no upstream counterpart. Its hash is the SHA-256 of the local file as committed here.
+# Every other listed file is upstream mldsa-native v2.0.0 at 834a90d5 (see ../../../PROVENANCE.md).
+22f7173776d0a36d3f13ec1f45d51e0502e67d17e384bddf39690d833974ff93  LICENSE
+f8e2e7c53d9644b58e78ea32ab6ead3aa60a10c2465d8eaaf3e82919b56cd964  mldsa_fips202_glue.h
+0d7e19d651e629430b1923f3cba2fb2579639d8bd1f156a2dcd2696aa83f846f  mldsa_native.c
+b30c04756599aaa15301a13bc6025955f275c1e573fc92f96778a7c972fc4d4d  mldsa_native.h
+2f286889cd9f2e4099b861be79f4abe53140a3545a50e55340a96fefdc8d2bf9  mldsa_native_config.h
+825bacae1b60e7d0bb91d4a514b33f4ea1d7e70724d6e42742fb987e27efd0ef  README.md
+355704060689792c1ef7307844b486ac54bd397db5474a912cdf1d5ee4e0d2e7  src/cbmc.h
+340e0a7c22f807ba020362d3cca7babadec0214c59329ea88c1f6e307686af84  src/common.h
+c75d2d0f6555230e5fa6ea9147d523d5375fba247b314fe080d0454f89267719  src/context.h
+5d5641f89ee92f8d33f4489b7746ca20d4226cf6ecfcc9895bf644d4bc8871e5  src/ct.c
+706be081c657b742247b25588b6eb75f399f73b84b33ef20179ceeb721731078  src/ct.h
+0200f23feaebfd12d35b39232c2ae566f7322d86993f981a705ddc6355a42edc  src/debug.c
+4effd0eef9b63bdf434369b69ec5d14293ad7d22031b4f5ba237c69ce2fda383  src/debug.h
+bc410982aca199135550eebdae4da4533d9c76e1a8ea0b8e0b02df9dccdd7632  src/packing.c
+d095e2960591186bb7ae843381dbce5e407d41b62ceef2e46ce494f90348ccf1  src/packing.h
+fd15d4b12747bffc17a78dd7e361fff7973e4455e3d3a162e83237f2d3029941  src/params.h
+3bfb1b8f3c2e9fe1f00ca37d0fc64c57f70d0c3f845504989f39e9014799bdc3  src/poly.c
+f753c1efdf41252198b2681a5e1f04252ed5707aa325e50c17f2846a2c12f18e  src/poly.h
+2073e8e6230957f39feabc5d204f8055ae25e60dedb161eff3f3e4894832abe5  src/poly_kl.c
+c2a52797f36d676c4f2c889986cddae06cbbd1004e23e09064353137e4cf2a44  src/poly_kl.h
+bdca075b7f0d7741c649d59350e6eb94884b7160e0baefc5e50be492c1b2070a  src/polyvec.c
+707341d7ea21f599dacad64845a7afbf4f78ce8f49b2b24986c7e5cc95813e4d  src/polyvec.h
+5bc5b115b16393ca79f44540f5561da544496bda5b5514e1552015a0b83f0a73  src/polyvec_lazy.c
+08d8f9fda9bc3f27cbbae40ff861f623576c0a2b520b991d666db0d20c3dce52  src/polyvec_lazy.h
+b8ccb9a34818d8e1cd0cfea9b24829ab9949cb88c20ed0648459c5c7d36aa492  src/randombytes.h
+c726a493163756a9746c71c247e8d8dfdfc96ce5ba85be4bcc0acdebf689e010  src/reduce.h
+2fc8dd6f1ce513104287255e35a6087b2d17d2d8a9327eb1791e874c86f5a206  src/rounding.h
+b4fddbdd7c0e6acb50683dc96319ef9a77c34d7fc6ea24c7ec40bf1a567afe66  src/sign.c
+5392dd11d538563c8e89ae449e02fd78eb7c909393bc0596477e21e36e1b7abd  src/sign.h
+4ed2df211b960a747e29aec04055100470def1ae8c481feb203c27fbc61a0b70  src/symmetric.h
+a3bbf630c21751783547d21126af6e8162e6e0687d96e2d0f1aa14fd2c60d38f  src/sys.h
+f27b371b78b05875d22e9b98f541f265c5f9358c3ece72dc91137114556d45ee  src/zetas.inc
