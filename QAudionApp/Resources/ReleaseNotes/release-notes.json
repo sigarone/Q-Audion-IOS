@@ -1,5 +1,28 @@
 [
   {
+    "version": "1.0.1284",
+    "notes": {
+      "it": [
+        "Miglioramenti di affidabilità e stabilità"
+      ],
+      "en": [
+        "Reliability and stability improvements"
+      ],
+      "de": [
+        "Verbesserungen bei Zuverlässigkeit und Stabilität"
+      ],
+      "es": [
+        "Mejoras de fiabilidad y estabilidad"
+      ],
+      "fr": [
+        "Améliorations de la fiabilité et de la stabilité"
+      ],
+      "pt-BR": [
+        "Melhorias de confiabilidade e estabilidade"
+      ]
+    }
+  },
+  {
     "version": "1.0.1282",
     "notes": {
       "it": [
