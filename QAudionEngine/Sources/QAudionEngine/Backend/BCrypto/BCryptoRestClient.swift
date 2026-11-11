@@ -527,6 +527,10 @@ public final class BCryptoRestClient {
         if status == 402 { throw BCryptoError.paymentRequired }
         // A registration refused over the Terms keeps its reason: the screens send the person back to the steps.
         if status == 400, let refusal = BCryptoTermsRefusal(responseBody: data) { throw refusal }
+        // The identity publish whose extra signature fields were refused alone: the Ed25519 bundle is stored.
+        if status == 400, MldsaPublishPolicy.ed25519BundleStored(data) {
+            throw BCryptoIdentityBundleStored(reason: MldsaPublishPolicy.refusalReason(data))
+        }
         throw BCryptoError.httpError(status)
     }
 

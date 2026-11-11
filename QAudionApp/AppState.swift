@@ -14886,15 +14886,30 @@ final class AppState: ObservableObject {
                     ed25519Pub: signingPub, ikPqPub: ikPqPub,
                     ikX25519Pub: ikX25519Pub, createdAtMs: createdAtMs
                 )
+                // The extra signature fields of this device ride on the v2 publish. The server flag can only switch
+                // them off. They are part of what was published, so they are part of the fingerprint.
+                let mldsaEnabled = FeatureFlags.killSwitch(
+                    MldsaPublishPolicy.flagKey, compiledDefault: MldsaPublishPolicy.compiledDefault)
                 let fingerprint = IdentityPublishFingerprint.v2(
                     deviceId: deviceId, ed25519Pub: signingPub,
-                    ikPqPub: ikPqPub, ikX25519Pub: ikX25519Pub
+                    ikPqPub: ikPqPub, ikX25519Pub: ikX25519Pub,
+                    mldsaBinding: IdentityPublishFingerprint.mldsaBindingToken(enabled: mldsaEnabled, deviceId: deviceId)
                 )
+                let edSeed = sovereign.signingPrivate
+                let mldsaCache = MldsaPublishFieldsCache()
                 await publishWithRetry(fingerprint: fingerprint) {
-                    try await provider.kmsClient.publishUserIdentityBundleV2(
-                        ed25519Pub: signingPub, ikPqPub: ikPqPub, ikX25519Pub: ikX25519Pub,
-                        selfSig: selfSig, createdAtMs: createdAtMs, deviceId: deviceId
-                    )
+                    var mldsa: MldsaIdentityPublication.Fields?
+                    if mldsaEnabled {
+                        mldsa = await Self.mldsaPublishFields(
+                            cache: mldsaCache, edSeed: edSeed, edPub: signingPub, uuidRaw: uuidRaw, deviceId: deviceId)
+                    }
+                    let outcome = try await MldsaPublishPolicy.publish(mldsa) { fields in
+                        try await provider.kmsClient.publishUserIdentityBundleV2(
+                            ed25519Pub: signingPub, ikPqPub: ikPqPub, ikX25519Pub: ikX25519Pub,
+                            selfSig: selfSig, createdAtMs: createdAtMs, deviceId: deviceId, mldsa: fields
+                        )
+                    }
+                    Self.logMldsaPublish(outcome)
                 }
                 return
             } catch {
@@ -14905,6 +14920,57 @@ final class AppState: ObservableObject {
         await publishWithRetry(fingerprint: fingerprint) {
             try await provider.kmsClient.publishUserIdentityKey(ed25519PubKey: signingPub, deviceId: deviceId)
         }
+    }
+
+    /// Builds the extra signature fields of this device once per publish run (the retries of one sweep reuse them).
+    /// The created_ms of the certificate is chosen once per (uuid, Ed25519 key, device id) and kept, because a
+    /// republish must carry the same fields; it is stored only after a certificate was built from it. Signing needs
+    /// about 108 KB of stack, so it runs in a Task, never on a small custom thread.
+    private static func mldsaPublishFields(
+        cache: MldsaPublishFieldsCache, edSeed: Data, edPub: Data, uuidRaw: Data, deviceId: String
+    ) async -> MldsaIdentityPublication.Fields? {
+        if cache.done { return cache.fields }
+        cache.done = true
+        guard MldsaIdentityPublication.isPublishableDeviceId(deviceId) else {
+            RTLog.info("crypto", "mldsaPublish omitted=1 deviceid=0")
+            return nil
+        }
+        let storedKey = "com.qaudion.identity.mldsa_xc_created_v1"
+        let nowMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        let created = MldsaIdentityPublication.createdMsFor(
+            stored: UserDefaults.standard.string(forKey: storedKey), uuidRaw: uuidRaw, edPub: edPub,
+            deviceId: deviceId, nowMs: nowMs)
+        let createdMs = created.createdMs
+        let fields = await Task.detached(priority: .utility) {
+            MldsaIdentityPublication.build(
+                edSeed: edSeed, edPub: edPub, uuidRaw: uuidRaw, deviceId: deviceId, createdMs: createdMs)
+        }.value
+        if fields != nil {
+            UserDefaults.standard.set(created.record, forKey: storedKey)
+        } else {
+            RTLog.warn("crypto", "mldsaPublish built=0")
+        }
+        cache.fields = fields
+        return fields
+    }
+
+    private static func logMldsaPublish(_ outcome: MldsaPublishPolicy.Outcome) {
+        switch outcome {
+        case .plain:
+            break
+        case .accepted:
+            RTLog.info("crypto", "mldsaPublish accepted=1")
+        case .refused:
+            // The Ed25519 bundle is stored; the same fields would only be refused again, so nothing retries.
+            RTLog.warn("crypto", "mldsaPublish refused=1")
+        case .unacknowledged:
+            RTLog.warn("crypto", "mldsaPublish ack=0")
+        }
+    }
+
+    private final class MldsaPublishFieldsCache: @unchecked Sendable {
+        var done = false
+        var fields: MldsaIdentityPublication.Fields?
     }
 
     /// W-IDSELFHEAL (2026-09-02) — before this sweep's publish decision,
@@ -30233,6 +30299,16 @@ extension AppState {
     /// computes a self-sig, and v2 always carries the X25519 leg) — treated
     /// as verify-failure rather than guessed at.
     private static func verifyPeerBundleSelfSig(_ bundle: BCryptoKmsClient.IdentityBundleV2) -> Bool {
+        guard verifyPeerBundleSelfSigOnly(bundle) else { return false }
+        // The device's extra signature key, if the bundle carries one: kept (in memory) only when its
+        // cross-certificate verifies against this bundle's Ed25519 key, uuid and device id. Never rejects the bundle.
+        if PeerMldsaStore.ingest(bundle) == nil, bundle.mldsaPubB64 != nil {
+            RTLog.info("crypto", "peerBundle mldsa=0")
+        }
+        return true
+    }
+
+    private static func verifyPeerBundleSelfSigOnly(_ bundle: BCryptoKmsClient.IdentityBundleV2) -> Bool {
         // The peer-published identity key must be a usable Ed25519 key before either branch below: a
         // small-order or non-canonical key would "verify" any self-sig under a permissive verifier, and
         // the TOFU-accept branch must not take one either (`Ed25519IdentityKeyPolicy`).

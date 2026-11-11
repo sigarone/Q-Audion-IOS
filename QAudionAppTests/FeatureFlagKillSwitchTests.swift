@@ -52,4 +52,15 @@ final class FeatureFlagKillSwitchTests: XCTestCase {
         XCTAssertTrue(EnigmaSettings.flagDefault, "Enigma mode is part of the release")
         XCTAssertEqual(EnigmaSettings.flagKey, "enigma_mode.enabled")
     }
+
+    /// The extra signature fields of the identity publish: on by default, and the server flag can only switch them off.
+    func test_theIdentityPublishExtrasShipOnAndTheFlagCanOnlySwitchThemOff() {
+        XCTAssertEqual(MldsaPublishPolicy.flagKey, "pqc.mldsa_publish")
+        XCTAssertTrue(MldsaPublishPolicy.compiledDefault)
+        let on = MldsaPublishPolicy.compiledDefault
+        XCTAssertTrue(FeatureFlags.resolveKillSwitch(compiledDefault: on, remote: nil), "on before any server data")
+        XCTAssertTrue(FeatureFlags.resolveKillSwitch(compiledDefault: on, remote: true))
+        XCTAssertFalse(FeatureFlags.resolveKillSwitch(compiledDefault: on, remote: false), "the flag switches it off")
+        XCTAssertTrue(FeatureFlags.killSwitch(MldsaPublishPolicy.flagKey, compiledDefault: on), "absent from the file")
+    }
 }
