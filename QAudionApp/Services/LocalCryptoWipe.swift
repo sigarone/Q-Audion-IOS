@@ -46,6 +46,9 @@ enum LocalCryptoWipe {
         KeychainRatchetVault().wipeAll()
         KeychainGroupSessionVault().wipeAll()
         PeerIdentityPinStore().wipeAll()
+        // The capability pins are account data: logout, remote wipe and account deletion all come through here. The arming flag
+        // is not: only the full-wipe call sites clear it (`CapsPinBook.clearAll`).
+        CapsPinBook.shared.clearPins()
         ContactsStore().wipeAll()
         // The "address book imported" mark belongs to the account that is leaving (logout, remote wipe and account deletion all
         // come through here): the next account must run "Importa" itself before a refresh scans anything.

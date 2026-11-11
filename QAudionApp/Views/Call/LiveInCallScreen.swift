@@ -434,6 +434,8 @@ struct LiveInCallScreen: View {
                 // XC-1 — sibling advisory for the sig_invalid verdict (distinct
                 // copy from the identity-change banner above).
                 handshakeSignatureInvalid: appState.callHandshakeSignatureInvalid,
+                // A capability the contact device was pinned with is missing: advisory warning that names it.
+                pinWarningReason: appState.callPinWarning?.reason,
                 // P0-3 — see AppState.awaitingIdentityConfirmation's doc: unlike
                 // the advisory-only flag above, this ONE reflects a REAL media
                 // hold; confirming SAS below (handleConfirmSas) releases it.
@@ -616,6 +618,8 @@ struct LiveInCallScreen: View {
         SasVerificationStore.shared.recordVerified(
             peerUserId: peer, fingerprint: fp, identityTag: identityTag)
         RTLog.info("call", "sasConfirm ok=1")
+        // A pin warning of this call goes with the confirmation (the record of the contact device drops the capability).
+        appState.confirmCapsPinWarning()
         // P0-3 — release whatever media (relay sealers / v4 bootstrap) AppState
         // held back for this call's unverified handshake identity, if any was.
         // No-op when the gate was never engaged (the common case).

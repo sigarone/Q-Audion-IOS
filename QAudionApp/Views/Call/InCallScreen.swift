@@ -350,6 +350,9 @@ struct InCallScreen: View {
     /// `signatureInvalidBanner`'s doc for why this must NOT share copy with
     /// `identityChangeBanner`.
     let handshakeSignatureInvalid: Bool
+    /// The contact device was pinned with a capability that this call's first round did not carry: the visible safety-code
+    /// warning, with the sentence that names the missing protection. Advisory only; confirming the code below clears it.
+    let pinWarningReason: CapsPinReason?
     /// P0-3 (2026-08-05, coordinated fix plan cluster 3) — true when the
     /// handshake identity verdict for THIS call was `.abort` (a signature was
     /// required and did not verify). Unlike `identityUnauthenticatedChange`
@@ -515,6 +518,7 @@ struct InCallScreen: View {
          identityUnauthenticatedChange: Bool = false,
          identityRotationAwaitingSas: Bool = false,
          handshakeSignatureInvalid: Bool = false,
+         pinWarningReason: CapsPinReason? = nil,
          awaitingIdentityConfirmation: Bool = false,
          assurancePresentation: AssuranceStateUI.Presentation? = nil,
          mutualNfcInCommon: Bool = false,
@@ -579,6 +583,7 @@ struct InCallScreen: View {
         self.identityUnauthenticatedChange = identityUnauthenticatedChange
         self.identityRotationAwaitingSas = identityRotationAwaitingSas
         self.handshakeSignatureInvalid = handshakeSignatureInvalid
+        self.pinWarningReason = pinWarningReason
         self.awaitingIdentityConfirmation = awaitingIdentityConfirmation
         self.assurancePresentation = assurancePresentation
         self.mutualNfcInCommon = mutualNfcInCommon
@@ -831,6 +836,50 @@ struct InCallScreen: View {
         .accessibilityLabel("Avviso di sicurezza: la firma di questa chiamata non corrisponde alla chiave fidata del contatto. Verifica le parole SAS.")
     }
 
+    /// The sentence that follows the lead line: it names the protection this device did not offer.
+    private func pinWarningSentence(_ reason: CapsPinReason) -> String {
+        switch reason {
+        case .capsBindV1Missing:
+            return String(localized: "in_call.pin_warning.caps_bind_missing",
+                          defaultValue: "Protezione delle impostazioni della chiamata non offerta da questo dispositivo.",
+                          comment: "Call screen, safety-code warning: the contact's device no longer offers the protection of the call settings it offered before.")
+        }
+    }
+
+    private func pinWarningBanner(_ reason: CapsPinReason) -> some View {
+        let lead = String(localized: "in_call.pin_warning.lead",
+                          defaultValue: "Verifica il codice di sicurezza con questo contatto.",
+                          comment: "Call screen, safety-code warning: first sentence, followed by the one that names the missing protection.")
+        let sentence = pinWarningSentence(reason)
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.shield.fill")
+                .qaudionScaledFont(size: 16, weight: .semibold, maxSize: .xLarge)
+                .foregroundStyle(extras.warning)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(lead)
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(extras.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(sentence)
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(scheme.surfaceVariant)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(extras.warning.opacity(0.55), lineWidth: 1)
+                )
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(lead + " " + sentence))
+    }
+
     // MARK: - P0-3 identity-hold banner (media IS gated — distinct from the
     //         advisory-only banner above)
 
@@ -1058,6 +1107,12 @@ struct InCallScreen: View {
                 if handshakeSignatureInvalid {
                     Spacer().frame(height: 10)
                     signatureInvalidBanner.padding(.horizontal, 20)
+                }
+
+                // The contact device lacks a protection it had before: advisory, names the missing protection.
+                if let pinWarningReason {
+                    Spacer().frame(height: 10)
+                    pinWarningBanner(pinWarningReason).padding(.horizontal, 20)
                 }
 
                 // P0-3 — this one actually gates media (see the field's doc).

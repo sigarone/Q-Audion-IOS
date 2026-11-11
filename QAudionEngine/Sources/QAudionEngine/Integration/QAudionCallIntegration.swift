@@ -1001,13 +1001,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         public let acceptBinding: Data?
         /// The identity key that signed THIS device's bundle of this round (`localSignerIdentityKey`).
         public let ownSignerKey: Data?
+        /// `ext_r` of this round: both bundles carry `capsBindV1`, so `transcript` is `kc_transcript_x`.
+        public let capsBindExt: Bool
 
         public init(
             peerId: String, callId: String, isInitiator: Bool, sessionKey: Data,
             kcKey: Data?, transcript: Data?, n: Int, peerSupportsMix: Bool,
             sigOk: Bool, signerIdentityKey: Data?, mutualFingerprints: [String],
             selectedFp: String? = nil, round: UInt32 = 1, advertIsBlinded: Bool = false,
-            acceptBinding: Data? = nil, ownSignerKey: Data? = nil
+            acceptBinding: Data? = nil, ownSignerKey: Data? = nil, capsBindExt: Bool = false
         ) {
             self.peerId = peerId
             self.callId = callId
@@ -1025,6 +1027,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             self.advertIsBlinded = advertIsBlinded
             self.acceptBinding = acceptBinding
             self.ownSignerKey = ownSignerKey
+            self.capsBindExt = capsBindExt
         }
     }
     public var onKcMacReady: ((KcMacReadyEvent) -> Void)?
@@ -1269,6 +1272,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Overwritten by every re-key round (the ACCEPT of round N answers round N's OFFER). Cleared
     /// with the rest of the per-call state in `onCallEnded`.
     var sentOfferTranscriptByCall: [String: Data] = [:]
+
+    /// `capsBindV1`: what this side sent per call (CAPSX/EXTX of its own bundle) and the pin decision of round 1. Per-call state
+    /// only: the pin records are in `capsBindBook` and are not cleared with a call.
+    let capsBindState = CapsBindCallState()
+    /// The sticky capability pins. Injected by tests.
+    public var capsBindBook: CapsPinBook = CapsPinBook.shared
+    /// The live value of the pin-hold server flag (nil: unknown). It is read and stored, and can never arm a hold
+    /// while `CapsPinPolicy.holdEnabled` is false.
+    public var capsBindFlag: (() -> Bool?)?
+    /// Local switch for advertising `capsBindV1` (pins already stored keep working). On by default.
+    public nonisolated(unsafe) static var capsBindV1Enabled = true
+    /// A pin anomaly of the call's round 1: the visible warning. Never ends, refuses or holds the call.
+    public var onCapsPinAnomaly: ((_ callId: String, _ peerId: String, _ reason: CapsPinReason) -> Void)?
 
     /// W-KCMAC (ship step 5) — the RAW fingerprint list WE advertised in the OFFER
     /// (`onAndroidCallSetupStarted`'s `advertisedPskFingerprints`), stashed so the
@@ -1912,8 +1928,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         callerDeviceId: String? = nil,
         envelopeSenderDeviceId: String? = nil,
         eligiblePsks: [String: Data] = [:],
+        capsBind peerCaps: BundleCapsBind,
         sendOpaqueRaw: @escaping (String) async throws -> Void
     ) async throws {
+        // The call's epoch when this step began: a call that ends while it is suspended changes it (`capsBindState.reset()`).
+        let capsEpoch = capsBindState.epoch
+        // `capsBindV1`: `peerCaps` is the analysis of the bundle's raw text as received (`AndroidHandshakeEnvelope.parse`). It is
+        // required: the typed bundle drops unknown and repeated members, so it can never stand in for the raw text.
         // W-PQCENTRY (2026-07-13) — unconditional entry breadcrumb, BEFORE any
         // guard/switch below can early-return or throw. Added after a muted
         // call (server-confirmed c74487d2, 2026-07-13: callee's WS bounced at
@@ -2042,7 +2063,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // them again.
                 if case .malformed = evaluateInbound(
                     bundle: bundle, callId: callId, peerId: callerId, peerDeviceId: callerDeviceId,
-                    expectedOfferBinding: nil).verdict {
+                    expectedOfferBinding: nil, capsBind: peerCaps).verdict {
                     print("[QAudionCallIntegration] OFFER dropped — a malformed OFFER never replaces the held one callId=\(callId.prefix(8))…")
                     return
                 }
@@ -2064,7 +2085,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
             let offerCheck = evaluateInbound(
                 bundle: bundle, callId: callId, peerId: callerId, peerDeviceId: callerDeviceId,
-                expectedOfferBinding: nil)
+                expectedOfferBinding: nil, capsBind: peerCaps)
             // W-KCMAC — `AssuranceState.decide`'s `sigOk` input: true only for the two verdicts that
             // actually confirm the Ed25519 transcript signature.
             var offerSigOk = false
@@ -2099,6 +2120,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true, ratchetV5Capable: ratchetV5Capable)
                 offerSigOk = true
             }
+            // capsBindV1: the first round is judged against the sticky pin of its verified signer key (a warning at most).
+            if isFirstOfferOfCall {
+                judgeCapsRound1(callId: callId, peerId: callerId, peer: peerCaps,
+                                verifiedKey: offerSigOk ? Self.rawSignerKey(bundle.signerIdentityKey) : nil)
+            }
             // Every non-malformed verdict carries the transcript, the parsed peer fingerprint and
             // the signer key (the policy returns `.malformed` otherwise).
             guard let offerT = offerCheck.transcript, let peerFp = offerCheck.peerFingerprint else {
@@ -2122,6 +2148,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // `sign_unavailable` as before; never an unsigned ACCEPT.
             guard await awaitLocalSignerKey() else {
                 throw IntegrationError.handshakeAborted(code: "sign_unavailable")
+            }
+            // The call may have ended while this step waited: nothing more is done for it (no state, no registry entry, no ACCEPT).
+            guard capsBindState.epoch == capsEpoch else {
+                print("[QAudionCallIntegration] OFFER step abandoned — the call ended while waiting for the signer key callId=\(callId.prefix(8))…")
+                return
             }
 
             // Re-key round freshness (every round, unconditionally): refuse an OFFER whose signed
@@ -2366,6 +2397,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 throw IntegrationError.handshakeAborted(code: "sign_unavailable")
             }
             let acceptToSend = try signedBundle(of: accept, transcript: acceptT, fingerprint: fpSelf)
+            // capsBindV1: this round's facts, from the bytes this side sends and the bytes it received. Round 1 also fixes the role of
+            // the legacy outer layer for a same-account call, before any sealer is installed.
+            let capsOwnInfo = CapsBind.analyze(bundle: acceptToSend)
+            let capsExt = CapsBind.isActive(own: capsOwnInfo, peer: peerCaps)
+            let capsRound = UInt32(max(1, min(bundle.rekeyRound ?? 1, Int(UInt32.max))))
+            if capsRound == 1 {
+                capsBindState.noteRound1(callId: callId, ownTag: capsOwnInfo.hasTag, peerTag: peerCaps.hasTag, selfIsCaller: false, epoch: capsEpoch)
+            }
+            CapsBindLog.line("capsbind ext=\(capsExt ? 1 : 0) own=\(capsOwnInfo.hasTag ? 1 : 0) peer=\(peerCaps.hasTag ? 1 : 0) round=\(capsRound)")
             // `SHA-256(ACCEPT_v6)`: the KDF / SAS / KCMAC binding (F4 — unconditional).
             let acceptBinding = HandshakeTranscript.offerBinding(acceptT)
             let combined = Self.deriveTranscriptBoundSessionKey(
@@ -2645,7 +2685,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                         ikInit: ikInit,
                         ikResp: ikResp
                     ) {
-                        kcTranscriptForEvent = t
+                        kcTranscriptForEvent = capsExt
+                            ? (CapsBind.kcTranscriptX(kcTranscript: t, offer: peerCaps, accept: capsOwnInfo) ?? t)
+                            : t
                         kcKeyForEvent = KeyConfirmation.deriveKcKey(sessionKey: combined)
                     }
                 }
@@ -2667,7 +2709,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     signerIdentityKey: offerSigOk ? v4PeerSik : nil,
                     mutualFingerprints: kcMutualFingerprints, selectedFp: selectedFp,
                     round: innerAadEpoch, advertIsBlinded: resolvedAdvert.dialect == .v3Blinded,
-                    acceptBinding: acceptBinding, ownSignerKey: localSignerIdentityKey
+                    acceptBinding: acceptBinding, ownSignerKey: localSignerIdentityKey,
+                    capsBindExt: capsExt
                 ))
 
                 // Pre-negotiation: the PQC OFFER is fully deserialised and our ACCEPT is on the
@@ -2873,7 +2916,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let expectedOfferBinding = HandshakeTranscript.offerBinding(sentOfferTranscript)
             let acceptCheck = evaluateInbound(
                 bundle: bundle, callId: callId, peerId: callerId, peerDeviceId: callerDeviceId,
-                expectedOfferBinding: expectedOfferBinding)
+                expectedOfferBinding: expectedOfferBinding, capsBind: peerCaps)
             // R-COMMIT-BIND: bind round 1 ATOMICALLY (under the book's lock, before any suspension point)
             // to the first ACCEPT that parsed and passed the malformed checks. An invalid signature or an
             // unresolved identity still binds: the call then goes held, and the SAS is exactly what it
@@ -2932,6 +2975,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true, ratchetV5Capable: ratchetV5Capable)
                 acceptSigOk = true
             }
+            // capsBindV1: this round's facts, from the bytes this side sent (its OFFER of the round) and the bytes it received.
+            let capsOwnInfo = capsBindState.sent(callId: callId) ?? CapsBind.analyze(json: "{}")
+            let capsExt = CapsBind.isActive(own: capsOwnInfo, peer: peerCaps)
+            let capsRound = isReKeyAccept ? UInt32(max(2, min(bundle.rekeyRound ?? 2, Int(UInt32.max)))) : 1
+            if !isReKeyAccept {
+                capsBindState.noteRound1(callId: callId, ownTag: capsOwnInfo.hasTag, peerTag: peerCaps.hasTag, selfIsCaller: true, epoch: capsEpoch)
+                judgeCapsRound1(callId: callId, peerId: callerId, peer: peerCaps,
+                                verifiedKey: acceptSigOk ? Self.rawSignerKey(bundle.signerIdentityKey) : nil)
+            }
+            CapsBindLog.line("capsbind ext=\(capsExt ? 1 : 0) own=\(capsOwnInfo.hasTag ? 1 : 0) peer=\(peerCaps.hasTag ? 1 : 0) round=\(capsRound)")
             guard let acceptT = acceptCheck.transcript, let peerFp = acceptCheck.peerFingerprint else {
                 reportHandshakeFatal(callId: callId, reason: CallCloseReason.peerIncompatible.rawValue)
                 throw IntegrationError.handshakeAborted(code: "transcript_unbuildable")
@@ -3246,7 +3299,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     ikInit: ikInit,
                     ikResp: ikResp
                 ) {
-                    kcCallerTranscriptForEvent = t
+                    kcCallerTranscriptForEvent = capsExt
+                        ? (CapsBind.kcTranscriptX(kcTranscript: t, offer: capsOwnInfo, accept: peerCaps) ?? t)
+                        : t
                     kcCallerKeyForEvent = KeyConfirmation.deriveKcKey(sessionKey: combined)
                 }
             }
@@ -3310,7 +3365,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 selectedFp: establishedPskFp,
                 round: innerAadEpochCaller,
                 advertIsBlinded: kcCallerResolved.dialect == .v3Blinded,
-                acceptBinding: acceptBinding, ownSignerKey: localSignerIdentityKey
+                acceptBinding: acceptBinding, ownSignerKey: localSignerIdentityKey,
+                capsBindExt: capsExt
             ))
 
             // W529: caller's ACCEPT decapsulation succeeded → cancel
@@ -3348,7 +3404,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // because it is part of the signed CAPS9.
             hsTranscriptBindV1: true,
             // MEDIA-3/4/5 — gated by innerAudioAadV1Enabled (default false).
-            innerAudioAadV1: innerAudioAadV1Enabled ? true : nil
+            innerAudioAadV1: innerAudioAadV1Enabled ? true : nil,
+            // capsBindV1: omitted while off, like every other tag.
+            capsBindV1: capsBindV1Enabled ? true : nil
         )
     }
 
@@ -3559,6 +3617,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
         let signed = try signedBundle(of: unsigned, transcript: transcript, fingerprint: fpSelf)
         lock.withLock { sentOfferTranscriptByCall[callId.lowercased()] = transcript }
+        // The bytes this side sends, per round: the input of its own CAPSX/EXTX when the round's key confirmation is built.
+        capsBindState.noteSent(callId: callId, info: CapsBind.analyze(bundle: signed))
         return signed
     }
 
@@ -3580,13 +3640,20 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         callId: String,
         peerId: String,
         peerDeviceId: String?,
-        expectedOfferBinding: Data?
+        expectedOfferBinding: Data?,
+        capsBind capsBindPeer: BundleCapsBind
     ) -> InboundCheck {
         // R-COMMIT-FIELD: the SAS commitment rules are malformed codes, checked before anything else
         // (no pin, no key and no transcript is touched for a bundle the call ends on anyway).
         if let code = HandshakeSigningPolicy.sasCommitMalformedCode(
             isOffer: bundle.kind == .offer, round: bundle.rekeyRound, sasCommitB64: bundle.sasCommit) {
             return InboundCheck(verdict: .malformed(code: code), transcript: nil, peerFingerprint: nil)
+        }
+        // capsBindV1: when the round would run the extension, a repeated or unusable member name in the peer's `capabilities` makes
+        // the bundle malformed. A bundle without the tag, and a build that does not advertise it, are never checked.
+        if CapsBind.peerCapabilitiesMalformed(ownAdvertises: Self.capsBindV1Enabled, peer: capsBindPeer) {
+            CapsBindLog.line("capsbind malformed=1")
+            return InboundCheck(verdict: .malformed(code: CallCloseReason.handshakeMalformed.rawValue), transcript: nil, peerFingerprint: nil)
         }
         // D11: the pin is keyed per-(peer, device); a nil device id resolves to the legacy
         // bare-contactId pin inside the store.
@@ -3687,6 +3754,43 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             return perDevice(peerId, deviceId)
         }
         return resolvePinnedPeerKey?(peerId)
+    }
+
+    // MARK: - capsBindV1 pins
+
+    /// The raw 32-byte signer key of a bundle, or nil.
+    private static func rawSignerKey(_ base64: String?) -> Data? {
+        guard let text = base64, let raw = Data(base64Encoded: text), raw.count == 32 else { return nil }
+        return raw
+    }
+
+    /// Judge the peer's round-1 bundle against the sticky pin of its verified signer key and report an anomaly as a visible warning.
+    /// Never ends, refuses or (with the hold compiled off) holds the call.
+    private func judgeCapsRound1(callId: String, peerId: String, peer: BundleCapsBind, verifiedKey: Data?) {
+        let flag = capsBindFlag?()
+        capsBindBook.observeFlag(flag)
+        let armed = CapsPinPolicy.isArmedForHold(book: capsBindBook, flagValue: flag)
+        guard let call = capsBindState.judgeRound1(
+            callId: callId, peerUserId: peerId, peer: peer, verifiedSignerKey: verifiedKey,
+            book: capsBindBook, armedForHold: armed) else { return }
+        guard call.pin == .anomaly, let reason = call.reason else { return }
+        if call.hold {
+            markHeld(callId: callId)
+            onHandshakeIdentityUnverified?(callId, "pin_anomaly")
+        }
+        onCapsPinAnomaly?(callId, peerId, reason)
+    }
+
+    /// Exit 1 of the pins: the user confirmed the safety code of this call. When its round 1 was a pin anomaly the record of the
+    /// contact device drops the tag. True once.
+    @discardableResult
+    public func confirmCapsPinAnomaly(callId: String) -> Bool {
+        capsBindState.confirmAnomaly(callId: callId, book: capsBindBook)
+    }
+
+    /// The words of the protection line for this call: `pin=`, `withdraw=`, `caps=` (empty: none).
+    public func capsBindLineWords(callId: String) -> (pin: String, withdraw: String, caps: String) {
+        capsBindState.lineWords(callId: callId)
     }
 
     /// Commit the side effects of a `.authenticated` /
@@ -4520,6 +4624,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // integration does not leak a prior call's offer_binding into the next
         // call's ACCEPT verification.
         sentOfferTranscriptByCall.removeAll()
+        // capsBindV1: the per-call facts go with the call; the pin records stay.
+        capsBindState.reset()
         // The round/nonce ratchets and the pinned peer DTLS fingerprint: a reused integration
         // instance must not carry a prior call's nonce, accepted-round watermark or fingerprint
         // pin into the next call — clearing unconditionally is the same "never trust stale

@@ -137,6 +137,7 @@ extension AppState {
     func finishLocalSessionAfterServerSideDeletion() {
         LocalCryptoWipe.wipeAll()
         resetAccountScopedRuntimeState()
+        CapsPinBook.shared.clearAll()
         InstallIdStore.shared.reset()
         authService.clearToken()
         SavedLoginStore.shared.deleteAll()

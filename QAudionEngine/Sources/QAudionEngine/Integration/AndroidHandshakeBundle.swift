@@ -174,6 +174,32 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         // `AndroidCapabilities.ratchetV5`.
         public let ratchetV5: Bool?
 
+        /// `capsBindV1`: the unsigned capability members and the optional key-carrying members are bound into the key
+        /// confirmation of the round when both bundles carry the tag (`CapsBind`). OPTIONAL, appended LAST, omitted while
+        /// not advertised, so the bytes of a build without it are unchanged. Read leniently: a value that is not a boolean
+        /// reads as absent and never makes the bundle undecodable.
+        public let capsBindV1: Bool?
+
+        private enum CodingKeys: String, CodingKey {
+            case ratchetV3, sframeV1, vkeyV1, sessionKdfV3, ratchetV4, srtpDirKeyV1, pskMixV1, hsTranscriptBindV1
+            case innerAudioAadV1, ratchetV5, capsBindV1
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            ratchetV3 = try c.decodeIfPresent(Bool.self, forKey: .ratchetV3)
+            sframeV1 = try c.decodeIfPresent(Bool.self, forKey: .sframeV1)
+            vkeyV1 = try c.decodeIfPresent(Bool.self, forKey: .vkeyV1)
+            sessionKdfV3 = try c.decodeIfPresent(Bool.self, forKey: .sessionKdfV3)
+            ratchetV4 = try c.decodeIfPresent(Bool.self, forKey: .ratchetV4)
+            srtpDirKeyV1 = try c.decodeIfPresent(Bool.self, forKey: .srtpDirKeyV1)
+            pskMixV1 = try c.decodeIfPresent(Bool.self, forKey: .pskMixV1)
+            hsTranscriptBindV1 = try c.decodeIfPresent(Bool.self, forKey: .hsTranscriptBindV1)
+            innerAudioAadV1 = try c.decodeIfPresent(Bool.self, forKey: .innerAudioAadV1)
+            ratchetV5 = try c.decodeIfPresent(Bool.self, forKey: .ratchetV5)
+            capsBindV1 = try? c.decodeIfPresent(Bool.self, forKey: .capsBindV1)
+        }
+
         public init(
             ratchetV3: Bool?,
             sframeV1: Bool? = nil,
@@ -184,7 +210,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             pskMixV1: Bool? = nil,
             hsTranscriptBindV1: Bool? = nil,
             innerAudioAadV1: Bool? = nil,
-            ratchetV5: Bool? = nil
+            ratchetV5: Bool? = nil,
+            capsBindV1: Bool? = nil
         ) {
             self.ratchetV3 = ratchetV3
             self.sframeV1 = sframeV1
@@ -196,6 +223,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             self.hsTranscriptBindV1 = hsTranscriptBindV1
             self.innerAudioAadV1 = innerAudioAadV1
             self.ratchetV5 = ratchetV5
+            self.capsBindV1 = capsBindV1
         }
     }
 
@@ -377,6 +405,14 @@ public enum AndroidHandshakeEnvelope {
     public struct Parsed: Equatable {
         public let callId: String
         public let bundle: AndroidHandshakeBundle
+        /// `CapsBind` analysis of the bundle's raw JSON text, as received.
+        public let capsBind: BundleCapsBind
+
+        public init(callId: String, bundle: AndroidHandshakeBundle, capsBind: BundleCapsBind) {
+            self.callId = callId
+            self.bundle = bundle
+            self.capsBind = capsBind
+        }
     }
 
     /// Parse `"<callId>|<JSON HandshakeBundle>"`.
@@ -410,7 +446,7 @@ public enum AndroidHandshakeEnvelope {
         case .accept:
             guard bundle.ciphertext != nil else { return nil }
         }
-        return Parsed(callId: callId, bundle: bundle)
+        return Parsed(callId: callId, bundle: bundle, capsBind: CapsBind.analyze(json: payload))
     }
 
     /// R-COMMIT-FIELD: the callId of a `"<callId>|{...}"` string that is a handshake bundle (its JSON
@@ -435,6 +471,11 @@ public enum AndroidHandshakeEnvelope {
 
     /// Build the wire string `"<callId>|<JSON>"`.
     public static func serialize(callId: String, bundle: AndroidHandshakeBundle) -> String {
+        "\(callId)|\(jsonPayload(of: bundle))"
+    }
+
+    /// The JSON text of a bundle exactly as `serialize` puts it on the wire (the part after `<callId>|`).
+    public static func jsonPayload(of bundle: AndroidHandshakeBundle) -> String {
         let encoder = JSONEncoder()
         // Match Android's kotlinx.serialization defaults — alphabetical key
         // ordering is NOT guaranteed but parsers ignore order. We omit
@@ -442,8 +483,7 @@ public enum AndroidHandshakeEnvelope {
         // for nullable Kotlin properties).
         encoder.outputFormatting = []
         let data = (try? encoder.encode(bundle)) ?? Data()
-        let json = String(data: data, encoding: .utf8) ?? "{}"
-        return "\(callId)|\(json)"
+        return String(data: data, encoding: .utf8) ?? "{}"
     }
 }
 

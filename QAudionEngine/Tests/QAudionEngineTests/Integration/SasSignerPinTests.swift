@@ -43,7 +43,8 @@ final class SasSignerPinTests: XCTestCase {
 
     private func verdict(_ integ: QAudionCallIntegration, _ b: AndroidHandshakeBundle) -> HandshakeSigningPolicy.Verdict {
         integ.evaluateInbound(
-            bundle: b, callId: F.callId, peerId: peer, peerDeviceId: nil, expectedOfferBinding: nil).verdict
+            bundle: b, callId: F.callId, peerId: peer, peerDeviceId: nil, expectedOfferBinding: nil,
+            capsBind: CapsBind.analyze(bundle: b)).verdict
     }
 
     private func assertAuthenticated(

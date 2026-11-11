@@ -1,4 +1,422 @@
 {
+  "capsx": {
+    "cases": [
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true}",
+        "capsx": "01000a6361707342696e645631",
+        "ext": true,
+        "lpCapsx": "000d01000a6361707342696e645631",
+        "name": "minimal",
+        "names": [
+          "capsBindV1"
+        ],
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "result": "ok"
+      },
+      {
+        "capabilitiesJson": "{\"zzTag\":true,\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"sessionKdfV3\":true,\"ratchetV4\":true,\"srtpDirKeyV1\":true,\"pskMixV1\":true,\"hsTranscriptBindV1\":true,\"ratchetV5\":true,\"relayKemV1\":true,\"capsBindV1\":true,\"Abc\":true,\"innerAudioAadV1\":true,\"frameKeyV6\":true}",
+        "capsx": "060003416263000a6361707342696e645631000a6672616d654b65795636000f696e6e6572417564696f4161645631000a72656c61794b656d563100057a7a546167",
+        "ext": true,
+        "lpCapsx": "0042060003416263000a6361707342696e645631000a6672616d654b65795636000f696e6e6572417564696f4161645631000a72656c61794b656d563100057a7a546167",
+        "name": "caps9-excluded-and-bytewise-order",
+        "names": [
+          "Abc",
+          "capsBindV1",
+          "frameKeyV6",
+          "innerAudioAadV1",
+          "relayKemV1",
+          "zzTag"
+        ],
+        "note": "uppercase sorts before lowercase; the nine CAPS9 names are left out; input order is irrelevant",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "result": "ok"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"aFalse\":false,\"aNull\":null,\"aString\":\"true\",\"aOne\":1,\"aObject\":{},\"aArray\":[true],\"relayKemV1\":true}",
+        "capsx": "02000a6361707342696e645631000a72656c61794b656d5631",
+        "ext": true,
+        "lpCapsx": "001902000a6361707342696e645631000a72656c61794b656d5631",
+        "name": "only-literal-true-counts",
+        "names": [
+          "capsBindV1",
+          "relayKemV1"
+        ],
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "result": "ok"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"1abc\":true,\"a_b\":true,\"a-b\":true,\"\":true,\"a b\":true,\"étag\":true,\"tagé\":true,\"abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\":true,\"abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\":true,\"A\":true,\"z9\":true}",
+        "capsx": "04000141004061626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262000a6361707342696e64563100027a39",
+        "ext": true,
+        "lpCapsx": "005604000141004061626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262000a6361707342696e64563100027a39",
+        "name": "pattern-exclusions",
+        "names": [
+          "A",
+          "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "capsBindV1",
+          "z9"
+        ],
+        "note": "a name must match ^[A-Za-z][A-Za-z0-9]{0,63}$; 64 characters are kept, 65 are left out; excluded members are never an error",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "result": "ok"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"t00\":true,\"t01\":true,\"t02\":true,\"t03\":true,\"t04\":true,\"t05\":true,\"t06\":true,\"t07\":true,\"t08\":true,\"t09\":true,\"t10\":true,\"t11\":true,\"t12\":true,\"t13\":true,\"t14\":true,\"t15\":true,\"t16\":true,\"t17\":true,\"t18\":true,\"t19\":true,\"t20\":true,\"t21\":true,\"t22\":true,\"t23\":true,\"t24\":true,\"t25\":true,\"t26\":true,\"t27\":true,\"t28\":true,\"t29\":true,\"t30\":true,\"t31\":true,\"t32\":true,\"t33\":true,\"t34\":true,\"t35\":true,\"t36\":true,\"t37\":true,\"t38\":true,\"t39\":true,\"t40\":true,\"t41\":true,\"t42\":true,\"t43\":true,\"t44\":true,\"t45\":true,\"t46\":true,\"t47\":true,\"t48\":true,\"t49\":true,\"t50\":true,\"t51\":true,\"t52\":true,\"t53\":true,\"t54\":true,\"t55\":true,\"t56\":true,\"t57\":true,\"t58\":true,\"t59\":true,\"t60\":true,\"t61\":true,\"t62\":true,\"t63\":true,\"t64\":true,\"t65\":true,\"t66\":true,\"t67\":true,\"t68\":true,\"t69\":true}",
+        "capsx": "40000a6361707342696e645631000374303000037430310003743032000374303300037430340003743035000374303600037430370003743038000374303900037431300003743131000374313200037431330003743134000374313500037431360003743137000374313800037431390003743230000374323100037432320003743233000374323400037432350003743236000374323700037432380003743239000374333000037433310003743332000374333300037433340003743335000374333600037433370003743338000374333900037434300003743431000374343200037434330003743434000374343500037434360003743437000374343800037434390003743530000374353100037435320003743533000374353400037435350003743536000374353700037435380003743539000374363000037436310003743632",
+        "ext": true,
+        "lpCapsx": "014840000a6361707342696e645631000374303000037430310003743032000374303300037430340003743035000374303600037430370003743038000374303900037431300003743131000374313200037431330003743134000374313500037431360003743137000374313800037431390003743230000374323100037432320003743233000374323400037432350003743236000374323700037432380003743239000374333000037433310003743332000374333300037433340003743335000374333600037433370003743338000374333900037434300003743431000374343200037434330003743434000374343500037434360003743437000374343800037434390003743530000374353100037435320003743533000374353400037435350003743536000374353700037435380003743539000374363000037436310003743632",
+        "name": "cap-64",
+        "names": [
+          "capsBindV1",
+          "t00",
+          "t01",
+          "t02",
+          "t03",
+          "t04",
+          "t05",
+          "t06",
+          "t07",
+          "t08",
+          "t09",
+          "t10",
+          "t11",
+          "t12",
+          "t13",
+          "t14",
+          "t15",
+          "t16",
+          "t17",
+          "t18",
+          "t19",
+          "t20",
+          "t21",
+          "t22",
+          "t23",
+          "t24",
+          "t25",
+          "t26",
+          "t27",
+          "t28",
+          "t29",
+          "t30",
+          "t31",
+          "t32",
+          "t33",
+          "t34",
+          "t35",
+          "t36",
+          "t37",
+          "t38",
+          "t39",
+          "t40",
+          "t41",
+          "t42",
+          "t43",
+          "t44",
+          "t45",
+          "t46",
+          "t47",
+          "t48",
+          "t49",
+          "t50",
+          "t51",
+          "t52",
+          "t53",
+          "t54",
+          "t55",
+          "t56",
+          "t57",
+          "t58",
+          "t59",
+          "t60",
+          "t61",
+          "t62"
+        ],
+        "note": "71 valid names; the first 64 in bytewise order are kept, the rest are ignored",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "result": "ok"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"Abc\":true,\"x1\":true,\"a\\/b\":true}",
+        "capsx": "030003416263000a6361707342696e64563100027831",
+        "ext": true,
+        "lpCapsx": "0016030003416263000a6361707342696e64563100027831",
+        "name": "escaped-name-is-the-member",
+        "names": [
+          "Abc",
+          "capsBindV1",
+          "x1"
+        ],
+        "note": "the stored text has real JSON escapes (a backslash in the text): a member name is compared, sorted and matched after JSON unescaping, so \\u0063apsBindV1 is the member capsBindV1; a\\/b unescapes to a/b and fails the pattern",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "result": "ok"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"relayKemV1\":true,\"relayKemV1\":false}",
+        "ext": true,
+        "name": "duplicate-with-capsBindV1-malformed",
+        "note": "ext_r would be true, so a duplicate name is handshake_malformed",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "reason": "duplicate-member-name",
+        "result": "handshake_malformed"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"capsBindV1\":false}",
+        "ext": true,
+        "name": "duplicate-capsBindV1-itself-malformed",
+        "note": "at least one capsBindV1 member is true, so the check applies",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "reason": "duplicate-member-name",
+        "result": "handshake_malformed"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"capsBindV1\":false}",
+        "ext": true,
+        "name": "duplicate-by-escape-malformed",
+        "note": "the second member is capsBindV1 only after unescaping: a duplicate",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "reason": "duplicate-member-name",
+        "result": "handshake_malformed"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"relayKemV1\":true,\"relayKemV1\":true}",
+        "ext": true,
+        "name": "duplicate-by-escape-with-other-name-malformed",
+        "note": "a duplicate that only an unescaping parser sees, of a name other than capsBindV1",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "reason": "duplicate-member-name",
+        "result": "handshake_malformed"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"a_b\":true,\"a_b\":false}",
+        "ext": true,
+        "name": "duplicate-of-name-failing-pattern-malformed",
+        "note": "the duplicate rule covers every member name of the object, also names that CAPSX would leave out",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "reason": "duplicate-member-name",
+        "result": "handshake_malformed"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"a_b\":true,\"a_b\":true}",
+        "ext": true,
+        "name": "duplicate-of-name-failing-pattern-by-escape-malformed",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "reason": "duplicate-member-name",
+        "result": "handshake_malformed"
+      },
+      {
+        "capabilitiesJson": "{\"a_b\":true,\"a_b\":false,\"ratchetV3\":true}",
+        "ext": false,
+        "name": "duplicate-of-name-failing-pattern-without-ext-decoded-as-today",
+        "note": "no capsBindV1 member that is true: no duplicate check",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": false,
+        "result": "ok"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"abc\\n\":true,\"abc\":true}",
+        "capsx": "020003616263000a6361707342696e645631",
+        "ext": true,
+        "lpCapsx": "0012020003616263000a6361707342696e645631",
+        "name": "name-with-newline-fails-pattern",
+        "names": [
+          "abc",
+          "capsBindV1"
+        ],
+        "note": "abc followed by an escaped newline is not abc: the pattern is anchored to the whole name (a regex whose $ accepts a trailing newline is wrong); excluded, never an error",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "result": "ok"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"😀\":true}",
+        "capsx": "01000a6361707342696e645631",
+        "ext": true,
+        "lpCapsx": "000d01000a6361707342696e645631",
+        "name": "valid-surrogate-pair-name-excluded-not-malformed",
+        "names": [
+          "capsBindV1"
+        ],
+        "note": "a surrogate pair is a valid escape: the name is U+1F600, fails the pattern, is left out",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "result": "ok"
+      },
+      {
+        "capabilitiesJson": "{\"A00\":true,\"A01\":true,\"A02\":true,\"A03\":true,\"A04\":true,\"A05\":true,\"A06\":true,\"A07\":true,\"A08\":true,\"A09\":true,\"A10\":true,\"A11\":true,\"A12\":true,\"A13\":true,\"A14\":true,\"A15\":true,\"A16\":true,\"A17\":true,\"A18\":true,\"A19\":true,\"A20\":true,\"A21\":true,\"A22\":true,\"A23\":true,\"A24\":true,\"A25\":true,\"A26\":true,\"A27\":true,\"A28\":true,\"A29\":true,\"A30\":true,\"A31\":true,\"A32\":true,\"A33\":true,\"A34\":true,\"A35\":true,\"A36\":true,\"A37\":true,\"A38\":true,\"A39\":true,\"A40\":true,\"A41\":true,\"A42\":true,\"A43\":true,\"A44\":true,\"A45\":true,\"A46\":true,\"A47\":true,\"A48\":true,\"A49\":true,\"A50\":true,\"A51\":true,\"A52\":true,\"A53\":true,\"A54\":true,\"A55\":true,\"A56\":true,\"A57\":true,\"A58\":true,\"A59\":true,\"A60\":true,\"A61\":true,\"A62\":true,\"A63\":true,\"capsBindV1\":true}",
+        "capsx": "400003413030000341303100034130320003413033000341303400034130350003413036000341303700034130380003413039000341313000034131310003413132000341313300034131340003413135000341313600034131370003413138000341313900034132300003413231000341323200034132330003413234000341323500034132360003413237000341323800034132390003413330000341333100034133320003413333000341333400034133350003413336000341333700034133380003413339000341343000034134310003413432000341343300034134340003413435000341343600034134370003413438000341343900034135300003413531000341353200034135330003413534000341353500034135360003413537000341353800034135390003413630000341363100034136320003413633",
+        "ext": true,
+        "lpCapsx": "0141400003413030000341303100034130320003413033000341303400034130350003413036000341303700034130380003413039000341313000034131310003413132000341313300034131340003413135000341313600034131370003413138000341313900034132300003413231000341323200034132330003413234000341323500034132360003413237000341323800034132390003413330000341333100034133320003413333000341333400034133350003413336000341333700034133380003413339000341343000034134310003413432000341343300034134340003413435000341343600034134370003413438000341343900034135300003413531000341353200034135330003413534000341353500034135360003413537000341353800034135390003413630000341363100034136320003413633",
+        "name": "tag-beyond-cap-64",
+        "names": [
+          "A00",
+          "A01",
+          "A02",
+          "A03",
+          "A04",
+          "A05",
+          "A06",
+          "A07",
+          "A08",
+          "A09",
+          "A10",
+          "A11",
+          "A12",
+          "A13",
+          "A14",
+          "A15",
+          "A16",
+          "A17",
+          "A18",
+          "A19",
+          "A20",
+          "A21",
+          "A22",
+          "A23",
+          "A24",
+          "A25",
+          "A26",
+          "A27",
+          "A28",
+          "A29",
+          "A30",
+          "A31",
+          "A32",
+          "A33",
+          "A34",
+          "A35",
+          "A36",
+          "A37",
+          "A38",
+          "A39",
+          "A40",
+          "A41",
+          "A42",
+          "A43",
+          "A44",
+          "A45",
+          "A46",
+          "A47",
+          "A48",
+          "A49",
+          "A50",
+          "A51",
+          "A52",
+          "A53",
+          "A54",
+          "A55",
+          "A56",
+          "A57",
+          "A58",
+          "A59",
+          "A60",
+          "A61",
+          "A62",
+          "A63"
+        ],
+        "note": "64 valid names sort before capsBindV1: ext is true (the member is true) but capsBindV1 is the 65th name and is not in CAPSX",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "result": "ok"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"\\ud800\":true}",
+        "ext": true,
+        "name": "lone-high-surrogate-name-malformed",
+        "note": "ext_r is true and a member name is a lone surrogate: the whole object is malformed for the duplicate rule",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "reason": "invalid-member-name",
+        "result": "handshake_malformed"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"x\\udc00y\":false}",
+        "ext": true,
+        "name": "lone-low-surrogate-name-malformed",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "reason": "invalid-member-name",
+        "result": "handshake_malformed"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"\\ud800A\":true}",
+        "ext": true,
+        "name": "high-surrogate-followed-by-non-low-malformed",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "reason": "invalid-member-name",
+        "result": "handshake_malformed"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"a\\qb\":true}",
+        "ext": true,
+        "name": "invalid-escape-in-name-malformed",
+        "note": "\\q is not a JSON escape",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "reason": "invalid-member-name",
+        "result": "handshake_malformed"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"a\\u00zz\":true}",
+        "ext": true,
+        "name": "short-unicode-escape-in-name-malformed",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": true,
+        "reason": "invalid-member-name",
+        "result": "handshake_malformed"
+      },
+      {
+        "capabilitiesJson": "{\"relayKemV1\":true,\"relayKemV1\":false,\"ratchetV3\":true}",
+        "ext": false,
+        "name": "duplicate-without-capsBindV1-decoded-as-today",
+        "note": "the peer object has no capsBindV1 member that is true: no duplicate check, ext_r false, no CAPSX",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": false,
+        "result": "ok"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":true,\"x1\":true,\"x1\":true}",
+        "ext": false,
+        "name": "duplicate-own-does-not-advertise",
+        "note": "the receiver's own bundle lacks capsBindV1: ext_r false, no duplicate check, no CAPSX",
+        "ownCapsBindV1": false,
+        "peerHasCapsBindV1": true,
+        "result": "ok"
+      },
+      {
+        "capabilitiesJson": "{\"ratchetV3\":true,\"relayKemV1\":true}",
+        "ext": false,
+        "name": "peer-lacks-tag",
+        "note": "an old or stripped peer: ext_r false, no CAPSX",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": false,
+        "result": "ok"
+      },
+      {
+        "capabilitiesJson": "{\"capsBindV1\":false}",
+        "ext": false,
+        "name": "empty-object-with-tag-false",
+        "note": "the value false is not the tag",
+        "ownCapsBindV1": true,
+        "peerHasCapsBindV1": false,
+        "result": "ok"
+      }
+    ],
+    "rule": "CAPSX = u8(n) || LP(name_1) || ... || LP(name_n), names = members of `capabilities` whose value is the JSON literal true, not one of the nine CAPS9 names, matching ^[A-Za-z][A-Za-z0-9]{0,63}$, sorted bytewise, first 64. ext = own bundle advertises capsBindV1 AND the raw peer object has a capsBindV1 member that is true. Member names are compared, sorted and matched after JSON unescaping. A duplicate member name (after unescaping), or a member name with an invalid escape or a lone surrogate, makes the whole object handshake_malformed only when ext would be true (members with such a name never count as capsBindV1); otherwise the object is out of scope of these vectors (a decoder that rejects the text makes the bundle handshake_malformed under WIRE_SPEC 3.1 whatever ext is). `capsx` is given only when ext is true. `capabilitiesJson` is the stored object text, escapes unprocessed."
+  },
   "common": {
     "callId": "kat-call-0001",
     "calleeUserId": "bob",
@@ -30,14 +448,14 @@
     "xcert",
     "sigHybrid",
     "ed25519Strict",
-    "leafV2"
+    "leafV2",
+    "capsx",
+    "extx",
+    "kcmacExt"
   ],
   "deferred": {
-    "note": "Defined by later steps (S8-S17), added to this file when those steps start; the sha256 pin changes then. mldsaSeed, xcert and sigHybrid were added by S13; ed25519Strict and leafV2 by S14.",
+    "note": "Defined by later steps (S9-S17), added to this file when those steps start; the sha256 pin changes then. mldsaSeed, xcert and sigHybrid were added by S13; ed25519Strict and leafV2 by S14; capsx, extx and kcmacExt by S8.",
     "sections": [
-      "capsx",
-      "extx",
-      "kcmacExt",
       "innerSealV2",
       "relayKemV1",
       "relayRotV1",
@@ -331,8 +749,452 @@
       }
     ]
   },
+  "extx": {
+    "bundleFields": "the optional members of one bundle as they appear on the wire (JSON), `bundleFields` holds only those present",
+    "cases": [
+      {
+        "bundleFields": {},
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "all-absent",
+        "note": "what every S8 build sends today",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "relayKem": {
+            "mlkem": "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",
+            "x25519": "CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I="
+          }
+        },
+        "extx": "f04654427830de4048adbd691b82855bb4f576cd71f7d068cb8406814e73131c",
+        "name": "relayKem-both",
+        "preimage": "71612d657874782d76310620030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dc00200910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe200000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "relayKem": {
+            "x25519": "CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I="
+          }
+        },
+        "extx": "29d7b784e484fa28a0090eedfe095ecc79d347d38f389d5db41d02b9e280e11f",
+        "name": "relayKem-x25519-only",
+        "preimage": "71612d657874782d7631000000200910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe200000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "mldsaKeyId": "uRUCz7NV5e0BtFn+YIKtyCMlznHVfqZUWRGHPlKdfkU="
+        },
+        "extx": "d5add981f22aaee26246fb4cb1cc9f8914115a37d21116836ee3e2ef141d32e8",
+        "name": "mldsaKeyId",
+        "preimage": "71612d657874782d7631000000000020b91502cfb355e5ed01b459fe6082adc82325ce71d57ea6545911873e529d7e450000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "mldsaKeyId": "BQwTGiEoLzY9REtSWWBnbnV8g4qRmJ+mrbS7wsnQ1w=="
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "mldsaKeyId-wrong-length-counts-absent",
+        "note": "31 bytes: absent, same digest as all-absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "relayKem": {
+            "mlkem": "!!not base64!!",
+            "x25519": "CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I="
+          }
+        },
+        "extx": "29d7b784e484fa28a0090eedfe095ecc79d347d38f389d5db41d02b9e280e11f",
+        "name": "relayKem-not-base64-counts-absent",
+        "preimage": "71612d657874782d7631000000200910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe200000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "capsWithdrawn": [
+            "sigHybridV1"
+          ]
+        },
+        "extx": "a5b8e18fc6ac4a94248a0237ffc11fa484713dc4d90f63ccfb07d2cae317ea8b",
+        "name": "capsWithdrawn-sigHybridV1",
+        "preimage": "71612d657874782d7631000000000000000b7369674879627269645631",
+        "withdrawnJoined": "sigHybridV1"
+      },
+      {
+        "bundleFields": {
+          "capsWithdrawn": [
+            "zeta",
+            "alpha",
+            "alpha",
+            "Beta"
+          ]
+        },
+        "extx": "9069d3da7e8e3951565d80638df9de6ca653ef0fbe6cacefade1fb5b5a1a03f3",
+        "name": "capsWithdrawn-sorted-deduplicated",
+        "note": "joined sorted bytewise and deduplicated: Beta,alpha,zeta",
+        "preimage": "71612d657874782d7631000000000000000f426574612c616c7068612c7a657461",
+        "withdrawnJoined": "Beta,alpha,zeta"
+      },
+      {
+        "bundleFields": {
+          "capsWithdrawn": [
+            "ok1",
+            "1bad",
+            "a,b",
+            "",
+            7
+          ]
+        },
+        "extx": "fcca69931a288bf7d63bf0ac3609b48c845c6560c0cd8c76cbd07787ecbee204",
+        "name": "capsWithdrawn-invalid-names-dropped",
+        "preimage": "71612d657874782d763100000000000000036f6b31",
+        "withdrawnJoined": "ok1"
+      },
+      {
+        "bundleFields": {
+          "capsWithdrawn": []
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "capsWithdrawn-empty-array-is-absent",
+        "note": "same digest as all-absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "capsWithdrawn": [
+            "capsBindV1"
+          ]
+        },
+        "extx": "40dcb67174e990c0091f28b00154c9f8d2fdf8e7ef64ac219ac0cb5e7df8c4f6",
+        "name": "capsWithdrawn-names-capsBindV1",
+        "note": "bound as sent; a marker naming capsBindV1 is ignored by the pin policy, not by EXTX",
+        "preimage": "71612d657874782d7631000000000000000a6361707342696e645631",
+        "withdrawnJoined": "capsBindV1"
+      },
+      {
+        "bundleFields": {
+          "capsWithdrawn": [
+            "n19",
+            "n18",
+            "n17",
+            "n16",
+            "n15",
+            "n14",
+            "n13",
+            "n12",
+            "n11",
+            "n10",
+            "n09",
+            "n08",
+            "n07",
+            "n06",
+            "n05",
+            "n04",
+            "n03",
+            "n02",
+            "n01",
+            "n00"
+          ]
+        },
+        "extx": "209530d62543440d0f6decbd17338bd68fd5614a3f72fd91efe75f5462f05425",
+        "name": "capsWithdrawn-cap-16",
+        "note": "20 names: the first 16 in bytewise order",
+        "preimage": "71612d657874782d7631000000000000003f6e30302c6e30312c6e30322c6e30332c6e30342c6e30352c6e30362c6e30372c6e30382c6e30392c6e31302c6e31312c6e31322c6e31332c6e31342c6e3135",
+        "withdrawnJoined": "n00,n01,n02,n03,n04,n05,n06,n07,n08,n09,n10,n11,n12,n13,n14,n15"
+      },
+      {
+        "bundleFields": {
+          "capsWithdrawn": [
+            "sigHybridV1",
+            "relayRotV1"
+          ],
+          "mldsaKeyId": "uRUCz7NV5e0BtFn+YIKtyCMlznHVfqZUWRGHPlKdfkU=",
+          "relayKem": {
+            "mlkem": "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",
+            "x25519": "CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I="
+          }
+        },
+        "extx": "2758f930660ab15991b6edaab25cd32929c3712ebc55ddca3615891657e372d7",
+        "name": "everything",
+        "preimage": "71612d657874782d76310620030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb020910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9e0e7eef5fc030a11181f262d343b424950575e656c737a81888f969da4abb2b9c0c7ced5dc00200910171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe20020b91502cfb355e5ed01b459fe6082adc82325ce71d57ea6545911873e529d7e45001672656c6179526f7456312c7369674879627269645631",
+        "withdrawnJoined": "relayRotV1,sigHybridV1"
+      },
+      {
+        "bundleFields": {
+          "relayKem": {
+            "x25519": "++++////AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbA="
+          }
+        },
+        "extx": "174df7120dfda722baa0790741f2f0c857580b140aab66c06905e0723b48b69c",
+        "name": "x25519-standard-alphabet-plus-slash",
+        "note": "positive control: the same 32 bytes in the standard alphabet are present",
+        "preimage": "71612d657874782d763100000020fbefbeffffff01080f161d242b323940474e555c636a71787f868d949ba2a9b000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "relayKem": {
+            "x25519": "----____AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbA="
+          }
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "x25519-urlsafe-alphabet-counts-absent",
+        "note": "same bytes as the positive control, URL-safe alphabet (- and _), padded: not RFC 4648 section 4, absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "relayKem": {
+            "x25519": "CRAXHiUs\nMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I="
+          }
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "x25519-embedded-newline-counts-absent",
+        "note": "a line feed inside the string; encoding/base64 would skip it, the canonical rule does not",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "relayKem": {
+            "x25519": "CRAXHiUs\r\nMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I="
+          }
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "x25519-embedded-crlf-counts-absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "relayKem": {
+            "x25519": " CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I= "
+          }
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "x25519-surrounding-space-counts-absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "relayKem": {
+            "x25519": "CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I"
+          }
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "x25519-missing-padding-counts-absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "relayKem": {
+            "x25519": "CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+J="
+          }
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "x25519-nonzero-pad-bits-counts-absent",
+        "note": "the last character has non-zero unused bits: a different string for the same 32 bytes, not canonical",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "relayKem": {
+            "x25519": 7
+          }
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "x25519-not-a-string-counts-absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "relayKem": {
+            "mlkem": [
+              "AAAA"
+            ]
+          }
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "mlkem-not-a-string-counts-absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "relayKem": "CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I="
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "relayKem-not-an-object-counts-absent",
+        "note": "relayKem that is not an object: both members absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "mldsaKeyId": "BQwTGiEoLzY9REtSWWBnbnV8g4qRmJ+mrbS7wsnQ197l"
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "mldsaKeyId-33-bytes-counts-absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "mldsaKeyId": "uRUCz7NV\n5e0BtFn+YIKtyCMlznHVfqZUWRGHPlKdfkU="
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "mldsaKeyId-embedded-newline-counts-absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "mldsaKeyId": "uRUCz7NV5e0BtFn+YIKtyCMlznHVfqZUWRGHPlKdfkU"
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "mldsaKeyId-missing-padding-counts-absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "mldsaKeyId": 7
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "mldsaKeyId-not-a-string-counts-absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "capsWithdrawn": "sigHybridV1"
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "capsWithdrawn-not-an-array-counts-absent",
+        "note": "a string is not an array: absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "capsWithdrawn": {
+            "a": "sigHybridV1"
+          }
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "capsWithdrawn-object-counts-absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "capsWithdrawn": [
+            1,
+            "1x",
+            null,
+            "a b",
+            [
+              "sigHybridV1"
+            ]
+          ]
+        },
+        "equalsAllAbsent": true,
+        "extx": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+        "name": "capsWithdrawn-no-valid-element-counts-absent",
+        "note": "no string element matches the tag pattern: absent",
+        "preimage": "71612d657874782d76310000000000000000",
+        "withdrawnJoined": ""
+      },
+      {
+        "bundleFields": {
+          "capsWithdrawn": [
+            "n15",
+            "n14",
+            "n13",
+            "n12",
+            "n11",
+            "n10",
+            "n09",
+            "n08",
+            "n07",
+            "n06",
+            "n05",
+            "n04",
+            "n03",
+            "n02",
+            "n01",
+            "n00",
+            "sigHybridV1"
+          ]
+        },
+        "extx": "209530d62543440d0f6decbd17338bd68fd5614a3f72fd91efe75f5462f05425",
+        "name": "capsWithdrawn-name-appended-beyond-16-is-not-in-the-list",
+        "note": "16 names n00..n15 and sigHybridV1 appended: sigHybridV1 sorts after them, falls outside the first 16 and is in neither EXTX nor the list the pin policy reads, so an appended name cannot act as a marker that EXTX does not bind",
+        "preimage": "71612d657874782d7631000000000000003f6e30302c6e30312c6e30322c6e30332c6e30342c6e30352c6e30362c6e30372c6e30382c6e30392c6e31302c6e31312c6e31322c6e31332c6e31342c6e3135",
+        "withdrawnJoined": "n00,n01,n02,n03,n04,n05,n06,n07,n08,n09,n10,n11,n12,n13,n14,n15"
+      },
+      {
+        "bundleFields": {
+          "capsWithdrawn": [
+            "n15",
+            "n14",
+            "n13",
+            "n12",
+            "n11",
+            "n10",
+            "n09",
+            "n08",
+            "n07",
+            "n06",
+            "n05",
+            "n04",
+            "n03",
+            "n02",
+            "n01",
+            "n00",
+            "Hybrid"
+          ]
+        },
+        "extx": "ef9580905cbeab7621b0a7645b803fbdd78885bada86860b4bb1017ac9763ced",
+        "name": "capsWithdrawn-name-sorting-first-kept-among-17",
+        "note": "17 valid names: Hybrid sorts first and is kept, n15 (the last in order) is dropped",
+        "preimage": "71612d657874782d763100000000000000424879627269642c6e30302c6e30312c6e30322c6e30332c6e30342c6e30352c6e30362c6e30372c6e30382c6e30392c6e31302c6e31312c6e31322c6e31332c6e3134",
+        "withdrawnJoined": "Hybrid,n00,n01,n02,n03,n04,n05,n06,n07,n08,n09,n10,n11,n12,n13,n14"
+      }
+    ],
+    "rule": "EXTX = SHA-256(\"qa-extx-v1\" || LP(relayKem.mlkem | empty) || LP(relayKem.x25519 | empty) || LP(mldsaKeyId | empty) || LP(capsWithdrawn | empty)). relayKem members and mldsaKeyId are the raw base64-decoded bytes. Canonical base64 is RFC 4648 section 4: a JSON string, standard alphabet, padding required, no other character (no whitespace, no newline), zero pad bits. A member that is not a JSON string, is not canonical base64 or (mldsaKeyId) is not 32 bytes counts as absent (LP(empty) = 0x0000), as does a relayKem that is not an object. capsWithdrawn is the normalised list: its string elements that match the tag pattern, deduplicated, sorted bytewise, the first 16, joined by \",\"; a value that is not an array, or has no such element, is absent. The pin policy of spec 2.5 reads the same normalised list. `equalsAllAbsent` marks the cases whose EXTX must equal that of `all-absent`."
+  },
   "format": "pqc-hardening-v1-kat",
-  "generator": "tools/kat/pqc-hardening-v1/gen (Go, Phase 1 sections), gen_s13 (Go 1.27, S13 sections) and gen_s14 (Go 1.27, S14 sections); recomputed by verify_test.go, s13_test.go and s14_test.go (Go) and verify_kat.py (Python, Phase 1 sections only)",
+  "generator": "tools/kat/pqc-hardening-v1/gen (Go, Phase 1 sections), gen_s13 (Go 1.27, S13 sections), gen_s14 (Go 1.27, S14 sections) and gen_s8 (Go, S8 sections); recomputed by verify_test.go, s13_test.go, s14_test.go and s8_test.go (Go) and verify_kat.py (Python, Phase 1 sections only)",
   "innerNonceV1": {
     "counterAcrossRekeyRevert": {
       "asserted": "all nonces of the sequence are pairwise distinct; ctr increases by one at each seal across rekey, revert, profile latch and leg swap",
@@ -469,6 +1331,628 @@
       "previousSealingAllowed": true,
       "sealingAllowed": false
     }
+  },
+  "kcmacExt": {
+    "cases": [
+      {
+        "kcKey": "9a8f9bb9be9388ce07002c6eccbc28c3ca1517df3eb460f68b3930aa0ffd6c72",
+        "kcTranscriptV1": "a3b157b39040f851cc6cfda2d9a9039360da45615f57f2e824ddd5e0ed7901db",
+        "macsAgree": true,
+        "name": "round1-ext-on",
+        "note": "both bundles carry capsBindV1; both sides compute the same kc_transcript_x",
+        "round": 1,
+        "sessionKey": "914314883e029126a57cc35ad822962128ee6640a8fc3a21756e6fc1e5decbd6",
+        "views": [
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}"
+            },
+            "capsxAccept": "03000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631",
+            "capsxOffer": "02000a6361707342696e645631000a72656c61794b656d5631",
+            "ext": true,
+            "extxAccept": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "extxOffer": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "kcMacInit": "d32b0e4a31d9a9696d1b99fbb7c7dcb5b6ce3fe87484f09d4833d2edf8e6f349",
+            "kcMacResp": "0cf11d59276d1ce882d26b86e35173a9664badde169a6b4e465c9ee283c2aab4",
+            "kcTranscriptX": "fbf6ee48bc731fa137df04dee51fe544cad24f0b29dcd3b3d58a11fabc8b2f3d",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}"
+            },
+            "preimage": "71612d6b632d7472616e7363726970742d7632a3b157b39040f851cc6cfda2d9a9039360da45615f57f2e824ddd5e0ed7901db001902000a6361707342696e645631000a72656c61794b656d5631002503000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d563109271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "side": "offerer"
+          },
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}"
+            },
+            "capsxAccept": "03000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631",
+            "capsxOffer": "02000a6361707342696e645631000a72656c61794b656d5631",
+            "ext": true,
+            "extxAccept": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "extxOffer": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "kcMacInit": "d32b0e4a31d9a9696d1b99fbb7c7dcb5b6ce3fe87484f09d4833d2edf8e6f349",
+            "kcMacResp": "0cf11d59276d1ce882d26b86e35173a9664badde169a6b4e465c9ee283c2aab4",
+            "kcTranscriptX": "fbf6ee48bc731fa137df04dee51fe544cad24f0b29dcd3b3d58a11fabc8b2f3d",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}"
+            },
+            "preimage": "71612d6b632d7472616e7363726970742d7632a3b157b39040f851cc6cfda2d9a9039360da45615f57f2e824ddd5e0ed7901db001902000a6361707342696e645631000a72656c61794b656d5631002503000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d563109271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "side": "acceptor"
+          }
+        ]
+      },
+      {
+        "kcKey": "19b9f610fbc92e1990494f62f460afbeac942e9dc54493e2ac2faed8fc07cb69",
+        "kcTranscriptV1": "8890c4f4718ede25ffd1b3102d6e4a3f40e169a407224cc7a5e4db0b69844273",
+        "macsAgree": true,
+        "name": "round2-ext-on-with-extx-fields",
+        "note": "a rekey round (other session key and kc_transcript v1); EXTX carries relayKem and capsWithdrawn",
+        "round": 2,
+        "sessionKey": "b5a8bd3689ad835c434492ade1895ee74c899c4027090b9c7815ac6ca92cdb8b",
+        "views": [
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}",
+              "capsWithdrawn": [
+                "relayRotV1"
+              ],
+              "relayKem": {
+                "mlkem": "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",
+                "x25519": "CxIZICcuNTxDSlFYX2ZtdHuCiZCXnqWss7rByM/W3eQ="
+              }
+            },
+            "capsxAccept": "03000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631",
+            "capsxOffer": "02000a6361707342696e645631000a72656c61794b656d5631",
+            "ext": true,
+            "extxAccept": "284033171f4502db42689620f88716a48bc3c2afdaca4d500b1f6a51ad5a2fde",
+            "extxOffer": "f04654427830de4048adbd691b82855bb4f576cd71f7d068cb8406814e73131c",
+            "kcMacInit": "883f79efaa3f940959eb482e5105808749d0bb9bd5cb3ec4b3cd23ec3e714920",
+            "kcMacResp": "d8ee5844028c0d5922a634ab311676a767de976149e6177d7e3d884de49150cf",
+            "kcTranscriptX": "c30363ce2bca4ddc45f9a2cdf4762bbe06345c2d62e195a8a275fbf0e8a129dd",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}",
+              "relayKem": {
+                "mlkem": "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",
+                "x25519": "CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I="
+              }
+            },
+            "preimage": "71612d6b632d7472616e7363726970742d76328890c4f4718ede25ffd1b3102d6e4a3f40e169a407224cc7a5e4db0b69844273001902000a6361707342696e645631000a72656c61794b656d5631002503000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631f04654427830de4048adbd691b82855bb4f576cd71f7d068cb8406814e73131c284033171f4502db42689620f88716a48bc3c2afdaca4d500b1f6a51ad5a2fde",
+            "side": "offerer"
+          },
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}",
+              "capsWithdrawn": [
+                "relayRotV1"
+              ],
+              "relayKem": {
+                "mlkem": "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",
+                "x25519": "CxIZICcuNTxDSlFYX2ZtdHuCiZCXnqWss7rByM/W3eQ="
+              }
+            },
+            "capsxAccept": "03000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631",
+            "capsxOffer": "02000a6361707342696e645631000a72656c61794b656d5631",
+            "ext": true,
+            "extxAccept": "284033171f4502db42689620f88716a48bc3c2afdaca4d500b1f6a51ad5a2fde",
+            "extxOffer": "f04654427830de4048adbd691b82855bb4f576cd71f7d068cb8406814e73131c",
+            "kcMacInit": "883f79efaa3f940959eb482e5105808749d0bb9bd5cb3ec4b3cd23ec3e714920",
+            "kcMacResp": "d8ee5844028c0d5922a634ab311676a767de976149e6177d7e3d884de49150cf",
+            "kcTranscriptX": "c30363ce2bca4ddc45f9a2cdf4762bbe06345c2d62e195a8a275fbf0e8a129dd",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}",
+              "relayKem": {
+                "mlkem": "AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dzj6vH4/wYNFBsiKTA3PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30+wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL/GzdTb4unw9/4FDBMaISgvNj1ES1JZYGdudXyDipGYn6attLvCydDX3uXs8/oBCA8WHSQrMjlAR05VXGNqcXh/ho2Um6KpsLe+xczT2uHo7/b9BAsSGSAnLjU8Q0pRWF9mbXR7gomQl56lrLO6wcjP1t3k6/L5AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/AMKERgfJi00O0JJUFdeZWxzeoGIj5adpKuyucDHztXc4+rx+P8GDRQbIikwNz5FTFNaYWhvdn2Ei5KZoKeutbzDytHY3+bt9PsCCRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+Lp8Pf+BQwTGiEoLzY9REtSWWBnbnV8g4qRmJ+mrbS7wsnQ197l7PP6AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O/2/QQLEhkgJy41PENKUVhfZm10e4KJkJeepayzusHIz9bd5Ovy+QAHDhUcIyoxOD9GTVRbYmlwd36FjJOaoaivtr3Ey9LZ4Ofu9fwDChEYHyYtNDtCSVBXXmVsc3qBiI+WnaSrsrnAx87V3OPq8fj/Bg0UGyIpMDc+RUxTWmFob3Z9hIuSmaCnrrW8w8rR2N/m7fT7AgkQFx4lLDM6QUhPVl1ka3J5gIeOlZyjqrG4v8bN1Nvi6fD3/gUMExohKC82PURLUllgZ251fIOKkZifpq20u8LJ0Nfe5ezz+gEIDxYdJCsyOUBHTlVcY2pxeH+GjZSboqmwt77FzNPa4ejv9v0ECxIZICcuNTxDSlFYX2ZtdHuCiZCXnqWss7rByM/W3eTr8vkABw4VHCMqMTg/Rk1UW2JpcHd+hYyTmqGor7a9xMvS2eDn7vX8AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dzj6vH4/wYNFBsiKTA3PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30+wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL/GzdTb4unw9/4FDBMaISgvNj1ES1JZYGdudXyDipGYn6attLvCydDX3uXs8/oBCA8WHSQrMjlAR05VXGNqcXh/ho2Um6KpsLe+xczT2uHo7/b9BAsSGSAnLjU8Q0pRWF9mbXR7gomQl56lrLO6wcjP1t3k6/L5AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK+2vcTL0tng5+71/AMKERgfJi00O0JJUFdeZWxzeoGIj5adpKuyucDHztXc4+rx+P8GDRQbIikwNz5FTFNaYWhvdn2Ei5KZoKeutbzDytHY3+bt9PsCCRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+Lp8Pf+BQwTGiEoLzY9REtSWWBnbnV8g4qRmJ+mrbS7wsnQ197l7PP6AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O/2/QQLEhkgJy41PENKUVhfZm10e4KJkJeepayzusHIz9bd5Ovy+QAHDhUcIyoxOD9GTVRbYmlwd36FjJOaoaivtr3Ey9LZ4Ofu9fwDChEYHyYtNDtCSVBXXmVsc3qBiI+WnaSrsrnAx87V3OPq8fj/Bg0UGyIpMDc+RUxTWmFob3Z9hIuSmaCnrrW8w8rR2N/m7fT7AgkQFx4lLDM6QUhPVl1ka3J5gIeOlZyjqrG4v8bN1Nvi6fD3/gUMExohKC82PURLUllgZ251fIOKkZifpq20u8LJ0Nfe5ezz+gEIDxYdJCsyOUBHTlVcY2pxeH+GjZSboqmwt77FzNPa4ejv9v0ECxIZICcuNTxDSlFYX2ZtdHuCiZCXnqWss7rByM/W3eTr8vkABw4VHCMqMTg/Rk1UW2JpcHd+hYyTmqGor7a9xMvS2eDn7vX8AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dw=",
+                "x25519": "CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I="
+              }
+            },
+            "preimage": "71612d6b632d7472616e7363726970742d76328890c4f4718ede25ffd1b3102d6e4a3f40e169a407224cc7a5e4db0b69844273001902000a6361707342696e645631000a72656c61794b656d5631002503000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631f04654427830de4048adbd691b82855bb4f576cd71f7d068cb8406814e73131c284033171f4502db42689620f88716a48bc3c2afdaca4d500b1f6a51ad5a2fde",
+            "side": "acceptor"
+          }
+        ]
+      },
+      {
+        "kcKey": "9a8f9bb9be9388ce07002c6eccbc28c3ca1517df3eb460f68b3930aa0ffd6c72",
+        "kcTranscriptV1": "a3b157b39040f851cc6cfda2d9a9039360da45615f57f2e824ddd5e0ed7901db",
+        "macsAgree": true,
+        "name": "old-peer-ext-off",
+        "note": "the acceptor is an old build: ext false on both sides, the MACs equal today's (kc_transcript v1)",
+        "round": 1,
+        "sessionKey": "914314883e029126a57cc35ad822962128ee6640a8fc3a21756e6fc1e5decbd6",
+        "views": [
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true}"
+            },
+            "ext": false,
+            "kcMacInit": "d640899c6fc1885c237829d9b4b93bc91db0c7c69263cb8d6006ae20a74e1c3c",
+            "kcMacResp": "60e27194b9b8b9e3c613c3c01037153cb070a9c2fdd3df5946e1928c4aae6dbd",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}"
+            },
+            "side": "offerer"
+          },
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true}"
+            },
+            "ext": false,
+            "kcMacInit": "d640899c6fc1885c237829d9b4b93bc91db0c7c69263cb8d6006ae20a74e1c3c",
+            "kcMacResp": "60e27194b9b8b9e3c613c3c01037153cb070a9c2fdd3df5946e1928c4aae6dbd",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}"
+            },
+            "side": "acceptor"
+          }
+        ]
+      },
+      {
+        "kcKey": "9a8f9bb9be9388ce07002c6eccbc28c3ca1517df3eb460f68b3930aa0ffd6c72",
+        "kcTranscriptV1": "a0434c65707d997de91a40bd1a25cc955b0cf521691582c2f36aef31ec7109ca",
+        "macsAgree": true,
+        "name": "old-offerer-ext-off",
+        "note": "the offerer is an old build",
+        "round": 3,
+        "sessionKey": "914314883e029126a57cc35ad822962128ee6640a8fc3a21756e6fc1e5decbd6",
+        "views": [
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}"
+            },
+            "ext": false,
+            "kcMacInit": "7d51a13665998c6c9a4dd3258ccefb76c5835a2ed7fec36ebf39e155ef3a0ee4",
+            "kcMacResp": "cec69c08838749f7380aa3ff7b22badec6e106ec22d6022fbe802e2ea007bdfd",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true}"
+            },
+            "side": "offerer"
+          },
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}"
+            },
+            "ext": false,
+            "kcMacInit": "7d51a13665998c6c9a4dd3258ccefb76c5835a2ed7fec36ebf39e155ef3a0ee4",
+            "kcMacResp": "cec69c08838749f7380aa3ff7b22badec6e106ec22d6022fbe802e2ea007bdfd",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true}"
+            },
+            "side": "acceptor"
+          }
+        ]
+      },
+      {
+        "kcKey": "9a8f9bb9be9388ce07002c6eccbc28c3ca1517df3eb460f68b3930aa0ffd6c72",
+        "kcTranscriptV1": "a3b157b39040f851cc6cfda2d9a9039360da45615f57f2e824ddd5e0ed7901db",
+        "macsAgree": false,
+        "name": "negative-tag-stripped-on-one-leg",
+        "note": "capsBindV1 removed from the ACCEPT the offerer receives: the offerer has ext false, the acceptor ext true; the MACs differ (kcmac_mismatch)",
+        "round": 1,
+        "sessionKey": "914314883e029126a57cc35ad822962128ee6640a8fc3a21756e6fc1e5decbd6",
+        "views": [
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}"
+            },
+            "ext": false,
+            "kcMacInit": "d640899c6fc1885c237829d9b4b93bc91db0c7c69263cb8d6006ae20a74e1c3c",
+            "kcMacResp": "60e27194b9b8b9e3c613c3c01037153cb070a9c2fdd3df5946e1928c4aae6dbd",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}"
+            },
+            "side": "offerer"
+          },
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}"
+            },
+            "capsxAccept": "03000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631",
+            "capsxOffer": "02000a6361707342696e645631000a72656c61794b656d5631",
+            "ext": true,
+            "extxAccept": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "extxOffer": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "kcMacInit": "d32b0e4a31d9a9696d1b99fbb7c7dcb5b6ce3fe87484f09d4833d2edf8e6f349",
+            "kcMacResp": "0cf11d59276d1ce882d26b86e35173a9664badde169a6b4e465c9ee283c2aab4",
+            "kcTranscriptX": "fbf6ee48bc731fa137df04dee51fe544cad24f0b29dcd3b3d58a11fabc8b2f3d",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}"
+            },
+            "preimage": "71612d6b632d7472616e7363726970742d7632a3b157b39040f851cc6cfda2d9a9039360da45615f57f2e824ddd5e0ed7901db001902000a6361707342696e645631000a72656c61794b656d5631002503000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d563109271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "side": "acceptor"
+          }
+        ]
+      },
+      {
+        "kcKey": "9a8f9bb9be9388ce07002c6eccbc28c3ca1517df3eb460f68b3930aa0ffd6c72",
+        "kcTranscriptV1": "a3b157b39040f851cc6cfda2d9a9039360da45615f57f2e824ddd5e0ed7901db",
+        "macsAgree": false,
+        "name": "negative-tag-stripped-on-offer-leg",
+        "note": "capsBindV1 removed from the OFFER the acceptor receives: the acceptor has ext false, the offerer ext true; the MACs differ",
+        "round": 1,
+        "sessionKey": "914314883e029126a57cc35ad822962128ee6640a8fc3a21756e6fc1e5decbd6",
+        "views": [
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}"
+            },
+            "capsxAccept": "03000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631",
+            "capsxOffer": "02000a6361707342696e645631000a72656c61794b656d5631",
+            "ext": true,
+            "extxAccept": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "extxOffer": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "kcMacInit": "d32b0e4a31d9a9696d1b99fbb7c7dcb5b6ce3fe87484f09d4833d2edf8e6f349",
+            "kcMacResp": "0cf11d59276d1ce882d26b86e35173a9664badde169a6b4e465c9ee283c2aab4",
+            "kcTranscriptX": "fbf6ee48bc731fa137df04dee51fe544cad24f0b29dcd3b3d58a11fabc8b2f3d",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}"
+            },
+            "preimage": "71612d6b632d7472616e7363726970742d7632a3b157b39040f851cc6cfda2d9a9039360da45615f57f2e824ddd5e0ed7901db001902000a6361707342696e645631000a72656c61794b656d5631002503000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d563109271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "side": "offerer"
+          },
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}"
+            },
+            "ext": false,
+            "kcMacInit": "d640899c6fc1885c237829d9b4b93bc91db0c7c69263cb8d6006ae20a74e1c3c",
+            "kcMacResp": "60e27194b9b8b9e3c613c3c01037153cb070a9c2fdd3df5946e1928c4aae6dbd",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"relayKemV1\":true}"
+            },
+            "side": "acceptor"
+          }
+        ]
+      },
+      {
+        "kcKey": "9a8f9bb9be9388ce07002c6eccbc28c3ca1517df3eb460f68b3930aa0ffd6c72",
+        "kcTranscriptV1": "a3b157b39040f851cc6cfda2d9a9039360da45615f57f2e824ddd5e0ed7901db",
+        "macsAgree": false,
+        "name": "negative-other-tag-stripped-from-both-bundles",
+        "note": "relayKemV1 removed from both bundles in transit: each side hashes its own bundle as sent and the peer's as received, so the MACs differ",
+        "round": 1,
+        "sessionKey": "914314883e029126a57cc35ad822962128ee6640a8fc3a21756e6fc1e5decbd6",
+        "views": [
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"frameKeyV6\":true}"
+            },
+            "capsxAccept": "02000a6361707342696e645631000a6672616d654b65795636",
+            "capsxOffer": "02000a6361707342696e645631000a72656c61794b656d5631",
+            "ext": true,
+            "extxAccept": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "extxOffer": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "kcMacInit": "b0ce2a3639f87e90a8d23b0b3cb45a31bfe9a0e3526c80cc6203ec069b123db9",
+            "kcMacResp": "b2c96f3fdd6d1b676151a12532ca24a535425e9e9aaa3c825e3311eed29aa064",
+            "kcTranscriptX": "9ede070eeff9c9b516eabeb2c7fe4581b4a6d0ae1de1eed91e1c325cb5113b91",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}"
+            },
+            "preimage": "71612d6b632d7472616e7363726970742d7632a3b157b39040f851cc6cfda2d9a9039360da45615f57f2e824ddd5e0ed7901db001902000a6361707342696e645631000a72656c61794b656d5631001902000a6361707342696e645631000a6672616d654b6579563609271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "side": "offerer"
+          },
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}"
+            },
+            "capsxAccept": "03000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631",
+            "capsxOffer": "01000a6361707342696e645631",
+            "ext": true,
+            "extxAccept": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "extxOffer": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "kcMacInit": "53ef8dbedd817054c49b617ed55fb7b7f7eb3b7f57acd76b58704b4267e041fa",
+            "kcMacResp": "345d49d025f5acab55b82477bf4889f77f8d36671f55f353a100ce7c6cb350ae",
+            "kcTranscriptX": "0bb47bc72e806c2d92f66b165b5bccca4ab04aacfd5bd53a4e59e9b93dafe634",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true}"
+            },
+            "preimage": "71612d6b632d7472616e7363726970742d7632a3b157b39040f851cc6cfda2d9a9039360da45615f57f2e824ddd5e0ed7901db000d01000a6361707342696e645631002503000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d563109271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "side": "acceptor"
+          }
+        ]
+      },
+      {
+        "kcKey": "9a8f9bb9be9388ce07002c6eccbc28c3ca1517df3eb460f68b3930aa0ffd6c72",
+        "kcTranscriptV1": "a3b157b39040f851cc6cfda2d9a9039360da45615f57f2e824ddd5e0ed7901db",
+        "macsAgree": true,
+        "name": "undetected-capsBindV1-stripped-from-both-bundles",
+        "note": "capsBindV1 removed from both bundles: each side has its own bundle with the tag and the peer's without, so ext is false on both and the MACs are today's and agree (no detection; sticky pins, spec 2.5, cover known contacts)",
+        "round": 1,
+        "sessionKey": "914314883e029126a57cc35ad822962128ee6640a8fc3a21756e6fc1e5decbd6",
+        "views": [
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}"
+            },
+            "ext": false,
+            "kcMacInit": "d640899c6fc1885c237829d9b4b93bc91db0c7c69263cb8d6006ae20a74e1c3c",
+            "kcMacResp": "60e27194b9b8b9e3c613c3c01037153cb070a9c2fdd3df5946e1928c4aae6dbd",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}"
+            },
+            "side": "offerer"
+          },
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}"
+            },
+            "ext": false,
+            "kcMacInit": "d640899c6fc1885c237829d9b4b93bc91db0c7c69263cb8d6006ae20a74e1c3c",
+            "kcMacResp": "60e27194b9b8b9e3c613c3c01037153cb070a9c2fdd3df5946e1928c4aae6dbd",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"relayKemV1\":true}"
+            },
+            "side": "acceptor"
+          }
+        ]
+      },
+      {
+        "kcKey": "9a8f9bb9be9388ce07002c6eccbc28c3ca1517df3eb460f68b3930aa0ffd6c72",
+        "kcTranscriptV1": "a3b157b39040f851cc6cfda2d9a9039360da45615f57f2e824ddd5e0ed7901db",
+        "macsAgree": false,
+        "name": "negative-relayKem-tampered-on-one-leg",
+        "note": "relayKem.x25519 of the OFFER replaced on the way to the acceptor: EXTX differs, the MACs differ",
+        "round": 1,
+        "sessionKey": "914314883e029126a57cc35ad822962128ee6640a8fc3a21756e6fc1e5decbd6",
+        "views": [
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}"
+            },
+            "capsxAccept": "03000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631",
+            "capsxOffer": "02000a6361707342696e645631000a72656c61794b656d5631",
+            "ext": true,
+            "extxAccept": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "extxOffer": "f04654427830de4048adbd691b82855bb4f576cd71f7d068cb8406814e73131c",
+            "kcMacInit": "5a6308f2b79d1abfa27cedb3ec1404175751290b3087707631176bd023b51dac",
+            "kcMacResp": "fa295b741affd2aaae4a634e29f19b2d609228ff27a2a41661d51f112e65b927",
+            "kcTranscriptX": "62082523bf277253be6a1289326f4f6bae9108e0372ea0630b59d037c6065fdc",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}",
+              "relayKem": {
+                "mlkem": "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",
+                "x25519": "CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I="
+              }
+            },
+            "preimage": "71612d6b632d7472616e7363726970742d7632a3b157b39040f851cc6cfda2d9a9039360da45615f57f2e824ddd5e0ed7901db001902000a6361707342696e645631000a72656c61794b656d5631002503000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631f04654427830de4048adbd691b82855bb4f576cd71f7d068cb8406814e73131c09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "side": "offerer"
+          },
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}"
+            },
+            "capsxAccept": "03000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631",
+            "capsxOffer": "02000a6361707342696e645631000a72656c61794b656d5631",
+            "ext": true,
+            "extxAccept": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "extxOffer": "97119dfd0ae4c9e56f57b8f5b935d7e5d5086dfc1c0e1e06de4ec00b0d3d14b3",
+            "kcMacInit": "a96616814873c0a83c43cdea4ce44906c5c439938bc17130a693514a1b9b0106",
+            "kcMacResp": "e42656f4a353af27307ed0ba6a40a48faa4acc4585f9777dd99565cb90c8097f",
+            "kcTranscriptX": "16f7e7b92d83c08ce79c68ba3c84af5e69790de05c37a25dea491566b8c13ca9",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}",
+              "relayKem": {
+                "mlkem": "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",
+                "x25519": "CxIZICcuNTxDSlFYX2ZtdHuCiZCXnqWss7rByM/W3eQ="
+              }
+            },
+            "preimage": "71612d6b632d7472616e7363726970742d7632a3b157b39040f851cc6cfda2d9a9039360da45615f57f2e824ddd5e0ed7901db001902000a6361707342696e645631000a72656c61794b656d5631002503000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d563197119dfd0ae4c9e56f57b8f5b935d7e5d5086dfc1c0e1e06de4ec00b0d3d14b309271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "side": "acceptor"
+          }
+        ]
+      },
+      {
+        "kcKey": "b01037fc67e687061d18625a97f3b5123e00a71a899f4c15fcaa7ab85117d9e3",
+        "kcTranscriptV1": "49f600d413abde75f155b5e24c7ca3d74bf0575429f2ededda545cfa2edf130f",
+        "macsAgree": true,
+        "name": "v6-chained-kdf-no-psk-ext-on",
+        "note": "session key and kc_transcript (v1) are the `kdf-no-psk` values of handshake-sig-v6-kat.json (kdf section); ext on, both sides compute the same kc_transcript_x on top of the real v1 transcript",
+        "round": 1,
+        "sessionKey": "369cedd883b5df68519ce4ecfc47d3dd73e8b518b0c059900344d3756f7db603",
+        "v6Vector": "kdf-no-psk",
+        "views": [
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}"
+            },
+            "capsxAccept": "03000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631",
+            "capsxOffer": "02000a6361707342696e645631000a72656c61794b656d5631",
+            "ext": true,
+            "extxAccept": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "extxOffer": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "kcMacInit": "4d4a214db54018c2c0d32461738bd8e4079c34adb47bf31d865425c34b73c09d",
+            "kcMacResp": "8ec0316503b2137903b21df9c2ebc383230b85ccf4a98aaf890b484f420d881e",
+            "kcTranscriptX": "e3f151241677659ffd4955a84cabf9bf74ab9fc6c7a714992997cadf18e79fc0",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}"
+            },
+            "preimage": "71612d6b632d7472616e7363726970742d763249f600d413abde75f155b5e24c7ca3d74bf0575429f2ededda545cfa2edf130f001902000a6361707342696e645631000a72656c61794b656d5631002503000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d563109271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "side": "offerer"
+          },
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}"
+            },
+            "capsxAccept": "03000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631",
+            "capsxOffer": "02000a6361707342696e645631000a72656c61794b656d5631",
+            "ext": true,
+            "extxAccept": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "extxOffer": "09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "kcMacInit": "4d4a214db54018c2c0d32461738bd8e4079c34adb47bf31d865425c34b73c09d",
+            "kcMacResp": "8ec0316503b2137903b21df9c2ebc383230b85ccf4a98aaf890b484f420d881e",
+            "kcTranscriptX": "e3f151241677659ffd4955a84cabf9bf74ab9fc6c7a714992997cadf18e79fc0",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}"
+            },
+            "preimage": "71612d6b632d7472616e7363726970742d763249f600d413abde75f155b5e24c7ca3d74bf0575429f2ededda545cfa2edf130f001902000a6361707342696e645631000a72656c61794b656d5631002503000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d563109271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e09271c0ef16743aece96e96f304b8e8369f06ab72a063a91125094428aa41c5e",
+            "side": "acceptor"
+          }
+        ]
+      },
+      {
+        "kcKey": "b01037fc67e687061d18625a97f3b5123e00a71a899f4c15fcaa7ab85117d9e3",
+        "kcTranscriptV1": "49f600d413abde75f155b5e24c7ca3d74bf0575429f2ededda545cfa2edf130f",
+        "macsAgree": true,
+        "name": "v6-chained-kdf-no-psk-ext-off-equals-v6-macs",
+        "note": "the acceptor is an old build: ext false on both sides, the MACs are the kcMacInitHex and kcMacRespHex of the same v6 vector (today's KCMAC, byte for byte)",
+        "round": 1,
+        "sessionKey": "369cedd883b5df68519ce4ecfc47d3dd73e8b518b0c059900344d3756f7db603",
+        "v6Vector": "kdf-no-psk",
+        "views": [
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true}"
+            },
+            "ext": false,
+            "kcMacInit": "16a66b60e5c5d5e266c1fbb90b137280a83163034b2d0a690e66165ca6291eb3",
+            "kcMacResp": "07a217ab3b2fdefbf868c4d7e53543910b51e41e135ebb00ff16f2dc6e9c9c8c",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}"
+            },
+            "side": "offerer"
+          },
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true}"
+            },
+            "ext": false,
+            "kcMacInit": "16a66b60e5c5d5e266c1fbb90b137280a83163034b2d0a690e66165ca6291eb3",
+            "kcMacResp": "07a217ab3b2fdefbf868c4d7e53543910b51e41e135ebb00ff16f2dc6e9c9c8c",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}"
+            },
+            "side": "acceptor"
+          }
+        ]
+      },
+      {
+        "kcKey": "17e6ec9c3f54fc5febbac93709c5d2bb8ad7cabe36ec71a79bab34e59919573f",
+        "kcTranscriptV1": "b17ab5d4043c1f74ac5c42d690a1f1851979006af2150608e0467871af886058",
+        "macsAgree": true,
+        "name": "v6-chained-kdf-with-psk-ext-on",
+        "note": "session key and kc_transcript (v1) are the `kdf-with-psk` values of handshake-sig-v6-kat.json (kdf section); ext on, both sides compute the same kc_transcript_x on top of the real v1 transcript",
+        "round": 2,
+        "sessionKey": "4e64787592f0ce94ddc842c5450b9a2947bfdba20c9156c9c29743cf6eae724e",
+        "v6Vector": "kdf-with-psk",
+        "views": [
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}",
+              "capsWithdrawn": [
+                "relayRotV1"
+              ],
+              "relayKem": {
+                "mlkem": "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",
+                "x25519": "CxIZICcuNTxDSlFYX2ZtdHuCiZCXnqWss7rByM/W3eQ="
+              }
+            },
+            "capsxAccept": "03000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631",
+            "capsxOffer": "02000a6361707342696e645631000a72656c61794b656d5631",
+            "ext": true,
+            "extxAccept": "284033171f4502db42689620f88716a48bc3c2afdaca4d500b1f6a51ad5a2fde",
+            "extxOffer": "f04654427830de4048adbd691b82855bb4f576cd71f7d068cb8406814e73131c",
+            "kcMacInit": "da2e612c627ed3de1a5a1bdba973f5792ff87b3829dbb36456772beafbe4c849",
+            "kcMacResp": "ad27abf64c9a6f913c0486109a798404aa3d5f2095918fe15cea98432676307e",
+            "kcTranscriptX": "a392f4aa4763c3464f2baf260a31399c4168c8678290ba9790055ca981180c30",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}",
+              "relayKem": {
+                "mlkem": "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",
+                "x25519": "CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I="
+              }
+            },
+            "preimage": "71612d6b632d7472616e7363726970742d7632b17ab5d4043c1f74ac5c42d690a1f1851979006af2150608e0467871af886058001902000a6361707342696e645631000a72656c61794b656d5631002503000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631f04654427830de4048adbd691b82855bb4f576cd71f7d068cb8406814e73131c284033171f4502db42689620f88716a48bc3c2afdaca4d500b1f6a51ad5a2fde",
+            "side": "offerer"
+          },
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true,\"frameKeyV6\":true}",
+              "capsWithdrawn": [
+                "relayRotV1"
+              ],
+              "relayKem": {
+                "mlkem": "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",
+                "x25519": "CxIZICcuNTxDSlFYX2ZtdHuCiZCXnqWss7rByM/W3eQ="
+              }
+            },
+            "capsxAccept": "03000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631",
+            "capsxOffer": "02000a6361707342696e645631000a72656c61794b656d5631",
+            "ext": true,
+            "extxAccept": "284033171f4502db42689620f88716a48bc3c2afdaca4d500b1f6a51ad5a2fde",
+            "extxOffer": "f04654427830de4048adbd691b82855bb4f576cd71f7d068cb8406814e73131c",
+            "kcMacInit": "da2e612c627ed3de1a5a1bdba973f5792ff87b3829dbb36456772beafbe4c849",
+            "kcMacResp": "ad27abf64c9a6f913c0486109a798404aa3d5f2095918fe15cea98432676307e",
+            "kcTranscriptX": "a392f4aa4763c3464f2baf260a31399c4168c8678290ba9790055ca981180c30",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}",
+              "relayKem": {
+                "mlkem": "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",
+                "x25519": "CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I="
+              }
+            },
+            "preimage": "71612d6b632d7472616e7363726970742d7632b17ab5d4043c1f74ac5c42d690a1f1851979006af2150608e0467871af886058001902000a6361707342696e645631000a72656c61794b656d5631002503000a6361707342696e645631000a6672616d654b65795636000a72656c61794b656d5631f04654427830de4048adbd691b82855bb4f576cd71f7d068cb8406814e73131c284033171f4502db42689620f88716a48bc3c2afdaca4d500b1f6a51ad5a2fde",
+            "side": "acceptor"
+          }
+        ]
+      },
+      {
+        "kcKey": "17e6ec9c3f54fc5febbac93709c5d2bb8ad7cabe36ec71a79bab34e59919573f",
+        "kcTranscriptV1": "b17ab5d4043c1f74ac5c42d690a1f1851979006af2150608e0467871af886058",
+        "macsAgree": true,
+        "name": "v6-chained-kdf-with-psk-ext-off-equals-v6-macs",
+        "note": "the acceptor is an old build: ext false on both sides, the MACs are the kcMacInitHex and kcMacRespHex of the same v6 vector (today's KCMAC, byte for byte)",
+        "round": 2,
+        "sessionKey": "4e64787592f0ce94ddc842c5450b9a2947bfdba20c9156c9c29743cf6eae724e",
+        "v6Vector": "kdf-with-psk",
+        "views": [
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true}",
+              "capsWithdrawn": [
+                "relayRotV1"
+              ],
+              "relayKem": {
+                "mlkem": "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",
+                "x25519": "CxIZICcuNTxDSlFYX2ZtdHuCiZCXnqWss7rByM/W3eQ="
+              }
+            },
+            "ext": false,
+            "kcMacInit": "538b1e32ce663bdeebbb47b5f33222df6ac0d4615bff58df758b9ae74e9cc2eb",
+            "kcMacResp": "03bdf0437f367a51a165fe060c7749c10c9acc56be1b633f8cd6357b458f9405",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}",
+              "relayKem": {
+                "mlkem": "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",
+                "x25519": "CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I="
+              }
+            },
+            "side": "offerer"
+          },
+          {
+            "accept": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true}",
+              "capsWithdrawn": [
+                "relayRotV1"
+              ],
+              "relayKem": {
+                "mlkem": "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",
+                "x25519": "CxIZICcuNTxDSlFYX2ZtdHuCiZCXnqWss7rByM/W3eQ="
+              }
+            },
+            "ext": false,
+            "kcMacInit": "538b1e32ce663bdeebbb47b5f33222df6ac0d4615bff58df758b9ae74e9cc2eb",
+            "kcMacResp": "03bdf0437f367a51a165fe060c7749c10c9acc56be1b633f8cd6357b458f9405",
+            "offer": {
+              "capabilitiesJson": "{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"capsBindV1\":true,\"relayKemV1\":true}",
+              "relayKem": {
+                "mlkem": "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",
+                "x25519": "CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+I="
+              }
+            },
+            "side": "acceptor"
+          }
+        ]
+      }
+    ],
+    "rule": "ext_r = own bundle of round r carries capsBindV1 AND the peer bundle of round r carries capsBindV1 (members whose value is the literal true). When ext_r: kc_transcript_x = SHA-256(\"qa-kc-transcript-v2\" || kc_transcript(v1)[32] || LP(CAPSX(OFFER)) || LP(CAPSX(ACCEPT)) || EXTX(OFFER)[32] || EXTX(ACCEPT)[32]), kcMacInit = HMAC-SHA256(K_kc, 0x01 || kc_transcript_x), kcMacResp = HMAC-SHA256(K_kc, 0x02 || kc_transcript_x); K_kc = HKDF-Expand(sessionKey, \"qa-kc-key-v1\", 32). Otherwise the MACs use kc_transcript(v1) unchanged. Each side computes CAPSX and EXTX of its own bundle from the bytes it sent and of the peer's from the bytes it received: a `view` is one side's picture of the two bundles. `kcTranscriptV1` is an opaque fixed 32-byte value here (its own construction is the `kdf` vectors of the v6 file)."
   },
   "leafV2": {
     "formula": "SHA-256(\"qaudion-kt-leaf-v2\\x20\" || uuid_raw[16] || ed25519_pub[32] || be64(created_at_ms) || SHA-256(mldsa_pub)[32])",
@@ -1445,7 +2929,7 @@
       }
     ]
   },
-  "phase": "1 (steps S0-S7, no wire change) + S13 vectors (mldsaSeed, xcert, sigHybrid; no wire change) + S14 vectors (ed25519Strict, leafV2; additive API)",
+  "phase": "1 (steps S0-S7, no wire change) + S13 vectors (mldsaSeed, xcert, sigHybrid; no wire change) + S14 vectors (ed25519Strict, leafV2; additive API) + S8 vectors (capsx, extx, kcmacExt; tag capsBindV1)",
   "roleTie": {
     "note": "Keys are the legacy outer keys of common; role A sends with outerKeyA2B and opens outerKeyB2A, role B the opposite. The last scenario (both A) cannot open each other's frames: the documented denial; the nonces still differ in byte 0. Frames are outer counter 0.",
     "plaintext": "0101000000000000000000000100000000000000010110989199e2eb510c7fbb4c47eb1b932ac0008555a0472acedb0d16c9ad90ce83f415e5d5acc3043c97ac6eef3c044c3b53eff7a5185ce653bb1c97a75925fbb201f4c6a407e19c4ca6356b1d544a74471f64871633260f4fa100f7623bafd85fa82e122fe716e06d8f29d650676fe24d2f4c007f26f110cc997248c0f88b5eefe4ce24b31a38cde1e020515756f8486c381dd49aafd46d4f0f9b262696dc8f6589a4b301523e5702da83f9a5efc47c88b33876ca679b9fa81986ddfdfc741214db6b517fc152d56448605d3ddb32ae3d4bcba4d4bdd06c1c243afef061af803e65ce345e97c3bbaaa9ca28ac63c4e19e27eff3ca5c07bbc475aac04dde0afc835ac868d0ff526ec76a1d68ff878c99b6ec",

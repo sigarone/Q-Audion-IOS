@@ -1968,6 +1968,10 @@ final class CallService: @unchecked Sendable {
         out.dcmux = outerState.rawValue
         out.inner = "legacy"
         out.hold = integration.isMediaHeld(callId: cid) ? "1" : "0"
+        let capsWords = integration.capsBindLineWords(callId: cid)
+        out.pin = capsWords.pin
+        out.withdraw = capsWords.withdraw
+        out.caps = capsWords.caps
         out.outer = mode == .sealed ? "sealed" : "off"
         switch mode {
         case .offPeerInstall: out.reason = "peer_install"

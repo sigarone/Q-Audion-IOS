@@ -175,7 +175,7 @@ final class SasCommitTests: XCTestCase {
         var code: String?
         do {
             try await integ.onAndroidBundleReceived(
-                bundle: bundle, callId: callId, callerId: "peer-1", sendOpaqueRaw: { _ in sent += 1 })
+                bundle: bundle, callId: callId, callerId: "peer-1", capsBind: CapsBind.analyze(bundle: bundle), sendOpaqueRaw: { _ in sent += 1 })
         } catch IntegrationError.handshakeAborted(let c) {
             code = c
         } catch {
@@ -216,7 +216,8 @@ final class SasCommitTests: XCTestCase {
         integ.onHandshakeFatal = { _, reason in fatals.append(reason) }
         let verdict = integ.evaluateInbound(
             bundle: offerBundle(round: 2, commit: commit().base64EncodedString()), callId: callId,
-            peerId: "peer-1", peerDeviceId: nil, expectedOfferBinding: nil).verdict
+            peerId: "peer-1", peerDeviceId: nil, expectedOfferBinding: nil,
+            capsBind: CapsBind.analyze(bundle: offerBundle(round: 2, commit: commit().base64EncodedString()))).verdict
         XCTAssertEqual(verdict, .malformed(code: "commit_unexpected"))
         _ = fatals
     }
@@ -232,7 +233,8 @@ final class SasCommitTests: XCTestCase {
             rekeyNonce: V6TestFixtures.rekeyNonce.base64EncodedString(), rekeyRound: 1)
         let verdict = integ.evaluateInbound(
             bundle: accept, callId: callId, peerId: "peer-1", peerDeviceId: nil,
-            expectedOfferBinding: Data(repeating: 1, count: 32)).verdict
+            expectedOfferBinding: Data(repeating: 1, count: 32),
+            capsBind: CapsBind.analyze(bundle: accept)).verdict
         XCTAssertEqual(verdict, .malformed(code: "commit_unexpected"))
     }
 

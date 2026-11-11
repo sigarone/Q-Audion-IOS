@@ -129,6 +129,9 @@ final class AppState: ObservableObject {
         didSet {
             capabilityGate.loadCached()
             if currentUserId != oldValue { phoneTransferNotice.reset() }
+            // The capability pins belong to the account: another account (or none) starts with no record. The first value of a
+            // launch (no previous one) clears nothing; the arming flag is not touched.
+            if let previous = oldValue, !previous.isEmpty, previous != currentUserId { CapsPinBook.shared.clearPins() }
         }
     }
     /// W444: server-assigned short PBX extension for the logged-in user (e.g. "103").
@@ -1154,6 +1157,10 @@ final class AppState: ObservableObject {
     /// the integration's `onUnauthenticatedIdentityChange` (marshalled to
     /// MainActor); reset at the start of every new call.
     @Published var callIdentityUnauthenticatedChange: Bool = false
+    /// The visible safety-code warning of the live call's contact device (a capability the device was pinned with is missing). Shown on the
+    /// call screen with the sentence that names it; never holds media. Cleared when the user confirms the code from it and when a new call
+    /// starts (a second incoming call never clears the live call's).
+    @Published var callPinWarning: CapsPinWarning?
     /// 2026-09-19 — true while the active call holds a ROTATED identity key that the server publishes for
     /// the peer and that `commitSetProvenRepinForDevice` refused to pin, because the user had SAS-verified
     /// the previous key. Drives the banner copy (the key IS published, and one SAS confirmation resolves
@@ -1274,9 +1281,12 @@ final class AppState: ObservableObject {
             RTLog.warn("call", "tofupin adopt=0 gate=1 bound=\(bound ? 1 : 0)")
             return false
         }
-        switch PeerIdentityPinStore().repin(
-            contactId: pending.peerId, ed25519Pub: pending.key, deviceId: pending.deviceId
-        ) {
+        let replacedKey = PeerIdentityPinStore().pinnedKey(contactId: pending.peerId, deviceId: pending.deviceId)
+        let adoptOutcome = PeerIdentityPinStore().repin(
+            contactId: pending.peerId, ed25519Pub: pending.key, deviceId: pending.deviceId)
+        // Only an overwrite of this exact (peer, device) entry replaces a key: its capability record goes with it.
+        CapsPinBook.shared.noteRepin(adoptOutcome, peerUserId: pending.peerId, replacedKey: replacedKey, newKey: pending.key)
+        switch adoptOutcome {
         case .overwritten, .added, .unchanged:
             SasVerificationStore.shared.clear(peerUserId: pending.peerId)
             pendingIdentityRotation = nil
@@ -1373,6 +1383,58 @@ final class AppState: ObservableObject {
         RTLog.info("call", "saspin mark=\(written ? 1 : 0)")
     }
 
+    // MARK: - Capability pins (the safety-code warning)
+
+    /// Connect an integration to the capability pins: the visible warning, the fixed-word log lines and the flag reader.
+    func wireCapsBind(on integration: QAudionCallIntegration) {
+        // Read once, here on the main actor (the same snapshot the other call flags use); it is only ever stored, never acted on.
+        let flagOn: Bool = FeatureFlags.bool(CapsPinPolicy.holdFlagName, false)
+        integration.capsBindFlag = { flagOn ? true : nil }
+        integration.onCapsPinAnomaly = { [weak self] callId, _, reason in
+            Task { @MainActor [weak self] in
+                self?.handleCapsPinAnomaly(callId: callId, reason: reason)
+            }
+        }
+    }
+
+    /// A pin anomaly of a call's round 1. Shown for the live call only: while another call's warning is up, or another call is the
+    /// live one, this call's judgement stays in its own state and nothing on the screen changes.
+    @MainActor
+    private func handleCapsPinAnomaly(callId: String, reason: CapsPinReason) {
+        let cid = callId.lowercased()
+        guard !cid.isEmpty else { return }
+        if let shown = callPinWarning, shown.callId != cid { return }
+        let active = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased()
+        if let active, !active.isEmpty, active != cid { return }
+        callPinWarning = CapsPinWarning(callId: cid, reason: reason)
+        RTLog.info("call", "pin warning=1")
+    }
+
+    /// A new call starts: its screen has no warning yet. The live call keeps its own, and a warning already raised for the new call
+    /// itself (its first round can arrive before the ring) stays.
+    @MainActor
+    private func resetCapsPinWarningForNewCall(callId: String?) {
+        guard let shown = callPinWarning else { return }
+        if let callId, shown.callId == callId.lowercased() { return }
+        let active = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased()
+        if let active, active == shown.callId { return }
+        callPinWarning = nil
+    }
+
+    /// The user confirmed the safety code of the live call (the call screen's confirm button). When the call carries a pin warning,
+    /// the record of the contact device drops the tag and the warning goes. Nothing was held, so nothing is released.
+    @MainActor
+    func confirmCapsPinWarning() {
+        guard let shown = callPinWarning else { return }
+        let active = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased()
+        guard active == shown.callId else { return }
+        for candidate in [callService.callIntegration, responderCallIntegration].compactMap({ $0 })
+        where candidate.confirmCapsPinAnomaly(callId: shown.callId) {
+            break
+        }
+        callPinWarning = nil
+    }
+
     /// Caller (true) or callee (false) of the call in progress, from the integration that owns it; nil when no integration is bound.
     private func currentCallIsCaller() -> Bool? {
         if let integration = callService.callIntegration { return integration.currentIsCaller }
@@ -1406,7 +1468,7 @@ final class AppState: ObservableObject {
         guard integration?.negotiatedSrtpDirKey == true else { return }
         guard !selfId.isEmpty, !peerId.isEmpty else { return }
         guard integration?.isMediaHeld(callId: callId) != true else { return }
-        let roleA: Bool = PqcRtpFrameSealer.selfIsRoleA(selfId, peerId)
+        let roleA: Bool = CapsBindCallRegistry.selfIsRoleA(callId: callId, selfUserId: selfId, peerUserId: peerId)
         callService.installRelaySealers(
             sessionKey: sessionKey, callId: callId,
             srtpDirKeyV1: true, selfIsRoleA: roleA, selfIsCaller: selfIsCaller,
@@ -2593,6 +2655,8 @@ final class AppState: ObservableObject {
         /// The peer's advertisement of this round was read as v3 tags (`KcMacReadyEvent.advertIsBlinded`): evidence
         /// F2(b) of docs/security/CALL_KEY_PRIORITY.md section 4a.
         let advertIsBlinded: Bool
+        /// `ext_r` of this round (`KcMacReadyEvent.capsBindExt`): the round's MAC covers both bundles' capability members.
+        let capsBindExt: Bool
         var kcStatus: KeyConfirmation.Status = .absent
         /// Set once the FINAL verdict (verified / wrong / timed-out-absent) is
         /// recorded, so a late-arriving duplicate KCMAC or a race between the
@@ -2626,6 +2690,7 @@ final class AppState: ObservableObject {
         var ownMacSentAtMs: Int?
 
         init(event: QAudionCallIntegration.KcMacReadyEvent) {
+            capsBindExt = event.capsBindExt
             isRound1 = event.round == 1
             round = Int(event.round)
             peerId = event.peerId
@@ -5668,6 +5733,8 @@ final class AppState: ObservableObject {
                         // currentUserId/isAuthenticated behavior.
                         self.capabilityGate.discard()
                         self.phoneTransferNotice.reset()
+                        // The session ended on its own: the capability pins (account data) go; the arming flag stays.
+                        CapsPinBook.shared.clearPins()
                         self.isAuthenticated = false
                     } else {
                         // A transient failure (`BCryptoSessionRecoveryError`, network, 5xx)
@@ -7917,6 +7984,7 @@ final class AppState: ObservableObject {
             self.callIdentityUnauthenticatedChange = false
             self.callIdentityRotationAwaitingSas = false
             self.pendingIdentityRotation = nil
+            self.resetCapsPinWarningForNewCall(callId: callIdStr)
             // XC-1: same reset for the sibling sig_invalid banner.
             self.callHandshakeSignatureInvalid = false
             // P0-3: a fresh incoming call must not inherit a stale media hold
@@ -10873,6 +10941,8 @@ final class AppState: ObservableObject {
                 self.capabilityGate.discard()
                 LocalCryptoWipe.wipeAll()
                 self.resetAccountScopedRuntimeState()
+                // A full remote wipe also clears the arming flag of the capability pins.
+                CapsPinBook.shared.clearAll()
                 InstallIdStore.shared.reset()
                 // The session's runtime goes with it (socket, engine, presence), so the next sign-in builds a new one;
                 // then nobody is signed in any more: the car screen (which follows `isAuthenticated`) drops its lists
@@ -10896,6 +10966,8 @@ final class AppState: ObservableObject {
                 // reasoning as the `remote_wipe` handler just above.
                 self?.capabilityGate.discard()
                 self?.phoneTransferNotice.reset()
+                // The session ended: the capability pins (account data) go; the arming flag stays.
+                CapsPinBook.shared.clearPins()
                 // As for `remote_wipe`: the session's runtime goes, then the car screen and the phone follow
                 // `isAuthenticated`.
                 self?.tearDownSessionRuntime()
@@ -16027,6 +16099,7 @@ final class AppState: ObservableObject {
                     // membership (never a fatal mismatch).
                     callerDeviceId: senderDeviceId,
                     eligiblePsks: eligiblePsks,
+                    capsBind: parsed.capsBind,
                     sendOpaqueRaw: sendOpaqueRaw)
             } catch {
                 // W-SIGSWALLOW (2026-09-01) — was a bare print: a responder
@@ -16134,6 +16207,7 @@ final class AppState: ObservableObject {
                     // R-COMMIT-KCMAC-DEVICE: the device that sent THIS ACCEPT, recorded when round 1 binds to it.
                     envelopeSenderDeviceId: envelopeSenderDeviceId,
                     eligiblePsks: eligiblePsks,
+                    capsBind: parsed.capsBind,
                     sendOpaqueRaw: sendOpaqueRaw)
             } catch {
                 print("[AppState] routeInboundAndroidAccept failed: \(error)")
@@ -16623,6 +16697,11 @@ final class AppState: ObservableObject {
             if round == 1 {
                 promotionContexts[key]?.anchor.noteKcMacVerified(round: round)
                 reevaluatePromotedInvites(trigger: .kcmac)
+                // A verified round-1 MAC under the extension pins the tag for the contact device whose signature verified.
+                if state.capsBindExt, state.sigOk, let signerKey = state.signerIdentityKey, signerKey.count == 32 {
+                    CapsPinBook.shared.setCapsBind(peerUserId: state.peerId, signerKey: signerKey)
+                    RTLog.info("call", "pin set=1")
+                }
             }
             // Section 4a, F2: a verified round (signature and the peer's MAC) that proves the other phone holds a new
             // in-person key finalizes it.
@@ -17540,7 +17619,7 @@ final class AppState: ObservableObject {
                 let peerId: String = callerId
                 let neg: Bool = integration?.negotiatedSrtpDirKey ?? false
                 let useDir: Bool = neg && !selfId.isEmpty && !peerId.isEmpty
-                let roleA: Bool = useDir ? PqcRtpFrameSealer.selfIsRoleA(selfId, peerId) : false
+                let roleA: Bool = useDir ? CapsBindCallRegistry.selfIsRoleA(callId: cid, selfUserId: selfId, peerUserId: peerId) : false
                 // P0-3 — hold the audio media install if this call's handshake
                 // identity verdict was `.abort`; run it immediately otherwise.
                 // persistMessagePsk / consumeDeferredAnswerIfReady below are
@@ -17822,6 +17901,7 @@ final class AppState: ObservableObject {
                 self.runOrDeferUntilAccepted(cid, action: identityGated)
             }
         }
+        wireCapsBind(on: integration)
         // W-KCMAC (ship step 5) — responder leg. See `handleKcMacReady`'s doc.
         integration.onKcMacReady = { [weak self] event in
             Task { @MainActor [weak self] in
@@ -18005,7 +18085,8 @@ final class AppState: ObservableObject {
         // for what's about to be replaced" asks the identical question those
         // readers would ask.
         integration.commitSetProvenRepinForDevice = { [weak self] peerId, key, deviceId in
-            if let prior = pinStore.pinnedKey(contactId: peerId, deviceId: deviceId), prior != key {
+            let priorKey = pinStore.pinnedKey(contactId: peerId, deviceId: deviceId)
+            if let prior = priorKey, prior != key {
                 let priorTag = SasVerificationStore.identityTag(forPinnedKey: prior)
                 if SasVerificationStore.shared.hasVerifiedBinding(peerUserId: peerId, currentIdentityTag: priorTag) {
                     RTLog.warn("call", "tofupin repin=0 blocked=1")
@@ -18030,7 +18111,10 @@ final class AppState: ObservableObject {
             // unrelated device's verification every time this peer's OTHER
             // device is first seen. Only `.overwritten` — and by construction
             // above, only when it was not carrying a verified binding — clears.
-            switch pinStore.repin(contactId: peerId, ed25519Pub: key, deviceId: deviceId) {
+            let repinOutcome = pinStore.repin(contactId: peerId, ed25519Pub: key, deviceId: deviceId)
+            // Only an overwrite of this exact (peer, device) entry replaces a key; a first-time device adds and drops nothing.
+            CapsPinBook.shared.noteRepin(repinOutcome, peerUserId: peerId, replacedKey: priorKey, newKey: key)
+            switch repinOutcome {
             case .overwritten:
                 RTLog.info("call", "tofupin repin=1 ovw=1")
                 SasVerificationStore.shared.clear(peerUserId: peerId)
@@ -20077,6 +20161,7 @@ final class AppState: ObservableObject {
         callIdentityUnauthenticatedChange = false
         callIdentityRotationAwaitingSas = false
         pendingIdentityRotation = nil
+        resetCapsPinWarningForNewCall(callId: nil)
         // XC-1: same reset for the sibling sig_invalid banner.
         callHandshakeSignatureInvalid = false
         // P0-3: a fresh outgoing call must not inherit a stale media hold
@@ -20587,7 +20672,7 @@ final class AppState: ObservableObject {
                         let peerId: String = contactId
                         let neg: Bool = integration?.negotiatedSrtpDirKey ?? false
                         let useDir: Bool = neg && !selfId.isEmpty && !peerId.isEmpty
-                        let roleA: Bool = useDir ? PqcRtpFrameSealer.selfIsRoleA(selfId, peerId) : false
+                        let roleA: Bool = useDir ? CapsBindCallRegistry.selfIsRoleA(callId: cid, selfUserId: selfId, peerUserId: peerId) : false
                         // P0-3 — hold the audio media install if this call's handshake
                         // identity verdict was `.abort`; run it immediately otherwise.
                         // Mirrors the responder leg's identical gate above verbatim —
@@ -20773,6 +20858,7 @@ final class AppState: ObservableObject {
                         }
                     }
                 }
+                wireCapsBind(on: integration)
                 // W-KCMAC (ship step 5) — caller leg. See `handleKcMacReady`'s doc.
                 integration.onKcMacReady = { [weak self] event in
                     Task { @MainActor [weak self] in
@@ -25212,7 +25298,7 @@ extension AppState {
                     let videoCallId = pinned?.callId
                         ?? self.activeCallKitId?.uuidString.lowercased() ?? ""
                     let videoSelfIsRoleA = pinned?.selfIsRoleA
-                        ?? PqcRtpFrameSealer.selfIsRoleA(self.currentUserId ?? "", self.callContactId ?? "")
+                        ?? CapsBindCallRegistry.selfIsRoleA(callId: videoCallId, selfUserId: self.currentUserId ?? "", peerUserId: self.callContactId ?? "")
                     let videoSelfIsCaller = self.currentCallIsCaller()
                     // P0-3 follow-up (post-remediation audit, 2026-08-05) — video
                     // was never covered by the identity-hold gate: this rotate
@@ -29127,7 +29213,7 @@ extension AppState {
         // silently swap the send/recv key assignment mid-call. Pinning
         // removes that risk by construction.
         let videoCallId = callingImpl?.getActiveCallId() ?? ""
-        let videoSelfIsRoleA = PqcRtpFrameSealer.selfIsRoleA(self.currentUserId ?? "", peerId)
+        let videoSelfIsRoleA = CapsBindCallRegistry.selfIsRoleA(callId: videoCallId, selfUserId: self.currentUserId ?? "", peerUserId: peerId)
         self.activeVideoCallIdentity = (callId: videoCallId, selfIsRoleA: videoSelfIsRoleA)
         // P0-3 follow-up (post-remediation audit, 2026-08-05) — same hold as
         // the wireSasReadyToController rotate above: defer while this call's

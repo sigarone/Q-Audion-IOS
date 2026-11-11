@@ -51,7 +51,7 @@ final class KcMacKCloseTests: XCTestCase {
         var fatals: [String] = []
         integ.onHandshakeFatal = { _, reason in fatals.append(reason) }
         try await integ.onAndroidBundleReceived(
-            bundle: bundle, callId: callId, callerId: "peer-1", sendOpaqueRaw: { _ in })
+            bundle: bundle, callId: callId, callerId: "peer-1", capsBind: CapsBind.analyze(bundle: bundle), sendOpaqueRaw: { _ in })
         return fatals
     }
 
