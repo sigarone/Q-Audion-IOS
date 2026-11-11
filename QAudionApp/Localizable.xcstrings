@@ -77041,6 +77041,90 @@
         }
       }
     },
+    "vpn.error.connect_timeout": {
+      "extractionState": "manual",
+      "comment": "VPN error: the VPN did not connect within the time limit and the attempt was stopped. The user can retry.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La VPN non si è connessa in tempo. Riprova."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The VPN did not connect in time. Try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La VPN no se conectó a tiempo. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La VPN ne s'est pas connectée à temps. Réessayez."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die VPN hat sich nicht rechtzeitig verbunden. Versuche es erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A VPN não conectou a tempo. Tente novamente."
+          }
+        }
+      }
+    },
+    "vpn.error.stop_timeout": {
+      "extractionState": "manual",
+      "comment": "VPN error: the previous VPN connection is still closing, so a new one cannot start yet. The user can retry.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La connessione VPN precedente si sta ancora chiudendo. Riprova tra poco."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The previous VPN connection is still closing. Try again shortly."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La conexión VPN anterior aún se está cerrando. Inténtalo de nuevo en un momento."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La connexion VPN précédente se ferme encore. Réessayez dans un instant."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die vorherige VPN-Verbindung wird noch beendet. Versuche es gleich erneut."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A conexão VPN anterior ainda está sendo encerrada. Tente novamente em instantes."
+          }
+        }
+      }
+    },
     "vpn.error.pqc_state_mismatch": {
       "extractionState": "manual",
       "comment": "VPN error: the server answered with a post-quantum (ML-KEM) ciphertext but the app has no matching local key. Technical message.",

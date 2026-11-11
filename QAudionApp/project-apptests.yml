@@ -105,6 +105,7 @@ targets:
           - VoiceGuardModelTests.swift
           - VoiceToneRowTests.swift
           - VoiceWordTests.swift
+          - VpnSessionCoordinatorTests.swift
       # The Siri Intents extension and the files it shares with the app, compiled into the bundle itself so that
       # IntentHandlerTests and SiriIntentPolicyTests drive the real source with a fake bridge. The bundle's own
       # copies shadow the app's: the types are different (another module), the code is the same file.
