@@ -171,10 +171,15 @@ public final class BCryptoKmsClient {
     /// preimage must already have been built with that same uuid (see
     /// `AppState.publishIdentityKeyWithRetry`) or the self-sig verify (server-
     /// side, over the server's OWN uuid) will fail with 400 `self_sig invalid`.
+    ///
+    /// `mldsa` carries the extra signature fields of one device (`MldsaIdentityPublication`). They are sent only
+    /// here, on the v2 publish, only when given, and never empty; they need a non-empty `deviceId`, which is the
+    /// value signed in their certificate. Returns the `mldsa_key_id_b64` of the acknowledgement, or nil.
+    @discardableResult
     public func publishUserIdentityBundleV2(
         ed25519Pub: Data, ikPqPub: Data, ikX25519Pub: Data, selfSig: Data, createdAtMs: Int64,
-        deviceId: String = ""
-    ) async throws {
+        deviceId: String = "", mldsa: MldsaIdentityPublication.Fields? = nil
+    ) async throws -> String? {
         precondition(ed25519Pub.count == 32, "Ed25519 public key must be 32 bytes")
         precondition(ikX25519Pub.count == 32, "X25519 public key must be 32 bytes")
         precondition(selfSig.count == 64, "self-signature must be 64 bytes")
@@ -190,8 +195,16 @@ public final class BCryptoKmsClient {
         ]
         // Not signed (absent from the preimage): selects the per-device record.
         if !deviceId.isEmpty { dict["device_id"] = deviceId }
+        if let mldsa, !deviceId.isEmpty {
+            dict["mldsa_pub_b64"] = mldsa.pubB64
+            dict["mldsa_xc_created_ms"] = mldsa.createdMs
+            dict["mldsa_xc_ed_sig_b64"] = mldsa.edSigB64
+            dict["mldsa_xc_pq_sig_b64"] = mldsa.pqSigB64
+            dict["mldsa_key_id_b64"] = mldsa.keyIdB64
+        }
         let body = try JSONSerialization.data(withJSONObject: dict)
-        _ = try await rest.post("/api/v1/users/me/identity-key", body: body)
+        let ack = try await rest.post("/api/v1/users/me/identity-key", body: body)
+        return MldsaPublishPolicy.ackKeyId(in: ack)
     }
 
     /// Sigsum key-transparency submit status (2026-09-04) for the CALLING
@@ -410,6 +423,16 @@ public final class BCryptoKmsClient {
         public let selfSig: Data?         // 64B Ed25519 sig, nil on a pre-self-sig server row
         public let version: Int
         public let createdAtMs: Int64
+        /// Server metadata outside the signed preimage: the device the bundle belongs to.
+        public var deviceId: String? = nil
+        /// The device's second signature key and its cross-certificate, present only for a bundle that carries one.
+        /// Unverified here: see `PeerMldsaStore.ingest`.
+        public var mldsaPubB64: String? = nil
+        public var mldsaXcCreatedMs: Int64? = nil
+        public var mldsaXcEdSigB64: String? = nil
+        public var mldsaXcPqSigB64: String? = nil
+        public var mldsaGen: Int? = nil
+        public var mldsaKeyIdB64: String? = nil
     }
 
     public func fetchUserIdentityBundleV2(userId: String) async -> IdentityBundleV2? {
@@ -440,7 +463,7 @@ public final class BCryptoKmsClient {
             guard let uuidRaw = Self.uuidToRawBytes(uuidStr) else { return nil }
             let version = json["version"] as? Int ?? 1
             let createdAtMs = (json["created_at_ms"] as? NSNumber)?.int64Value ?? 0
-            return IdentityBundleV2(
+            var bundle = IdentityBundleV2(
                 uuidRaw: uuidRaw,
                 ed25519Pub: edPub,
                 pqPub: pqPub,
@@ -449,6 +472,14 @@ public final class BCryptoKmsClient {
                 version: version,
                 createdAtMs: createdAtMs
             )
+            bundle.deviceId = json["device_id"] as? String
+            bundle.mldsaPubB64 = json["mldsa_pub_b64"] as? String
+            bundle.mldsaXcCreatedMs = (json["mldsa_xc_created_ms"] as? NSNumber)?.int64Value
+            bundle.mldsaXcEdSigB64 = json["mldsa_xc_ed_sig_b64"] as? String
+            bundle.mldsaXcPqSigB64 = json["mldsa_xc_pq_sig_b64"] as? String
+            bundle.mldsaGen = (json["mldsa_gen"] as? NSNumber)?.intValue
+            bundle.mldsaKeyIdB64 = json["mldsa_key_id_b64"] as? String
+            return bundle
         } catch {
             return nil
         }

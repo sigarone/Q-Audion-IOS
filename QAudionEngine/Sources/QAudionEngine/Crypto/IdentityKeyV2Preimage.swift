@@ -123,11 +123,15 @@ public enum IdentityKeyV2Preimage {
 /// launch after an update even when the keys are unchanged.
 public enum IdentityPublishFingerprint {
     /// Bump whenever the published payload shape changes.
-    public static let payloadSchemaVersion = 2
+    public static let payloadSchemaVersion = 3
 
-    public static func v2(deviceId: String, ed25519Pub: Data, ikPqPub: Data, ikX25519Pub: Data) -> String {
+    /// `mldsaBinding` is `mldsaBindingToken(enabled:deviceId:)`: the extra signature fields are part of what was
+    /// published, so a change of the switch or of the device id they are bound to republishes.
+    public static func v2(
+        deviceId: String, ed25519Pub: Data, ikPqPub: Data, ikX25519Pub: Data, mldsaBinding: String = "m0"
+    ) -> String {
         "v2|s\(payloadSchemaVersion)|\(deviceId)|\(ed25519Pub.base64EncodedString())|" +
-            "\(ikPqPub.base64EncodedString())|\(ikX25519Pub.base64EncodedString())"
+            "\(ikPqPub.base64EncodedString())|\(ikX25519Pub.base64EncodedString())|\(mldsaBinding)"
     }
 
     public static func v1(deviceId: String, ed25519Pub: Data) -> String {
