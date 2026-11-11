@@ -104,11 +104,20 @@ let package = Package(
         .target(
             name: "CLiboqs",
             path: "Sources/CLiboqs",
+            // src/mldsa/src/*.c are pulled in by the single compilation unit src/mldsa/mldsa_native.c and must
+            // not be compiled on their own; the other three are documentation files of the vendored tree.
+            exclude: [
+                "src/mldsa/src",
+                "src/mldsa/README.md",
+                "src/mldsa/LICENSE",
+                "src/mldsa/MANIFEST.sha256",
+            ],
             publicHeadersPath: "include",
             cSettings: [
                 .headerSearchPath("include"),
                 .headerSearchPath("src"),
                 .headerSearchPath("src/mlkem"),
+                .headerSearchPath("src/mldsa"),
                 .headerSearchPath("src/common"),
                 .headerSearchPath("src/common/sha3"),
                 .headerSearchPath("src/common/sha3/xkcp_low/KeccakP-1600/plain-64bits"),
@@ -407,6 +416,10 @@ let package = Package(
                 // tools/kat/pqc-hardening-v1/pqc-hardening-v1-kat.json. PqcHardeningV1KatTests pins its SHA-256 and .gitattributes
                 // marks it -text so a CRLF checkout cannot change it. Re-copy it, never edit it.
                 .copy("Resources/kat/pqc-hardening-v1-kat.json"),
+                // ML-DSA-87 primitive vectors (key generation from a seed, deterministic pure-mode signatures with two
+                // contexts): a BYTE-FOR-BYTE copy of the shared file mldsa87-v1.json. PqsigKatTests pins its SHA-256 and
+                // .gitattributes marks it -text. Re-copy it, never edit it.
+                .copy("Resources/kat/mldsa87-v1.json"),
                 // Remote-voice analysis: the expected output of the reference implementation of the
                 // specification in docs/voice-analysis-spec.md (28 synthetic cases, 804 steps, the input of each
                 // described by generator parameters). A BYTE-FOR-BYTE copy of the file that ships with the

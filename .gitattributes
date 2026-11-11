@@ -58,3 +58,8 @@ QAudionEngine/Tests/QAudionEngineTests/Mesh/Resources/mesh-vectors.json -text
 QAudionEngine/Tests/QAudionEngineTests/Resources/kat/promotion-token-kat.json -text
 # The call-media layer known-answer vectors are a byte-for-byte copy of the server repository file; the tests pin its SHA-256: git must never rewrite its line endings.
 QAudionEngine/Tests/QAudionEngineTests/Resources/kat/pqc-hardening-v1-kat.json -text
+
+# Shared ML-DSA-87 vectors: byte-for-byte copy, the tests pin the SHA-256.
+QAudionEngine/Tests/QAudionEngineTests/Resources/kat/mldsa87-v1.json -text
+# Vendored mldsa-native tree: MANIFEST.sha256 lists the SHA-256 of each upstream file, git must never rewrite line endings.
+QAudionEngine/Sources/CLiboqs/src/mldsa/** -text

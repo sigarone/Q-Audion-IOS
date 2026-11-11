@@ -6,5 +6,6 @@ module CLiboqs {
     header "oqs/kem_ml_kem.h"
     header "oqs/sha3.h"
     header "oqs/sha3_ops.h"
+    header "oqs/qa_mldsa87.h"
     export *
 }
