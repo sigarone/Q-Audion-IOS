@@ -10,7 +10,7 @@ import CryptoKit
 /// This code was written on a machine that cannot compile Swift for iOS: the macOS CI job is what runs it.
 final class PqcHardeningV1KatTests: XCTestCase {
 
-    static let pinnedSHA256 = "75976b4c72bc09226faffa78123082093447df1fe32f496ad9e637ca5de4c694"
+    static let pinnedSHA256 = "3c135f42e7d70a34e88555ed10b04ee89ad29a03e327679f8652ce20836f2267"
 
     // MARK: - Loading
 

@@ -28,10 +28,12 @@
     "level",
     "mldsaSeed",
     "xcert",
-    "sigHybrid"
+    "sigHybrid",
+    "ed25519Strict",
+    "leafV2"
   ],
   "deferred": {
-    "note": "Defined by later steps (S8-S17), added to this file when those steps start; the sha256 pin changes then. mldsaSeed, xcert and sigHybrid were added by S13.",
+    "note": "Defined by later steps (S8-S17), added to this file when those steps start; the sha256 pin changes then. mldsaSeed, xcert and sigHybrid were added by S13; ed25519Strict and leafV2 by S14.",
     "sections": [
       "capsx",
       "extx",
@@ -42,14 +44,295 @@
       "frameKeyV6",
       "pinPolicy",
       "rekeyChain",
-      "leafV2",
       "bundle-max",
       "roleTie vectors with R-ROLE keys (relayKemV1)",
       "nackResend under B2+B4 and the E=0 erase negative"
     ]
   },
+  "ed25519Strict": {
+    "cofactorNote": "vectors with cofactoredAccepts true are signer-only: only the holder of the private key can build them. A platform whose library is cofactored may accept them; its test marks them as a documented difference and does not treat the vector as a failure of the rule",
+    "expectValues": "accept: the verifier returns true. reject: it returns false. stdlibAccepts is what Go crypto/ed25519.Verify returns and is informational: it shows which vectors a plain library accepts",
+    "rule": "uniform Ed25519 rule (spec 5.2): public key canonical (RFC 8032 section 5.1.3 strict decoding: y \u003c p, on the curve, no x = 0 with the sign bit set) and [8]A != identity; then the RFC 8032 cofactorless equation [S]B = R + [k]A with S \u003c L and R compared as its canonical encoding",
+    "smallOrderPoints": [
+      {
+        "enc": "0100000000000000000000000000000000000000000000000000000000000000",
+        "index": 0,
+        "order": 1
+      },
+      {
+        "enc": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+        "index": 1,
+        "order": 8
+      },
+      {
+        "enc": "0000000000000000000000000000000000000000000000000000000000000080",
+        "index": 2,
+        "order": 4
+      },
+      {
+        "enc": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+        "index": 3,
+        "order": 8
+      },
+      {
+        "enc": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        "index": 4,
+        "order": 2
+      },
+      {
+        "enc": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+        "index": 5,
+        "order": 8
+      },
+      {
+        "enc": "0000000000000000000000000000000000000000000000000000000000000000",
+        "index": 6,
+        "order": 4
+      },
+      {
+        "enc": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+        "index": 7,
+        "order": 8
+      }
+    ],
+    "vectors": [
+      {
+        "class": "control",
+        "expect": "accept",
+        "msg": "7071632d68617264656e696e672d7631206564323535313953747269637420686f6e657374",
+        "name": "honest",
+        "note": "an honest signature under a canonical key with a prime-order part verifies",
+        "pub": "8897eb8204f041bbd19236ac7a18d243f5a4decdd4056d27c5c393a216d087ce",
+        "sig": "caba7215db52b3b2137f9c087cf5170e09ffa001a2d9225030d20cf8b7c6cefb2c78bd58162ad6dca7d4f3584a655a55973d0005f6b5846fa8419fe83e30b508",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "smallOrderA",
+        "expect": "reject",
+        "msg": "736d616c6c2d6f726465722f302f30",
+        "name": "small-order-A-0",
+        "note": "A has order 1: [8]A is the identity, rejected before the equation. A plain verifier accepts (R = identity, S = 0) whenever [k]A = 0",
+        "order": 1,
+        "pub": "0100000000000000000000000000000000000000000000000000000000000000",
+        "sig": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "smallOrderA",
+        "expect": "reject",
+        "msg": "736d616c6c2d6f726465722f312f32",
+        "name": "small-order-A-1",
+        "note": "A has order 8: [8]A is the identity, rejected before the equation. A plain verifier accepts (R = identity, S = 0) whenever [k]A = 0",
+        "order": 8,
+        "pub": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+        "sig": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "smallOrderA",
+        "expect": "reject",
+        "msg": "736d616c6c2d6f726465722f322f35",
+        "name": "small-order-A-2",
+        "note": "A has order 4: [8]A is the identity, rejected before the equation. A plain verifier accepts (R = identity, S = 0) whenever [k]A = 0",
+        "order": 4,
+        "pub": "0000000000000000000000000000000000000000000000000000000000000080",
+        "sig": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "smallOrderA",
+        "expect": "reject",
+        "msg": "736d616c6c2d6f726465722f332f32",
+        "name": "small-order-A-3",
+        "note": "A has order 8: [8]A is the identity, rejected before the equation. A plain verifier accepts (R = identity, S = 0) whenever [k]A = 0",
+        "order": 8,
+        "pub": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+        "sig": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "smallOrderA",
+        "expect": "reject",
+        "msg": "736d616c6c2d6f726465722f342f30",
+        "name": "small-order-A-4",
+        "note": "A has order 2: [8]A is the identity, rejected before the equation. A plain verifier accepts (R = identity, S = 0) whenever [k]A = 0",
+        "order": 2,
+        "pub": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        "sig": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "smallOrderA",
+        "expect": "reject",
+        "msg": "736d616c6c2d6f726465722f352f3130",
+        "name": "small-order-A-5",
+        "note": "A has order 8: [8]A is the identity, rejected before the equation. A plain verifier accepts (R = identity, S = 0) whenever [k]A = 0",
+        "order": 8,
+        "pub": "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85",
+        "sig": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "smallOrderA",
+        "expect": "reject",
+        "msg": "736d616c6c2d6f726465722f362f30",
+        "name": "small-order-A-6",
+        "note": "A has order 4: [8]A is the identity, rejected before the equation. A plain verifier accepts (R = identity, S = 0) whenever [k]A = 0",
+        "order": 4,
+        "pub": "0000000000000000000000000000000000000000000000000000000000000000",
+        "sig": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "smallOrderA",
+        "expect": "reject",
+        "msg": "736d616c6c2d6f726465722f372f30",
+        "name": "small-order-A-7",
+        "note": "A has order 8: [8]A is the identity, rejected before the equation. A plain verifier accepts (R = identity, S = 0) whenever [k]A = 0",
+        "order": 8,
+        "pub": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+        "sig": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "nonCanonicalA",
+        "expect": "reject",
+        "msg": "6e6f6e2d63616e6f6e6963616c2d412f6964656e746974792d792d706c75732d702f30",
+        "name": "non-canonical-A-identity-y-plus-p",
+        "note": "y = p + 1: non-canonical encoding of the identity",
+        "pub": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        "sig": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "nonCanonicalA",
+        "expect": "reject",
+        "msg": "6e6f6e2d63616e6f6e6963616c2d412f6964656e746974792d792d706c75732d702d7369676e2f30",
+        "name": "non-canonical-A-identity-y-plus-p-sign",
+        "note": "y = p + 1 with the sign bit set",
+        "pub": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "sig": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "nonCanonicalA",
+        "expect": "reject",
+        "msg": "6e6f6e2d63616e6f6e6963616c2d412f79302d706c75732d702f30",
+        "name": "non-canonical-A-y0-plus-p",
+        "note": "y = p: non-canonical encoding of a point of order 4",
+        "pub": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        "sig": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "nonCanonicalA",
+        "expect": "reject",
+        "msg": "6e6f6e2d63616e6f6e6963616c2d412f79302d706c75732d702d7369676e2f32",
+        "name": "non-canonical-A-y0-plus-p-sign",
+        "note": "y = p with the sign bit set",
+        "pub": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "sig": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "nonCanonicalA",
+        "expect": "reject",
+        "msg": "6e6f6e2d63616e6f6e6963616c2d412f6964656e746974792d78302d7369676e2f30",
+        "name": "non-canonical-A-identity-x0-sign",
+        "note": "x = 0 with the sign bit set (identity)",
+        "pub": "0100000000000000000000000000000000000000000000000000000000000080",
+        "sig": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "nonCanonicalA",
+        "expect": "reject",
+        "msg": "6e6f6e2d63616e6f6e6963616c2d412f6f72646572322d78302d7369676e2f33",
+        "name": "non-canonical-A-order2-x0-sign",
+        "note": "x = 0 with the sign bit set (point of order 2)",
+        "pub": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "sig": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "nonCanonicalR",
+        "expect": "reject",
+        "msg": "6e6f6e2d63616e6f6e6963616c2d522f6964656e746974792d792d706c75732d70",
+        "name": "non-canonical-R-identity-y-plus-p",
+        "note": "R is a non-canonical encoding of the identity (r = 0); S is the honest value for those bytes",
+        "pub": "8897eb8204f041bbd19236ac7a18d243f5a4decdd4056d27c5c393a216d087ce",
+        "sig": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7feea200055641532f89ee3f25fad6ca0be845d93694199c2ec932e94452363e0f",
+        "stdlibAccepts": false
+      },
+      {
+        "class": "nonCanonicalR",
+        "expect": "reject",
+        "msg": "6e6f6e2d63616e6f6e6963616c2d522f6964656e746974792d78302d7369676e",
+        "name": "non-canonical-R-identity-x0-sign",
+        "note": "R is a non-canonical encoding of the identity (r = 0); S is the honest value for those bytes",
+        "pub": "8897eb8204f041bbd19236ac7a18d243f5a4decdd4056d27c5c393a216d087ce",
+        "sig": "0100000000000000000000000000000000000000000000000000000000000080a60e332fc9d18adb4510ae162fb9e9ab7aeceab0a782acab94c97251ddb6290d",
+        "stdlibAccepts": false
+      },
+      {
+        "class": "scalarNotReduced",
+        "expect": "reject",
+        "msg": "532d6e6f742d62656c6f772d4c",
+        "name": "S-plus-L",
+        "note": "S' = S + L: the same point equation holds mod L but S' is not below the group order",
+        "pub": "8897eb8204f041bbd19236ac7a18d243f5a4decdd4056d27c5c393a216d087ce",
+        "sig": "f1a381dec338b3b665e3dbb86b3844e178e9cef306d80575fd8c5e3215daf67cf15245a2e8e3ac212c0e5fbd0640c84e435eaea539baf9c12554c51d8ca5d713",
+        "stdlibAccepts": false
+      },
+      {
+        "class": "mixedOrderA",
+        "expect": "accept",
+        "msg": "6d697865642d6f726465722d412f30",
+        "name": "mixed-order-A-k0",
+        "note": "A = aB + T (T of order 8) passes the public key rule; the signature verifies because 8 divides k. Signer-only",
+        "pub": "33a33f5d9097ee5ef3b4f682f1402be0b2c539f3c0704c2e160f3890b5065d59",
+        "sig": "1b2980e211ad0e6b684c7def35e3a661a152d3368e9bf88316841df1ee67f51ffff8ad189f32d6636ec0a6160c546946330499f66ef3de3960c3ed3d0f662402",
+        "stdlibAccepts": true
+      },
+      {
+        "class": "mixedOrderA",
+        "cofactoredAccepts": true,
+        "expect": "reject",
+        "msg": "6d697865642d6f726465722d412f31",
+        "name": "mixed-order-A-k1",
+        "note": "same key, a message for which 8 does not divide k: the cofactorless equation fails; a cofactored verifier accepts. Signer-only difference, see spec 5.2",
+        "pub": "33a33f5d9097ee5ef3b4f682f1402be0b2c539f3c0704c2e160f3890b5065d59",
+        "sig": "1b2980e211ad0e6b684c7def35e3a661a152d3368e9bf88316841df1ee67f51f0e30d05fbd77a135ad5a9472ad36fe0d09cd412f4052d9b4e83f9fa309e59b04",
+        "stdlibAccepts": false
+      },
+      {
+        "class": "torsionedR",
+        "cofactoredAccepts": true,
+        "expect": "reject",
+        "msg": "746f7273696f6e65642d522f30",
+        "name": "torsioned-R-order2",
+        "note": "R = rB + T with T of small order: rejected by the cofactorless equation, accepted by a cofactored verifier. Signer-only difference, see spec 5.2",
+        "pub": "8897eb8204f041bbd19236ac7a18d243f5a4decdd4056d27c5c393a216d087ce",
+        "sig": "d2d67f1dee52f19497b38210ca1c599e5ead2cc97164077ce97be20e11980ae08122a7e0b9a4a1e5ca49c9a90f28a635cff5db6807633f69e09796f5e8bf0b03",
+        "stdlibAccepts": false,
+        "torsionOrder": 2
+      },
+      {
+        "class": "torsionedR",
+        "cofactoredAccepts": true,
+        "expect": "reject",
+        "msg": "746f7273696f6e65642d522f31",
+        "name": "torsioned-R-order8",
+        "note": "R = rB + T with T of small order: rejected by the cofactorless equation, accepted by a cofactored verifier. Signer-only difference, see spec 5.2",
+        "pub": "8897eb8204f041bbd19236ac7a18d243f5a4decdd4056d27c5c393a216d087ce",
+        "sig": "6e311f310ed4ec8430537acd7a390aff6ff7eb1378f6754a8cc9f6d27a3bb6e2b0055167c6dd9a6671df21a1945c32ddd5d19b41dd6463ba3fe7f89287067f0e",
+        "stdlibAccepts": false,
+        "torsionOrder": 8
+      }
+    ]
+  },
   "format": "pqc-hardening-v1-kat",
-  "generator": "tools/kat/pqc-hardening-v1/gen (Go, Phase 1 sections) and gen_s13 (Go 1.27, S13 sections); recomputed by verify_test.go and s13_test.go (Go) and verify_kat.py (Python, Phase 1 sections only)",
+  "generator": "tools/kat/pqc-hardening-v1/gen (Go, Phase 1 sections), gen_s13 (Go 1.27, S13 sections) and gen_s14 (Go 1.27, S14 sections); recomputed by verify_test.go, s13_test.go and s14_test.go (Go) and verify_kat.py (Python, Phase 1 sections only)",
   "innerNonceV1": {
     "counterAcrossRekeyRevert": {
       "asserted": "all nonces of the sequence are pairwise distinct; ctr increases by one at each seal across rekey, revert, profile latch and leg swap",
@@ -186,6 +469,50 @@
       "previousSealingAllowed": true,
       "sealingAllowed": false
     }
+  },
+  "leafV2": {
+    "formula": "SHA-256(\"qaudion-kt-leaf-v2\\x20\" || uuid_raw[16] || ed25519_pub[32] || be64(created_at_ms) || SHA-256(mldsa_pub)[32])",
+    "leafV1Layout": "SHA-256(tag || uuid_raw[16] || ed25519_pub[32] || be64(created_at_ms)), unchanged and still submitted",
+    "leafV1Tag": "71617564696f6e2d6b742d6c6561662d763120",
+    "note": "created_at_ms is the Ed25519 bundle field created_at_ms (not mldsa_xc_created_ms). createdAtMs is a decimal string",
+    "preimageLen": 107,
+    "spec": "5.3",
+    "tag": "71617564696f6e2d6b742d6c6561662d763220",
+    "vectors": [
+      {
+        "createdAtMs": "1700000000123",
+        "edPub": "24f09084342995fe16c595a4eb69e6c4294b1c1af36aa564375a7ff7d75bf574",
+        "leaf": "842d54deccd84c82048e6dd28ddfeef2a87dd7c172a4f2f8aa8a6c4f0daf2d29",
+        "leafV1": "c1f5f131421897b2033a2441b08c3d4b3c73bcaa88f8ebf5c3ea4c0e8854d490",
+        "mldsaKeyId": "f7e2e49abd6e1a05d21a7cfbe8999a9ead66d114a5b5e61d95e04e9e87c78a5b",
+        "name": "leafV2-0",
+        "preimage": "71617564696f6e2d6b742d6c6561662d76322000112233445566778899aabbccddeeff24f09084342995fe16c595a4eb69e6c4294b1c1af36aa564375a7ff7d75bf5740000018bcfe5687bf7e2e49abd6e1a05d21a7cfbe8999a9ead66d114a5b5e61d95e04e9e87c78a5b",
+        "seedCase": "seed1-gen0",
+        "uuid": "00112233445566778899aabbccddeeff"
+      },
+      {
+        "createdAtMs": "1",
+        "edPub": "24f09084342995fe16c595a4eb69e6c4294b1c1af36aa564375a7ff7d75bf574",
+        "leaf": "d36d482cf30749b50f3af186667a96f784c292f0b77791e1f8d4475f47e90e0f",
+        "leafV1": "d48b4bf6facf23ab53783a1492b0c9f5d32021d8b07ddaec6bf28f74edf9dd19",
+        "mldsaKeyId": "ab41ae61c15ae5d663fb11b4c5c6e71c1f25146311e95577e927490f4f0f030b",
+        "name": "leafV2-1",
+        "preimage": "71617564696f6e2d6b742d6c6561662d763220f47ac10b58cc4372a5670e02b2c3d47924f09084342995fe16c595a4eb69e6c4294b1c1af36aa564375a7ff7d75bf5740000000000000001ab41ae61c15ae5d663fb11b4c5c6e71c1f25146311e95577e927490f4f0f030b",
+        "seedCase": "seed1-gen1",
+        "uuid": "f47ac10b58cc4372a5670e02b2c3d479"
+      },
+      {
+        "createdAtMs": "9223372036854775807",
+        "edPub": "24f09084342995fe16c595a4eb69e6c4294b1c1af36aa564375a7ff7d75bf574",
+        "leaf": "28fb9c9164139d8c02242d234300f482711e872aff2d6cddcfa533cad6cb7396",
+        "leafV1": "4222917015bdda140a04d6bf6d91498f73eefa406e924337b23395cff8c33d93",
+        "mldsaKeyId": "2cb2e42e46d5280aa55ca3e14fab2140e99740f64b5359125286f31af0a1b07c",
+        "name": "leafV2-2",
+        "preimage": "71617564696f6e2d6b742d6c6561662d7632200000000000000000000000000000000024f09084342995fe16c595a4eb69e6c4294b1c1af36aa564375a7ff7d75bf5747fffffffffffffff2cb2e42e46d5280aa55ca3e14fab2140e99740f64b5359125286f31af0a1b07c",
+        "seedCase": "seed1-gen65535",
+        "uuid": "00000000000000000000000000000000"
+      }
+    ]
   },
   "legacyOuterNonce": {
     "distinctNonceProperty": "two senders under the same key and the same counter (a tie, same key) differ in byte 0 when one is caller and one callee",
@@ -1118,7 +1445,7 @@
       }
     ]
   },
-  "phase": "1 (steps S0-S7, no wire change) + S13 vectors (mldsaSeed, xcert, sigHybrid; no wire change)",
+  "phase": "1 (steps S0-S7, no wire change) + S13 vectors (mldsaSeed, xcert, sigHybrid; no wire change) + S14 vectors (ed25519Strict, leafV2; additive API)",
   "roleTie": {
     "note": "Keys are the legacy outer keys of common; role A sends with outerKeyA2B and opens outerKeyB2A, role B the opposite. The last scenario (both A) cannot open each other's frames: the documented denial; the nonces still differ in byte 0. Frames are outer counter 0.",
     "plaintext": "0101000000000000000000000100000000000000010110989199e2eb510c7fbb4c47eb1b932ac0008555a0472acedb0d16c9ad90ce83f415e5d5acc3043c97ac6eef3c044c3b53eff7a5185ce653bb1c97a75925fbb201f4c6a407e19c4ca6356b1d544a74471f64871633260f4fa100f7623bafd85fa82e122fe716e06d8f29d650676fe24d2f4c007f26f110cc997248c0f88b5eefe4ce24b31a38cde1e020515756f8486c381dd49aafd46d4f0f9b262696dc8f6589a4b301523e5702da83f9a5efc47c88b33876ca679b9fa81986ddfdfc741214db6b517fc152d56448605d3ddb32ae3d4bcba4d4bdd06c1c243afef061af803e65ce345e97c3bbaaa9ca28ac63c4e19e27eff3ca5c07bbc475aac04dde0afc835ac868d0ff526ec76a1d68ff878c99b6ec",
