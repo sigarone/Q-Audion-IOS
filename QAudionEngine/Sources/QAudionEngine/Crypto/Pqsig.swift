@@ -345,11 +345,36 @@ public enum Pqsig {
         return Data(sig)
     }
 
-    private static func edVerify(_ edPub: Data, _ msg: Data, _ sig: Data) -> Bool {
+    /// Ed25519 verification under the rule shared by all platforms: the public key is a canonical encoding and not a
+    /// small-order point (`Ed25519IdentityKeyPolicy`), R is a canonical encoding, S < L; the remaining checks are
+    /// CryptoKit's. The shared vectors (section ed25519Strict) are run by Ed25519StrictKatTests.
+    static func edVerify(_ edPub: Data, _ msg: Data, _ sig: Data) -> Bool {
         guard edPub.count == edPublicSize, sig.count == edSignatureSize,
+              Ed25519IdentityKeyPolicy.isAcceptable(edPub), edSignatureIsReduced([UInt8](sig)),
               let key = try? Curve25519.Signing.PublicKey(rawRepresentation: edPub)
         else { return false }
         return key.isValidSignature(sig, for: msg)
+    }
+
+    /// The prime group order L = 2^252 + 27742317777372353535851937790883648493, little-endian.
+    private static let edGroupOrderLE: [UInt8] = [
+        0xED, 0xD3, 0xF5, 0x5C, 0x1A, 0x63, 0x12, 0x58, 0xD6, 0x9C, 0xF7, 0xA2, 0xDE, 0xF9, 0xDE, 0x14,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+    ]
+
+    /// `sig` is R (32 bytes) || S (32 bytes, little-endian): R must be a canonical encoding and S must be below L.
+    private static func edSignatureIsReduced(_ sig: [UInt8]) -> Bool {
+        guard sig.count == edSignatureSize,
+              !Ed25519IdentityKeyPolicy.isNonCanonicalEncoding(Data(sig[0..<32]))
+        else { return false }
+        var i = 31
+        while i >= 0 {
+            let s = sig[32 + i]
+            let l = edGroupOrderLE[i]
+            if s != l { return s < l }
+            i -= 1
+        }
+        return false
     }
 
     fileprivate static func ctxBytes(_ ctx: String) -> [UInt8]? {
