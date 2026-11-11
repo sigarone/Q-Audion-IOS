@@ -10,8 +10,8 @@
 //   VpnToggleChip(vpnService: vpnService, accessToken: token)
 //
 // Tapping while disconnected: fetches first available node → connects.
+// Tapping while connecting: cancels the attempt.
 // Tapping while connected: disconnects.
-// Disabled while a state transition is in progress.
 
 import SwiftUI
 import NetworkExtension
@@ -94,7 +94,9 @@ struct VpnToggleChip: View {
             }
         }
         .buttonStyle(.plain)
-        .disabled(busy || vpnService.state.isConnecting)
+        // A tap while connecting cancels the attempt (handleTap), so only the
+        // pre-connect busy phase (node list, picking) is disabled.
+        .disabled(busy && !vpnService.state.isConnecting)
         .animation(.easeInOut(duration: 0.2), value: vpnService.state)
         // Long-press the chip to choose the exit. highPriorityGesture (not
         // simultaneous) so a long-press opens the picker WITHOUT also firing the
@@ -160,6 +162,12 @@ struct VpnToggleChip: View {
     // MARK: - Action
 
     private func handleTap() {
+        // Tap while connecting = cancel: stops the attempt and returns to the idle chip.
+        if vpnService.state.isConnecting {
+            vpnService.disconnect()
+            busy = false
+            return
+        }
         guard !busy else { return }
         // Entitlements Task 5 — Capability.vpn. Disconnecting an ALREADY
         // -connected tunnel is never blocked, checked BEFORE the vpnUnlocked

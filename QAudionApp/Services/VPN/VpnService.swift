@@ -53,6 +53,15 @@ final class VpnService: ObservableObject {
     private var manager: NETunnelProviderManager?
     private var statusObserver: NSObjectProtocol?
 
+    /// Generation bookkeeping, stop wait and connect deadline (see VpnSessionCoordinator).
+    private lazy var coordinator = VpnSessionCoordinator(
+        tunnel: { [weak self] in
+            guard let mgr = self?.manager else { return nil }
+            return ManagerTunnelController(manager: mgr)
+        },
+        onDeadline: { [weak self] in self?.handleConnectDeadline() }
+    )
+
     // MARK: - Init / deinit
 
     init() {
@@ -86,9 +95,20 @@ final class VpnService: ObservableObject {
     func connect(to node: VpnNode, accessToken: String) async {
         guard !state.isConnected && !state.isConnecting else { return }
         state = .connecting(nodeId: node.id)
+        // Every attempt is one generation: a disconnect, a cancel or the connect
+        // deadline supersedes it, and the checks below then end this task quietly.
+        let gen = coordinator.beginConnect()
         do {
+            // Step 0 — never start while a previous session is still closing.
+            guard await coordinator.ensureStopped(for: gen) else {
+                try ensureCurrent(gen)
+                throw VpnError.stopTimeout
+            }
+            try ensureCurrent(gen)
+
             // Step 1 — VPN sub-token (used for server-side session binding).
             _ = try await api.getToken(accessToken: accessToken)
+            try ensureCurrent(gen)
 
             // Step 2 — WireGuard key pair.
             let (privateKeyB64, publicKeyB64) = try generateWgKeyPair()
@@ -114,6 +134,7 @@ final class VpnService: ObservableObject {
                 nodeId: node.id,
                 mlkemPubkey: mlkemPubkeyB64
             )
+            try ensureCurrent(gen)
 
             // Step 3b — Resolve the WireGuard PSK.
             // If the server returned an ML-KEM ciphertext, decapsulate it with
@@ -128,31 +149,44 @@ final class VpnService: ObservableObject {
             )
 
             // Step 4 — Pass raw crypto params to the extension.
+            // State transitions to .connected when NEVPNStatus fires. The node is
+            // stored BEFORE the start so the status handler can never see the
+            // event first.
+            pendingConnectedNode = node
+            pendingAssignedIp = wgConfig.assignedIp4
+                .components(separatedBy: "/").first ?? wgConfig.assignedIp4
             try await startTunnel(
+                gen: gen,
                 node: node,
                 privateKeyB64: privateKeyB64,
                 pskB64: resolvedPskB64,
                 wgConfig: wgConfig
             )
 
-            // State transitions to .connected when NEVPNStatus fires.
-            // Store node so the status handler can set it.
-            pendingConnectedNode = node
-            pendingAssignedIp = wgConfig.assignedIp4
-                .components(separatedBy: "/").first ?? wgConfig.assignedIp4
-
         } catch {
-            // W497 — log the full error so it surfaces in the live telemetry feed.
-            // Before this, the error was silently swallowed and the chip showed
-            // only "Errore VPN" with no actionable detail.
-            print("[VpnService] connect failed: \(error.localizedDescription)")
+            // A superseded attempt (cancel, disconnect, deadline) ends quietly: whoever
+            // superseded it already set the state.
+            guard coordinator.isCurrent(gen) else {
+                RTLog.info("vpn", "connect attempt superseded gen=\(gen)")
+                return
+            }
+            coordinator.abort(gen)
+            pendingConnectedNode = nil
+            // W497 — log the error kind so it surfaces in the live telemetry feed.
+            // Only the error type and code: the description can carry a URL or host.
+            let ns = error as NSError
+            RTLog.error("vpn", "connect failed: \(ns.domain) code \(ns.code)")
             state = .error(message: error.localizedDescription)
         }
     }
 
-    /// Disconnect the active tunnel.
+    /// Disconnect the active tunnel, or cancel a connect that is still in progress.
+    ///
+    /// The state goes to `.disconnected` at once; the system tunnel keeps closing
+    /// in the background, and a following `connect` waits for it (bounded).
     func disconnect() {
-        manager?.connection.stopVPNTunnel()
+        coordinator.beginDisconnect()
+        pendingConnectedNode = nil
         state = .disconnected
         lastSentExcludedHost = nil
     }
@@ -214,7 +248,7 @@ final class VpnService: ObservableObject {
     /// Stores individual WireGuard parameters in `providerConfiguration` so the
     /// `PacketTunnelProvider` extension can build a `TunnelConfiguration` using
     /// the public WireGuardKit API without the private wg-quick string parser.
-    private func startTunnel(node: VpnNode, privateKeyB64: String, pskB64: String, wgConfig: WgConfigResponse) async throws {
+    private func startTunnel(gen: Int, node: VpnNode, privateKeyB64: String, pskB64: String, wgConfig: WgConfigResponse) async throws {
         guard let mgr = manager else { throw NSError(domain: "VpnService", code: -1) }
 
         let ip4Bare = wgConfig.assignedIp4.components(separatedBy: "/").first ?? wgConfig.assignedIp4
@@ -244,16 +278,56 @@ final class VpnService: ObservableObject {
         mgr.localizedDescription = "Q-Audion VPN · \(node.city)"
         mgr.isEnabled = true
 
+        try ensureCurrent(gen)
+        // The first save shows the system's permission prompt, which waits on the
+        // user: the connect deadline does not run during it.
+        coordinator.pauseDeadline(for: gen)
         try await mgr.saveToPreferences()
+        try ensureCurrent(gen)
+        coordinator.armDeadline(for: gen)
         try await mgr.loadFromPreferences()
+        try ensureCurrent(gen)
         // loadFromPreferences() replaces mgr.connection with a fresh object, so the
         // observer registered in loadManager() (bound to the OLD connection via
         // `object:`) would never fire for this tunnel — leaving `state` stuck at
         // .connecting and the status badge grey for every node. Re-subscribe to the
         // new connection before starting so NEVPNStatusDidChange actually reaches us.
         subscribeToStatus(connection: mgr.connection)
-        try (mgr.connection as? NETunnelProviderSession)?
-            .startTunnel(options: nil)
+        guard let session = mgr.connection as? NETunnelProviderSession else {
+            throw NSError(domain: "VpnService", code: -2)
+        }
+        try session.startTunnel(options: nil)
+        // No suspension between the start and this call: the status handler can
+        // only run after it, so the first event of this session is never dropped.
+        coordinator.tunnelStarted(for: gen)
+    }
+
+    /// Throws when `gen` was superseded (cancel, disconnect, deadline, newer connect).
+    private func ensureCurrent(_ gen: Int) throws {
+        guard coordinator.isCurrent(gen) else { throw CancellationError() }
+    }
+
+    /// Reads the system's last disconnect error and, if there is one, shows it
+    /// (the user can retry) instead of a plain "disconnected". Only the error
+    /// domain and code are logged.
+    private func reportConnectFailure(connection: NEVPNConnection) {
+        let gen = coordinator.generation
+        connection.fetchLastDisconnectError { [weak self] error in
+            guard let error else { return }
+            let ns = error as NSError
+            let message = error.localizedDescription
+            Task { @MainActor [weak self] in
+                guard let self, self.coordinator.generation == gen, self.state == .disconnected else { return }
+                RTLog.error("vpn", "connect ended by the system: \(ns.domain) code \(ns.code)")
+                self.state = .error(message: message)
+            }
+        }
+    }
+
+    /// The connect deadline expired: the coordinator has already asked the tunnel to stop.
+    private func handleConnectDeadline() {
+        pendingConnectedNode = nil
+        state = .error(message: VpnError.connectTimeout.errorDescription ?? "")
     }
 
     /// Subscribes to NEVPNStatus notifications on the given connection.
@@ -273,7 +347,12 @@ final class VpnService: ObservableObject {
     }
 
     private func handleStatusChange(connection: NEVPNConnection) {
-        switch connection.status {
+        // Events of a superseded session (an old tunnel closing after a new connect
+        // began) are dropped by the coordinator; intermediate statuses too.
+        // A status change of a replaced connection object is not ours.
+        guard connection === manager?.connection else { return }
+        guard let event = coordinator.handleStatus(VpnTunnelStatus(connection.status)) else { return }
+        switch event {
         case .connected:
             if let node = pendingConnectedNode {
                 state = .connected(node: node, assignedIp: pendingAssignedIp)
@@ -282,17 +361,14 @@ final class VpnService: ObservableObject {
         case .disconnected:
             // Only flip to .disconnected if we were actually connected/connecting.
             // Avoids clobbering an .error state set before the extension shut down.
+            let wasConnecting = state.isConnecting
             if state.isConnected || state.isConnecting {
                 state = .disconnected
             }
-        case .disconnecting:
-            break // intermediate — wait for .disconnected
-        case .connecting, .reasserting:
-            break // already set to .connecting in connect()
+            // The tunnel went down while connecting: the system may know why.
+            if wasConnecting { reportConnectFailure(connection: connection) }
         case .invalid:
             state = .error(message: String(localized: "vpn.error.invalid_configuration", defaultValue: "Configurazione VPN non valida", comment: "VPN error shown when the system reports the VPN configuration as invalid."))
-        @unknown default:
-            break
         }
     }
 
@@ -350,8 +426,42 @@ final class VpnService: ObservableObject {
     }
 }
 
-/// Errors specific to the VPN connect flow's PQC PSK handshake.
+/// System tunnel of a `NETunnelProviderManager`, as the session coordinator sees it.
+/// Reads the status from the manager's CURRENT connection (it is replaced by
+/// `loadFromPreferences()`).
+@MainActor
+private final class ManagerTunnelController: VpnTunnelControlling {
+    private let manager: NETunnelProviderManager
+
+    init(manager: NETunnelProviderManager) {
+        self.manager = manager
+    }
+
+    var tunnelStatus: VpnTunnelStatus { VpnTunnelStatus(manager.connection.status) }
+
+    func stopTunnel() { manager.connection.stopVPNTunnel() }
+}
+
+private extension VpnTunnelStatus {
+    init(_ status: NEVPNStatus) {
+        switch status {
+        case .invalid:       self = .invalid
+        case .disconnected:  self = .disconnected
+        case .connecting:    self = .connecting
+        case .connected:     self = .connected
+        case .reasserting:   self = .reasserting
+        case .disconnecting: self = .disconnecting
+        @unknown default:    self = .disconnected
+        }
+    }
+}
+
+/// Errors specific to the VPN connect flow.
 enum VpnError: LocalizedError {
+    /// The previous tunnel session did not close within the wait bound.
+    case stopTimeout
+    /// The tunnel did not come up within the connect deadline.
+    case connectTimeout
     /// Server returned an ML-KEM ciphertext but the client has no ephemeral
     /// secret key for this connection (should be impossible — the pubkey is
     /// only sent when a keypair was generated). Treated as fatal.
@@ -361,6 +471,10 @@ enum VpnError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .stopTimeout:
+            return String(localized: "vpn.error.stop_timeout", defaultValue: "La connessione VPN precedente si sta ancora chiudendo. Riprova tra poco.", comment: "VPN error: the previous VPN connection is still closing, so a new one cannot start yet. The user can retry.")
+        case .connectTimeout:
+            return String(localized: "vpn.error.connect_timeout", defaultValue: "La VPN non si è connessa in tempo. Riprova.", comment: "VPN error: the VPN did not connect within the time limit and the attempt was stopped. The user can retry.")
         case .pqcStateMismatch:
             return String(localized: "vpn.error.pqc_state_mismatch", defaultValue: "VPN PQC: ciphertext senza chiave ML-KEM locale", comment: "VPN error: the server answered with a post-quantum (ML-KEM) ciphertext but the app has no matching local key. Technical message.")
         case .invalidMlkemCiphertext:

@@ -41,12 +41,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     /// via the ICE selected-candidate-pair remote host, and cleared on call end.
     private var currentExcludedHost: String?
 
+    /// `wg_server_endpoint` with the host replaced by an IP literal, resolved ONCE
+    /// while the tunnel is still down (see `endpointLiteral`). Later config
+    /// rebuilds (call-gate updates) reuse it, so WireGuardKit never has to resolve
+    /// a name while the tunnel is up.
+    private var resolvedEndpoint: String?
+
     // MARK: - NEPacketTunnelProvider
 
     override func startTunnel(
         options: [String: NSObject]?,
         completionHandler: @escaping (Error?) -> Void
     ) {
+        resolvedEndpoint = nil
         let iface: InterfaceConfiguration
         let peer: PeerConfiguration
         let city: String
@@ -124,10 +131,80 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             peer.preSharedKey = psk
         }
         peer.allowedIPs = allowedIPs(excludingHost: currentExcludedHost)
-        peer.endpoint = Endpoint(from: serverEndpointStr)
+        let endpointStr: String
+        if let cached = resolvedEndpoint {
+            endpointStr = cached
+        } else {
+            endpointStr = try Self.endpointLiteral(serverEndpointStr)
+            resolvedEndpoint = endpointStr
+        }
+        peer.endpoint = Endpoint(from: endpointStr)
         peer.persistentKeepAlive = 25
 
         return (iface, peer, city)
+    }
+
+    /// "host:port" / "[v6]:port" with the host as an IP literal.
+    ///
+    /// WireGuardKit resolves a host NAME in `start` before the tunnel settings
+    /// are applied (physical interface), but ALSO in `update` (call-gate), when
+    /// the default route is already the tunnel: `update` -> `resolvePeers` then
+    /// looks the name up through the tunnel, where it can stall or fail. A
+    /// literal is never looked up by WireGuardKit, so the name is resolved here,
+    /// once, before the first start. A literal input is returned unchanged.
+    /// `AI_ALL` makes a DNS64 network return the real IPv4 next to the
+    /// synthesized IPv6 address; the IPv4 one is kept, and WireGuardKit's own
+    /// DNS64 handling re-synthesizes it for whatever network is current.
+    /// Nothing is logged: no host names or addresses.
+    private static func endpointLiteral(_ hostPort: String) throws -> String {
+        let host: String
+        let port: String
+        if hostPort.hasPrefix("[") {
+            guard let close = hostPort.firstIndex(of: "]") else { throw TunnelError.badConfig("Invalid endpoint") }
+            host = String(hostPort[hostPort.index(after: hostPort.startIndex)..<close])
+            let rest = hostPort[hostPort.index(after: close)...]
+            guard rest.hasPrefix(":") else { throw TunnelError.badConfig("Invalid endpoint") }
+            port = String(rest.dropFirst())
+        } else {
+            guard let colon = hostPort.lastIndex(of: ":") else { throw TunnelError.badConfig("Invalid endpoint") }
+            host = String(hostPort[..<colon])
+            port = String(hostPort[hostPort.index(after: colon)...])
+        }
+        guard !host.isEmpty, UInt16(port) != nil else { throw TunnelError.badConfig("Invalid endpoint") }
+
+        var v4 = in_addr()
+        var v6 = in6_addr()
+        if inet_pton(AF_INET, host, &v4) == 1 || inet_pton(AF_INET6, host, &v6) == 1 {
+            return hostPort
+        }
+
+        var hints = addrinfo()
+        hints.ai_family = AF_UNSPEC
+        hints.ai_socktype = SOCK_DGRAM
+        hints.ai_flags = AI_ALL
+        var result: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &result) == 0, let first = result else {
+            throw TunnelError.badConfig("Endpoint not resolvable")
+        }
+        defer { freeaddrinfo(first) }
+
+        // Prefer IPv4, fall back to the first IPv6 result.
+        var chosen: UnsafeMutablePointer<addrinfo>?
+        var cursor: UnsafeMutablePointer<addrinfo>? = first
+        while let current = cursor {
+            if current.pointee.ai_family == AF_INET { chosen = current; break }
+            if chosen == nil, current.pointee.ai_family == AF_INET6 { chosen = current }
+            cursor = current.pointee.ai_next
+        }
+        guard let info = chosen, let addr = info.pointee.ai_addr else {
+            throw TunnelError.badConfig("Endpoint not resolvable")
+        }
+        var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        guard getnameinfo(addr, info.pointee.ai_addrlen, &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0 else {
+            throw TunnelError.badConfig("Endpoint not resolvable")
+        }
+        let ip = buffer.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+        return ip.contains(":") ? "[\(ip)]:\(port)" : "\(ip):\(port)"
     }
 
     /// Full-tunnel `allowedIPs` (`0.0.0.0/0` + `::/0`), minus `excludedHost`
@@ -215,7 +292,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             if let err {
                 log.error("call-gate update failed: \(err, privacy: .public)")
             } else {
-                log.info("call-gate updated, excludedHost=\(newHost ?? "none", privacy: .public)")
+                log.info("call-gate updated, excludedHost=\(newHost ?? "none", privacy: .private)")
             }
             completionHandler?(nil)
         }

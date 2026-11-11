@@ -390,6 +390,7 @@ jobs:
             -only-testing:QAudionAppTests/VoiceGuardModelTests \
             -only-testing:QAudionAppTests/VoiceToneRowTests \
             -only-testing:QAudionAppTests/VoiceWordTests \
+            -only-testing:QAudionAppTests/VpnSessionCoordinatorTests \
             -resultBundlePath /tmp/app-tests.xcresult \
             COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGN_IDENTITY="-" \
