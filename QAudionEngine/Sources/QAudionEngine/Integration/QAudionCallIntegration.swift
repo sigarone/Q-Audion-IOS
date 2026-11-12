@@ -2090,8 +2090,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // leaves them as they are.
         if bundle.kind == .accept {
             // An ACCEPT is kept only when it answers an OFFER this integration sent for this exact call (the stashed
-            // sent-OFFER transcript, which a rekey round refreshes). Any other ACCEPT writes nothing and is dropped.
-            let answersOwnOffer = lock.withLock { sentOfferTranscriptByCall[callId.lowercased()] != nil }
+            // sent-OFFER transcript, which a rekey round refreshes, or the round-1 ACCEPT already bound). Any other ACCEPT writes nothing and is dropped.
+            let answersOwnOffer = lock.withLock {
+                sentOfferTranscriptByCall[callId.lowercased()] != nil || boundRound1AcceptKeyByCall[callId.lowercased()] != nil
+            }
             if !answersOwnOffer {
                 CapsBindLog.line("accept_drop other_call cid=\(callId.prefix(8))")
                 print("[QAudionCallIntegration] ACCEPT dropped — no OFFER of this call is pending callId=\(callId.prefix(8))…")
