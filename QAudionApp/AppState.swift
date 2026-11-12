@@ -1618,6 +1618,9 @@ final class AppState: ObservableObject {
     /// call", never "is everything about it fine" — that second question is what
     /// the warning banner is for. `false` only for genuine PQC-only (S10, n==0).
     @Published var callPskMixedThisCall: Bool = false
+    /// Badge of the post-quantum protection of this call, from the level the call service computes for the protection line
+    /// (nil: no level yet, or none to show). Read by `CallSecurityBadge`.
+    @Published var callPqBadge: CallPqBadge?
     /// "Voce come chiave" cross-device attestation (item 2, 2026-07-31
     /// InCallScreen Android→iOS port) — `true` once the PEER has announced,
     /// over the `<callId>|VOICE_KEY:1` opaque_message piggy-back
@@ -6455,6 +6458,13 @@ final class AppState: ObservableObject {
         // WIRE_SPEC 16.3 privacy — while this side is HELD, whatever the cause (CallKit hold, audio interruption, session
         // deactivation), the camera is paused as well; it is restored only when the LAST cause is removed, and only if the
         // video was active and not paused by the user before. `CallHoldPolicy` is the pure decision.
+        callService.onPqProtectionChanged = { [weak self] level, auth in
+            let badge = CallPqBadge(level: level, auth: auth)
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                if self.callPqBadge != badge { self.callPqBadge = badge }
+            }
+        }
         callService.onLocalHoldActiveChanged = { [weak self] held in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
@@ -8059,6 +8069,7 @@ final class AppState: ObservableObject {
             self.callAssuranceExpectedNfc = false
             self.callMutualNfcInCommon = false
             self.callPskMixedThisCall = false
+            self.callPqBadge = nil
             self.callPeerVoiceKeyEnrolled = false
             // WIRE_SPEC §8.1: a fresh incoming call clears any stale
             // "peer paused their camera" state from a previous call.
@@ -20250,6 +20261,7 @@ final class AppState: ObservableObject {
         callAssuranceExpectedNfc = false
         callMutualNfcInCommon = false
         callPskMixedThisCall = false
+        callPqBadge = nil
         callPeerVoiceKeyEnrolled = false
         // WIRE_SPEC §8.1: a fresh outgoing call clears any stale "peer
         // paused their camera" state from a previous call.

@@ -1,6 +1,56 @@
 import SwiftUI
 import QAudionEngine
 
+// MARK: - Post-quantum protection of the call
+
+/// What the badge says about the post-quantum protection of the call, from the level and the `auth` word of the protection
+/// line (`PqLevel`, `QAudionCallIntegration.pqLineWords`). Nothing else decides it.
+///
+/// - `PQ2` with `auth=H`: `.double` (two independent post-quantum layers and a verified hybrid signature of the handshake).
+/// - `PQ2` or `PQ2S` otherwise: `.encryption`. `PQ2S` never gets the double badge.
+/// - `PQ1`: `.reduced`.
+/// - `CL`, or no level yet: nil, no post-quantum wording.
+enum CallPqBadge: Equatable {
+    case double
+    case encryption
+    case reduced
+
+    init?(level: PqLevel?, hybridAuth: Bool) {
+        switch level {
+        case .some(.pq2): self = hybridAuth ? .double : .encryption
+        case .some(.pq2s): self = .encryption
+        case .some(.pq1): self = .reduced
+        case .some(.cl), .none: return nil
+        }
+    }
+
+    /// `auth` is the word of the protection line: "H" once the hybrid signature of this call verified, "C" otherwise.
+    init?(level: PqLevel?, auth: String) {
+        self.init(level: level, hybridAuth: auth == "H")
+    }
+
+    /// The claim sentence is shown only with the double badge.
+    var showsClaim: Bool { self == .double }
+
+    /// Short tag of the compact chip.
+    var tag: String { self == .double ? "PQ2" : "PQ" }
+
+    var word: String {
+        switch self {
+        case .double:
+            return String(localized: "call.protection.double", defaultValue: "Doppia protezione post-quantistica", comment: "Call security badge — protection of the call: two independent post-quantum layers and a verified post-quantum hybrid signature of the handshake.")
+        case .encryption:
+            return String(localized: "call.protection.encryption", defaultValue: "Cifratura post-quantistica", comment: "Call security badge — protection of the call: post-quantum encryption.")
+        case .reduced:
+            return String(localized: "call.protection.reduced", defaultValue: "Cifratura post-quantistica (ridotta)", comment: "Call security badge — protection of the call: post-quantum encryption with one layer on at least one path.")
+        }
+    }
+
+    static var claimSentence: String {
+        String(localized: "call.protection.claim", defaultValue: "Le chiamate tra app aggiornate sono protette da due livelli indipendenti di cifratura ibrida post-quantistica, e l'handshake della chiamata è firmato con una firma ibrida post-quantistica (ML-DSA-87 con Ed25519).", comment: "Call security badge details — the public claim, shown only for a double post-quantum call.")
+    }
+}
+
 // MARK: - Call Security Badge
 
 /// The compact security chip of the call screens and the details panel it expands to on a tap.
@@ -85,6 +135,19 @@ struct CallSecurityBadge: View {
                     .cornerRadius(4)
             }
 
+            // Post-quantum protection of this call, from the level the call reports; drawn only when there is a level to show.
+            if let pq = appState.callPqBadge {
+                Text(verbatim: pq.tag)
+                    .qaudionScaledFont(size: 9, weight: .bold, family: .label, maxSize: .xLarge)
+                    .foregroundColor(.black)
+                    .lineLimit(1)
+                    .fixedSize()
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.green)
+                    .cornerRadius(4)
+            }
+
             Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                 .qaudionScaledFont(size: 10, family: .label, maxSize: .xLarge)
                 .foregroundColor(.gray)
@@ -96,7 +159,7 @@ struct CallSecurityBadge: View {
         .qaudionGlassSurface(in: RoundedRectangle(cornerRadius: 20), fallback: surfaceFallback)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel("Sicurezza chiamata: \(statusLabel)")
+        .accessibilityLabel("Sicurezza chiamata: \(statusLabel)" + (appState.callPqBadge.map { ", " + $0.word } ?? ""))
         .accessibilityHint(isExpanded ? String(localized: "call.security.hide_details_a11y", defaultValue: "Nascondi i dettagli", comment: "VoiceOver hint of the call security badge while its details are shown.") : String(localized: "Mostra i dettagli"))
     }
 
@@ -139,6 +202,16 @@ struct CallSecurityBadge: View {
             // (that's the current shipped text even under the Italian
             // locale) — not silently rewritten to Italian here, translators
             // pick each language's real equivalent.
+            if let pq = appState.callPqBadge {
+                detailRow(label: String(localized: "call.protection.label", defaultValue: "Protezione", comment: "Call security detail panel — field label for the post-quantum protection of the call"), value: pq.word)
+                if pq.showsClaim {
+                    Text(CallPqBadge.claimSentence)
+                        .qaudionScaledFont(size: 11, weight: .regular, family: .label, maxSize: .xLarge)
+                        .foregroundColor(.gray)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             detailRow(label: String(localized: "call_security.label.rekey", defaultValue: "Re-key", comment: "Call security detail panel — field label for key-rotation count"), value: "\(appState.rekeyCount) rotazioni")
             detailRow(label: String(localized: "call_security.label.encryption", defaultValue: "Cifratura", comment: "Call security detail panel — field label for the active encryption algorithm"), value: Self.encryptionWord(algo: appState.encryptionAlgo, hasMlKemKey: CallSessionKeyShown.realKey(appState.callPqcSessionKey, source: appState.callSasKeySource) != nil))
             detailRow(label: String(localized: "call_security.label.transport", defaultValue: "Trasporto", comment: "Call security detail panel — field label for the media transport type"), value: Self.transportWord(backendType: appState.backendType))

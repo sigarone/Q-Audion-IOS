@@ -2,6 +2,7 @@ import XCTest
 import SwiftUI
 import UIKit
 @testable import QAudionApp
+import QAudionEngine
 
 /// Design system, the accessibility settings of the user, and the decisions behind what the call screens print:
 ///  - the text follows the text size chosen in Settings (Dynamic Type), up to one declared cap, and does not change
@@ -257,6 +258,49 @@ final class DesignSystemAccessibilityTests: XCTestCase {
         XCTAssertFalse(InCallScreen.demoBadgeShown(keyInfoPresent: true, sessionKeyPresent: false),
                        "a screen built with only a key panel shows the badge")
         XCTAssertFalse(InCallScreen.demoBadgeShown(keyInfoPresent: true, sessionKeyPresent: true))
+    }
+
+    /// The post-quantum badge follows the level of the protection line and its `auth` word and nothing else: the double
+    /// badge only for PQ2 with hybrid auth, plain encryption for PQ2 with classical auth and for PQ2S either way, the
+    /// reduced wording for PQ1, nothing for CL or while there is no level.
+    func testThePqBadgeMapsEveryLevelAndAuth() {
+        XCTAssertEqual(CallPqBadge(level: .pq2, hybridAuth: true), .double)
+        XCTAssertEqual(CallPqBadge(level: .pq2, hybridAuth: false), .encryption)
+        XCTAssertEqual(CallPqBadge(level: .pq2s, hybridAuth: true), .encryption, "PQ2S never gets the double badge")
+        XCTAssertEqual(CallPqBadge(level: .pq2s, hybridAuth: false), .encryption)
+        XCTAssertEqual(CallPqBadge(level: .pq1, hybridAuth: true), .reduced)
+        XCTAssertEqual(CallPqBadge(level: .pq1, hybridAuth: false), .reduced)
+        XCTAssertNil(CallPqBadge(level: .cl, hybridAuth: true))
+        XCTAssertNil(CallPqBadge(level: .cl, hybridAuth: false))
+        XCTAssertNil(CallPqBadge(level: nil, hybridAuth: true), "no level yet, no post-quantum wording")
+        XCTAssertNil(CallPqBadge(level: nil, hybridAuth: false))
+    }
+
+    /// The auth word of the line: only "H" is hybrid; "C", an empty word or anything else is classical.
+    func testThePqBadgeReadsTheAuthWordOfTheLine() {
+        XCTAssertEqual(CallPqBadge(level: .pq2, auth: "H"), .double)
+        XCTAssertEqual(CallPqBadge(level: .pq2, auth: "C"), .encryption)
+        XCTAssertEqual(CallPqBadge(level: .pq2, auth: ""), .encryption)
+        XCTAssertEqual(CallPqBadge(level: .pq2, auth: "h"), .encryption)
+        XCTAssertNil(CallPqBadge(level: nil, auth: "H"))
+    }
+
+    /// The claim sentence and the double tag appear only for PQ2 with hybrid auth.
+    func testThePqClaimIsShownOnlyWithTheDoubleBadge() {
+        let levels: [PqLevel?] = [nil, .cl, .pq1, .pq2s, .pq2]
+        for level in levels {
+            for hybrid in [true, false] {
+                let badge = CallPqBadge(level: level, hybridAuth: hybrid)
+                let expected = (level == .pq2 && hybrid)
+                XCTAssertEqual(badge?.showsClaim ?? false, expected, "\(String(describing: level)) hybrid=\(hybrid)")
+                if let badge = badge {
+                    XCTAssertEqual(badge.tag, expected ? "PQ2" : "PQ")
+                }
+            }
+        }
+        XCTAssertFalse(CallPqBadge.claimSentence.isEmpty)
+        XCTAssertNotEqual(CallPqBadge.double.word, CallPqBadge.encryption.word)
+        XCTAssertNotEqual(CallPqBadge.encryption.word, CallPqBadge.reduced.word)
     }
 
     /// The PSK row of the security badge stands on one verified fact: a pre-shared key was mixed into this call's
