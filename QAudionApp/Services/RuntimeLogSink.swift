@@ -343,7 +343,7 @@ public final class RuntimeLogSink: ObservableObject {
         // Repeated native output (a line the audio engine prints dozens of times a second) is cut to one line per
         // window plus a summary: same single-queue rule as the assembler.
         // Its pending summaries are also flushed by a timer on this same queue when no later line arrives.
-        let limiter = StdoutTeeLines.RateLimiter(queue: queue) { [weak self] lines in
+        let limiter = StdoutTeeLines.RateLimiter(queue: queue) { lines in
             let flushedAt = Date()
             for out in lines {
                 // Straight into the ring on this queue (never mirrored back to OSLog): no hop to the

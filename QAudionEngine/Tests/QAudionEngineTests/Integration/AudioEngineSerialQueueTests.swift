@@ -105,6 +105,7 @@ final class AudioEngineSerialQueueTests: XCTestCase {
             engine.begin("start")
             engine.end("start", running: true)
         })
+        queue.waitUntilIdle()  // the start has run; the end of the call comes after it
         queue.submitStop {
             engine.begin("end-of-call-stop")
             engine.end("end-of-call-stop", running: false)
