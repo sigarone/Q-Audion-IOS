@@ -311,6 +311,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         lock.withLock { offerBoundCallId = callId.lowercased() }
     }
 
+    /// Test seam: the OFFER this integration sent for `callId` (its stashed transcript).
+    func stashSentOfferForTesting(callId: String) {
+        lock.withLock { sentOfferTranscriptByCall[callId.lowercased()] = Data(repeating: 0x5A, count: 64) }
+    }
+
     /// Test seam: the call the integration is bound to.
     var boundOfferCallIdForTesting: String? { lock.withLock { offerBoundCallId } }
 
@@ -2083,6 +2088,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
         // An OFFER's capability bits are kept only once the OFFER is accepted (see the `.offer` case): a dropped one
         // leaves them as they are.
+        if bundle.kind == .accept {
+            // An ACCEPT is kept only when it answers an OFFER this integration sent for this exact call (the stashed
+            // sent-OFFER transcript, which a rekey round refreshes). Any other ACCEPT writes nothing and is dropped.
+            let answersOwnOffer = lock.withLock { sentOfferTranscriptByCall[callId.lowercased()] != nil }
+            if !answersOwnOffer {
+                CapsBindLog.line("accept_drop other_call cid=\(callId.prefix(8))")
+                print("[QAudionCallIntegration] ACCEPT dropped — no OFFER of this call is pending callId=\(callId.prefix(8))…")
+                return
+            }
+        }
         if bundle.kind != .offer {
             applyPeerCapabilities(bundle: bundle, srtpDirKeyAdvertised: peerSrtpDirKeyAdvertised)
         }
@@ -2998,6 +3013,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // round stops waiting NOW (its deadline can no longer abandon it, nothing else can take it), and the ACCEPT is
             // processed to completion even when its verification ends after the round's deadline. If the deadline ran
             // first the round was abandoned and this ACCEPT is dropped (reaching and expiry never overlap).
+            // The stashed OFFER of this exact call is checked BEFORE a waiting rekey is taken: an ACCEPT that cannot be
+            // matched to it must never abandon the live round.
+            let sentOfferT: Data? = lock.withLock { sentOfferTranscriptByCall[callId.lowercased()] }
+            guard let sentOfferTranscript = sentOfferT else {
+                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… but no sent-OFFER transcript is stashed — ignoring")
+                return
+            }
             let rekeyAttempt: PendingReKeyAttempt?
             if let waitingRekeyRound {
                 guard let taken = takeWaitingReKeyAttempt(round: waitingRekeyRound) else {
@@ -3034,11 +3056,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // decapsulate + initSession: the crypto session (and therefore the SAS words) must exist
             // for the user to have anything to reconfirm, while MEDIA is held behind that
             // reconfirmation. `.authenticated` commits the pin / capability pins.
-            let sentOfferT: Data? = lock.withLock { sentOfferTranscriptByCall[callId.lowercased()] }
-            guard let sentOfferTranscript = sentOfferT else {
-                print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… but no sent-OFFER transcript is stashed — ignoring")
-                return
-            }
             let expectedOfferBinding = HandshakeTranscript.offerBinding(sentOfferTranscript)
             let acceptCheck = evaluateInbound(
                 bundle: bundle, callId: callId, peerId: callerId, peerDeviceId: callerDeviceId,

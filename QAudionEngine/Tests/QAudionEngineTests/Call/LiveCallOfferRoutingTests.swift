@@ -196,6 +196,81 @@ final class LiveCallOfferRoutingTests: XCTestCase {
         XCTAssertLessThan(writeAt.lowerBound, offerCase.lowerBound, "no capability write of an OFFER before its case")
         XCTAssertLessThan(offerCase.lowerBound, acceptedAt.lowerBound)
     }
+    // MARK: - ACCEPT of another call
+
+    private func accept(callId: String, round: Int?) -> AndroidHandshakeBundle {
+        AndroidHandshakeBundle(
+            kind: .accept, callId: callId,
+            ciphertext: .init(pqc: Data(repeating: 0xB1, count: 1568).base64EncodedString(),
+                              x25519: Data(repeating: 0xB2, count: 32).base64EncodedString()),
+            capabilities: .init(ratchetV3: nil, ratchetV4: false, srtpDirKeyV1: false, innerAudioAadV1: false),
+            rekeyRound: round)
+    }
+
+    private final class ResumeBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var calls: [Data?] = []
+        func add(_ v: Data?) { lock.lock(); calls.append(v); lock.unlock() }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return calls.count }
+    }
+
+    /// An ACCEPT of another call writes no capability and does not consume the live rekey; the honest ACCEPT afterwards
+    /// still takes the waiting round and is processed.
+    func testForeignAcceptLeavesCapabilitiesAndTheWaitingRekeyAlone() async throws {
+        let integ = QAudionCallIntegration()
+        integ.configureLiveCallForTesting(callId: liveId)
+        integ.stashSentOfferForTesting(callId: liveId)
+        integ.setPeerCapabilitiesForTesting(srtpDirKey: true, ratchetV4: true, innerAudioAad: true)
+        let resumed = ResumeBox()
+        let attemptId = try integ.installWaitingReKeyAttemptForTesting(round: 2) { resumed.add($0) }
+        let before = integ.peerCapabilitiesForTesting
+
+        _ = try? await integ.onAndroidBundleReceived(
+            bundle: accept(callId: otherId, round: 2), callId: otherId, callerId: "peer-1",
+            capsBind: CapsBind.analyze(bundle: accept(callId: otherId, round: 2)), sendOpaqueRaw: { _ in })
+
+        let after = integ.peerCapabilitiesForTesting
+        XCTAssertEqual(after.srtpDirKey, before.srtpDirKey)
+        XCTAssertEqual(after.ratchetV4, before.ratchetV4)
+        XCTAssertEqual(after.innerAudioAad, before.innerAudioAad)
+        let pending = try XCTUnwrap(integ.reKeyAttemptForTesting, "the live rekey is still there")
+        XCTAssertEqual(pending.id, attemptId)
+        XCTAssertFalse(pending.acceptReached)
+        XCTAssertEqual(resumed.count, 0)
+
+        // The honest ACCEPT of the call takes the waiting round: it is processed and the attempt is resolved once.
+        let honest = accept(callId: liveId, round: 2)
+        _ = try? await integ.onAndroidBundleReceived(
+            bundle: honest, callId: liveId, callerId: "peer-1", capsBind: CapsBind.analyze(bundle: honest), sendOpaqueRaw: { _ in })
+        XCTAssertEqual(resumed.count, 1, "the honest ACCEPT reached the round and resolved it")
+    }
+
+    /// An ACCEPT with no OFFER of its call behind it writes nothing, whatever else is held.
+    func testAcceptWithoutAnOwnOfferWritesNoCapability() async {
+        let integ = QAudionCallIntegration()
+        let bundle = accept(callId: otherId, round: 1)
+        _ = try? await integ.onAndroidBundleReceived(
+            bundle: bundle, callId: otherId, callerId: "peer-1", capsBind: CapsBind.analyze(bundle: bundle), sendOpaqueRaw: { _ in })
+        XCTAssertFalse(integ.peerCapabilitiesForTesting.seen)
+    }
+
+    /// Wiring: the sent-OFFER transcript is checked before a waiting rekey is taken.
+    func testTranscriptIsCheckedBeforeTheWaitingRekeyIsTaken() throws {
+        var dir = URL(fileURLWithPath: #filePath)
+        var src: String?
+        for _ in 0..<10 {
+            dir = dir.deletingLastPathComponent()
+            let c = dir.appendingPathComponent("QAudionEngine/Sources/QAudionEngine/Integration/QAudionCallIntegration.swift")
+            if FileManager.default.fileExists(atPath: c.path) { src = try String(contentsOf: c, encoding: .utf8); break }
+        }
+        let text = try XCTUnwrap(src, "source not found")
+        let acceptCase = try XCTUnwrap(text.range(of: "case .accept:
+            // Originator side"))
+        let tail = String(text[acceptCase.upperBound...])
+        let guardAt = try XCTUnwrap(tail.range(of: "but no sent-OFFER transcript is stashed"))
+        let takeAt = try XCTUnwrap(tail.range(of: "takeWaitingReKeyAttempt(round: waitingRekeyRound)"))
+        XCTAssertLessThan(guardAt.lowerBound, takeAt.lowerBound)
+    }
 }
 
 private final class RouteBox: @unchecked Sendable {
