@@ -82,4 +82,125 @@ final class LiveCallOfferRoutingTests: XCTestCase {
         let first = await receive(idle, offer(callId: otherId), callId: otherId)
         XCTAssertEqual(first.processing, [otherId])
     }
+
+    // MARK: - routing before any state, and one call per integration
+
+    private func offerWithCaps(callId: String, round: Int = 1) -> AndroidHandshakeBundle {
+        AndroidHandshakeBundle(
+            kind: .offer, callId: callId,
+            pqcPublicKey: Data(repeating: 0xA1, count: 1568).base64EncodedString(),
+            x25519PublicKey: Data(repeating: 0xA2, count: 32).base64EncodedString(),
+            capabilities: .init(ratchetV3: nil, ratchetV4: false, srtpDirKeyV1: false, innerAudioAadV1: false),
+            sasCommit: nil,
+            rekeyNonce: V6TestFixtures.rekeyNonce.base64EncodedString(), rekeyRound: round)
+    }
+
+    /// (1) A dropped OFFER of another call leaves the live call's negotiated capabilities, and so its outer mode, as they were.
+    func testDroppedOfferLeavesTheLiveCallsCapabilitiesAndOuterModeAlone() async {
+        let integ = QAudionCallIntegration()
+        integ.configureLiveCallForTesting(callId: liveId)
+        integ.setPeerCapabilitiesForTesting(srtpDirKey: true, ratchetV4: true, innerAudioAad: true)
+        let outerBefore = integ.negotiatedSrtpDirKey
+        let before = integ.peerCapabilitiesForTesting
+        _ = await receive(integ, offerWithCaps(callId: otherId), callId: otherId)
+        let after = integ.peerCapabilitiesForTesting
+        XCTAssertEqual(after.srtpDirKey, before.srtpDirKey)
+        XCTAssertEqual(after.seen, before.seen)
+        XCTAssertEqual(after.ratchetV4, before.ratchetV4)
+        XCTAssertEqual(after.innerAudioAad, before.innerAudioAad)
+        XCTAssertTrue(after.srtpDirKey, "the bit the dropped OFFER did not advertise is still set")
+        XCTAssertEqual(integ.negotiatedSrtpDirKey, outerBefore)
+    }
+
+    /// The same holds for an OFFER dropped while the call is only ringing (bound, no session yet).
+    func testOfferDroppedWhileRingingLeavesCapabilitiesAlone() async {
+        let integ = QAudionCallIntegration()
+        integ.bindOfferCallForTesting(callId: liveId)
+        integ.setPeerCapabilitiesForTesting(srtpDirKey: true, ratchetV4: true, innerAudioAad: false)
+        let before = integ.peerCapabilitiesForTesting
+        let seen = await receive(integ, offerWithCaps(callId: otherId), callId: otherId)
+        XCTAssertTrue(seen.processing.isEmpty)
+        XCTAssertEqual(integ.peerCapabilitiesForTesting.srtpDirKey, before.srtpDirKey)
+        XCTAssertEqual(integ.peerCapabilitiesForTesting.ratchetV4, before.ratchetV4)
+        XCTAssertEqual(integ.boundOfferCallIdForTesting, liveId)
+    }
+
+    /// (2) Two OFFERs for different calls racing through the routing decision: exactly one passes, the other is refused.
+    func testOnlyOneOfTwoInterleavedOffersIsTakenUp() {
+        for _ in 0..<200 {
+            let integ = QAudionCallIntegration()
+            let box = RouteBox()
+            let ids = [liveId, otherId]
+            DispatchQueue.concurrentPerform(iterations: 2) { i in
+                let r = integ.routeOffer(callId: ids[i])
+                box.add(r)
+            }
+            XCTAssertEqual(box.routes.filter { $0 == .claimed }.count, 1)
+            XCTAssertEqual(box.routes.filter { $0 == .other }.count, 1)
+        }
+    }
+
+    /// While X rings (no session yet, not active), the OFFER of Y that queued behind it is refused, and X's own OFFER still passes.
+    func testSecondCallIsRefusedWhileTheFirstRings() {
+        let integ = QAudionCallIntegration()
+        XCTAssertEqual(integ.routeOffer(callId: liveId), .claimed)
+        XCTAssertEqual(integ.routeOffer(callId: otherId), .other)
+        XCTAssertEqual(integ.routeOffer(callId: liveId.uppercased()), .alreadyBound)
+        XCTAssertEqual(integ.boundOfferCallIdForTesting, liveId)
+    }
+
+    /// The first OFFER that ends without establishing anything gives the binding back; one that holds a session keeps it.
+    func testBindingIsReleasedOnlyWhenNothingWasEstablished() {
+        let integ = QAudionCallIntegration()
+        XCTAssertEqual(integ.routeOffer(callId: liveId), .claimed)
+        integ.releaseOfferClaimForTesting(callId: liveId)
+        XCTAssertNil(integ.boundOfferCallIdForTesting)
+        XCTAssertEqual(integ.routeOffer(callId: otherId), .claimed, "a real call is not refused on account of a failed one")
+
+        let held = QAudionCallIntegration()
+        held.configureLiveCallForTesting(callId: liveId)
+        XCTAssertEqual(held.routeOffer(callId: liveId), .claimed)
+        held.releaseOfferClaimForTesting(callId: liveId)
+        XCTAssertEqual(held.boundOfferCallIdForTesting, liveId)
+    }
+
+    /// (3) The same callId keeps working once bound: a replacement of an unanswered round 1 (A2) and a rekey.
+    func testSameCallIdOffersAreStillTakenUpAfterTheBinding() async {
+        let integ = QAudionCallIntegration()
+        integ.bindOfferCallForTesting(callId: liveId)
+        let replacement = await receive(integ, offer(callId: liveId, round: 1), callId: liveId)
+        XCTAssertEqual(replacement.processing, [liveId], "the A2 replacement of an unanswered round 1 is routed on")
+        let rekey = await receive(integ, offer(callId: liveId, round: 2), callId: liveId)
+        XCTAssertEqual(rekey.processing, [liveId])
+        XCTAssertEqual(integ.routeOffer(callId: liveId), .alreadyBound)
+    }
+
+    /// Wiring: the routing decision runs before the first write of any peer capability, and the capability bits of an
+    /// OFFER are written only where the OFFER is accepted (inside the `.offer` case, with its fingerprint).
+    func testRoutingPrecedesEveryCapabilityWrite() throws {
+        var dir = URL(fileURLWithPath: #filePath)
+        var src: String?
+        for _ in 0..<10 {
+            dir = dir.deletingLastPathComponent()
+            let c = dir.appendingPathComponent("QAudionEngine/Sources/QAudionEngine/Integration/QAudionCallIntegration.swift")
+            if FileManager.default.fileExists(atPath: c.path) { src = try String(contentsOf: c, encoding: .utf8); break }
+        }
+        let text = try XCTUnwrap(src, "source not found")
+        let entry = try XCTUnwrap(text.range(of: "public func onAndroidBundleReceived("))
+        let body = String(text[entry.upperBound...])
+        let routeAt = try XCTUnwrap(body.range(of: "switch routeOffer(callId: callId)"))
+        let writeAt = try XCTUnwrap(body.range(of: "applyPeerCapabilities(bundle: bundle, srtpDirKeyAdvertised: peerSrtpDirKeyAdvertised)"))
+        XCTAssertLessThan(routeAt.lowerBound, writeAt.lowerBound)
+        let offerCase = try XCTUnwrap(body.range(of: "case .offer:"))
+        let acceptedAt = try XCTUnwrap(body.range(of: "applyPeerCapabilitiesLocked(bundle: bundle"))
+        XCTAssertLessThan(writeAt.lowerBound, offerCase.lowerBound, "no capability write of an OFFER before its case")
+        XCTAssertLessThan(offerCase.lowerBound, acceptedAt.lowerBound)
+    }
+}
+
+private final class RouteBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [QAudionCallIntegration.OfferRoute] = []
+    func add(_ r: QAudionCallIntegration.OfferRoute) { lock.lock(); stored.append(r); lock.unlock() }
+    var routes: [QAudionCallIntegration.OfferRoute] { lock.lock(); defer { lock.unlock() }; return stored }
 }

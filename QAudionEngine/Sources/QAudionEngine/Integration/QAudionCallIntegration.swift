@@ -248,6 +248,74 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         isLive && !sessionCallIds.isEmpty && !sessionCallIds.contains(offerCallId.lowercased())
     }
 
+    /// How an inbound OFFER relates to the call this integration serves.
+    enum OfferRoute: Equatable { case claimed, alreadyBound, other }
+
+    /// The call this integration serves, bound by the first OFFER it takes up (lowercased callId). It lives until the
+    /// call ends (`onCallEnded`), and is released early when that first OFFER ends without establishing anything.
+    private var offerBoundCallId: String?
+
+    /// ONE atomic decision per inbound OFFER, under `lock`: the OFFER of the bound call passes; the OFFER of another
+    /// call is refused; with no call bound yet the live-call rule applies and a passing OFFER binds its call. Two OFFERs
+    /// for different calls racing through here cannot both pass.
+    func routeOffer(callId: String) -> OfferRoute {
+        let id = callId.lowercased()
+        return lock.withLock { () -> OfferRoute in
+            if let bound = offerBoundCallId { return bound == id ? .alreadyBound : .other }
+            if Self.isOfferForOtherLiveCall(offerCallId: id, sessionCallIds: sessionInitializedByCall, isLive: state == .active) {
+                return .other
+            }
+            offerBoundCallId = id
+            return .claimed
+        }
+    }
+
+    /// An OFFER that bound the call and ended without installing a session (and without holding one) gives the binding
+    /// back, so a later OFFER of a real call is not refused on its account.
+    private func releaseOfferClaimIfNotEstablished(callId: String) {
+        let id = callId.lowercased()
+        lock.withLock {
+            if offerBoundCallId == id, !sessionInitializedByCall.contains(id) { offerBoundCallId = nil }
+        }
+    }
+
+    private func applyPeerCapabilities(bundle: AndroidHandshakeBundle, srtpDirKeyAdvertised: Bool) {
+        lock.withLock { applyPeerCapabilitiesLocked(bundle: bundle, srtpDirKeyAdvertised: srtpDirKeyAdvertised) }
+    }
+
+    /// The peer's advertised capability bits of a bundle that is taken up. The caller holds `lock`.
+    private func applyPeerCapabilitiesLocked(bundle: AndroidHandshakeBundle, srtpDirKeyAdvertised: Bool) {
+        peerAdvertisedSrtpDirKey = srtpDirKeyAdvertised
+        peerBundleSeen = true
+        // Phase 18: a bundle that omits the v4 field (older peer / un-opted-in) reads false, so v4 stays off for the pair.
+        peerAdvertisedRatchetV4 = (bundle.capabilities?.ratchetV4 ?? false)
+        // MEDIA-3/4/5: same additive/AND-negotiated shape; inert while `innerAudioAadV1Enabled` is false.
+        peerAdvertisedInnerAudioAad = (bundle.capabilities?.innerAudioAadV1 ?? false)
+    }
+
+    /// Test seam: the capability bits as held.
+    var peerCapabilitiesForTesting: (srtpDirKey: Bool, seen: Bool, ratchetV4: Bool, innerAudioAad: Bool) {
+        lock.withLock { (peerAdvertisedSrtpDirKey, peerBundleSeen, peerAdvertisedRatchetV4, peerAdvertisedInnerAudioAad) }
+    }
+
+    /// Test seam: the capability bits of a live call, as an accepted OFFER left them.
+    func setPeerCapabilitiesForTesting(srtpDirKey: Bool, ratchetV4: Bool, innerAudioAad: Bool) {
+        lock.withLock {
+            peerAdvertisedSrtpDirKey = srtpDirKey; peerBundleSeen = true
+            peerAdvertisedRatchetV4 = ratchetV4; peerAdvertisedInnerAudioAad = innerAudioAad
+        }
+    }
+
+    /// Test seam: this integration has taken up the OFFER of `callId` (no session yet: the ringing window).
+    func bindOfferCallForTesting(callId: String) {
+        lock.withLock { offerBoundCallId = callId.lowercased() }
+    }
+
+    /// Test seam: the call the integration is bound to.
+    var boundOfferCallIdForTesting: String? { lock.withLock { offerBoundCallId } }
+
+    func releaseOfferClaimForTesting(callId: String) { releaseOfferClaimIfNotEstablished(callId: callId) }
+
     /// Test seam: a live call on this integration, with its session held under `callId`.
     func configureLiveCallForTesting(callId: String) {
         lock.withLock { sessionInitializedByCall.insert(callId.lowercased()); state = .active }
@@ -1994,32 +2062,33 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // unauthenticated claim alone.
         let peerSrtpDirKeyAdvertised: Bool = (bundle.capabilities?.srtpDirKeyV1 ?? false)
             || (isPeerSrtpDirKeyV1Pinned?(callerId) ?? false)
-        lock.withLock {
-            self.peerAdvertisedSrtpDirKey = peerSrtpDirKeyAdvertised
-            self.peerBundleSeen = true
+        // An OFFER names the call it belongs to. It is routed before anything derived from it is kept: while a call is
+        // live (or already answered) on this integration, an OFFER for any other call is dropped before it touches the
+        // engine, a key or the per-call capability state.
+        var claimedOfferCall = false
+        if bundle.kind == .offer {
+            switch routeOffer(callId: callId) {
+            case .other:
+                CapsBindLog.line("offer_drop other_call cid=\(callId.prefix(8))")
+                print("[QAudionCallIntegration] OFFER dropped — another call is live callId=\(callId.prefix(8))…")
+                return
+            case .claimed:
+                claimedOfferCall = true
+            case .alreadyBound:
+                break
+            }
         }
-        // Phase 18 — capture the peer's v4 advertisement so the v4 bootstrap is
-        // gated on the negotiated AND (`negotiatedRatchetV4`). A bundle that omits
-        // the field (older peer / un-opted-in) decodes nil → false → v4 stays off
-        // for the pair, exactly like Android's `safePeer.ratchetV4` default.
-        self.peerAdvertisedRatchetV4 = (bundle.capabilities?.ratchetV4 ?? false)
-        // MEDIA-3/4/5 — capture the peer's inner-sealed-audio-AAD advertisement,
-        // same additive/AND-negotiated shape as srtpDirKeyV1/ratchetV4 above. No
-        // TOFU-pin OR here (unlike srtpDirKeyV1) — this bit has no pinning store
-        // of its own, and with `Self.innerAudioAadV1Enabled` false the AND in
-        // `negotiatedInnerAudioAadV1` keeps this inert either way.
-        self.peerAdvertisedInnerAudioAad = (bundle.capabilities?.innerAudioAadV1 ?? false)
+        defer {
+            if claimedOfferCall { releaseOfferClaimIfNotEstablished(callId: callId) }
+        }
+        // An OFFER's capability bits are kept only once the OFFER is accepted (see the `.offer` case): a dropped one
+        // leaves them as they are.
+        if bundle.kind != .offer {
+            applyPeerCapabilities(bundle: bundle, srtpDirKeyAdvertised: peerSrtpDirKeyAdvertised)
+        }
 
         switch bundle.kind {
         case .offer:
-            // An OFFER names the call it belongs to. While a call is live on this integration, an OFFER for any
-            // other call is not this call's handshake: it is dropped before it touches the engine or any key.
-            if Self.isOfferForOtherLiveCall(
-                offerCallId: callId, sessionCallIds: lock.withLock { sessionInitializedByCall },
-                isLive: lock.withLock { state == .active }) {
-                print("[QAudionCallIntegration] OFFER dropped — another call is live callId=\(callId.prefix(8))…")
-                return
-            }
             // Pre-negotiation: emit
             // `call_processing` the moment the OFFER lands so the Android
             // caller's UI flips "Calling…" → "Connecting…". The Android
@@ -2509,6 +2578,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 let dup = processedOfferFingerprintsByCall.contains(offerDedupKey)
                 let wasAlreadyHandshaked = sessionInitializedByCall.contains(normalizedOId)
                 if !dup {
+                    // The OFFER is accepted: only now are its capability bits kept (written under this same lock).
+                    applyPeerCapabilitiesLocked(bundle: bundle, srtpDirKeyAdvertised: peerSrtpDirKeyAdvertised)
                     processedOfferFingerprintsByCall.insert(offerDedupKey)
                     acceptWireByOfferFingerprint[offerDedupKey] = wire
                     sessionInitializedByCall.insert(normalizedOId)
@@ -4781,6 +4852,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // later call: clear all per-callId state so the next call
         // re-runs key generation + session init from scratch.
         sessionInitializedByCall.removeAll()
+        offerBoundCallId = nil
         // I3 — same reasoning as sessionInitializedByCall above: a reused
         // integration instance must not carry a prior call's OFFER
         // fingerprints/cached ACCEPTs into the next call.
