@@ -14,7 +14,7 @@ import CLiboqs
 /// This code was written on a machine that cannot compile Swift for iOS: the simulator CI job is what runs it.
 final class PqsigKatTests: XCTestCase {
 
-    static let pinnedPqcSHA256 = "3c135f42e7d70a34e88555ed10b04ee89ad29a03e327679f8652ce20836f2267"
+    static let pinnedPqcSHA256 = "aaafc23e5bcab947570ee9f04679df56ee10ad3c2a8f27cadd4b32eae4fad81d"
     static let pinnedMldsaSHA256 = "dccdd89dd85b9a9619b28e0a26e4430aedf781c505dd64bdeffbb4fc0251dd04"
 
     // MARK: - Loading

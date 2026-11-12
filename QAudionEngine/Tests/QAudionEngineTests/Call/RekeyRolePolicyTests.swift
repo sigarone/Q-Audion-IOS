@@ -42,7 +42,7 @@ final class RekeyRolePolicyTests: XCTestCase {
         var threw = false
         do {
             try await integ.onAndroidBundleReceived(
-                bundle: offer, callId: callId, callerId: "peer-1", sendOpaqueRaw: { _ in })
+                bundle: offer, callId: callId, callerId: "peer-1", capsBind: CapsBind.analyze(bundle: offer), sendOpaqueRaw: { _ in })
         } catch {
             threw = true
         }

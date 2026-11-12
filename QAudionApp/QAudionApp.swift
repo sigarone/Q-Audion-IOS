@@ -474,6 +474,7 @@ struct QAudionApp: App {
         }
         // The engine cannot reach RTLog either: its lines go out with the tag "call", like the other `audioroute` lines.
         EncoderBandHintController.shared.lineSink = { line in RTLog.info("call", line) }
+        CapsBindLog.setSink { line in RTLog.info("call", line) }
     }
 
     /// The steps that come after `AppState.initialize()`.

@@ -10141,6 +10141,90 @@
         }
       }
     },
+    "in_call.pin_warning.lead": {
+      "extractionState": "manual",
+      "comment": "Call screen, safety-code warning: first sentence, followed by the one that names the missing protection.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica il codice di sicurezza con questo contatto."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verify the safety code with this contact."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica el código de seguridad con este contacto."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifie le code de sécurité avec ce contact."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Überprüfe den Sicherheitscode mit diesem Kontakt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica o código de segurança com este contato."
+          }
+        }
+      }
+    },
+    "in_call.pin_warning.caps_bind_missing": {
+      "extractionState": "manual",
+      "comment": "Call screen, safety-code warning: the contact's device no longer offers the protection of the call settings it offered before.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protezione delle impostazioni della chiamata non offerta da questo dispositivo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protection of the call settings not offered by this device."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este dispositivo no ofrece la protección de los ajustes de la llamada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cet appareil n'offre pas la protection des réglages de l'appel."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieses Gerät bietet den Schutz der Anrufeinstellungen nicht an."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este dispositivo não oferece a proteção das configurações da chamada."
+          }
+        }
+      }
+    },
     "in_call.custody.identity": {
       "extractionState": "manual",
       "comment": "Call security sheet, custody of the voice card — label of the identity cell",
