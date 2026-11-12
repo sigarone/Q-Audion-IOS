@@ -189,13 +189,57 @@ final class LiveCallOfferRoutingTests: XCTestCase {
         let entry = try XCTUnwrap(text.range(of: "public func onAndroidBundleReceived("))
         let body = String(text[entry.upperBound...])
         let routeAt = try XCTUnwrap(body.range(of: "switch routeOffer(callId: callId)"))
-        let writeAt = try XCTUnwrap(body.range(of: "applyPeerCapabilities(bundle: bundle, srtpDirKeyAdvertised: peerSrtpDirKeyAdvertised)"))
-        XCTAssertLessThan(routeAt.lowerBound, writeAt.lowerBound)
         let offerCase = try XCTUnwrap(body.range(of: "case .offer:"))
-        let acceptedAt = try XCTUnwrap(body.range(of: "applyPeerCapabilitiesLocked(bundle: bundle"))
-        XCTAssertLessThan(writeAt.lowerBound, offerCase.lowerBound, "no capability write of an OFFER before its case")
-        XCTAssertLessThan(offerCase.lowerBound, acceptedAt.lowerBound)
+        let writeAt = try XCTUnwrap(body.range(of: "applyPeerCapabilitiesLocked(bundle: bundle"))
+        XCTAssertLessThan(routeAt.lowerBound, offerCase.lowerBound)
+        XCTAssertLessThan(offerCase.lowerBound, writeAt.lowerBound, "no capability write before the bundle is accepted")
+        let acceptCase = try XCTUnwrap(body.range(of: "case .accept:"))
+        let acceptWrite = try XCTUnwrap(body.range(of: "applyPeerCapabilitiesLocked(bundle: bundle", range: writeAt.upperBound..<body.endIndex))
+        XCTAssertLessThan(acceptCase.lowerBound, acceptWrite.lowerBound)
+        let dropAt = try XCTUnwrap(body.range(of: "is a different round-1 ACCEPT after binding"))
+        XCTAssertLessThan(dropAt.lowerBound, acceptWrite.lowerBound, "the ACCEPT drops come before its capability write")
     }
+
+    /// A same-call ACCEPT that is dropped (a different round-1 ACCEPT after the binding, e.g. a sibling device) leaves the
+    /// capability bits as the bound ACCEPT left them.
+    func testDroppedSiblingAcceptLeavesCapabilitiesAlone() async {
+        let integ = QAudionCallIntegration()
+        integ.stashSentOfferForTesting(callId: liveId)
+        XCTAssertTrue(integ.bindProcessedRound1AcceptForTesting(
+            callId: liveId, pqcCt: Data(repeating: 0xB1, count: 1568), x25519Eph: Data(repeating: 0xB2, count: 32),
+            acceptHash: Data(repeating: 0x33, count: 32), nonce: Data(repeating: 0x44, count: 32)))
+        integ.setPeerCapabilitiesForTesting(srtpDirKey: false, ratchetV4: false, innerAudioAad: false)
+        let before = integ.peerCapabilitiesForTesting
+        let sibling = AndroidHandshakeBundle(
+            kind: .accept, callId: liveId,
+            ciphertext: .init(pqc: Data(repeating: 0xC1, count: 1568).base64EncodedString(),
+                              x25519: Data(repeating: 0xC2, count: 32).base64EncodedString()),
+            capabilities: .init(ratchetV3: nil, ratchetV4: true, srtpDirKeyV1: true, innerAudioAadV1: true),
+            rekeyRound: 1)
+        _ = try? await integ.onAndroidBundleReceived(
+            bundle: sibling, callId: liveId, callerId: "peer-1", capsBind: CapsBind.analyze(bundle: sibling), sendOpaqueRaw: { _ in })
+        let after = integ.peerCapabilitiesForTesting
+        XCTAssertEqual(after.srtpDirKey, before.srtpDirKey)
+        XCTAssertEqual(after.ratchetV4, before.ratchetV4)
+        XCTAssertEqual(after.innerAudioAad, before.innerAudioAad)
+        XCTAssertFalse(integ.negotiatedSrtpDirKey)
+    }
+
+    /// X1 claims the binding and fails (the claim is given back); X2, the same call, installs and asserts it again; an
+    /// OFFER of another call is then refused, at the guard and at its own install.
+    func testBindingIsAssertedAtInstallAfterTheFirstOfferFailed() {
+        let integ = QAudionCallIntegration()
+        XCTAssertEqual(integ.routeOffer(callId: liveId), .claimed)       // X1
+        XCTAssertEqual(integ.routeOffer(callId: liveId), .alreadyBound)  // X2
+        integ.releaseOfferClaimForTesting(callId: liveId)                // X1 fails
+        XCTAssertNil(integ.boundOfferCallIdForTesting)
+        XCTAssertTrue(integ.claimOfferBindingAtInstallForTesting(callId: liveId))   // X2 installs
+        XCTAssertEqual(integ.boundOfferCallIdForTesting, liveId)
+        XCTAssertEqual(integ.routeOffer(callId: otherId), .other)        // Z at the guard
+        XCTAssertFalse(integ.claimOfferBindingAtInstallForTesting(callId: otherId), "Z at its install")
+        XCTAssertEqual(integ.boundOfferCallIdForTesting, liveId)
+    }
+
     // MARK: - ACCEPT of another call
 
     private func accept(callId: String, round: Int?) -> AndroidHandshakeBundle {

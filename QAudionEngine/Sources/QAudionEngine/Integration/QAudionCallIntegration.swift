@@ -270,6 +270,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         }
     }
 
+    /// Under `lock`: binds `id` when no call is bound, and says whether `id` is the bound call.
+    private func claimOfferBindingLocked(id: String) -> Bool {
+        if let bound = offerBoundCallId { return bound == id }
+        offerBoundCallId = id
+        return true
+    }
+
+    /// Test seam: the claim an accepted OFFER makes where it installs.
+    func claimOfferBindingAtInstallForTesting(callId: String) -> Bool {
+        lock.withLock { claimOfferBindingLocked(id: callId.lowercased()) }
+    }
+
     /// An OFFER that bound the call and ended without installing a session (and without holding one) gives the binding
     /// back, so a later OFFER of a real call is not refused on its account.
     private func releaseOfferClaimIfNotEstablished(callId: String) {
@@ -277,10 +289,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         lock.withLock {
             if offerBoundCallId == id, !sessionInitializedByCall.contains(id) { offerBoundCallId = nil }
         }
-    }
-
-    private func applyPeerCapabilities(bundle: AndroidHandshakeBundle, srtpDirKeyAdvertised: Bool) {
-        lock.withLock { applyPeerCapabilitiesLocked(bundle: bundle, srtpDirKeyAdvertised: srtpDirKeyAdvertised) }
     }
 
     /// The peer's advertised capability bits of a bundle that is taken up. The caller holds `lock`.
@@ -2086,8 +2094,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         defer {
             if claimedOfferCall { releaseOfferClaimIfNotEstablished(callId: callId) }
         }
-        // An OFFER's capability bits are kept only once the OFFER is accepted (see the `.offer` case): a dropped one
-        // leaves them as they are.
+        // The capability bits of an OFFER or of an ACCEPT are kept only where that bundle is accepted (the lock block
+        // that records its fingerprint, in each case): a bundle dropped on the way leaves them as they are.
         if bundle.kind == .accept {
             // An ACCEPT is kept only when it answers an OFFER this integration sent for this exact call (the stashed
             // sent-OFFER transcript, which a rekey round refreshes, or the round-1 ACCEPT already bound). Any other ACCEPT writes nothing and is dropped.
@@ -2099,9 +2107,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 print("[QAudionCallIntegration] ACCEPT dropped — no OFFER of this call is pending callId=\(callId.prefix(8))…")
                 return
             }
-        }
-        if bundle.kind != .offer {
-            applyPeerCapabilities(bundle: bundle, srtpDirKeyAdvertised: peerSrtpDirKeyAdvertised)
         }
 
         switch bundle.kind {
@@ -2591,7 +2596,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // .initSession is a pure key-derivation + atomic swap, safe to
             // re-run). See docs/security/I3_IOS_REKEY_DESIGN_2026-08-21.md
             // in the qaudion-android-new repo (cross-repo doc).
-            let (alreadyInit, isReKeyRound) = lock.withLock { () -> (Bool, Bool) in
+            let (alreadyInit, isReKeyRound, boundToAnotherCall) = lock.withLock { () -> (Bool, Bool, Bool) in
+                // The binding is asserted where the OFFER is accepted: a sibling OFFER of this call whose first one
+                // failed (and gave the binding back) takes it again here, and an OFFER of another call is refused.
+                if !claimOfferBindingLocked(id: normalizedOId) { return (false, false, true) }
                 let dup = processedOfferFingerprintsByCall.contains(offerDedupKey)
                 let wasAlreadyHandshaked = sessionInitializedByCall.contains(normalizedOId)
                 if !dup {
@@ -2606,7 +2614,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // AppState re-supplying it.
                     retrySenderClosure = sendOpaqueRaw
                 }
-                return (dup, wasAlreadyHandshaked && !dup)
+                return (dup, wasAlreadyHandshaked && !dup, false)
+            }
+            if boundToAnotherCall {
+                CapsBindLog.line("offer_drop other_call cid=\(callId.prefix(8))")
+                print("[QAudionCallIntegration] OFFER dropped — this integration serves another call callId=\(callId.prefix(8))…")
+                return
             }
             if alreadyInit {
                 // Idempotent replay — re-emit the SAME bundle THIS OFFER
@@ -3231,6 +3244,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let alreadyInit = lock.withLock {
                 let r = processedAcceptFingerprintsByCall.contains(acceptDedupKey)
                 if !r {
+                    applyPeerCapabilitiesLocked(bundle: bundle, srtpDirKeyAdvertised: peerSrtpDirKeyAdvertised)
                     processedAcceptFingerprintsByCall.insert(acceptDedupKey)
                     sessionInitializedByCall.insert(normalizedIdForDedup)
                 }
