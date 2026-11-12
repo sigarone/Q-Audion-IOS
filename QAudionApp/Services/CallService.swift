@@ -5461,7 +5461,10 @@ final class CallService: @unchecked Sendable {
             // started before the negotiation landed, or from a fallback.
             // The owner is captured and recorded NOW, on the main thread: a didDeactivate that arrives
             // before the queued switch runs sees this owner and queues its switch-off behind it.
-            let owner = callArm.token
+            let owner = NativeAudioSessionGate.enableOwner(callArmToken: callArm.token)
+            if callArm.token == 0 {
+                RTLog.warn("call", "admgate enable callarm=0 owner=\(owner == 0 ? 0 : 1)")
+            }
             nativeUnitOwnerToken = owner
             let reasonRaw = reason.rawValue
             if let capture = audioCapture, capture.isCapturing || audioStartsInFlight > 0 {

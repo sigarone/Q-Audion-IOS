@@ -307,6 +307,14 @@ public enum NativeAudioSessionGate {
         return armedToken
     }
 
+    /// Owner of a switch-ON requested for the live call. The call's own arm when it is known;
+    /// otherwise the arm in force, which during a live 1:1 call can only be that call's own (a
+    /// group arms only after the 1:1 call is torn down). Switch-OFF never uses this fallback: it
+    /// would reach another call's arm after a promotion. Returns 0 only when nothing is armed.
+    public static func enableOwner(callArmToken: Int) -> Int {
+        callArmToken != 0 ? callArmToken : currentArmToken
+    }
+
     /// Owner-checked switch, to be called ON the audio queue only (`submitSwitch` and the queue
     /// closures of the callers do). Returns `true` when the unit actually changed. A stale or zero
     /// owner is a no-op.
