@@ -435,7 +435,7 @@ public final class BCryptoKmsClient {
         public var mldsaKeyIdB64: String? = nil
     }
 
-    public func fetchUserIdentityBundleV2(userId: String) async -> IdentityBundleV2? {
+    public func fetchUserIdentityBundleV2(userId: String, deviceId: String? = nil) async -> IdentityBundleV2? {
         guard !userId.isEmpty else { return nil }
         // IOS-E2 leg (3) — see the offline-gate kdoc on
         // `fetchUserIdentityKey(userId:deviceId:)` above; the group-call
@@ -443,7 +443,12 @@ public final class BCryptoKmsClient {
         // any nil, identical to a transport error.
         guard !rest.isOffline else { return nil }
         do {
-            let data = try await rest.get("/api/v1/users/\(userId)/identity-key")
+            var path = "/api/v1/users/\(userId)/identity-key"
+            if let d = deviceId, !d.isEmpty {
+                let enc = d.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? d
+                path += "?device_id=\(enc)"
+            }
+            let data = try await rest.get(path)
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return nil
             }

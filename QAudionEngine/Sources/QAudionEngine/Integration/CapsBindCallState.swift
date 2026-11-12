@@ -1,9 +1,34 @@
 import Foundation
 
+/// What the second-signature layer says about the peer's round-1 bundle, handed to `CapsBindCallState.judgeRound1`.
+struct PqVerification: Equatable {
+    let result: PqSigResult
+    /// Lowercase hex of the key id the check ran under, or nil.
+    let keyId: String?
+    /// The bundle advertises `sigHybridV1`.
+    let sigHybridV1: Bool
+}
+
 /// What the integration keeps per call for `capsBindV1`: the analysis of the bundle this side sent (per round, the last one) and the
 /// pin decision of round 1. The pin records themselves live in `CapsPinBook` and are never touched by this class going away: the
 /// end of a call, a teardown or a restart clears this per-call state and nothing else.
 final class CapsBindCallState: @unchecked Sendable {
+
+    /// What the pin policy needs again when the round's key confirmation verifies and when the user confirms the safety code from the
+    /// warning. Present only when the second-signature layer judged the round.
+    struct PqRound1: Equatable {
+        /// The policy input as judged (record as read, the bundle's tags, the signature result).
+        var input: HybridSigPolicy.Round1Input
+        /// `H` or `C`.
+        var auth: String
+        /// Log value of `pq_sig=`.
+        var result: String
+        /// Both bundles of the round carry `capsBindV1` (known when the key confirmation verified).
+        var ext: Bool
+        var kcmacVerified: Bool
+        /// The user confirmed the safety code from the warning.
+        var sas: Bool
+    }
 
     /// The pin decision of one call's round 1.
     struct PinCall: Equatable {
@@ -17,6 +42,11 @@ final class CapsBindCallState: @unchecked Sendable {
         let withdrawIgnored: Bool
         /// The user confirmed the safety code from this call's warning (exit 1 taken).
         var confirmed: Bool
+        /// Every warning of this call, the signature reason first, then the call-settings reason; empty without an anomaly.
+        var warns: [PqWarnReason] = []
+        /// A signed marker was honoured (the record lost the pinned second key).
+        var withdrawHonoured: Bool = false
+        var pq: PqRound1?
     }
 
     private let lock = NSLock()
@@ -94,31 +124,59 @@ final class CapsBindCallState: @unchecked Sendable {
     /// Only a verified signer key is judged: with `verifiedSignerKey` nil (a signature that did not verify, an unknown key) no record is
     /// read or written. A second call has its own entry (keyed by call id) and never overwrites another call's. An anomaly never ends
     /// or refuses the call: the visible warning is shown and, with the hold compiled off, nothing is held.
+    ///
+    /// With `pq` the second-signature layer judged the round too: the shared table (`HybridSigPolicy`) then decides the warning, the
+    /// authentication and (once the round's key confirmation verified, and again after the safety code) the record. `armedForHold`
+    /// changes nothing either way.
     func judgeRound1(callId: String, peerUserId: String, peer: BundleCapsBind, verifiedSignerKey: Data?,
-                     book: CapsPinBook, armedForHold: Bool) -> PinCall? {
+                     book: CapsPinBook, armedForHold: Bool, pq: PqVerification? = nil) -> PinCall? {
         let withdrawIgnored = peer.withdrawn.contains(CapsBind.tag)
         guard let signerKey = verifiedSignerKey else {
             CapsBindLog.line("pin judged=0 reason=1")
             return nil
         }
-        let decision = CapsPinPolicy.decideRound1(
-            record: book.record(peerUserId: peerUserId, signerKey: signerKey),
-            peerHasCapsBind: peer.hasTag, armed: armedForHold)
-        let call = PinCall(callId: callId.lowercased(), peerUserId: peerUserId, signerKey: signerKey, pin: decision.pin,
-                           hold: decision.hold, reason: decision.reason, withdrawIgnored: withdrawIgnored, confirmed: false)
+        let record = book.record(peerUserId: peerUserId, signerKey: signerKey)
+        let decision = CapsPinPolicy.decideRound1(record: record, peerHasCapsBind: peer.hasTag, armed: armedForHold)
+        var pin = decision.pin
+        var hold = decision.hold
+        var warns: [PqWarnReason] = decision.reason == nil ? [] : [.capsBindV1Missing]
+        var ignored = withdrawIgnored
+        var honoured = false
+        var pqCtx: PqRound1?
+        if let pq {
+            let input = HybridSigPolicy.Round1Input(
+                record: record, capsBindV1: peer.hasTag, sigHybridV1: pq.sigHybridV1, withdrawn: peer.withdrawn, ext: false,
+                sigHybrid: pq.result, sigKeyId: pq.keyId, kcmacValid: true, armed: armedForHold, sasConfirmed: false)
+            let policy = HybridSigPolicy.decideRound1(input)
+            if policy.pin == "anomaly" { pin = .anomaly }
+            hold = false
+            warns = policy.warn
+            if policy.withdraw == "ignored" { ignored = true }
+            if policy.withdraw == "honoured" { honoured = true }
+            pqCtx = PqRound1(input: input, auth: policy.auth == "H" ? "H" : "C", result: policy.pqSig, ext: false,
+                             kcmacVerified: false, sas: false)
+        }
+        let call = PinCall(callId: callId.lowercased(), peerUserId: peerUserId, signerKey: signerKey, pin: pin,
+                           hold: hold, reason: decision.reason, withdrawIgnored: ignored, confirmed: false,
+                           warns: warns, withdrawHonoured: honoured, pq: pqCtx)
         store(call)
-        switch decision.pin {
+        switch pin {
         case .anomaly:
-            CapsBindLog.line("pin anomaly=1 hold=\(decision.hold ? 1 : 0) withdraw=\(withdrawIgnored ? 1 : 0)")
+            CapsBindLog.line("pin anomaly=1 hold=\(hold ? 1 : 0) withdraw=\(ignored ? 1 : 0)")
         case .ok:
             CapsBindLog.line("pin ok=1")
         case .unpinned:
             CapsBindLog.line("pin unpinned=1")
         }
+        if let ctx = pqCtx {
+            CapsBindLog.line("pq round=1 pin=\(pin == .unpinned ? "-" : pin.rawValue) hold=0 auth=\(ctx.auth) pq_sig=\(ctx.result) "
+                + "pqstate=\(record?.pqState ?? "-") withdraw=\(ignored ? "ignored" : (honoured ? "honoured" : "-"))")
+        }
         return call
     }
 
-    /// Exit 1: the user confirmed the safety code of a call whose round 1 was an anomaly. The record drops the tag. Returns true once.
+    /// Exit 1: the user confirmed the safety code of a call whose round 1 was an anomaly. The record drops the tag (or, when the
+    /// second-signature layer judged the round, takes the state the shared table gives). Returns true once.
     @discardableResult
     func confirmAnomaly(callId: String, book: CapsPinBook) -> Bool {
         let key = callId.lowercased()
@@ -128,11 +186,57 @@ final class CapsBindCallState: @unchecked Sendable {
             return false
         }
         call.confirmed = true
+        if call.pq != nil { call.pq?.sas = true }
         pinByCall[key] = call
         lock.unlock()
-        book.dropCapsBind(peerUserId: call.peerUserId, signerKey: call.signerKey)
+        if call.pq != nil {
+            // written now when the round's key confirmation already verified, else when it does
+            applyPqRecord(call, book: book)
+        } else {
+            book.dropCapsBind(peerUserId: call.peerUserId, signerKey: call.signerKey)
+        }
         CapsBindLog.line("pin exit=1 sas=1")
         return true
+    }
+
+    /// The round-1 key confirmation of the call verified. `ext` is whether both bundles carried `capsBindV1`. When the
+    /// second-signature layer judged the round the record is written here (once) and true is returned; otherwise false and the
+    /// caller keeps the call-settings rule.
+    @discardableResult
+    func round1KeyConfirmed(callId: String, ext: Bool, book: CapsPinBook) -> Bool {
+        let key = callId.lowercased()
+        lock.lock()
+        guard var call = pinByCall[key], call.pq != nil else {
+            lock.unlock()
+            return false
+        }
+        if call.pq?.kcmacVerified == true {
+            lock.unlock()
+            return true
+        }
+        call.pq?.kcmacVerified = true
+        call.pq?.ext = ext
+        pinByCall[key] = call
+        lock.unlock()
+        applyPqRecord(call, book: book)
+        return true
+    }
+
+    /// Writes the record the table gives for this call, from the judged input, once the key confirmation verified.
+    private func applyPqRecord(_ call: PinCall, book: CapsPinBook) {
+        guard let pq = call.pq, pq.kcmacVerified else { return }
+        var input = pq.input
+        input.ext = pq.ext
+        input.kcmacValid = true
+        input.sasConfirmed = pq.sas
+        let result = HybridSigPolicy.decideRound1(input)
+        book.putRecord(peerUserId: call.peerUserId, signerKey: call.signerKey, record: result.record)
+        CapsBindLog.line("pq round=1 pin=set pqstate=\(result.record?.pqState ?? "-") pq_sig=\(result.pqSig) "
+            + "withdraw=\(result.withdraw) auth=\(result.auth) hold=0")
+        // a safety code confirmed from a pinned invalid or other-key anomaly writes a second line
+        if result.pqSig2 == "anomaly_confirmed" {
+            CapsBindLog.line("pq round=1 pin=anomaly pq_sig=anomaly_confirmed hold=0")
+        }
     }
 
     /// The words of the protection line: `pin=`, `withdraw=`, `caps=` (empty means no word).
@@ -140,8 +244,13 @@ final class CapsBindCallState: @unchecked Sendable {
         let call = pinCall(callId: callId)
         let round = CapsBindCallRegistry.round1(callId: callId)
         let pin = call.map { CapsPinPolicy.lineWord(for: $0.pin) } ?? ""
-        let withdraw = (call?.withdrawIgnored ?? false) ? "ignored" : ""
+        let withdraw = (call?.withdrawIgnored ?? false) ? "ignored" : ((call?.withdrawHonoured ?? false) ? "honoured" : "")
         let caps = (round?.ownTag == true && round?.peerTag == true) ? CapsBind.tag : ""
         return (pin, withdraw, caps)
+    }
+
+    /// The record state shown on the protection line (`pqstate=`), as it was when round 1 was judged.
+    func pqStateWord(callId: String) -> String {
+        pinCall(callId: callId)?.pq?.input.record?.pqState ?? ""
     }
 }

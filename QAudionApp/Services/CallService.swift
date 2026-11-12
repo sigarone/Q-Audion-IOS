@@ -1972,6 +1972,14 @@ final class CallService: @unchecked Sendable {
         out.pin = capsWords.pin
         out.withdraw = capsWords.withdraw
         out.caps = capsWords.caps
+        // The second handshake signature: what round 1 proved (auth H only after a valid signature), the record state, the first
+        // signature result, and a rekey round that was refused.
+        let pqWords = integration.pqLineWords(callId: cid)
+        if !pqWords.auth.isEmpty { out.auth = pqWords.auth }
+        out.pqstate = pqWords.pqstate
+        out.pqSig = pqWords.pqSig
+        out.rekey = pqWords.rekey
+        out.round = pqWords.round
         out.outer = mode == .sealed ? "sealed" : "off"
         switch mode {
         case .offPeerInstall: out.reason = "peer_install"

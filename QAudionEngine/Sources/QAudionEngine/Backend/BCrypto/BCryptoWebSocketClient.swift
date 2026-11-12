@@ -1399,6 +1399,12 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         _ = trySend(type: type, data: data)
     }
 
+    /// The object serialized for every frame this client writes. One definition: the size check of a handshake bundle
+    /// (`OpaqueFrameRule`) measures exactly what `trySend` writes.
+    static func envelope(type: String, data: [String: Any], id: String) -> [String: Any] {
+        ["type": type, "data": data, "id": id]
+    }
+
     /// Same wire behaviour as `send(type:data:)`, but reports whether the frame
     /// was handed to a socket task. `false` means the frame was NOT accepted
     /// and the caller still owns it: the envelope could not be encoded, there
@@ -1414,11 +1420,7 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// their queue only on `true`.
     @discardableResult
     public func trySend(type: String, data: [String: Any]) -> Bool {
-        let message: [String: Any] = [
-            "type": type,
-            "data": data,
-            "id": UUID().uuidString
-        ]
+        let message = Self.envelope(type: type, data: data, id: UUID().uuidString)
         guard let jsonData = try? JSONSerialization.data(withJSONObject: message),
               let jsonString = String(data: jsonData, encoding: .utf8) else { return false }
         // W419 — log dispatch attempt + capture send errors. The previous

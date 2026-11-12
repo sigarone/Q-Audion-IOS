@@ -435,7 +435,7 @@ struct LiveInCallScreen: View {
                 // copy from the identity-change banner above).
                 handshakeSignatureInvalid: appState.callHandshakeSignatureInvalid,
                 // A capability the contact device was pinned with is missing: advisory warning that names it.
-                pinWarningReason: appState.callPinWarning?.reason,
+                pinWarningReasons: appState.callPinWarning?.reasons ?? [],
                 // P0-3 — see AppState.awaitingIdentityConfirmation's doc: unlike
                 // the advisory-only flag above, this ONE reflects a REAL media
                 // hold; confirming SAS below (handleConfirmSas) releases it.

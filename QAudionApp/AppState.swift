@@ -1390,9 +1390,67 @@ final class AppState: ObservableObject {
         // Read once, here on the main actor (the same snapshot the other call flags use); it is only ever stored, never acted on.
         let flagOn: Bool = FeatureFlags.bool(CapsPinPolicy.holdFlagName, false)
         integration.capsBindFlag = { flagOn ? true : nil }
-        integration.onCapsPinAnomaly = { [weak self] callId, _, reason in
+        integration.onCapsPinAnomaly = { [weak self] callId, _, reasons in
             Task { @MainActor [weak self] in
-                self?.handleCapsPinAnomaly(callId: callId, reason: reason)
+                self?.handleCapsPinAnomaly(callId: callId, reasons: reasons)
+            }
+        }
+        integration.pqSig = makePqSigRuntime()
+    }
+
+    /// The second handshake signature of a call: its signer, the peer key lookup and whether this device may advertise it.
+    ///
+    /// The tag is advertised and every bundle signed only for a device that already published its second key (acknowledged in this
+    /// run, or built before as the stored creation record shows). The server flag that stops NEW publications is deliberately not read
+    /// here: a device that already published keeps signing and advertising whatever the flag says, and a withdrawal is a compiled
+    /// constant of the build (`PqSigRelease`), never a flag.
+    private func makePqSigRuntime() -> PqSigRuntime {
+        let identityManager = sovereignIdentity
+        let uuidRaw: Data? = currentUserId.flatMap { try? KmsPreBootstrapCbor.uuidStringToRaw($0) }
+        let deviceId: String? = TokenVault.loadDeviceId() ?? UserDefaults.standard.string(forKey: "com.qaudion.auth.device_id")
+        let createdKey = Self.mldsaCreatedDefaultsKey
+        return PqSigRuntime(
+            isAvailable: {
+                guard let uuidRaw, let deviceId, let identity = identityManager.loadIdentity(),
+                      identity.signingPublic.count == 32 else { return false }
+                let binding = MldsaOwnPublicationState.binding(uuidRaw: uuidRaw, edPub: identity.signingPublic, deviceId: deviceId)
+                return PqSigAvailability.isAvailable(
+                    deviceIdPublishable: MldsaIdentityPublication.isPublishableDeviceId(deviceId),
+                    acknowledgedThisRun: MldsaOwnPublicationState.isAccepted(binding: binding),
+                    creationRecordStored: MldsaIdentityPublication.hasStoredCreation(
+                        stored: UserDefaults.standard.string(forKey: createdKey),
+                        uuidRaw: uuidRaw, edPub: identity.signingPublic, deviceId: deviceId))
+            },
+            makeSigner: {
+                guard let identity = identityManager.loadIdentity(), identity.signingPrivate.count == 32,
+                      identity.signingPublic.count == 32 else { return nil }
+                return HybridBundleSigner(edSeed: identity.signingPrivate, edPub: identity.signingPublic)
+            },
+            resolvePeerKey: { [weak self] peerUserId, senderDeviceId, signerEdPub, keyId in
+                await PeerMldsaResolve.resolve(
+                    peerUserId: peerUserId, deviceId: senderDeviceId, signerEdPub: signerEdPub, keyId: keyId,
+                    fetchDevice: { user, device in
+                        _ = await self?.fetchPeerDeviceBundleForCall(userId: user, deviceId: device)
+                    })
+            })
+    }
+
+    /// Where the creation record of this device's second key is kept (see `mldsaPublishFields`).
+    nonisolated private static let mldsaCreatedDefaultsKey = "com.qaudion.identity.mldsa_xc_created_v1"
+
+    /// Fetch one device's identity bundle of a peer so its second key (when the certificate verifies) is in `PeerMldsaStore`.
+    private func fetchPeerDeviceBundleForCall(userId: String, deviceId: String) async {
+        guard let kms = liveProvider?.kmsClient,
+              let bundle = await kms.fetchUserIdentityBundleV2(userId: userId, deviceId: deviceId) else { return }
+        _ = Self.verifyPeerBundleSelfSig(bundle)
+    }
+
+    /// Warm the peer's second key ahead of a call (a callee while ringing, a caller when it starts the call). Fire and forget.
+    private func prefetchPeerSecondKey(_ userId: String) {
+        guard !userId.isEmpty, let provider = liveProvider else { return }
+        Task {
+            if let bundle = await provider.kmsClient.fetchUserIdentityBundleV2(userId: userId) {
+                _ = Self.verifyPeerBundleSelfSig(bundle)
             }
         }
     }
@@ -1400,13 +1458,18 @@ final class AppState: ObservableObject {
     /// A pin anomaly of a call's round 1. Shown for the live call only: while another call's warning is up, or another call is the
     /// live one, this call's judgement stays in its own state and nothing on the screen changes.
     @MainActor
-    private func handleCapsPinAnomaly(callId: String, reason: CapsPinReason) {
+    private func handleCapsPinAnomaly(callId: String, reasons: [PqWarnReason]) {
         let cid = callId.lowercased()
-        guard !cid.isEmpty else { return }
+        guard !cid.isEmpty, !reasons.isEmpty else { return }
         if let shown = callPinWarning, shown.callId != cid { return }
         let active = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased()
         if let active, !active.isEmpty, active != cid { return }
-        callPinWarning = CapsPinWarning(callId: cid, reason: reason)
+        // a later reason of the same call (a rekey round refused) goes in front of the ones already shown
+        if let shown = callPinWarning, shown.callId == cid {
+            callPinWarning = shown.adding(reasons)
+        } else {
+            callPinWarning = CapsPinWarning(callId: cid, reasons: reasons)
+        }
         RTLog.info("call", "pin warning=1")
     }
 
@@ -14982,6 +15045,10 @@ final class AppState: ObservableObject {
                         )
                     }
                     Self.logMldsaPublish(outcome)
+                    if outcome == .accepted {
+                        MldsaOwnPublicationState.markAccepted(
+                            binding: MldsaOwnPublicationState.binding(uuidRaw: uuidRaw, edPub: signingPub, deviceId: deviceId))
+                    }
                 }
                 return
             } catch {
@@ -15007,7 +15074,7 @@ final class AppState: ObservableObject {
             RTLog.info("crypto", "mldsaPublish omitted=1 deviceid=0")
             return nil
         }
-        let storedKey = "com.qaudion.identity.mldsa_xc_created_v1"
+        let storedKey = mldsaCreatedDefaultsKey
         let nowMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
         let created = MldsaIdentityPublication.createdMsFor(
             stored: UserDefaults.standard.string(forKey: storedKey), uuidRaw: uuidRaw, edPub: edPub,
@@ -16697,10 +16764,20 @@ final class AppState: ObservableObject {
             if round == 1 {
                 promotionContexts[key]?.anchor.noteKcMacVerified(round: round)
                 reevaluatePromotedInvites(trigger: .kcmac)
-                // A verified round-1 MAC under the extension pins the tag for the contact device whose signature verified.
-                if state.capsBindExt, state.sigOk, let signerKey = state.signerIdentityKey, signerKey.count == 32 {
-                    CapsPinBook.shared.setCapsBind(peerUserId: state.peerId, signerKey: signerKey)
-                    RTLog.info("call", "pin set=1")
+                // A verified round-1 MAC: when the second signature judged the round, its policy writes the record of the contact device
+                // whose signature verified (including the tag of the call settings under the extension). Otherwise a verified
+                // round-1 MAC under the extension pins the tag for that device.
+                if state.sigOk, let signerKey = state.signerIdentityKey, signerKey.count == 32 {
+                    var owned = false
+                    for candidate in [callService.callIntegration, responderCallIntegration].compactMap({ $0 })
+                    where candidate.noteRound1KeyConfirmed(callId: key, ext: state.capsBindExt) {
+                        owned = true
+                        break
+                    }
+                    if !owned, state.capsBindExt {
+                        CapsPinBook.shared.setCapsBind(peerUserId: state.peerId, signerKey: signerKey)
+                        RTLog.info("call", "pin set=1")
+                    }
                 }
             }
             // Section 4a, F2: a verified round (signature and the peer's MAC) that proves the other phone holds a new
@@ -19808,6 +19885,7 @@ final class AppState: ObservableObject {
         }
         // D11: also warm the published per-device SET (trust-on-publish floor).
         prefetchServerPeerKeySet(userId)
+        prefetchPeerSecondKey(userId)
     }
 
     /// D11 UserDefaults key namespace for the server-published per-device SET

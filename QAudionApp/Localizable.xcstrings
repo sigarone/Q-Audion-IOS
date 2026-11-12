@@ -10225,6 +10225,132 @@
         }
       }
     },
+    "in_call.pin_warning.pq_absent": {
+      "extractionState": "manual",
+      "comment": "Call screen, safety-code warning: the contact's device did not send the second signature of the handshake it sent before.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Firma post-quantistica non offerta da questo dispositivo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-quantum signature not offered by this device."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este dispositivo no ofrece la firma poscuántica."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cet appareil ne propose pas la signature post-quantique."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieses Gerät bietet die Post-Quanten-Signatur nicht an."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este dispositivo não oferece a assinatura pós-quântica."
+          }
+        }
+      }
+    },
+    "in_call.pin_warning.pq_invalid": {
+      "extractionState": "manual",
+      "comment": "Call screen, safety-code warning: the second signature of the handshake did not verify.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La firma post-quantistica di questo dispositivo non è stata verificata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The post-quantum signature of this device did not verify."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La firma poscuántica de este dispositivo no se pudo verificar."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La signature post-quantique de cet appareil n'a pas pu être vérifiée."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Post-Quanten-Signatur dieses Geräts konnte nicht überprüft werden."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A assinatura pós-quântica deste dispositivo não foi verificada."
+          }
+        }
+      }
+    },
+    "in_call.pin_warning.pq_other_key": {
+      "extractionState": "manual",
+      "comment": "Call screen, safety-code warning: the contact's device presented another second key than the one it presented before.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo dispositivo ha presentato una chiave post-quantistica diversa."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device presented a different post-quantum key."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este dispositivo presentó una clave poscuántica diferente."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cet appareil a présenté une clé post-quantique différente."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieses Gerät hat einen anderen Post-Quanten-Schlüssel vorgelegt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este dispositivo apresentou uma chave pós-quântica diferente."
+          }
+        }
+      }
+    },
     "in_call.custody.identity": {
       "extractionState": "manual",
       "comment": "Call security sheet, custody of the voice card — label of the identity cell",
