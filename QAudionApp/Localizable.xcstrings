@@ -102150,6 +102150,216 @@
           }
         }
       }
+    },
+    "call.protection.double": {
+      "extractionState": "manual",
+      "comment": "Call security badge — protection of the call: two independent post-quantum layers and a verified post-quantum hybrid signature of the handshake.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Doppia protezione post-quantistica"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Double post-quantum protection"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Doble protección poscuántica"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Double protection post-quantique"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Doppelter Post-Quanten-Schutz"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dupla proteção pós-quântica"
+          }
+        }
+      }
+    },
+    "call.protection.encryption": {
+      "extractionState": "manual",
+      "comment": "Call security badge — protection of the call: post-quantum encryption.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cifratura post-quantistica"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-quantum encryption"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cifrado poscuántico"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiffrement post-quantique"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-Quanten-Verschlüsselung"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Criptografia pós-quântica"
+          }
+        }
+      }
+    },
+    "call.protection.reduced": {
+      "extractionState": "manual",
+      "comment": "Call security badge — protection of the call: post-quantum encryption with one layer on at least one path.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cifratura post-quantistica (ridotta)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-quantum encryption (reduced)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cifrado poscuántico (reducido)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiffrement post-quantique (réduit)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-Quanten-Verschlüsselung (reduziert)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Criptografia pós-quântica (reduzida)"
+          }
+        }
+      }
+    },
+    "call.protection.label": {
+      "extractionState": "manual",
+      "comment": "Call security detail panel — field label for the post-quantum protection of the call",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protezione"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protection"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protección"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protection"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schutz"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proteção"
+          }
+        }
+      }
+    },
+    "call.protection.claim": {
+      "extractionState": "manual",
+      "comment": "Call security badge details — the public claim, shown only for a double post-quantum call.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le chiamate tra app aggiornate sono protette da due livelli indipendenti di cifratura ibrida post-quantistica, e l'handshake della chiamata è firmato con una firma ibrida post-quantistica (ML-DSA-87 con Ed25519)."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Calls between up-to-date apps are protected by two independent layers of post-quantum hybrid encryption, and the call handshake is signed with a post-quantum hybrid signature (ML-DSA-87 with Ed25519)."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Las llamadas entre aplicaciones actualizadas están protegidas por dos capas independientes de cifrado híbrido poscuántico, y el establecimiento de la llamada está firmado con una firma híbrida poscuántica (ML-DSA-87 con Ed25519)."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les appels entre applications à jour sont protégés par deux couches indépendantes de chiffrement hybride post-quantique, et la négociation de l'appel est signée avec une signature hybride post-quantique (ML-DSA-87 avec Ed25519)."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anrufe zwischen aktuellen Apps sind durch zwei unabhängige Schichten hybrider Post-Quanten-Verschlüsselung geschützt, und der Verbindungsaufbau des Anrufs ist mit einer hybriden Post-Quanten-Signatur (ML-DSA-87 mit Ed25519) signiert."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "As chamadas entre aplicativos atualizados são protegidas por duas camadas independentes de criptografia híbrida pós-quântica, e o handshake da chamada é assinado com uma assinatura híbrida pós-quântica (ML-DSA-87 com Ed25519)."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
