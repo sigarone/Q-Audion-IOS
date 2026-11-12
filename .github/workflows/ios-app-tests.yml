@@ -34,6 +34,14 @@
 # reads the built app and requires the scene configuration, the framework and the entitlement, and
 # scripts/ci/check_carplay_gating.py requires the same of the sources, the specs and the entitlements files.
 #
+# Which variant jobs run (2026-11): on a pull request only those whose files changed, decided by the
+# `changes` job through scripts/ci/ios-variant-changes.sh (the rules and the reasons are in the header
+# of that script, which is always taken from the BASE of the pull request, never from the pull request itself).
+# A change to the build configuration, or the label `full-ci` (read when the run starts: push, or re-run, after
+# adding it), runs all four. On push to
+# main and on a manual dispatch all four always run: a tag of ios-testflight.yml is released only when they
+# passed on the tagged commit (job `gate` there).
+#
 # Runs on public-repo runners (free); no signing secrets, no network to any
 # real backend: the tests are pure.
 
@@ -94,11 +102,85 @@ permissions:
 
 # A newer push to a pull request replaces the run in progress; a run on main is
 # never cancelled, so the step that writes the cache on main always completes.
+# A push to main has a group of its own per commit, so a newer merge never replaces the run still pending for
+# an older commit (the TestFlight gate needs the run of the exact commit it ships).
 concurrency:
-  group: ios-app-tests-${{ github.ref }}
+  group: ios-app-tests-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Decides, for a pull request, which variant builds are needed. Push, manual dispatch and the label
+  # `full-ci` run all of them. A failure of this job (file list unreadable or truncated, checkout error)
+  # also runs all of them: the variant jobs treat "failure" as "needed", never as "skip".
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      share: ${{ steps.decide.outputs.share }}
+      vpn: ${{ steps.decide.outputs.vpn }}
+      earbud: ${{ steps.decide.outputs.earbud }}
+      release: ${{ steps.decide.outputs.release }}
+    steps:
+      - name: Checkout (pull request only)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/checkout@v6
+
+      - name: Decide which variant builds are needed
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -u
+          all() {
+            printf 'share=true\nvpn=true\nearbud=true\nrelease=true\n' >> "$GITHUB_OUTPUT"
+            echo "$1: all variants run."
+            exit 0
+          }
+          [ "$EVENT" = "pull_request" ] || all "Event ${EVENT}"
+          # The labels now (not those of the event payload), so a re-run after adding the label sees it.
+          if ! LABELS=$(gh api "repos/${REPO}/issues/${PR}/labels" --paginate --jq '.[].name'); then
+            echo "::warning::could not read the labels of the pull request: running all variants"
+            all "Labels unavailable"
+          fi
+          if printf '%s\n' "$LABELS" | grep -qx 'full-ci'; then
+            all "Label full-ci"
+          fi
+          if ! FILES=$(gh api "repos/${REPO}/pulls/${PR}/files?per_page=100" --paginate --jq '.[] | .filename, (.previous_filename // empty)'); then
+            echo "::warning::could not list the files of the pull request: running all variants"
+            all "File list unavailable"
+          fi
+          COUNT=$(printf '%s\n' "$FILES" | grep -c . || true)
+          # The API lists at most 3000 files; an empty or full list is not trusted.
+          if [ "$COUNT" -eq 0 ] || [ "$COUNT" -ge 3000 ]; then
+            echo "::warning::file list of ${COUNT} entries is empty or possibly truncated: running all variants"
+            all "File list untrusted"
+          fi
+          # The base side: the decision script is the one on the base branch, never the pull request's own
+          # (a pull request that changes it must not decide with its own version), and the base content is
+          # what a deleted file or a removed flag is read from. Neither available: all variants.
+          if ! git fetch --no-tags --depth=1 origin "$BASE_SHA" >/dev/null 2>&1; then
+            echo "::warning::base commit not fetched: running all variants"
+            all "Base unavailable"
+          fi
+          SCRIPT="${RUNNER_TEMP}/ios-variant-changes.base.sh"
+          if ! git show "${BASE_SHA}:scripts/ci/ios-variant-changes.sh" > "$SCRIPT" 2>/dev/null; then
+            echo "::warning::scripts/ci/ios-variant-changes.sh is not on the base branch: running all variants"
+            all "Script not on base"
+          fi
+          if ! OUT=$(printf '%s\n' "$FILES" | BASE_REV="$BASE_SHA" sh "$SCRIPT"); then
+            echo "::warning::decision script failed: running all variants"
+            all "Script failed"
+          fi
+          printf '%s\n' "$OUT" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$OUT"
+
   app-build-and-tests:
     runs-on: xcode-27
     timeout-minutes: 60
@@ -443,7 +525,8 @@ jobs:
   # The build with the share extension (QAudionApp/project-share.yml: QAUDION_SHARE, QAudionShare extension), compiled
   # for the simulator without signing so the extension does not rot while the default build leaves it out.
   share-variant-build:
-    if: github.event_name != 'push'
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result == 'failure' || needs.changes.outputs.share == 'true') }}
     runs-on: xcode-27
     timeout-minutes: 60
 
@@ -505,9 +588,8 @@ jobs:
           echo "share extension embedded"
 
   vpn-variant-build:
-    # Not on push to main: that run exists to write the SPM cache (the other
-    # job does it) and this variant was already built on the pull request.
-    if: github.event_name != 'push'
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result == 'failure' || needs.changes.outputs.vpn == 'true') }}
     runs-on: xcode-27
     timeout-minutes: 60
 
@@ -620,9 +702,8 @@ jobs:
   # (what ios-testflight.yml dispatched with earbud=true produces) and together with
   # QAUDION_DEV_TOOLS, which adds the earbud diagnostics screen that drives the same code.
   earbud-variant-build:
-    # Not on push to main: that run exists to write the SPM cache (the first job does it) and
-    # this variant was already built on the pull request.
-    if: github.event_name != 'push'
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result == 'failure' || needs.changes.outputs.earbud == 'true') }}
     runs-on: xcode-27
     timeout-minutes: 60
 
@@ -763,7 +844,8 @@ jobs:
   # (optimised, whole-module): it reports warnings that a Debug build does not. Device
   # destination, unsigned. Held to the same counted baseline as the Debug build.
   release-config-build:
-    if: github.event_name != 'push'
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result == 'failure' || needs.changes.outputs.release == 'true') }}
     runs-on: xcode-27
     timeout-minutes: 60
 
