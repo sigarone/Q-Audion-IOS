@@ -32,7 +32,7 @@ public struct PqSigRuntime: Sendable {
 }
 
 /// The per-call state of the second handshake signature: what this side did with it in round 1 (a rekey bundle of the call does
-/// the same), the anchor of the call (what round 1 proved about the peer) and the last rekey round this side refused. Bounded, and
+/// the same), the anchor of the call (what round 1 proved about the peer) and the last rekey round this side refused. Bounded without evicting, and
 /// cleared with the call. The pin records live in `CapsPinBook` and are never touched here.
 final class PqCallLayer: @unchecked Sendable {
 
@@ -58,88 +58,102 @@ final class PqCallLayer: @unchecked Sendable {
         var reason: PqWarnReason
     }
 
-    static let ownCapacity = 8
-    static let anchorCapacity = 16
-    static let refusalCapacity = 8
+    /// The most calls each table keeps. A call's entry is never evicted to make room for another call's: a flood of bundles of
+    /// other call ids (each can set state) must not be able to remove what the live call needs, so at the bound a NEW entry is
+    /// dropped instead (`overflowed` then says so) and a missing anchor is read as a refusal. Everything is cleared with the call.
+    static let stateCapacity = 1024
+
+    private struct Table<V> {
+        var items: [String: V] = [:]
+        var overflowed = false
+
+        mutating func set(_ key: String, _ value: V) {
+            if items[key] == nil && items.count >= PqCallLayer.stateCapacity {
+                overflowed = true
+                return
+            }
+            items[key] = value
+        }
+    }
 
     private let lock = NSLock()
-    private var own: [String: OwnMode] = [:]
-    private var ownOrder: [String] = []
-    private var anchors: [String: Anchor] = [:]
-    private var anchorOrder: [String] = []
-    private var refusals: [String: Refusal] = [:]
-    private var refusalOrder: [String] = []
+    private var own = Table<OwnMode>()
+    private var anchors = Table<Anchor>()
+    private var roundKeys = Table<Pqsig.MlDsaPublicKey>()
+    private var refusals = Table<Refusal>()
 
     // MARK: - State
 
     func ownMode(callId: String) -> OwnMode? {
         lock.lock()
         defer { lock.unlock() }
-        return own[callId.lowercased()]
+        return own.items[callId.lowercased()]
     }
 
-    /// One slot per call; another call's bundle never overwrites the live call's sender rule.
+    /// One slot per call; another call's bundle never overwrites or evicts the live call's sender rule.
     func setOwn(callId: String, plan: PqSigPlan, sent: Bool) {
-        let key = callId.lowercased()
         lock.lock()
-        if own[key] == nil { ownOrder.append(key) }
-        own[key] = OwnMode(plan: plan, sent: sent)
-        while ownOrder.count > Self.ownCapacity {
-            own.removeValue(forKey: ownOrder.removeFirst())
-        }
+        own.set(callId.lowercased(), OwnMode(plan: plan, sent: sent))
         lock.unlock()
     }
 
     func anchor(callId: String) -> Anchor? {
         lock.lock()
         defer { lock.unlock() }
-        return anchors[callId.lowercased()]
+        return anchors.items[callId.lowercased()]
+    }
+
+    /// True once an anchor had to be dropped for lack of room: a call whose anchor is missing then cannot be told from one that lost it.
+    var anchorsOverflowed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return anchors.overflowed
     }
 
     func setAnchor(callId: String, _ anchor: Anchor) {
-        let key = callId.lowercased()
         lock.lock()
-        if anchors[key] == nil { anchorOrder.append(key) }
-        anchors[key] = anchor
-        while anchorOrder.count > Self.anchorCapacity {
-            anchors.removeValue(forKey: anchorOrder.removeFirst())
-        }
+        anchors.set(callId.lowercased(), anchor)
         lock.unlock()
     }
 
     func clearAnchor(callId: String) {
-        let key = callId.lowercased()
         lock.lock()
-        anchors.removeValue(forKey: key)
-        anchorOrder.removeAll { $0 == key }
+        anchors.items.removeValue(forKey: callId.lowercased())
+        lock.unlock()
+    }
+
+    /// The second public key round 1 of the call verified under: rekey rounds are checked against it, not against the evictable
+    /// store of peer keys.
+    func round1Key(callId: String) -> Pqsig.MlDsaPublicKey? {
+        lock.lock()
+        defer { lock.unlock() }
+        return roundKeys.items[callId.lowercased()]
+    }
+
+    func setRound1Key(callId: String, _ key: Pqsig.MlDsaPublicKey) {
+        lock.lock()
+        roundKeys.set(callId.lowercased(), key)
         lock.unlock()
     }
 
     func refusal(callId: String) -> Refusal? {
         lock.lock()
         defer { lock.unlock() }
-        return refusals[callId.lowercased()]
+        return refusals.items[callId.lowercased()]
     }
 
     func noteRefusal(callId: String, round: Int, reason: PqWarnReason) {
-        let key = callId.lowercased()
         lock.lock()
-        if refusals[key] == nil { refusalOrder.append(key) }
-        refusals[key] = Refusal(round: round, reason: reason)
-        while refusalOrder.count > Self.refusalCapacity {
-            refusals.removeValue(forKey: refusalOrder.removeFirst())
-        }
+        refusals.set(callId.lowercased(), Refusal(round: round, reason: reason))
         lock.unlock()
     }
 
     func reset() {
         lock.lock()
-        own.removeAll()
-        ownOrder.removeAll()
-        anchors.removeAll()
-        anchorOrder.removeAll()
-        refusals.removeAll()
-        refusalOrder.removeAll()
+        own = Table<OwnMode>()
+        anchors = Table<Anchor>()
+        roundKeys = Table<Pqsig.MlDsaPublicKey>()
+        refusals = Table<Refusal>()
         lock.unlock()
     }
 

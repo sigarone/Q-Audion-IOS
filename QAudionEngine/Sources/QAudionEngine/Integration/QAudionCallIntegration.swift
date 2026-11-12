@@ -3865,17 +3865,25 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             return HybridBundleVerifier.Outcome(result: .unavailable, keyId: nil)
         }
         let resolver = runtime.resolvePeerKey
+        let round = max(1, bundle.rekeyRound ?? 1)
+        // A rekey round is checked under the key round 1 of this call verified under, not under a fresh lookup of the evictable
+        // store of peer keys (which a slow fetch or a flush could leave empty).
+        let anchoredKey: Pqsig.MlDsaPublicKey? = round > 1 ? pqLayer.round1Key(callId: callId) : nil
+        var resolvedKey: Pqsig.MlDsaPublicKey?
         let outcome = await HybridBundleVerifier.verify(
             kind: isOffer ? Pqsig.kindOffer : Pqsig.kindAccept, transcript: transcript, signerEdPub: signerKey,
             dtlsFpSelf: peerOwnFp, dtlsFpPeer: isOffer ? nil : answeredFp, peer: peerCaps,
             mldsaKeyIdB64: bundle.mldsaKeyId, sigHybridB64: bundle.sigHybrid,
             resolveKey: { keyId in
+                if let anchoredKey, anchoredKey.keyId() == keyId { return anchoredKey }
                 let waited = await BoundedWait.run(seconds: Self.pqResolveTimeoutSeconds) {
                     await resolver(peerId, deviceId, signerKey, keyId)
                 }
                 CapsBindLog.line("pq resolve ms=\(waited.elapsedMs) limit=2000 found=\(waited.value == nil ? 0 : 1)")
+                resolvedKey = waited.value
                 return waited.value
             })
+        if round == 1, outcome.result == .valid, let resolvedKey { pqLayer.setRound1Key(callId: callId, resolvedKey) }
         CapsBindLog.line("pq verify kind=\(isOffer ? "offer" : "accept") pq_sig=\(outcome.result.rawValue)")
         return outcome
     }
@@ -3885,18 +3893,30 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `pq_sig=<r> round=<n> pin=anomaly hold=0 rekey=refused` and shows the warning for the rest of the call; the pin record is
     /// not read or changed (the anchor comes from this side's round-1 result alone).
     func pqRekeyRefuses(callId: String, peerId: String, pq: HybridBundleVerifier.Outcome?, round: Int, isOfferer: Bool) -> Bool {
-        guard pqSig != nil, let anchor = pqLayer.anchor(callId: callId) else { return false }
-        let decision = HybridSigPolicy.decideRekey(HybridSigPolicy.RekeyInput(
-            auth1: anchor.auth, anchorKeyId: anchor.keyId, isOfferer: isOfferer, round: round,
-            sigHybrid: pq?.result ?? .unavailable, sigKeyId: pq?.keyId, armed: false))
-        guard decision.action == .refuse else {
-            // an auth=C call logs a valid signature of an accepted rekey round (it does not raise the call to H)
-            if !decision.log.isEmpty { CapsBindLog.line(decision.log) }
-            return false
+        guard pqSig != nil else { return false }
+        let reason: PqWarnReason
+        let logLine: String
+        if let anchor = pqLayer.anchor(callId: callId) {
+            let decision = HybridSigPolicy.decideRekey(HybridSigPolicy.RekeyInput(
+                auth1: anchor.auth, anchorKeyId: anchor.keyId, isOfferer: isOfferer, round: round,
+                sigHybrid: pq?.result ?? .unavailable, sigKeyId: pq?.keyId, armed: false))
+            guard decision.action == .refuse else {
+                // an auth=C call logs a valid signature of an accepted rekey round (it does not raise the call to H)
+                if !decision.log.isEmpty { CapsBindLog.line(decision.log) }
+                return false
+            }
+            reason = decision.reason ?? .absent
+            logLine = decision.log
+        } else {
+            // No anchor. When round 1 of this call was judged by the second-signature layer (its pin state says so), or an anchor
+            // had to be dropped for lack of room, the round cannot be checked: it is refused (fail closed), never used unsigned.
+            guard capsBindState.pinCall(callId: callId)?.pq != nil || pqLayer.anchorsOverflowed else { return false }
+            let result = pq?.result ?? .unavailable
+            reason = result == .invalid ? .invalid : .absent
+            logLine = "pq_sig=\(result.rawValue) round=\(round) pin=anomaly hold=0 rekey=refused"
         }
-        let reason = decision.reason ?? .absent
         pqLayer.noteRefusal(callId: callId, round: round, reason: reason)
-        CapsBindLog.line(decision.log)
+        CapsBindLog.line(logLine)
         onCapsPinAnomaly?(callId, peerId, [reason])
         return true
     }

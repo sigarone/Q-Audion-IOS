@@ -921,26 +921,84 @@ final class HybridSigWiringTests: XCTestCase {
 
     // MARK: - Bounded state and the peer key wait
 
-    func testThePerCallStateIsBoundedAndClearedWithTheCall() {
+    func testThePerCallStateIsBoundedWithoutEvictingAndClearedWithTheCall() {
         let layer = PqCallLayer()
-        for n in 0..<40 {
+        let total = PqCallLayer.stateCapacity + 10
+        for n in 0..<total {
             layer.setOwn(callId: callId(n), plan: .advertise, sent: true)
             layer.setAnchor(callId: callId(n), PqCallLayer.Anchor(auth: "H", keyId: "aa", result: "valid"))
             layer.noteRefusal(callId: callId(n), round: 3, reason: .absent)
         }
-        XCTAssertNil(layer.ownMode(callId: callId(0)))
-        XCTAssertNotNil(layer.ownMode(callId: callId(39)))
-        XCTAssertNil(layer.anchor(callId: callId(0)))
-        XCTAssertNotNil(layer.anchor(callId: callId(39)))
-        XCTAssertNil(layer.refusal(callId: callId(0)))
-        XCTAssertNotNil(layer.refusal(callId: callId(39)))
-        var live = 0
-        for n in 0..<40 where layer.ownMode(callId: callId(n)) != nil { live += 1 }
-        XCTAssertEqual(live, PqCallLayer.ownCapacity)
+        // the first calls keep their state; the ones beyond the bound are the ones that are not kept
+        XCTAssertNotNil(layer.ownMode(callId: callId(0)))
+        XCTAssertNotNil(layer.anchor(callId: callId(0)))
+        XCTAssertNotNil(layer.refusal(callId: callId(0)))
+        XCTAssertNil(layer.ownMode(callId: callId(total - 1)))
+        XCTAssertNil(layer.anchor(callId: callId(total - 1)))
+        XCTAssertTrue(layer.anchorsOverflowed)
+        var kept = 0
+        for n in 0..<total where layer.anchor(callId: callId(n)) != nil { kept += 1 }
+        XCTAssertEqual(kept, PqCallLayer.stateCapacity)
         layer.reset()
-        XCTAssertNil(layer.ownMode(callId: callId(39)))
-        XCTAssertNil(layer.anchor(callId: callId(39)))
-        XCTAssertNil(layer.refusal(callId: callId(39)))
+        XCTAssertNil(layer.ownMode(callId: callId(0)))
+        XCTAssertNil(layer.anchor(callId: callId(0)))
+        XCTAssertNil(layer.refusal(callId: callId(0)))
+        XCTAssertFalse(layer.anchorsOverflowed)
+    }
+
+    /// Other calls' state (16 fresh call ids, the reviewer's reproduction) never removes the live call's anchor, and a rekey round
+    /// without the second signature is still refused.
+    func testDecoyCallsNeverEvictTheLiveCallsAnchorAndTheUnsignedRekeyIsRefused() {
+        let (receiver, _) = makeReceiver()
+        receiver.pqLayer.setAnchor(callId: "live", PqCallLayer.Anchor(auth: "H", keyId: "aa", result: "valid"))
+        for n in 0..<16 {
+            receiver.pqLayer.setAnchor(callId: "decoy\(n)", PqCallLayer.Anchor(auth: "C", keyId: nil, result: "absent"))
+        }
+        XCTAssertEqual(receiver.pqLayer.anchor(callId: "live")?.auth, "H")
+        let refuses = receiver.pqRekeyRefuses(
+            callId: "live", peerId: peerUser, pq: HybridBundleVerifier.Outcome(result: .absent, keyId: nil), round: 3, isOfferer: false)
+        XCTAssertTrue(refuses)
+    }
+
+    /// The sender's rule of the live call (`own`) survives other calls' bundles: a rekey bundle is still signed or not sent.
+    func testDecoyCallsNeverEvictTheLiveCallsOwnState() {
+        let layer = PqCallLayer()
+        layer.setOwn(callId: "live", plan: .advertise, sent: true)
+        for n in 0..<16 { layer.setOwn(callId: "decoy\(n)", plan: .off, sent: false) }
+        XCTAssertEqual(layer.ownMode(callId: "live"), PqCallLayer.OwnMode(plan: .advertise, sent: true))
+    }
+
+    /// A call whose round 1 was judged and whose anchor is gone (a full table) is refused, not accepted unsigned.
+    func testAMissingAnchorOfAJudgedCallRefusesTheRekeyRound() async throws {
+        try installPeerKey()
+        let sender = Sender(seed: edSeed)
+        let (receiver, _) = makeReceiver()
+        let call = callId(1)
+        try await authenticatedCall(receiver, sender, call: call)
+        receiver.pqLayer.clearAnchor(callId: call)
+        let honest = try signedOffer(sender, call: call, round: 3)
+        let refused = try await rekeyOffer(receiver, honest, round: 3, call: call)
+        XCTAssertTrue(refused)
+        XCTAssertEqual(receiver.pqLayer.refusal(callId: call)?.round, 3)
+        // a call this layer never judged is not touched
+        XCTAssertFalse(receiver.pqRekeyRefuses(callId: callId(9), peerId: peerUser, pq: nil, round: 3, isOfferer: false))
+    }
+
+    /// The rekey round is verified under the key round 1 verified under, even when the store of peer keys lost it.
+    func testARekeyRoundVerifiesWithTheRound1KeyWhenThePeerKeyStoreLostIt() async throws {
+        try installPeerKey()
+        let sender = Sender(seed: edSeed)
+        let (receiver, _) = makeReceiver()
+        let call = callId(1)
+        try await authenticatedCall(receiver, sender, call: call)
+        PeerMldsaStore.clear()
+        let honestOffer = try signedOffer(sender, call: call, round: 3)
+        let offerRefused = try await rekeyOffer(receiver, honestOffer, round: 3, call: call)
+        XCTAssertFalse(offerRefused)
+        let honestAccept = try signedAccept(sender, call: call, round: 3)
+        let acceptRefused = try await rekeyAccept(receiver, honestAccept, round: 3, call: call)
+        XCTAssertFalse(acceptRefused)
+        XCTAssertNil(receiver.pqLayer.refusal(callId: call))
     }
 
     func testThePeerKeyWaitIsBoundedToTwoSecondsAndTheTimeIsLogged() async throws {

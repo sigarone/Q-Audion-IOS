@@ -310,8 +310,8 @@ public enum PqSigAvailability {
     }
 
     /// The plan of this build. `withdrawnByRelease` is the compiled constant; the parameter exists only so a test can prove what it does.
-    public static func plan(capsBindEnabled: Bool, available: Bool,
-                            withdrawnByRelease: Bool = PqSigRelease.withdrawnByRelease) -> PqSigPlan {
+    static func plan(capsBindEnabled: Bool, available: Bool,
+                     withdrawnByRelease: Bool = PqSigRelease.withdrawnByRelease) -> PqSigPlan {
         guard capsBindEnabled else { return .off }
         if withdrawnByRelease { return available ? .withdraw : .off }
         return available ? .advertise : .off
