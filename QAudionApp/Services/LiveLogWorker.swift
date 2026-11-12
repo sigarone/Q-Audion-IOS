@@ -389,9 +389,9 @@ actor LiveLogWorker {
     private func collect(expected: Int) async {
         let since: Int64 = collectedSeq
         let maxTake: Int = backlog.maxEntries
-        let batch: LiveLogRawBatch = await MainActor.run {
-            RuntimeLogSink.shared.rawEntriesSince(seq: since, maxCount: maxTake)
-        }
+        // Straight from the lock-protected ring, no hop to the main actor: the upload does not
+        // depend on the main thread.
+        let batch: LiveLogRawBatch = RuntimeLogSink.rawEntriesSince(seq: since, maxCount: maxTake)
         guard runEpoch == expected else { return }
         backlog.noteDropped(batch.skippedOlder)
         var highest: Int64 = since

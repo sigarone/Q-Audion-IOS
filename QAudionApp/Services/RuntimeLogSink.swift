@@ -50,27 +50,20 @@ public final class RuntimeLogSink: ObservableObject {
     /// 2026-10-02: 5000 -> 12000. A group call logs ~1700 lines a minute (report
     /// 93005f73: 3489 lines in its 2-minute tail), so 5000 could not hold the 4-minute
     /// window a group-call bug report now carries (`AppState.bugReportLogWindowMinutes`).
-    private let maxEntries = 12000
-    private let lock = NSLock()
-    private var entries: [Entry] = []
-
-    /// W417 — global monotonic counter incremented for every recorded
-    /// entry. Independent from `entries.count` (FIFO eviction).
-    private var nextSeq: Int64 = 1
+    /// The ring itself lives outside the main actor (`runtimeLogRing`, lock-protected): the log
+    /// shipper reads it and `RTLog` appends to it from any thread, so neither depends on the
+    /// main thread. W417 — each entry gets a
+    /// monotonic sequence number at insert time, independent of the FIFO eviction.
+    private let ring = runtimeLogRing
 
     /// Bumped every time `record` adds a new line so SwiftUI views
     /// observing this sink re-render. Cheap monotonic counter.
     @Published public private(set) var entryCount: Int = 0
 
-    /// Mirror to OSLog so Console.app on a connected Mac (when
-    /// available) sees the same lines. Subsystem matches the bundle
-    /// id so a developer can filter on `process == QAudionApp`.
-    private let osLogger = Logger(subsystem: "com.qaudion.app", category: "runtime")
-
     private init() {}
 
-    /// `at` is when the line was produced. A line written off the main thread reaches the ring after a hop to
-    /// the main actor; stamping it there gave every line queued behind a stalled main thread the same second.
+    /// `at` is when the line was produced. A line written off the main thread no longer comes through here:
+    /// `RTLog` writes it to the ring on its own thread (`recordFromAnyThread`).
     public func record(level: Level, tag: String, _ message: String, at: Date = Date()) {
         record(level: level, tag: tag, message, origin: .app, at: at)
     }
@@ -104,25 +97,30 @@ public final class RuntimeLogSink: ObservableObject {
         // ever see `safeMessage`. `LogRedactor` applies the same function again at every egress
         // (defence in depth). Cost on this (main) thread: one linear pass over the bytes of the
         // line, no allocation for a clean line (see `KeyMaterialScrubber`).
-        let safeMessage: String = LogRedactor.scrubKeyMaterial(message)
-        // W-CRASHCRUMBS (this task) — every RTLog.* call AND every tee'd
-        // print(...) line (Engine code included) passes through exactly
-        // this function, so this is the ONE place that feeds the crash
-        // breadcrumb ring, already-scrubbed, with no new call sites on any
-        // hot media path. See `CrashBreadcrumbs`'s own header for why this
-        // is safe to read from a POSIX signal handler.
-        CrashBreadcrumbs.add(level.rawValue, tag, safeMessage)
-        lock.lock()
-        let seq = nextSeq
-        nextSeq &+= 1
-        let entry = Entry(seq: seq, timestamp: at, level: level, tag: tag, message: safeMessage)
-        entries.append(entry)
-        if entries.count > maxEntries {
-            // Drop the oldest 10% in one shot so we don't pay the
-            // O(n) array shift on every single append past the cap.
-            entries.removeFirst(maxEntries / 10)
+        let safeMessage: String = Self.appendToRing(
+            level: level, tag: tag, message, at: at, mirrorToOSLog: Self.mirrorsToOSLog(origin))
+        // Bump observable count on main (we're already @MainActor).
+        entryCount &+= 1
+        // W559 — feed errors into the auto-detection window.
+        if level == .error {
+            BugReporter.shared.onError(tag: tag, message: safeMessage)
         }
-        lock.unlock()
+    }
+
+    /// The part of recording a line that needs no main thread: key-material scrub, breadcrumb,
+    /// the ring, the OSLog mirror. Returns the scrubbed message.
+    nonisolated private static func appendToRing(
+        level: Level, tag: String, _ message: String, at: Date, mirrorToOSLog: Bool
+    ) -> String {
+        // W-KEYSCRUB (2026-09-21) -- THE choke point for key material (see `record`).
+        let safeMessage: String = LogRedactor.scrubKeyMaterial(message)
+        // W-CRASHCRUMBS — every RTLog.* call AND every tee'd print(...) line passes through here,
+        // so this is the ONE place that feeds the crash breadcrumb ring, already-scrubbed. See
+        // `CrashBreadcrumbs`'s own header for why this is safe to read from a POSIX signal handler.
+        CrashBreadcrumbs.add(level.rawValue, tag, safeMessage)
+        runtimeLogRing.append { seq in
+            Entry(seq: seq, timestamp: at, level: level, tag: tag, message: safeMessage)
+        }
         // Mirror to OSLog for Console.app + retain the formatted
         // form so a future os_log_store snapshot picks it up too.
         // SECURITY M-20 — `.private` so Apple sysdiagnose / device
@@ -131,17 +129,32 @@ public final class RuntimeLogSink: ObservableObject {
         // still sees the full text. Prevents inadvertent leak of
         // app-authored diagnostics through OS-level log collection.
         // A line the tee read from stdout/stderr is NOT mirrored (`Origin.stdoutTee`): see `mirrorsToOSLog`.
-        if Self.mirrorsToOSLog(origin) {
+        if mirrorToOSLog {
             switch level {
-            case .debug: osLogger.debug("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
-            case .info:  osLogger.info("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
-            case .warn:  osLogger.warning("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
-            case .error: osLogger.error("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
+            case .debug: runtimeOSLogger.debug("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
+            case .info:  runtimeOSLogger.info("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
+            case .warn:  runtimeOSLogger.warning("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
+            case .error: runtimeOSLogger.error("[\(tag, privacy: .private)] \(safeMessage, privacy: .private)")
             }
         }
-        // Bump observable count on main (we're already @MainActor).
+        return safeMessage
+    }
+
+    /// `RTLog` from a thread that is not the main thread: the line reaches the ring and the OSLog
+    /// mirror at once, on the calling thread. Only the observable counter (and the error hook of
+    /// the bug reporter) hop to the main actor afterwards, so the log does not wait for it.
+    nonisolated static func recordFromAnyThread(
+        level: Level, tag: String, _ message: String, at: Date, mirrorToOSLog: Bool = true
+    ) {
+        let safeMessage: String = appendToRing(level: level, tag: tag, message, at: at, mirrorToOSLog: mirrorToOSLog)
+        Task { @MainActor in
+            RuntimeLogSink.shared.noteRecordedElsewhere(level: level, tag: tag, safeMessage)
+        }
+    }
+
+    /// Main actor: the UI-side bookkeeping of a line already written to the ring.
+    private func noteRecordedElsewhere(level: Level, tag: String, _ safeMessage: String) {
         entryCount &+= 1
-        // W559 — feed errors into the auto-detection window.
         if level == .error {
             BugReporter.shared.onError(tag: tag, message: safeMessage)
         }
@@ -161,9 +174,7 @@ public final class RuntimeLogSink: ObservableObject {
     /// scrubbed, and the three egress paths must not differ in what they
     /// strip.
     public func snapshot() -> String {
-        lock.lock()
-        let copy = entries
-        lock.unlock()
+        let copy = ring.snapshot()
         var out = String()
         out.reserveCapacity(copy.count * 200)
         for e in copy {
@@ -195,9 +206,7 @@ public final class RuntimeLogSink: ObservableObject {
     /// and a filter, nothing else, so it is cheap to run on the main actor. The caller
     /// redacts (`BugReportLogFormatter.format`) wherever it is not blocking the UI.
     func recentRawEntries(minutes: Double) -> [LiveLogRawEntry] {
-        lock.lock()
-        let copy = entries
-        lock.unlock()
+        let copy = ring.snapshot()
         let cutoff = Date().addingTimeInterval(-minutes * 60.0)
         var out: [LiveLogRawEntry] = []
         out.reserveCapacity(copy.count)
@@ -222,43 +231,30 @@ public final class RuntimeLogSink: ObservableObject {
     /// `skippedOlder` counts entries newer than `since` that were left out because more than
     /// `maxCount` were pending (the newest `maxCount` are returned, oldest-first): the worker
     /// records them as dropped instead of preparing lines it has no room for.
-    func rawEntriesSince(seq since: Int64, maxCount: Int) -> LiveLogRawBatch {
-        lock.lock()
-        defer { lock.unlock() }
-        var firstNew = entries.count
-        while firstNew > 0 && entries[firstNew - 1].seq > since {
-            firstNew -= 1
+    ///
+    /// Not main-actor isolated: the ring is lock-protected storage outside the actor, so the worker
+    /// calls this on its own thread, with no hop to the main thread.
+    nonisolated static func rawEntriesSince(seq since: Int64, maxCount: Int) -> LiveLogRawBatch {
+        let batch = runtimeLogRing.entriesSince(seq: since, maxCount: maxCount) { e in
+            LiveLogRawEntry(seq: e.seq,
+                            timestamp: e.timestamp,
+                            level: e.level.rawValue,
+                            tag: e.tag,
+                            message: e.message)
         }
-        let available = entries.count - firstNew
-        let take = min(available, max(maxCount, 0))
-        var out: [LiveLogRawEntry] = []
-        out.reserveCapacity(take)
-        var index = entries.count - take
-        while index < entries.count {
-            let e = entries[index]
-            out.append(LiveLogRawEntry(seq: e.seq,
-                                       timestamp: e.timestamp,
-                                       level: e.level.rawValue,
-                                       tag: e.tag,
-                                       message: e.message))
-            index += 1
-        }
-        return LiveLogRawBatch(entries: out, skippedOlder: available - take)
+        return LiveLogRawBatch(entries: batch.entries, skippedOlder: batch.skippedOlder)
     }
 
     /// Drop everything. Used by Settings → "Pulisci log".
     public func clear() {
-        lock.lock()
-        entries.removeAll(keepingCapacity: true)
-        lock.unlock()
+        ring.removeAll()
         entryCount = 0
     }
 
     /// View-side accessor. SwiftUI list reads this; `entryCount`
     /// drives invalidation so we don't leak the lock.
     public var snapshotEntries: [Entry] {
-        lock.lock(); defer { lock.unlock() }
-        return entries
+        return ring.snapshot()
     }
 
     // MARK: - W416 stdout/stderr tee
@@ -347,12 +343,13 @@ public final class RuntimeLogSink: ObservableObject {
         // Repeated native output (a line the audio engine prints dozens of times a second) is cut to one line per
         // window plus a summary: same single-queue rule as the assembler.
         // Its pending summaries are also flushed by a timer on this same queue when no later line arrives.
-        let limiter = StdoutTeeLines.RateLimiter(queue: queue) { [weak self] lines in
+        let limiter = StdoutTeeLines.RateLimiter(queue: queue) { lines in
             let flushedAt = Date()
             for out in lines {
-                Task { @MainActor [weak self] in
-                    self?.record(level: .info, tag: "stdout", out, origin: .stdoutTee, at: flushedAt)
-                }
+                // Straight into the ring on this queue (never mirrored back to OSLog): no hop to the
+                // main thread.
+                RuntimeLogSink.recordFromAnyThread(
+                    level: .info, tag: "stdout", out, at: flushedAt, mirrorToOSLog: false)
             }
         }
         source.setEventHandler { [weak self] in
@@ -384,10 +381,10 @@ public final class RuntimeLogSink: ObservableObject {
                     let safe: String = RuntimeLogSink.redact(line)
                     // Repeats of the same native line inside a window are counted, not recorded.
                     for out in limiter.admit(safe, now: ProcessInfo.processInfo.systemUptime) {
-                        Task { @MainActor [weak self] in
-                            // `.stdoutTee`: a captured line is never mirrored back to OSLog (second defence).
-                            self?.record(level: .info, tag: "stdout", out, origin: .stdoutTee, at: readAt)
-                        }
+                        // A captured line is never mirrored back to OSLog (second defence), and does
+                        // not wait for the main thread.
+                        RuntimeLogSink.recordFromAnyThread(
+                            level: .info, tag: "stdout", out, at: readAt, mirrorToOSLog: false)
                     }
                 }
             }
@@ -401,7 +398,7 @@ public final class RuntimeLogSink: ObservableObject {
         teeAttached = true
         // Confirm via OSLog so even if stdout gets weird the wiring
         // is visible in Console.app.
-        osLogger.info("[RuntimeLogSink] stdout/stderr tee attached")
+        runtimeOSLogger.info("[RuntimeLogSink] stdout/stderr tee attached")
     }
 
     /// Detach the stdout tee. Mostly for tests — production app
@@ -416,9 +413,17 @@ public final class RuntimeLogSink: ObservableObject {
     }
 }
 
+/// The log ring, shared by the sink and by the log shipper's worker. A global rather than a member of
+/// the main-actor `RuntimeLogSink` so it can be reached from any thread.
+let runtimeLogRing = SequencedRing<RuntimeLogSink.Entry>(maxEntries: 12000, seqOf: { $0.seq })
+
+/// OSLog mirror of the sink: Console.app on a connected Mac sees the same lines. Subsystem matches
+/// the bundle id so a developer can filter on `process == QAudionApp`.
+private let runtimeOSLogger = Logger(subsystem: "com.qaudion.app", category: "runtime")
+
 /// Convenience global facade. Call `RTLog.info(...)` from any
-/// production code path; it routes to `RuntimeLogSink.shared` on
-/// MainActor (Task hop when off-main).
+/// production code path; on the main thread it records at once, from any other thread it writes to
+/// the ring on the calling thread (the main actor only gets the UI bookkeeping).
 public enum RTLog {
     public static func debug(_ tag: String, _ message: String) { dispatch(.debug, tag, message) }
     public static func info (_ tag: String, _ message: String) { dispatch(.info,  tag, message) }
@@ -431,10 +436,7 @@ public enum RTLog {
                 RuntimeLogSink.shared.record(level: level, tag: tag, message)
             }
         } else {
-            let at = Date()
-            Task { @MainActor in
-                RuntimeLogSink.shared.record(level: level, tag: tag, message, at: at)
-            }
+            RuntimeLogSink.recordFromAnyThread(level: level, tag: tag, message, at: Date())
         }
     }
 }

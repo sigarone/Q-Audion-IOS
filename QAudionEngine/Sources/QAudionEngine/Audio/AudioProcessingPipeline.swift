@@ -344,6 +344,9 @@ public final class AudioProcessingPipeline {
     private var engineRestartFailuresThisCall: Int = 0
     private var playoutDroppedThisCall: Int = 0
     private var engineRunningAtEndThisCall: Bool = false
+    /// The latch could not be read (the engine lock stayed busy): the value is not known, and must not
+    /// read as "the engine was down".
+    private var engineRunningAtEndUnknownThisCall: Bool = false
     // W-IOSPLAYOUT (2026-07-25) — the player-node queue, which nothing measured.
     //
     // `playoutDropped` above covers the frame that never reached the player because the
@@ -508,6 +511,12 @@ public final class AudioProcessingPipeline {
         public let engineRestartFailures: Int
         public let playoutDropped: Int
         public let engineRunningAtEnd: Bool
+        public let engineRunningAtEndUnknown: Bool
+        /// What the telemetry carries: the Bool, or "unknown" when it could not be read.
+        public var engineRunningAtEndAttr: Any {
+            if engineRunningAtEndUnknown { return "unknown" }
+            return engineRunningAtEnd
+        }
         // W-IOSPLAYOUT — the player-node queue and the scheduling failures.
         public let playoutWrites: Int
         public let playoutInFlightMax: Int
@@ -546,6 +555,7 @@ public final class AudioProcessingPipeline {
             engineRestartFailures: engineRestartFailuresThisCall,
             playoutDropped: playoutDroppedThisCall,
             engineRunningAtEnd: engineRunningAtEndThisCall,
+            engineRunningAtEndUnknown: engineRunningAtEndUnknownThisCall,
             playoutWrites: playoutWritesThisCall,
             playoutInFlightMax: playoutInFlightMaxThisCall,
             playoutSchedFail: playoutSchedFailThisCall,
@@ -569,6 +579,7 @@ public final class AudioProcessingPipeline {
         engineRestartFailuresThisCall = 0
         playoutDroppedThisCall = 0
         engineRunningAtEndThisCall = false
+        engineRunningAtEndUnknownThisCall = false
         playoutWritesThisCall = 0
         playoutInFlightMaxThisCall = 0
         playoutSchedFailThisCall = 0
@@ -918,6 +929,12 @@ extension AudioProcessingPipeline {
     /// can say whether the audio engine was still alive when the call ended.
     public func noteEngineRunningAtEnd(_ running: Bool) {
         engineRunningAtEndThisCall = running
+        engineRunningAtEndUnknownThisCall = false
+    }
+
+    /// The latch could not be read in time: report "unknown", never `false`.
+    public func noteEngineRunningAtEndUnknown() {
+        engineRunningAtEndUnknownThisCall = true
     }
 
     /// W-IOSPLAYOUT — a buffer was handed to the player node, with the resulting queue

@@ -49,8 +49,11 @@ public final class FallbackRelayStartRetry {
     private let scheduler: Scheduler
     private let observeRouteChanges: RouteObserver
     private let nowMs: () -> Int64
-    /// Tries once; `true` when the capture is running afterwards.
-    private let attempt: () -> Bool
+    /// Tries once; `true` when the capture is running afterwards. Exactly one of the two is set.
+    private let attempt: (() -> Bool)?
+    /// Same, for a capture started off the main thread: the result arrives later, on the main
+    /// thread, through the completion. While it is awaited no other try is scheduled.
+    private let attemptAsync: ((_ done: @escaping (Bool) -> Void) -> Void)?
     /// `false` once the call is over or the fallback no longer applies.
     private let isStillWanted: () -> Bool
     private let onAttemptFailed: (_ attempt: Int) -> Void
@@ -63,6 +66,7 @@ public final class FallbackRelayStartRetry {
     private var pendingDueAtMs: Int64?
     private var settleEndsAtMs: Int64 = 0
     private var lastAttemptAtMs: Int64?
+    private var attemptInFlight = false
     public private(set) var isRunning = false
     public private(set) var attempts = 0
 
@@ -80,6 +84,28 @@ public final class FallbackRelayStartRetry {
         self.observeRouteChanges = observeRouteChanges
         self.nowMs = nowMs
         self.attempt = attempt
+        self.attemptAsync = nil
+        self.isStillWanted = isStillWanted
+        self.onAttemptFailed = onAttemptFailed
+        self.onStarted = onStarted
+        self.onGaveUp = onGaveUp
+    }
+
+    public init(
+        scheduler: @escaping Scheduler = FallbackRelayStartRetry.mainQueueScheduler,
+        observeRouteChanges: @escaping RouteObserver = FallbackRelayStartRetry.noRouteObserver,
+        nowMs: @escaping () -> Int64 = FallbackRelayStartRetry.monotonicNowMs,
+        attemptAsync: @escaping (_ done: @escaping (Bool) -> Void) -> Void,
+        isStillWanted: @escaping () -> Bool,
+        onAttemptFailed: @escaping (_ attempt: Int) -> Void,
+        onStarted: @escaping (_ attempt: Int) -> Void,
+        onGaveUp: @escaping (_ attempts: Int) -> Void
+    ) {
+        self.scheduler = scheduler
+        self.observeRouteChanges = observeRouteChanges
+        self.nowMs = nowMs
+        self.attempt = nil
+        self.attemptAsync = attemptAsync
         self.isStillWanted = isStillWanted
         self.onAttemptFailed = onAttemptFailed
         self.onStarted = onStarted
@@ -109,7 +135,7 @@ public final class FallbackRelayStartRetry {
     /// Ignored during the settle; keeps `minTrySpacingMs` from the previous try;
     /// never adds a try (the pending one is moved, not duplicated).
     public func nudge() {
-        guard isRunning else { return }
+        guard isRunning, !attemptInFlight else { return }
         let now = nowMs()
         guard now >= settleEndsAtMs else { return }
         var delay: Int64 = 0
@@ -129,6 +155,7 @@ public final class FallbackRelayStartRetry {
 
     private func stop() {
         isRunning = false
+        attemptInFlight = false
         epoch += 1
         cancelPending?()
         cancelPending = nil
@@ -156,11 +183,36 @@ public final class FallbackRelayStartRetry {
         attempts += 1
         lastAttemptAtMs = nowMs()
         let number = attempts
-        if attempt() {
+        if let attemptAsync {
+            attemptInFlight = true
+            attemptAsync { [weak self] started in
+                self?.attemptFinished(started: started, number: number, forEpoch: scheduledEpoch)
+            }
+            return
+        }
+        let started = attempt?() ?? false
+        if started {
             stop()
             onStarted(number)
             return
         }
+        afterFailedAttempt(number, forEpoch: scheduledEpoch)
+    }
+
+    /// Result of an asynchronous try. Dropped when the sequence was cancelled or restarted while
+    /// the try was running.
+    private func attemptFinished(started: Bool, number: Int, forEpoch scheduledEpoch: Int) {
+        guard isRunning, scheduledEpoch == epoch else { return }
+        attemptInFlight = false
+        if started {
+            stop()
+            onStarted(number)
+            return
+        }
+        afterFailedAttempt(number, forEpoch: scheduledEpoch)
+    }
+
+    private func afterFailedAttempt(_ number: Int, forEpoch scheduledEpoch: Int) {
         // The attempt itself may have ended the sequence (cancel from a callback).
         guard isRunning, scheduledEpoch == epoch else { return }
         onAttemptFailed(number)

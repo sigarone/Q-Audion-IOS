@@ -1013,7 +1013,67 @@ public final class AudioCapture {
     /// legitimately owns VP-IO itself) is unaffected.
     public var isGroupCallActive: (() -> Bool)?
 
+    /// Every engine operation of this capture (start, stop, route restarts, interruption handling,
+    /// resume, the VP-IO watchdog and retry, media-services reset, the recovery retries) runs on
+    /// the one audio queue (`AudioEngineSerialQueue`), in order, and holds `engineOpLock` while it
+    /// does. The engine, the player node, the input sink and the timers below are confined to that
+    /// queue. The main thread never waits on the lock: the playout path only `try`-locks it and
+    /// drops the frame when it is busy; the two diagnostic readers wait at most
+    /// `mainThreadLockWaitSeconds`.
+    private let engineQueue = AudioEngineSerialQueue.shared
+    private let engineOpLock = NSRecursiveLock()
+    private static let mainThreadLockWaitSeconds: TimeInterval = 0.15
+    /// Bumped by every stop: a recovery retry scheduled before it does not start the engine again.
+    private var stopGeneration = 0
+
+    /// Bounded on the main thread, plain on the audio queue (the only other holder).
+    private func acquireEngineOpLock() -> Bool {
+        if Thread.isMainThread {
+            return engineOpLock.lock(before: Date().addingTimeInterval(Self.mainThreadLockWaitSeconds))
+        }
+        engineOpLock.lock()
+        return true
+    }
+
+    /// Queues `work` on the audio queue, behind everything submitted before, under the engine lock.
+    private func runOnEngineQueue(_ work: @escaping (AudioCapture) -> Void) {
+        engineQueue.submit { [weak self] in
+            guard let self else { return }
+            self.engineOpLock.lock()
+            defer { self.engineOpLock.unlock() }
+            work(self)
+        }
+    }
+
+    /// Main-thread reset of the playout ledger (it is main-owned): the queue never writes it.
+    private func resetPlayoutLedgerOnMain() {
+        DispatchQueue.main.async { [weak self] in
+            self?.playoutInFlight = 0
+        }
+    }
+
+    /// Runs `body` under the engine lock with the bounded wait; `fallback` when the lock stays busy.
+    private func withBoundedEngineLock<T>(_ fallback: @autoclosure () -> T, _ body: () -> T) -> T {
+        guard acquireEngineOpLock() else { return fallback() }
+        defer { engineOpLock.unlock() }
+        return body()
+    }
+
+    /// Must run on the audio queue (`CallService` and the recovery paths do): the engine start is
+    /// slow audio-system work and never belongs on the main thread.
     public func start() throws {
+        guard engineQueue.isOnQueue else {
+            throw NSError(
+                domain: "com.qaudion.AudioCapture",
+                code: -3,
+                userInfo: [NSLocalizedDescriptionKey: "AudioCapture.start() must run on the audio queue"])
+        }
+        engineOpLock.lock()
+        defer { engineOpLock.unlock() }
+        try startLocked()
+    }
+
+    private func startLocked() throws {
         guard !isRunning else { return }
         // W-GRPVPIO-CRASH-4 — refuse to (re)build the 1:1 engine while a group
         // call owns VP-IO. Covers every restart path (route change,
@@ -1315,8 +1375,10 @@ public final class AudioCapture {
     /// `VpioWatchdogDecisions.starveVerdict` holds the decision.
     private func scheduleVpioStarveWatchdog() {
         let armedGen = vpioWatchdogGen
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+        engineQueue.submitAfter(milliseconds: 1200, DispatchWorkItem { [weak self] in
             guard let self else { return }
+            self.engineOpLock.lock()
+            defer { self.engineOpLock.unlock() }
             let verdict = VpioWatchdogDecisions.starveVerdict(armedGen: armedGen,
                                                               currentGen: self.vpioWatchdogGen,
                                                               isRunning: self.isRunning,
@@ -1337,7 +1399,7 @@ public final class AudioCapture {
             print("[AudioCapture] W-AEC-FIX: VP-IO input tap starved (no frame in 1.2s) — restarting without VP-IO so the mic transmits")
             self.audioPipeline.forceDisableVoiceProcessing = true
             self.restartEngineForRoute()
-        }
+        })
     }
 
     /// W-VPIOOBS — the tap delivered inside the watchdog window: record how long it took.
@@ -1378,7 +1440,12 @@ public final class AudioCapture {
 
     /// W-VPIOOBS — main-queue only (see `onDiagLine`).
     private func emitDiagLine(_ line: String) {
-        onDiagLine?(line)
+        guard onDiagLine != nil else { return }
+        if Thread.isMainThread {
+            onDiagLine?(line)
+        } else {
+            DispatchQueue.main.async { [weak self] in self?.onDiagLine?(line) }
+        }
     }
 
     /// W-VPIOOBS — count `AVAudioEngineConfigurationChange` on the live engine within the first 2 s
@@ -1391,7 +1458,7 @@ public final class AudioCapture {
             object: nil,
             queue: .main
         ) { [weak self] note in
-            self?.noteEngineConfigurationChange(note)
+            self?.runOnEngineQueue { $0.noteEngineConfigurationChange(note) }
         }
     }
 
@@ -1419,6 +1486,10 @@ public final class AudioCapture {
     /// reset at call teardown next to `consumeLevelStats()`. See `VpioObservability.diagAttrs` and
     /// `BypassEchoDuck.diagAttrs`.
     public func consumeVpioDiagAttrs() -> [String: Any] {
+        withBoundedEngineLock([String: Any]()) { consumeVpioDiagAttrsLocked() }
+    }
+
+    private func consumeVpioDiagAttrsLocked() -> [String: Any] {
         flushVpioFirstFrame()  // a call that ended before the 1.2 s watchdog looked still reports its first frame
         // W-BYPASSDUCK -- the CallService read happens BEFORE `stop()`, so the tap thread can still be adding
         // to `echoDuckTotals` here. Take ONE copy and reset in the same breath: every `echo_duck_*` value
@@ -1442,7 +1513,13 @@ public final class AudioCapture {
     /// the pipeline right after, so the latch was always read as false (92 of 92 iOS records since
     /// 14/9). CallService calls this first, while the engine is still up; idempotent.
     public func noteRunningAtEndNow() {
-        audioPipeline.noteEngineRunningAtEnd(isRunning && (engine?.isRunning ?? false))
+        // Tri-state: when the lock stays busy the value is unknown, never "not running".
+        let running: Bool? = withBoundedEngineLock(nil) { isRunning && (engine?.isRunning ?? false) }
+        if let running {
+            audioPipeline.noteEngineRunningAtEnd(running)
+        } else {
+            audioPipeline.noteEngineRunningAtEndUnknown()
+        }
     }
 
     /// W-VPIOOBS — one-time environment read (no engine access): hardware model, OS build, the
@@ -2105,9 +2182,16 @@ public final class AudioCapture {
         // shipped (rx_recv/rx_dec) still looked perfect because they are incremented
         // upstream of this point. Non-zero `playout_dropped` next to a healthy
         // `rx_dec` now names the fault instead of leaving it to inference.
-        guard isRunning,
-              let player = playerNode,
-              let engine = engine, engine.isRunning else {
+        // The engine objects belong to the audio queue: a start, stop or restart there holds the lock
+        // for its whole duration. Never wait for it from here: drop the frame and touch nothing.
+        let gotLock = engineOpLock.`try`()
+        defer { if gotLock { engineOpLock.unlock() } }
+        guard PlayoutEngineAccess.decision(
+                lockAcquired: gotLock,
+                isRunning: isRunning,
+                hasPlayerAndEngine: playerNode != nil && engine != nil,
+                engineRunning: engine?.isRunning ?? false) == .schedule,
+              let player = playerNode else {
             audioPipeline.notePlayoutDropped()
             return
         }
@@ -2232,7 +2316,9 @@ public final class AudioCapture {
             object: nil,
             queue: .main
         ) { [weak self] note in
-            self?.handleInterruption(note)
+            guard let self else { return }
+            let observedEpoch = self.engineQueue.currentEpoch
+            self.runOnEngineQueue { $0.handleInterruption(note, observedEpoch: observedEpoch) }
         }
         // W571 — route change observer. Handles headset plug/unplug and
         // Bluetooth HFP connect/disconnect. On .oldDeviceUnavailable
@@ -2246,7 +2332,7 @@ public final class AudioCapture {
             object: nil,
             queue: .main
         ) { [weak self] note in
-            self?.handleRouteChange(note)
+            self?.runOnEngineQueue { $0.handleRouteChange(note) }
         }
         // W-MEDIARESET (2026-09-01) — the media server restarting under a
         // live capture orphans every audio object and wipes the session
@@ -2357,13 +2443,16 @@ public final class AudioCapture {
     private func scheduleDebouncedRouteRestart() {
         pendingRouteRestart?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.isRunning else { return }
+            guard let self else { return }
+            self.engineOpLock.lock()
+            defer { self.engineOpLock.unlock() }
+            guard self.isRunning else { return }
             // W-VPIORETRY — this path is only ever armed by handleRouteChange's
             // speaker<->earpiece detector, i.e. the route really did change.
             self.restartEngineForRoute(routeDriven: true)
         }
         pendingRouteRestart = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+        engineQueue.submitAfter(milliseconds: 350, work)
     }
 
     // MARK: - Timed Voice-Processing retry
@@ -2411,10 +2500,15 @@ public final class AudioCapture {
 
     private func armVpioRetryTimer() {
         let delay = VpioRetryPolicy.delayMs(attempt: vpioRetryAttempt, skips: vpioRetrySkips)
-        let work = DispatchWorkItem { [weak self] in self?.fireVpioRetry() }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.engineOpLock.lock()
+            defer { self.engineOpLock.unlock() }
+            self.fireVpioRetry()
+        }
         vpioRetryTimer = work
         emitDiagLine(VpioRetryPolicy.armLine(gen: vpioWatchdogGen, attempt: vpioRetryAttempt, delayMs: delay))
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay), execute: work)
+        engineQueue.submitAfter(milliseconds: delay, work)
     }
 
     private func fireVpioRetry() {
@@ -2504,7 +2598,7 @@ public final class AudioCapture {
         restartSuppressUntil = Date().addingTimeInterval(0.6)
         engine?.inputNode.removeTap(onBus: 0)
         playerNode?.stop()
-        playoutInFlight = 0  // W-IOSPLAYOUT — stop() discards the queue; the ledger must follow
+        resetPlayoutLedgerOnMain()  // W-IOSPLAYOUT — stop() discards the queue; the ledger (main-owned) must follow
         if let engine = engine { audioPipeline.disableVoiceProcessing(on: engine) }
         engine?.stop()
         engine = nil; playerNode = nil; playFormat = nil; inputSink = nil; isRunning = false
@@ -2572,19 +2666,32 @@ public final class AudioCapture {
         }
         // Backoff: 150ms, 300ms, 600ms, 1.2s — bounded by `maxAttempts` above.
         let delay = 0.15 * pow(2.0, Double(attempt))
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+        let retryStopGeneration = stopGeneration
+        let retryEpoch = engineQueue.currentEpoch
+        engineQueue.submitAfter(milliseconds: Int(delay * 1000), DispatchWorkItem { [weak self] in
             guard let self else { return }
+            self.engineOpLock.lock()
+            defer { self.engineOpLock.unlock() }
             // Someone else (interruption resume, a fresh call, teardown) may have
-            // already rebuilt or stopped the engine — never fight them.
-            guard !self.isRunning else { return }
+            // already rebuilt or stopped the engine — never fight them. A stop since this
+            // retry was scheduled (or a stop already queued behind it) ends the retries.
+            guard self.stopGeneration == retryStopGeneration,
+                  self.engineQueue.currentEpoch == retryEpoch,
+                  !self.isRunning else { return }
             self.restartEngineWithRecovery(attempt: attempt + 1)
-        }
+        })
     }
 
-    private func handleInterruption(_ note: Notification) {
+    private func handleInterruption(_ note: Notification, observedEpoch: Int) {
         guard let info = note.userInfo,
               let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        // A stop (or the end of the call) since the notification was observed: nothing to pause or resume.
+        // The observer is removed by `stopLocked`, which also clears `wasInterrupted`.
+        guard InterruptionHandlingGuard.shouldHandle(
+            observerActive: interruptionObserver != nil,
+            observedEpoch: observedEpoch,
+            currentEpoch: engineQueue.currentEpoch) else { return }
         switch type {
         case .began:
             // OS seized the audio session (phone call / Siri / alarm).
@@ -2596,7 +2703,7 @@ public final class AudioCapture {
             cancelPendingResumeRetry()  // W-AUDIORESUME — a new interruption supersedes any armed retry
             engine?.inputNode.removeTap(onBus: 0)
             playerNode?.stop()
-            playoutInFlight = 0  // W-IOSPLAYOUT — stop() discards the queue; the ledger must follow
+            resetPlayoutLedgerOnMain()  // W-IOSPLAYOUT — stop() discards the queue; the ledger (main-owned) must follow
             if let engine = engine {
                 audioPipeline.disableVoiceProcessing(on: engine)
             }
@@ -2688,6 +2795,8 @@ public final class AudioCapture {
         pendingResumeRetry?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
+            self.engineOpLock.lock()
+            defer { self.engineOpLock.unlock() }
             self.pendingResumeRetry = nil
             // Someone else (CallKit didActivate → CallService restart, a new
             // `.began`, teardown) may have moved on — never fight them. A nil
@@ -2726,7 +2835,7 @@ public final class AudioCapture {
             self.scheduleResumeRetry(attemptIndex: attemptIndex + 1)
         }
         pendingResumeRetry = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Int(delayMs)), execute: work)
+        engineQueue.submitAfter(milliseconds: Int(delayMs), work)
     }
 
     private func cancelPendingResumeRetry() {
@@ -2743,8 +2852,10 @@ public final class AudioCapture {
     /// route-change echoes from thrashing, and its W-AUDIODEATH ladder covers
     /// a `start()` that fails while the server is still coming back.
     private func handleMediaServicesReset() {
-        DispatchQueue.main.async { [weak self] in
+        engineQueue.submit { [weak self] in
             guard let self else { return }
+            self.engineOpLock.lock()
+            defer { self.engineOpLock.unlock() }
             let action = AudioInterruptionRecoveryPolicy.mediaServicesResetAction(isRunning: self.isRunning)
             let runFlag: String = self.isRunning ? "1" : "0"
             let actionCode: String = String(Self.mediaResetActionCode(action))
@@ -2785,7 +2896,7 @@ public final class AudioCapture {
         let interval = DispatchTimeInterval.seconds(AudioEngineStateBeacon.intervalSec)
         timer.schedule(deadline: .now() + interval, repeating: interval, leeway: .seconds(1))
         timer.setEventHandler { [weak self] in
-            self?.emitStateBeacon()
+            self?.runOnEngineQueue { $0.emitStateBeacon() }
         }
         timer.resume()
         stateBeaconTimer = timer
@@ -2851,6 +2962,17 @@ public final class AudioCapture {
     /// `CallsGate.callKitFreeMode` (no CallKit involved, nobody else will
     /// ever release this session) — that caller passes `true` explicitly.
     public func stop(deactivateSession: Bool = false) {
+        // From any other thread the stop is queued behind whatever the audio queue is doing.
+        guard engineQueue.isOnQueue else {
+            engineQueue.submitStop { [self] in self.stop(deactivateSession: deactivateSession) }
+            return
+        }
+        engineOpLock.lock()
+        defer { engineOpLock.unlock() }
+        stopLocked(deactivateSession: deactivateSession)
+    }
+
+    private func stopLocked(deactivateSession: Bool) {
         // W-AUDIODEATH (2026-07-24) — latch whether the engine was still alive at
         // teardown, BEFORE we tear it down ourselves. `false` here on a call that
         // reported healthy rx_dec counts is the fingerprint of a dead-playout call
@@ -2858,7 +2980,14 @@ public final class AudioCapture {
         // could not establish from any log or telemetry record we shipped.
         // (W-VPIOOBS: CallService now latches it earlier, via `noteRunningAtEndNow()`, because the
         // diag stats are consumed before this runs.)
-        noteRunningAtEndNow()
+        // Not running from here on, before anything slow: the playout path reads this flag first.
+        let wasRunningAtEnd = isRunning && (engine?.isRunning ?? false)
+        isRunning = false
+        stopGeneration += 1
+        // A stopped capture is not "interrupted": an interruption-ended notification queued behind this
+        // stop must not resume it.
+        wasInterrupted = false
+        audioPipeline.noteEngineRunningAtEnd(wasRunningAtEnd)
         flushVpioFirstFrame()  // W-VPIOOBS — a first buffer nobody judged is booked to THIS generation, before it is bumped
         vpioWatchdogGen += 1  // W-VPIOOBS — a watchdog timer armed for this engine must not judge a later one
         // W-SPKFIX — cancel any pending debounced route restart so it cannot
@@ -2888,7 +3017,7 @@ public final class AudioCapture {
         }
         engine?.inputNode.removeTap(onBus: 0)
         playerNode?.stop()
-        playoutInFlight = 0  // W-IOSPLAYOUT — stop() discards the queue; the ledger must follow
+        resetPlayoutLedgerOnMain()  // W-IOSPLAYOUT — stop() discards the queue; the ledger (main-owned) must follow
         if let engine = engine {
             audioPipeline.disableVoiceProcessing(on: engine)
         }

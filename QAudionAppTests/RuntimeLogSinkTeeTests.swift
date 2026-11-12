@@ -211,7 +211,7 @@ final class RuntimeLogSinkTeeTests: XCTestCase {
         let dropAt = try XCTUnwrap(tee.range(of: "if StdoutTeeLines.isOwnOSLogMirror(line) { continue }"))
         let redactAt = try XCTUnwrap(tee.range(of: "RuntimeLogSink.redact(line)"))
         XCTAssertLessThan(dropAt.lowerBound, redactAt.lowerBound, "the echo is judged on the raw line")
-        XCTAssertTrue(tee.contains("origin: .stdoutTee"), "a captured line is never mirrored back to OSLog")
+        XCTAssertTrue(tee.contains("mirrorToOSLog: false"), "a captured line is never mirrored back to OSLog")
         XCTAssertTrue(tee.contains("assembler.lines(from: buf[0..<n])"), "lines are assembled across reads")
     }
 }

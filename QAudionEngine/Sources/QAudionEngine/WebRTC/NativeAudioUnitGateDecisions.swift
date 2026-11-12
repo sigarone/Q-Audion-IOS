@@ -53,6 +53,14 @@ public enum AudioSessionActivationSource: Int, Sendable, Equatable {
 ///    it on a self-activated session.
 public enum NativeAudioUnitGateDecisions {
 
+    /// Whether a switch of the unit may apply: the owner it was requested for is still the arm in
+    /// force. `required == nil` (no owner stated) applies to any live arm; the app has no caller left
+    /// that states none, the gate keeps the shape for its own internals.
+    public static func switchIsOwned(required: Int?, current: Int) -> Bool {
+        if let required { return required != 0 && current == required }
+        return current != 0
+    }
+
     /// Why the unit may (0) or may not start. Raw values are the numeric
     /// `verdict=` field of the `admgate verdict=` lines.
     public enum Verdict: Int, Sendable, Equatable {

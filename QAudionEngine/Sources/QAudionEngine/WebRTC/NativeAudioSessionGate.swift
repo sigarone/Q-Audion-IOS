@@ -292,12 +292,61 @@ public enum NativeAudioSessionGate {
     /// can reach `isAudioEnabled`. `reason` is a
     /// `NativeAudioUnitGateDecisions.ChangeReason` raw value (log only).
     /// Returns `true` when the state actually changed.
+    ///
+    /// THE RULE (2026-11): every switch of the unit, on or off, runs on the call audio queue
+    /// (`AudioEngineSerialQueue`) and is owner-checked: `submitSwitch` / `switchOnQueue` capture the
+    /// owner on the calling (main) thread when the request is made, and the switch applies only if
+    /// that arm is still the one in force when its turn comes. There is no unowned switch: a
+    /// request with no owner is a no-op. The single allowed exception is the release of an arm
+    /// itself (`QAudionPeerConnection.close()` and `disarm(token:)`): owner-checked, in one
+    /// configuration-lock critical section with the release, and run before the connection closes.
+    ///
+    /// The arm token in force now, to be captured as the owner of a switch submitted now.
+    public static var currentArmToken: Int {
+        lock.lock(); defer { lock.unlock() }
+        return armedToken
+    }
+
+    /// Owner of a switch-ON requested for the live call. The call's own arm when it is known;
+    /// otherwise the arm in force, which during a live 1:1 call can only be that call's own (a
+    /// group arms only after the 1:1 call is torn down). Switch-OFF never uses this fallback: it
+    /// would reach another call's arm after a promotion. Returns 0 only when nothing is armed.
+    public static func enableOwner(callArmToken: Int) -> Int {
+        callArmToken != 0 ? callArmToken : currentArmToken
+    }
+
+    /// Owner-checked switch, to be called ON the audio queue only (`submitSwitch` and the queue
+    /// closures of the callers do). Returns `true` when the unit actually changed. A stale or zero
+    /// owner is a no-op.
     @discardableResult
-    public static func setNativeAudioActive(_ active: Bool, reason: Int) -> Bool {
-        // Fast path, unchanged: never armed (every call with native SRTP off)
-        // → the session is not touched and no lock is taken.
-        guard isArmed else { return false }
-        return switchUnit(active, reason: reason, requiredToken: nil).changed
+    public static func applySwitchOnAudioQueue(_ active: Bool, ifCurrent token: Int, reason: Int) -> Bool {
+        guard token != 0, isArmed else { return false }
+        return switchUnit(active, reason: reason, requiredToken: token).changed
+    }
+
+    /// Queues an owner-checked switch on the audio queue, in order with every other audio operation.
+    /// `token` is the owner captured by the caller now (main thread). `completion` runs on the queue.
+    public static func submitSwitch(
+        _ active: Bool, ifCurrent token: Int, reason: Int,
+        queue: AudioEngineSerialQueue = .shared,
+        completion: ((Bool) -> Void)? = nil
+    ) {
+        queue.submit {
+            let changed = applySwitchOnAudioQueue(active, ifCurrent: token, reason: reason)
+            completion?(changed)
+        }
+    }
+
+    /// Same, for async callers: resumes with whether the unit changed.
+    public static func switchOnQueue(
+        _ active: Bool, ifCurrent token: Int, reason: Int,
+        queue: AudioEngineSerialQueue = .shared
+    ) async -> Bool {
+        await withCheckedContinuation { continuation in
+            submitSwitch(active, ifCurrent: token, reason: reason, queue: queue) { changed in
+                continuation.resume(returning: changed)
+            }
+        }
     }
 
     /// W-DEACTOWN (2026-09-27) — `setNativeAudioActive(true, reason:)` that
@@ -306,12 +355,6 @@ public enum NativeAudioSessionGate {
     /// keeps it and later stops exactly that arm with
     /// ``setNativeAudioInactive(ifCurrent:reason:)``, never a successor's.
     /// 0 when nothing is armed (no-op, same fast path as before).
-    @discardableResult
-    public static func enableNativeAudio(reason: Int) -> Int {
-        guard isArmed else { return 0 }
-        return switchUnit(true, reason: reason, requiredToken: nil).owner
-    }
-
     /// W-ADMATOMIC (2026-09-26) — `QAudionPeerConnection.close()`'s backstop:
     /// switch the unit off only if `token` is STILL the arm in force, with the
     /// check and the switch in one critical section. It used to be
@@ -347,12 +390,7 @@ public enum NativeAudioSessionGate {
         session.lockForConfiguration()
         lock.lock()
         let current = armedToken
-        let owned: Bool
-        if let required = requiredToken {
-            owned = required != 0 && current == required
-        } else {
-            owned = current != 0
-        }
+        let owned: Bool = NativeAudioUnitGateDecisions.switchIsOwned(required: requiredToken, current: current)
         lock.unlock()
         guard owned else {
             session.unlockForConfiguration()

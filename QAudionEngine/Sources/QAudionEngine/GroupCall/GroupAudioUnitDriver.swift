@@ -222,8 +222,9 @@ public final class GroupAudioUnitDriver: GroupAudioUnitControlling, @unchecked S
         lock.unlock()
         cancelPendingEnable()
         if owns {
-            NativeAudioSessionGate.setNativeAudioInactive(
-                ifCurrent: current, reason: NativeAudioUnitGateDecisions.ChangeReason.sessionDeactivated.rawValue)
+            NativeAudioSessionGate.submitSwitch(
+                false, ifCurrent: current,
+                reason: NativeAudioUnitGateDecisions.ChangeReason.sessionDeactivated.rawValue)
         }
     }
 
@@ -280,18 +281,23 @@ public final class GroupAudioUnitDriver: GroupAudioUnitControlling, @unchecked S
         token = 0
         lock.unlock()
         guard owns else { return }
-        NativeAudioSessionGate.setNativeAudioInactive(
-            ifCurrent: current, reason: NativeAudioUnitGateDecisions.ChangeReason.groupEnd.rawValue)
+        // The switch-off is queued behind the audio operations already submitted; the arm release that
+        // follows is the one synchronous exception (owner-checked, and it switches the unit off itself).
+        NativeAudioSessionGate.submitSwitch(
+            false, ifCurrent: current, reason: NativeAudioUnitGateDecisions.ChangeReason.groupEnd.rawValue)
         NativeAudioSessionGate.disarm(token: current)
     }
 
     private func enable() {
         lock.lock()
         let started = begun
+        let owns = ownsArm
+        let current = token
         lock.unlock()
-        guard started, NativeAudioSessionGate.isArmed else { return }
-        _ = NativeAudioSessionGate.enableNativeAudio(
-            reason: NativeAudioUnitGateDecisions.ChangeReason.groupEnable.rawValue)
+        guard started, owns, NativeAudioSessionGate.isArmed else { return }
+        // Owner captured now: a later arm by anybody else makes the queued enable a no-op.
+        NativeAudioSessionGate.submitSwitch(
+            true, ifCurrent: current, reason: NativeAudioUnitGateDecisions.ChangeReason.groupEnable.rawValue)
     }
 
     private func cancelPendingEnable() {

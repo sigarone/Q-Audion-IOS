@@ -59,6 +59,12 @@ public enum CallKitWorkOffloadPolicy {
     /// timers). Default OFF — the mechanism is real and tested, but
     /// unverified live; flip only after confirming on a device (see the
     /// "da provare su device" list in the commit/report for this item).
+    ///
+    /// No longer read by `CallService`: the reason for the switch was the missing single owner of
+    /// the engine start and stop calls. `CallService` now runs every capture start AND stop, and the native unit switch of
+    /// the fallback, on one serial queue (`AudioEngineSerialQueue`), and `AudioCapture` serializes
+    /// its own `start()`/`stop()` with a lock, so the constraint this switch guarded is met by
+    /// construction. The value stays for the pure decision below and its tests.
     public static let audioEngineBackgroundQueueEnabled: Bool = false
 
     // MARK: - Pure decisions

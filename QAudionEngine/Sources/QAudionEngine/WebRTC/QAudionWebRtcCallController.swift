@@ -282,8 +282,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // unit, switch the SUCCESSOR's unit off. A stale owner stops here:
             // no restart request and no relay-fallback escalation below.
             let nudgeReason: Int = NativeAudioUnitGateDecisions.ChangeReason.captureLiveNudge.rawValue
-            let stopped: Bool = NativeAudioSessionGate.setNativeAudioInactive(
-                ifCurrent: armToken, reason: nudgeReason)
+            let stopped: Bool = await NativeAudioSessionGate.switchOnQueue(
+                false, ifCurrent: armToken, reason: nudgeReason)
             let ownership = NativeAudioUnitGateDecisions.nudgeOwnership(
                 ownerToken: armToken,
                 stopped: stopped,
@@ -1433,6 +1433,21 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// new global word such as `pass`, which would let credential-shaped prose through): a
     /// change of these line words needs the same check against the real shipper (the cases are in
     /// `scripts/test_ship_ios_redactor_hardening.py`, group DTLSB).
+    /// The arm token of the call's own peer connection, reported once it is created (the call service
+    /// records it as the owner of the call's unit switches). Set before the connection exists, or after:
+    /// an arm that already exists is reported at once.
+    public var onNativeAudioArmed: ((Int) -> Void)? {
+        didSet {
+            if let pc = peerConnection, pc.nativeAudioArmToken != 0 {
+                onNativeAudioArmed?(pc.nativeAudioArmToken)
+            }
+        }
+    }
+
+    private func reportNativeAudioArm(of pc: QAudionPeerConnection) {
+        onNativeAudioArmed?(pc.nativeAudioArmToken)
+    }
+
     private func wireDtlsFailureHook(on pc: QAudionPeerConnection) {
         pc.onDtlsFingerprintFailure = { [weak self] stage in
             let code = DtlsFingerprint.failureCode(stage: stage)
@@ -2056,6 +2071,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             throw ControllerError.wrongState("no-dtls-context")
         }
         wireDtlsFailureHook(on: pc)
+        reportNativeAudioArm(of: pc)
         // Bug-C guard: same race, closed a moment later — pc was just built
         // synchronously (no further suspension since the check above), but a
         // teardown could still have landed on another thread. Dispose rather
@@ -2206,6 +2222,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             throw ControllerError.wrongState("no-dtls-context")
         }
         wireDtlsFailureHook(on: pc)
+        reportNativeAudioArm(of: pc)
         // Bug-C guard: see startOutgoingCall's identical check.
         guard !intentionalShutdown else {
             pc.close()
@@ -2349,6 +2366,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             throw ControllerError.wrongState("no-dtls-context")
         }
         wireDtlsFailureHook(on: pc)
+        reportNativeAudioArm(of: pc)
         // Bug-C guard: see startOutgoingCall's identical check.
         guard !intentionalShutdown else {
             pc.close()

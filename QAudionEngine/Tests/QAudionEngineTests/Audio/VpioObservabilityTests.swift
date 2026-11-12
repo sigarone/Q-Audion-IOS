@@ -327,6 +327,8 @@ final class VpioObservabilityWiringTests: XCTestCase {
         XCTAssertEqual(capture.consumeVpioDiagAttrs()["vpio_watchdog_gen"] as? Int, 0)
         capture.stop()
         capture.stop()
+        // A stop from another thread runs on the audio queue: wait for it.
+        AudioEngineSerialQueue.shared.waitUntilIdle()
         XCTAssertEqual(capture.consumeVpioDiagAttrs()["vpio_watchdog_gen"] as? Int, 2)
     }
 }
