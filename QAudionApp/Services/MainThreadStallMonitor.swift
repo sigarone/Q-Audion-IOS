@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import QAudionEngine
 
 /// W-STALLMARK (2026-10-02) — marks main-thread stalls during a call in the phone log:
 /// `hang ms=<n> site=1 background=<0|1>` (RTLog tag "call"; a shape the phone-log shipper
@@ -12,7 +13,9 @@ import UIKit
 ///
 /// A utility-queue timer pings the main queue every 250 ms; a ping answered `thresholdMs`
 /// or more late is a stall of that length. One line per stall, written once the main
-/// thread answers, so the length is the real one. `background=1`: the app was in the
+/// thread answers, so the length is the real one. A ping still unanswered after `thresholdMs`
+/// also writes `hang_start ms=<n> site=1` at once, from this monitor's own queue, without waiting
+/// for the main thread to answer. `background=1`: the app was in the
 /// background when the main thread answered (a suspension, not a stall). Runs only while
 /// a call (1:1 or group) is live: `AppState.updateIdleTimer` switches it.
 final class MainThreadStallMonitor: @unchecked Sendable {
@@ -24,6 +27,8 @@ final class MainThreadStallMonitor: @unchecked Sendable {
     // Touched on `queue` only.
     private var timer: DispatchSourceTimer?
     private var pingSentAt: UInt64 = 0
+    /// The ping `hang_start` was already written for.
+    private var startMarkedForPing: UInt64 = 0
 
     private init() {}
 
@@ -53,7 +58,10 @@ final class MainThreadStallMonitor: @unchecked Sendable {
     private func tick() {
         // The previous ping is still waiting for the main thread: that IS the stall,
         // measured when it is answered.
-        guard pingSentAt == 0 else { return }
+        guard pingSentAt == 0 else {
+            markStartIfDue()
+            return
+        }
         let sentAt = DispatchTime.now().uptimeNanoseconds
         pingSentAt = sentAt
         DispatchQueue.main.async { [weak self] in
@@ -65,6 +73,18 @@ final class MainThreadStallMonitor: @unchecked Sendable {
                 self?.answered(sentAt: sentAt, answeredAt: answeredAt, background: background)
             }
         }
+    }
+
+    /// The ping is still unanswered: once it is `thresholdMs` old, write the start mark (once per ping).
+    private func markStartIfDue() {
+        let nowNs = DispatchTime.now().uptimeNanoseconds
+        guard nowNs > pingSentAt else { return }
+        let ageMs = Int((nowNs - pingSentAt) / 1_000_000)
+        guard MainThreadStallMarkPolicy.shouldMarkStart(
+            pingAgeMs: ageMs, alreadyMarked: startMarkedForPing == pingSentAt, thresholdMs: thresholdMs) else { return }
+        startMarkedForPing = pingSentAt
+        let line: String = "hang_start ms=\(ageMs) site=1"
+        RTLog.warn("call", line)
     }
 
     private func answered(sentAt: UInt64, answeredAt: UInt64, background: Bool) {

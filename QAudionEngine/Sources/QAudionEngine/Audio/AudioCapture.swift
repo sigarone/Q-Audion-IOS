@@ -1013,7 +1013,35 @@ public final class AudioCapture {
     /// legitimately owns VP-IO itself) is unaffected.
     public var isGroupCallActive: (() -> Bool)?
 
+    /// Serializes `start()` and `stop()` against each other. `CallService` runs both on its audio
+    /// queue; the capture's own restart paths (route change, interruption resume) run them on the
+    /// main thread. The engine objects have no thread-safety guarantee, so the two never run at
+    /// the same time (see `CallKitWorkOffloadPolicy.voiceProcessingTeardownQueueEnabled`).
+    /// The main thread waits at most `mainThreadLockWaitSeconds`: a busy lock there means the audio
+    /// queue is in the middle of a start, and the main thread does not wait behind it.
+    private let engineOpLock = NSRecursiveLock()
+    private static let mainThreadLockWaitSeconds: TimeInterval = 0.15
+
+    private func acquireEngineOpLock() -> Bool {
+        if Thread.isMainThread {
+            return engineOpLock.lock(before: Date().addingTimeInterval(Self.mainThreadLockWaitSeconds))
+        }
+        engineOpLock.lock()
+        return true
+    }
+
     public func start() throws {
+        guard acquireEngineOpLock() else {
+            throw NSError(
+                domain: "com.qaudion.AudioCapture",
+                code: -2,
+                userInfo: [NSLocalizedDescriptionKey: "AudioCapture.start() skipped: another start or stop is running"])
+        }
+        defer { engineOpLock.unlock() }
+        try startLocked()
+    }
+
+    private func startLocked() throws {
         guard !isRunning else { return }
         // W-GRPVPIO-CRASH-4 — refuse to (re)build the 1:1 engine while a group
         // call owns VP-IO. Covers every restart path (route change,
@@ -2851,6 +2879,14 @@ public final class AudioCapture {
     /// `CallsGate.callKitFreeMode` (no CallKit involved, nobody else will
     /// ever release this session) — that caller passes `true` explicitly.
     public func stop(deactivateSession: Bool = false) {
+        // A stop never gives up: from the main thread a busy lock after the bounded wait means a
+        // start is running on the audio queue, and the stop goes on rather than leave the engine up.
+        let locked = acquireEngineOpLock()
+        defer { if locked { engineOpLock.unlock() } }
+        stopLocked(deactivateSession: deactivateSession)
+    }
+
+    private func stopLocked(deactivateSession: Bool) {
         // W-AUDIODEATH (2026-07-24) — latch whether the engine was still alive at
         // teardown, BEFORE we tear it down ourselves. `false` here on a call that
         // reported healthy rx_dec counts is the fingerprint of a dead-playout call

@@ -907,6 +907,17 @@ final class CallService: @unchecked Sendable {
     /// below — the exact calls whose `call.audio.counts`/`call.audio.diag`
     /// (fallback_fired, session_active, pad_overflow) are most worth seeing.
     private var audioEngineStartAttempted = false
+    /// Starts of the manual capture queued on `audioEngineQueue` whose result has not come back
+    /// yet, and the relay-start tries waiting for it. Main thread only.
+    private var audioStartsInFlight = 0
+    private var audioStartWaiters: [(Bool) -> Void] = []
+    /// Bumped by every engage, recover, hand-back and teardown: a queued engage continuation that
+    /// finds another value (or another call) is dropped. Main thread only.
+    private var fallbackEngageSeq = 0
+    /// Latest group-call-owns-VP-IO answer read on the main thread, for the capture's own
+    /// `isGroupCallActive` check when it runs on the audio queue (the live value is main-thread state).
+    private let groupActiveSnapshotLock = NSLock()
+    private var groupActiveSnapshot = false
     private var didActivateFallbackFired = false
     /// W-PADOVERFLOW — the engine that owns this call's audio, kept so the
     /// teardown summary can read its counters. Weak because the engine's
@@ -2415,7 +2426,7 @@ final class CallService: @unchecked Sendable {
         // group-call-ownership signal the entry chokepoints use, so a stray
         // observer-driven restart during a group call can't SIGABRT in
         // setVoiceProcessingEnabled. See AudioCapture.isGroupCallActive kdoc.
-        capture.isGroupCallActive = { [weak self] in self?.isGroupCallActive?() == true }
+        capture.isGroupCallActive = { [weak self] in self?.groupCallActiveForCapture() == true }
         // W-AUDIORESUME (2026-09-01) — this capture runs under a voice call:
         // an interruption that ends WITHOUT `.shouldResume` is retried (1 s /
         // 3 s) instead of leaving the engine dead, and the 10 s engine-state
@@ -2811,7 +2822,7 @@ final class CallService: @unchecked Sendable {
         // W-GRPVPIO-CRASH-4 — same restart-path gate as the outgoing side
         // (see startCall). Closes the observer-driven restart that bypasses
         // the activateIncomingCallAudio entry guard during a group call.
-        capture.isGroupCallActive = { [weak self] in self?.isGroupCallActive?() == true }
+        capture.isGroupCallActive = { [weak self] in self?.groupCallActiveForCapture() == true }
         // W-AUDIORESUME (2026-09-01) — same voice-call ownership as the
         // outgoing side (see startCall): bounded resume retry + state beacon.
         capture.sessionOwnership = .voiceCall
@@ -4822,8 +4833,12 @@ final class CallService: @unchecked Sendable {
         // run right here was fully redundant with AudioCapture.stop()'s own
         // internal call AND raced CallKit's async release every single
         // call teardown; removed rather than made conditional twice.
-        audioCapture?.stop(deactivateSession: CallsGate.callKitFreeMode)
+        // The stop runs on the audio queue (behind a start still running, which then finds its
+        // capture gone), so the engine is never left running after the call.
+        let endedCapture = audioCapture
         audioCapture = nil
+        fallbackEngageSeq += 1
+        stopCaptureOnAudioQueue(endedCapture, deactivateSession: CallsGate.callKitFreeMode)
         audioPlayback?.stop()
         audioPlayback = nil
         audioPipeline = nil
@@ -4985,13 +5000,9 @@ final class CallService: @unchecked Sendable {
 
     // MARK: - W464 — CallKit audio-session lifecycle
 
-    /// W-CKMAINBLOCK (2026-09-02) — dedicated serial queue the
-    /// `AudioCapture.start()` call runs on when
-    /// `CallKitWorkOffloadPolicy.audioEngineBackgroundQueueEnabled` is on.
-    /// Unused (never scheduled) while the kill switch is off, so this has
-    /// no effect on today's shipped behaviour by itself.
-    private static let audioEngineOffloadQueue = DispatchQueue(
-        label: "com.qaudion.callservice.audioengine", qos: .userInitiated)
+    /// The serial queue of every audio-session and audio-engine operation of a call (see
+    /// `AudioEngineSerialQueue`): native unit switch, capture start, capture stop.
+    private static let audioEngineQueue = AudioEngineSerialQueue.shared
 
     /// W464 — start the capture + playback `AVAudioEngine`s, but ONLY once
     /// CallKit has activated the shared `AVAudioSession`.
@@ -5132,32 +5143,15 @@ final class CallService: @unchecked Sendable {
             // Idempotent on the engine (the latch is terminal), and a no-op on
             // any build with the send kill switch off.
             latchAudioProfileForCall()
-            // W-CKMAINBLOCK (2026-09-02) — `capture.start()` below reaches
-            // `setVoiceProcessingEnabled`, observed to block (see
-            // AudioProcessingPipeline's W-GRPVPIO-CRASH-5 comment), and this
-            // whole call chain runs on whatever thread called
-            // `startAudioIOIfReady()` — main, via CallKitProvider's
-            // `onAudioSessionActivated`/`didActivate` (CXProvider.setDelegate
-            // queue: nil = the SAME main queue every other CXProviderDelegate
-            // callback shares, so a block here can starve a later mute/end
-            // action too — audit memory reference_ios_stability_audit_2026_09_01,
-            // P1 (8)). `CallKitWorkOffloadPolicy.audioEngineDispatch()` decides
-            // whether this runs inline (today's byte-for-byte behaviour) or on
-            // a dedicated background queue (fire-and-forget — `RTLog` hops
-            // back to `@MainActor` internally for the diagnostics, see
-            // `performAudioCaptureStart`); see that type's kdoc for why the
-            // switch defaults OFF.
-            switch CallKitWorkOffloadPolicy.audioEngineDispatch() {
-            case .inlineOnCallingThread:
-                performAudioCaptureStart(capture)
-            case .backgroundQueueFireAndForget:
-                Self.audioEngineOffloadQueue.async { [weak self] in
-                    self?.performAudioCaptureStart(capture)
-                }
-            }
+            // The engine start (`setVoiceProcessingEnabled`, `engine.start()`) is slow audio-system
+            // work, and this chain begins on the main thread (CallKit's `didActivate`, the fallback
+            // engage). It runs on the one serial audio queue instead (`AudioEngineSerialQueue`),
+            // the same queue every stop of this capture goes through, so a start and a stop run one
+            // after the other. The result comes back to the main thread in `finishAudioCaptureStart`.
+            dispatchAudioCaptureStart(capture)
         }
         // Diagnostics: `audioEnginesStarted` is now set inside
-        // `performAudioCaptureStart` on SUCCESS only (W-CAPFAILRETRY) — it used
+        // `finishAudioCaptureStart` on SUCCESS only (W-CAPFAILRETRY) — it used
         // to be set here unconditionally, so `engines_started=true` shipped in
         // the end-of-call telemetry of calls whose engine never started.
         if audioCapture != nil {
@@ -5191,126 +5185,137 @@ final class CallService: @unchecked Sendable {
         }
     }
 
-    /// W-CKMAINBLOCK (2026-09-02) — the actual `AudioCapture.start()` call
-    /// plus its success/failure diagnostics, extracted unchanged from
-    /// `startAudioIOIfReady()` so it can run either inline (kill switch off)
-    /// or on `Self.audioEngineOffloadQueue` (kill switch on) — see the call
-    /// site. `RTLog.*` and `print` are safe off the main thread (RTLog hops
-    /// to `@MainActor` internally when not already on it; `print` is
-    /// stdlib-serialized), so this needs no completion hop of its own.
-    private func performAudioCaptureStart(_ capture: AudioCapture) {
-        // W-ROUTEPRECHECK (2026-09-09) — sample the session's live route
-        // BEFORE attempting the engine start, instead of only reading it
-        // from the `catch` below after a throw. Best-practices audit the
-        // same night: production CallKit+AVAudioEngine stacks check
-        // `currentRoute.inputs` at activation time rather than gating only
-        // on a generic thrown error code — a doomed attempt (no input
-        // route yet) reliably throws the same uninformative
-        // `AVAudioSessionErrorCodeUnspecified`/'what' this file already
-        // has to special-case (W-CAPFAILROUTE). Skipping the attempt here
-        // and reusing the existing bounded retry (`scheduleCapfailRetry`)
-        // avoids that wasted, indistinguishable failure — this does not
-        // replace `scheduleCapfailRetry`'s own catch-side handling for a
-        // genuine engine/hardware fault, it only stops an attempt we can
-        // already tell will fail before it does.
-        let preflightRoute = AVAudioSession.sharedInstance()
-        guard preflightRoute.currentRoute.inputs.count > 0 else {
-            RTLog.warn(
-                "call",
-                "audioIO noinput=1 inp=\(preflightRoute.currentRoute.inputs.count)"
-                    + " outp=\(preflightRoute.currentRoute.outputs.count)"
-                    + " rec=\(preflightRoute.isInputAvailable ? 1 : 0)"
-            )
-            scheduleCapfailRetry()
-            return
+    /// What the capture start did on the audio queue; everything is plain numbers so the main
+    /// thread can log it without touching AVAudioSession.
+    private enum AudioCaptureStartOutcome {
+        /// The start never ran: a stop or the end of the call came first.
+        case skipped
+        /// W-ROUTEPRECHECK: no input route yet, the engine was not tried.
+        case noInput(inputs: Int, outputs: Int, recordable: Int)
+        case started(vpActive: Bool, bypassCount: Int, onSpeaker: Bool)
+        case failed(code: Int, inputs: Int, outputs: Int, recordable: Int, bufferMs: Int)
+    }
+
+    /// Queues the capture start on the serial audio queue (see `startAudioIOIfReady`).
+    private func dispatchAudioCaptureStart(_ capture: AudioCapture) {
+        _ = groupCallActiveForCapture()  // refresh the snapshot the queue reads
+        let epoch = Self.audioEngineQueue.currentEpoch
+        let pipeline = audioPipeline
+        audioStartsInFlight += 1
+        Self.audioEngineQueue.submitStart(epoch: epoch, work: { [weak self] in
+            let outcome = Self.runAudioCaptureStart(capture, pipeline: pipeline)
+            DispatchQueue.main.async { self?.finishAudioCaptureStart(outcome, capture: capture) }
+        }, skipped: { [weak self] in
+            DispatchQueue.main.async { self?.finishAudioCaptureStart(.skipped, capture: capture) }
+        })
+    }
+
+    /// The AVAudio part of the capture start. Runs on the audio queue, never on the main thread.
+    private static func runAudioCaptureStart(
+        _ capture: AudioCapture, pipeline: AudioProcessingPipeline?
+    ) -> AudioCaptureStartOutcome {
+        // W-ROUTEPRECHECK (2026-09-09) — sample the session's live route BEFORE attempting the
+        // engine start: a doomed attempt (no input route yet) reliably throws the same
+        // uninformative error. Skipping it and reusing the bounded retry avoids that failure.
+        let session = AVAudioSession.sharedInstance()
+        let route = session.currentRoute
+        let inputCount = route.inputs.count
+        guard inputCount > 0 else {
+            return .noInput(
+                inputs: inputCount, outputs: route.outputs.count, recordable: session.isInputAvailable ? 1 : 0)
         }
         do {
             try capture.start()
-            audioEnginesStarted = true  // W-CAPFAILRETRY — success only
-            // W-AUDIOGATEDIAG (2026-08-03): confirms all three gates
-            // above actually cleared and AVAudioEngine.start() itself
-            // succeeded — the one line that, if present, rules out
-            // startAudioIOIfReady as the cause of a "no audio"
-            // report and points at TX encode/send or RX decode/
-            // playback instead. Was previously unlogged entirely
-            // (silence on success gave no positive confirmation).
-            RTLog.info("call", "audioIO started=1")
-            // W-VPIODIAG (2026-08-12): whether Apple's Voice Processing I/O
-            // — AEC, NS and AGC behind one hardware switch — is actually
-            // engaged for this call.
-            //
-            // Added because the question "was echo cancellation off on that
-            // call?" could not be answered from telemetry at all. Android
-            // ships it per call ("Audio capture started: ... ns=true,
-            // aec=true"); iOS emitted the equivalent only through
-            // AudioProcessingPipeline.emitSessionDiagnostics, which is a
-            // plain print() carrying `vpio=true` — a non-numeric run, which
-            // is exactly what the redactor drops. Zero such lines exist in
-            // Loki, so the state was invisible remotely no matter how many
-            // calls were made.
-            //
-            // Every field is therefore numeric, per the same rule the
-            // capfail branch below documents. `vpio` is what the engine
-            // ended up with, `want` is what the user's toggles asked for,
-            // and they differ exactly when a fallback fired: the W-AEC-FIX
-            // starve watchdog or the setVoiceProcessingEnabled NSException
-            // degrade, both of which trade echo for a working mic and
-            // count in `byp`.
-            let vpActive = audioPipeline?.voiceProcessingIsActive == true
-            // W574c only force-enables AEC on the built-in loudspeaker route —
-            // "was echo cancellation off" is unanswerable without knowing
-            // whether that route was even the one active, so it rides along
-            // on the same numeric-only line for the same redactor reason.
-            let onSpeaker = AudioProcessingPipeline.currentRouteHasBuiltInSpeaker()
-            RTLog.info(
-                "call",
-                "audioVp vpio=\(vpActive ? 1 : 0)"
-                    + " want=\(CallsGate.anyVoiceProcessingEnabled ? 1 : 0)"
-                    + " byp=\(audioPipeline?.voiceProcessingBypassCount ?? -1)"
-                    + " aec=\(CallsGate.aecEnabled ? 1 : 0)"
-                    + " ns=\(CallsGate.nsEnabled ? 1 : 0)"
-                    + " agc=\(CallsGate.agcEnabled ? 1 : 0)"
-                    + " spk=\(onSpeaker ? 1 : 0)"
-            )
+            return .started(
+                vpActive: pipeline?.voiceProcessingIsActive == true,
+                bypassCount: pipeline?.voiceProcessingBypassCount ?? -1,
+                onSpeaker: AudioProcessingPipeline.currentRouteHasBuiltInSpeaker())
         } catch {
-            // Was print()-only — invisible in every remote log pull.
-            // The error description is deliberately NOT included: it's
-            // free-form English text, and a multi-word free-form run
-            // makes the redactor drop the WHOLE line (verified against
-            // the real redact_body), not just scrub the offending part
-            // — better a bare positive/negative signal that reliably
-            // ships than a detailed one that silently doesn't.
-            //
-            // W-CAPFAILCODE (2026-09-08) — `capfail=1` alone was a dead
-            // end: live-reported recurring "one-way audio, nothing heard"
-            // traced to this exact catch firing, but with no error code
-            // shipped there was no way to tell WHICH of `configureForVoIP`
-            // / `enableVoiceProcessing` / `engine.start()` threw, or why.
-            // `code` is a plain Int (NSError.code — an AVAudioSession/
-            // CoreAudio OSStatus for the errors this throw site actually
-            // sees), so it survives the redactor same as every other
-            // numeric field on this line.
+            // W-CAPFAILCODE / W-CAPFAILROUTE — the error code and the route probe of the state that
+            // actually failed, read here because the session is only touched on this queue.
             let nsError = error as NSError
-            // W-CAPFAILROUTE (2026-09-08) — the route probe used to exist only
-            // on the gate=4 skip branch, so the state that actually failed was
-            // never logged: the 16:33:45 'what' capfail had `in=` EMPTY on the
-            // W556 line next to it and no way to see that from this one.
-            // `code` is split into two ≤5-digit halves as well because a
-            // 10-digit OSStatus (2003329396 = 'what') is blobbed by the
-            // redactor as a phone number — `ch`/`cl` always survive.
-            let sess = AVAudioSession.sharedInstance()
-            let code = nsError.code
-            let codeHi = code / 100_000
-            let codeLo = code % 100_000
-            let inputs = sess.currentRoute.inputs.count
-            let outputs = sess.currentRoute.outputs.count
-            let recordable = sess.isInputAvailable ? 1 : 0
-            let bufMs = Int(sess.ioBufferDuration * 1000)
-            // Single interpolated literal on precomputed locals (CLAUDE.md §13:
-            // no `+` chains at a log site).
-            RTLog.warn("call", "audioIO capfail=1 code=\(code) ch=\(codeHi) cl=\(codeLo) inp=\(inputs) outp=\(outputs) rec=\(recordable) buf=\(bufMs)")
+            let now = AVAudioSession.sharedInstance()
+            return .failed(
+                code: nsError.code,
+                inputs: now.currentRoute.inputs.count,
+                outputs: now.currentRoute.outputs.count,
+                recordable: now.isInputAvailable ? 1 : 0,
+                bufferMs: Int(now.ioBufferDuration * 1000))
+        }
+    }
+
+    /// Main thread: books the result of a queued capture start (state and diagnostics).
+    private func finishAudioCaptureStart(_ outcome: AudioCaptureStartOutcome, capture: AudioCapture) {
+        audioStartsInFlight = max(0, audioStartsInFlight - 1)
+        defer { resolveAudioStartWaiters() }
+        // A capture that is no longer this call's: its stop was queued behind this start.
+        guard audioCapture === capture else { return }
+        switch outcome {
+        case .skipped:
+            return
+        case .noInput(let inputs, let outputs, let recordable):
+            let line: String = "audioIO noinput=1 inp=\(inputs) outp=\(outputs) rec=\(recordable)"
+            RTLog.warn("call", line)
+            scheduleCapfailRetry()
+        case .started(let vpActive, let bypassCount, let onSpeaker):
+            audioEnginesStarted = true  // W-CAPFAILRETRY — success only
+            // W-AUDIOGATEDIAG: the one line that confirms the engine start itself succeeded.
+            RTLog.info("call", "audioIO started=1")
+            // W-VPIODIAG (2026-08-12): whether Apple's Voice Processing I/O (AEC, NS, AGC behind one
+            // hardware switch) is engaged for this call. Every field is numeric so the redactor keeps
+            // the line; `vpio` is what the engine ended up with, `want` what the toggles asked for.
+            let vpio: Int = vpActive ? 1 : 0
+            let want: Int = CallsGate.anyVoiceProcessingEnabled ? 1 : 0
+            let aec: Int = CallsGate.aecEnabled ? 1 : 0
+            let ns: Int = CallsGate.nsEnabled ? 1 : 0
+            let agc: Int = CallsGate.agcEnabled ? 1 : 0
+            let spk: Int = onSpeaker ? 1 : 0
+            let vpLine: String = "audioVp vpio=\(vpio) want=\(want) byp=\(bypassCount) aec=\(aec) ns=\(ns) agc=\(agc) spk=\(spk)"
+            RTLog.info("call", vpLine)
+        case .failed(let code, let inputs, let outputs, let recordable, let bufMs):
+            // The error description is deliberately NOT included (free-form text makes the redactor
+            // drop the whole line). `code` is split into two <=5-digit halves because a 10-digit
+            // OSStatus is blobbed by the redactor as a phone number; `ch`/`cl` always survive.
+            let codeHi: Int = code / 100_000
+            let codeLo: Int = code % 100_000
+            let line: String = "audioIO capfail=1 code=\(code) ch=\(codeHi) cl=\(codeLo) inp=\(inputs) outp=\(outputs) rec=\(recordable) buf=\(bufMs)"
+            RTLog.warn("call", line)
             scheduleCapfailRetry()
         }
+    }
+
+    private func resolveAudioStartWaiters() {
+        guard audioStartsInFlight == 0, !audioStartWaiters.isEmpty else { return }
+        let waiting = audioStartWaiters
+        audioStartWaiters = []
+        let started = audioEnginesStarted
+        for done in waiting { done(started) }
+    }
+
+    /// Stops `capture` on the audio queue, behind any start still running, and makes the starts not
+    /// yet begun stale. `completion` runs on the main thread afterwards.
+    private func stopCaptureOnAudioQueue(
+        _ capture: AudioCapture?, deactivateSession: Bool, completion: (() -> Void)? = nil
+    ) {
+        Self.audioEngineQueue.submitStop {
+            capture?.stop(deactivateSession: deactivateSession)
+            if let completion { DispatchQueue.main.async(execute: completion) }
+        }
+    }
+
+    /// `AudioCapture.isGroupCallActive` runs on the audio queue too; the live answer is main-thread
+    /// state, so off the main thread the last answer read on it is used.
+    private func groupCallActiveForCapture() -> Bool {
+        if Thread.isMainThread {
+            let live = isGroupCallActive?() == true
+            groupActiveSnapshotLock.lock()
+            groupActiveSnapshot = live
+            groupActiveSnapshotLock.unlock()
+            return live
+        }
+        groupActiveSnapshotLock.lock()
+        defer { groupActiveSnapshotLock.unlock() }
+        return groupActiveSnapshot
     }
 
     // MARK: - W-ADMGATE (2026-09-26) — WebRTC's own audio unit (manual mode)
@@ -5401,15 +5406,29 @@ final class CallService: @unchecked Sendable {
             // fully stopped before WebRTC's starts. It normally never runs on
             // a native call (this branch skips it); it can only be up if it
             // started before the negotiation landed, or from a fallback.
-            if let capture = audioCapture, capture.isCapturing {
-                capture.stop(deactivateSession: false)
+            if let capture = audioCapture, capture.isCapturing || audioStartsInFlight > 0 {
+                // The stop and the unit switch-on run in this order on the audio queue.
                 audioEnginesStarted = false
-                RTLog.info("call", "admgate capstop=1")
+                let generation = currentCallGeneration()
+                let reasonRaw = reason.rawValue
+                Self.audioEngineQueue.submitStop { [weak self] in
+                    capture.stop(deactivateSession: false)
+                    // W-DEACTOWN — same switch as `setNativeAudioActive(true, ...)`,
+                    // plus the arm it was made for: this call's deactivation stops
+                    // that arm only.
+                    let token = NativeAudioSessionGate.enableNativeAudio(reason: reasonRaw)
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        RTLog.info("call", "admgate capstop=1")
+                        if self.currentCallGeneration() == generation { self.nativeUnitOwnerToken = token }
+                    }
+                }
+            } else {
+                // W-DEACTOWN — same switch as `setNativeAudioActive(true, ...)`,
+                // plus the arm it was made for: this call's deactivation stops
+                // that arm only.
+                nativeUnitOwnerToken = NativeAudioSessionGate.enableNativeAudio(reason: reason.rawValue)
             }
-            // W-DEACTOWN — same switch as `setNativeAudioActive(true, ...)`,
-            // plus the arm it was made for: this call's deactivation stops
-            // that arm only.
-            nativeUnitOwnerToken = NativeAudioSessionGate.enableNativeAudio(reason: reason.rawValue)
         case .awaitingCallKit:
             scheduleNativeUnitCallKitWait()
         default:
@@ -5435,7 +5454,7 @@ final class CallService: @unchecked Sendable {
                 false, reason: NativeAudioUnitGateDecisions.ChangeReason.captureLiveNudge.rawValue)
             reapplyNativeAudioUnitGate(reasonCode: NativeAudioUnitGateDecisions.ChangeReason.gate.rawValue)
         } else {
-            audioCapture?.stop(deactivateSession: false)
+            stopCaptureOnAudioQueue(audioCapture, deactivateSession: false)
             audioEnginesStarted = false
             startAudioIOIfReady()
         }
@@ -5535,8 +5554,32 @@ final class CallService: @unchecked Sendable {
         // so AudioCapture starts after a bounded settle instead of at once
         // (conservative: the fork's stop latency is not determinable here).
         fallbackRelayPending = true
-        let unitStopped = NativeAudioSessionGate.setNativeAudioActive(
-            false, reason: NativeAudioUnitGateDecisions.ChangeReason.fallbackEngage.rawValue)
+        // Everything that touches the audio session or the engine runs on the serial audio queue
+        // (`AudioEngineSerialQueue`), never on this (main) thread: switching WebRTC's unit off takes
+        // the RTCAudioSession configuration lock, and the relay capture start that follows runs
+        // `setVoiceProcessingEnabled` / `engine.start()`. The main thread resumes in
+        // `continueFallbackEngage` with the result.
+        fallbackEngageSeq += 1
+        let engageSeq = fallbackEngageSeq
+        let engagedGeneration = currentCallGeneration()
+        let epoch = Self.audioEngineQueue.currentEpoch
+        let changeReason = NativeAudioUnitGateDecisions.ChangeReason.fallbackEngage.rawValue
+        Self.audioEngineQueue.submitStart(epoch: epoch, work: { [weak self] in
+            let unitStopped = NativeAudioSessionGate.setNativeAudioActive(false, reason: changeReason)
+            DispatchQueue.main.async {
+                self?.continueFallbackEngage(unitStopped: unitStopped, seq: engageSeq, generation: engagedGeneration)
+            }
+        }, skipped: {
+            // A recover, hand-back or call end came first and has already taken over.
+        })
+    }
+
+    /// Main thread: second half of `engageAudioSrtpFallback`, once the native unit is off.
+    private func continueFallbackEngage(unitStopped: Bool, seq: Int, generation: Int) {
+        guard seq == fallbackEngageSeq,
+              audioSrtpFallbackActive,
+              currentCallGeneration() == generation,
+              getCallId?() != nil else { return }
         let settleMs = unitStopped ? Int(NativeAudioUnitGateDecisions.fallbackUnitStopSettleMs) : 0
         if unitStopped {
             RTLog.info("call", "admgate fbsettle=\(settleMs)")
@@ -5573,13 +5616,16 @@ final class CallService: @unchecked Sendable {
                 ) { _ in mainQueueHandler() }
                 return { NotificationCenter.default.removeObserver(token) }
             },
-            attempt: { [weak self] in
-                guard let self else { return false }
-                // `audioEnginesStarted` is set inline by `performAudioCaptureStart`; that holds
-                // because `CallKitWorkOffloadPolicy.audioEngineBackgroundQueueEnabled` is false.
-                // Turning that switch on would make this result stale: revisit this attempt first.
+            attemptAsync: { [weak self] done in
+                guard let self else { done(false); return }
+                // The capture start runs on the audio queue: when one is queued, the result is the
+                // one `finishAudioCaptureStart` books, delivered through the waiters.
                 self.startAudioIOIfReady()
-                return self.audioEnginesStarted
+                if self.audioStartsInFlight > 0 {
+                    self.audioStartWaiters.append(done)
+                } else {
+                    done(self.audioEnginesStarted)
+                }
             },
             isStillWanted: { [weak self] in
                 guard let self else { return false }
@@ -5634,14 +5680,30 @@ final class CallService: @unchecked Sendable {
         if fallbackRelayGiveUps == SrtpFallbackDecisions.maxGiveUpsPerCall {
             RTLog.warn("call", "audiosrtpfb capped=1")
         }
-        for step in FallbackHandBack.steps {
+        runHandBackSteps(FallbackHandBack.steps[...], generation: currentCallGeneration())
+    }
+
+    /// Runs the hand-back steps in order. The capture stop goes through the audio queue and the
+    /// steps after it continue on the main thread once the capture is really stopped (the custom
+    /// unit has to be gone before the native one is switched back on).
+    private func runHandBackSteps(_ steps: ArraySlice<FallbackHandBack.Step>, generation: Int) {
+        var remaining = steps
+        while let step = remaining.first {
+            remaining = remaining.dropFirst()
             switch step {
             case .clearLatch:
                 audioSrtpFallbackActive = false
                 audioSrtpFallbackTag = nil
             case .stopCapture:
-                audioCapture?.stop(deactivateSession: false)
+                fallbackEngageSeq += 1
                 audioEnginesStarted = false
+                let rest = remaining
+                stopCaptureOnAudioQueue(audioCapture, deactivateSession: false) { [weak self] in
+                    guard let self, self.currentCallGeneration() == generation else { return }
+                    self.audioEnginesStarted = false
+                    self.runHandBackSteps(rest, generation: generation)
+                }
+                return
             case .unmuteNativeSender:
                 reapplyNativeSenderMute(site: 5)
             case .restoreNativeUnit:
@@ -5658,6 +5720,7 @@ final class CallService: @unchecked Sendable {
     public func recoverAudioSrtpFallback() {
         guard audioSrtpFallbackActive else { return }
         cancelFallbackRelayStart()
+        fallbackEngageSeq += 1
         audioSrtpFallbackActive = false
         audioSrtpFallbackTag = nil
         RTLog.warn("call", "audiosrtpfb recover=1")
@@ -5665,19 +5728,24 @@ final class CallService: @unchecked Sendable {
         // only the manual fallback engine is stepping aside for native
         // audio-srtp to resume. Deactivating the shared session mid-call
         // would tear down its category/mode for no reason.
-        // `stop()` tears VoiceProcessingIO down synchronously
-        // (`CallKitWorkOffloadPolicy.voiceProcessingTeardownQueueEnabled` is a
-        // compile-time `false`), so the custom unit is gone before WebRTC's is
-        // switched back on below.
-        audioCapture?.stop(deactivateSession: false)
+        // The stop runs on the audio queue, behind any start still running, and tears
+        // VoiceProcessingIO down there; the custom unit is gone before WebRTC's is switched back
+        // on, because the steps below only run once the stop is done.
+        let generation = currentCallGeneration()
         audioEnginesStarted = false
-        // W-DEADTXRELEASE — symmetric un-mute: native audio resumes as the
-        // sole TX/RX owner, same as this function's own doc already says.
-        // W-NATIVEMUTE (2026-09-26) — honouring the user's own mute.
-        // W-CALLERUNMUTELOST (2026-09-27) — via the shared formula now (site=5).
-        reapplyNativeSenderMute(site: 5)
-        // W-ADMFALLBACK — native unit back on (same verdict as the call start).
-        applyNativeAudioUnitGate(reason: .fallbackRecover)
+        stopCaptureOnAudioQueue(audioCapture, deactivateSession: false) { [weak self] in
+            guard let self, self.currentCallGeneration() == generation else { return }
+            self.audioEnginesStarted = false
+            // Engaged again in the meantime: that engage owns the units now.
+            guard !self.audioSrtpFallbackActive else { return }
+            // W-DEADTXRELEASE — symmetric un-mute: native audio resumes as the
+            // sole TX/RX owner, same as this function's own doc already says.
+            // W-NATIVEMUTE (2026-09-26) — honouring the user's own mute.
+            // W-CALLERUNMUTELOST (2026-09-27) — via the shared formula now (site=5).
+            self.reapplyNativeSenderMute(site: 5)
+            // W-ADMFALLBACK — native unit back on (same verdict as the call start).
+            self.applyNativeAudioUnitGate(reason: .fallbackRecover)
+        }
     }
 
     /// W464 — CallKit activated the shared `AVAudioSession`. This is the
