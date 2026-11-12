@@ -892,6 +892,7 @@ for why in range(1, 6):
 #   trig src=1 suppressed=1 why=<1-5>            a volume change that was NOT a press
 #   report send age=<ms> min=<n> count=<n>       a report sent (trigger->send, log window)
 #   hang ms=<n> site=1 background=<0|1>          a main-thread stall during a call
+#   hang_start ms=<n> site=1                     a main-thread ping unanswered after 1 s
 # ---------------------------------------------------------------------------
 DIAG_LINES = (
     ("group", "grp state=2 old=1 count=3"),
@@ -921,6 +922,7 @@ DIAG_LINES = (
     ("bugreport", "report send age=5200 min=5 count=2"),
     ("call", "hang ms=5200 site=1 background=0"),
     ("call", "hang ms=1200 site=1 background=1"),
+    ("call", "hang_start ms=1500 site=1"),
 )
 
 

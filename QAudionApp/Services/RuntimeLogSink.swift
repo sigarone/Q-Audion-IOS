@@ -143,8 +143,10 @@ public final class RuntimeLogSink: ObservableObject {
     /// `RTLog` from a thread that is not the main thread: the line reaches the ring and the OSLog
     /// mirror at once, on the calling thread. Only the observable counter (and the error hook of
     /// the bug reporter) hop to the main actor afterwards, so the log does not wait for it.
-    nonisolated static func recordFromAnyThread(level: Level, tag: String, _ message: String, at: Date) {
-        let safeMessage: String = appendToRing(level: level, tag: tag, message, at: at, mirrorToOSLog: true)
+    nonisolated static func recordFromAnyThread(
+        level: Level, tag: String, _ message: String, at: Date, mirrorToOSLog: Bool = true
+    ) {
+        let safeMessage: String = appendToRing(level: level, tag: tag, message, at: at, mirrorToOSLog: mirrorToOSLog)
         Task { @MainActor in
             RuntimeLogSink.shared.noteRecordedElsewhere(level: level, tag: tag, safeMessage)
         }
@@ -344,9 +346,10 @@ public final class RuntimeLogSink: ObservableObject {
         let limiter = StdoutTeeLines.RateLimiter(queue: queue) { [weak self] lines in
             let flushedAt = Date()
             for out in lines {
-                Task { @MainActor [weak self] in
-                    self?.record(level: .info, tag: "stdout", out, origin: .stdoutTee, at: flushedAt)
-                }
+                // Straight into the ring on this queue (never mirrored back to OSLog): no hop to the
+                // main thread.
+                RuntimeLogSink.recordFromAnyThread(
+                    level: .info, tag: "stdout", out, at: flushedAt, mirrorToOSLog: false)
             }
         }
         source.setEventHandler { [weak self] in
@@ -378,10 +381,10 @@ public final class RuntimeLogSink: ObservableObject {
                     let safe: String = RuntimeLogSink.redact(line)
                     // Repeats of the same native line inside a window are counted, not recorded.
                     for out in limiter.admit(safe, now: ProcessInfo.processInfo.systemUptime) {
-                        Task { @MainActor [weak self] in
-                            // `.stdoutTee`: a captured line is never mirrored back to OSLog (second defence).
-                            self?.record(level: .info, tag: "stdout", out, origin: .stdoutTee, at: readAt)
-                        }
+                        // A captured line is never mirrored back to OSLog (second defence), and does
+                        // not wait for the main thread.
+                        RuntimeLogSink.recordFromAnyThread(
+                            level: .info, tag: "stdout", out, at: readAt, mirrorToOSLog: false)
                     }
                 }
             }

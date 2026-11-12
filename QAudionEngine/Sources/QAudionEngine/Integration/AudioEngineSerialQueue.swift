@@ -2,11 +2,11 @@ import Foundation
 
 /// One serial queue for the work that touches the audio session and the audio engine during a
 /// call: the native audio unit switch, the route preflight, `AudioCapture.start()` and
-/// `AudioCapture.stop()`. The caller's thread (main) only submits a request and receives the
-/// result.
+/// `AudioCapture.stop()`, and every restart, recovery, interruption and watchdog operation of the
+/// capture itself. The caller's thread (main) only submits a request and receives the result.
 ///
-/// Why one queue for start AND stop: the engine objects have no thread-safety guarantee, so a
-/// stop must not run on another thread while a start is still building the engine (see
+/// Why one queue for everything: the engine objects have no thread-safety guarantee, so a stop
+/// must not run on another thread while a start is still building the engine (see
 /// `CallKitWorkOffloadPolicy.voiceProcessingTeardownQueueEnabled`).
 /// Here a stop waits behind the start that is running, so the two run one after the other, and a start
 /// that has not begun when a stop is submitted is skipped, so no engine is left running after
@@ -21,11 +21,18 @@ public final class AudioEngineSerialQueue: @unchecked Sendable {
     public static let shared = AudioEngineSerialQueue(label: "com.qaudion.callservice.audioengine")
 
     private let queue: DispatchQueue
+    private let specificKey = DispatchSpecificKey<Void>()
     private let lock = NSLock()
     private var epoch = 0
 
     public init(label: String, qos: DispatchQoS = .userInitiated) {
         queue = DispatchQueue(label: label, qos: qos)
+        queue.setSpecific(key: specificKey, value: ())
+    }
+
+    /// True when the caller is running on this queue.
+    public var isOnQueue: Bool {
+        DispatchQueue.getSpecific(key: specificKey) != nil
     }
 
     public var currentEpoch: Int {
@@ -64,6 +71,16 @@ public final class AudioEngineSerialQueue: @unchecked Sendable {
     public func submitStop(_ work: @escaping () -> Void) {
         invalidatePendingStarts()
         queue.async(execute: work)
+    }
+
+    /// Queues `work` behind everything submitted before. It always runs and does not change the epoch.
+    public func submit(_ work: @escaping () -> Void) {
+        queue.async(execute: work)
+    }
+
+    /// Queues `item` to run on this queue after `milliseconds`. The caller keeps the item to cancel it.
+    public func submitAfter(milliseconds: Int, _ item: DispatchWorkItem) {
+        queue.asyncAfter(deadline: .now() + .milliseconds(max(0, milliseconds)), execute: item)
     }
 
     /// Returns once everything submitted before this call has run. For tests: never call it from
