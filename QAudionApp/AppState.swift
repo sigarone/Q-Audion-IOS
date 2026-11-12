@@ -16073,7 +16073,7 @@ final class AppState: ObservableObject {
                let liveId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(),
                !liveId.isEmpty,
                liveId.caseInsensitiveCompare(parsed.callId) != .orderedSame {
-                print("[AppState] Android OFFER dropped — another call is live callId=\(parsed.callId.prefix(8))… live=\(liveId.prefix(8))…")
+                RTLog.info("call", "offer_drop other_call cid=\(parsed.callId.prefix(8)) live=\(liveId.prefix(8))")
                 return
             }
         } else {
