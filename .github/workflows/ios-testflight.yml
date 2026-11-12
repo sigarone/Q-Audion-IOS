@@ -161,6 +161,15 @@ on:
 permissions:
   contents: read
 
+# Shared by the `build` job and the `dsyms-recovery` job, so it is committed exactly once
+# (scripts/ci/test-encrypt-dsyms.sh checks that).
+env:
+  # age public key (X25519) the dSYM artifacts are encrypted to. PUBLIC by design: it can
+  # only encrypt. The matching private key is kept off GitHub. Rotating it means a new
+  # key pair and a new value here; artifacts already uploaded stay readable only with
+  # the old key, so keep the old one until they have expired (90 days).
+  DSYM_AGE_RECIPIENT: age19jh648g49rpsthzlnm2qrq9h8tmymnv7xmxncwhew4us9qc70s6shnu2pq
+
 # Serialize the whole job across EVERY trigger (tag push AND workflow_dispatch,
 # dev_tools or not) -- a single static group, not per-ref/per-tag. Reason: the
 # "Bump version" step reads "latest TestFlight build number" from App Store
@@ -191,9 +200,11 @@ jobs:
   #      commit: a path-filtered push may not have started one) in which share-variant-build,
   #      vpn-variant-build, earbud-variant-build and release-config-build all succeeded (a skipped job
   #      does not count), and
-  #   2. a successful run of engine-tests.yml in which ios-simulator-tests succeeded.
+  #   2. a successful run of engine-tests.yml in which ios-simulator-tests succeeded (a push, or a manual
+  #      dispatch of it on that commit).
   # A run still in progress is waited for; a run that failed, or none at all, fails the job with the remedy.
-  # The dSYM recovery dispatch (download_dsyms=true) builds and uploads nothing and is not gated.
+  # The dSYM recovery dispatch (download_dsyms=true) is not CI-gated because it never builds, signs or
+  # uploads a build: the `build` job is skipped for it and only the separate `dsyms-recovery` job runs.
   gate:
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -237,7 +248,7 @@ jobs:
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
           echo "Commit to build and to check: ${SHA}"
           if [ "$RECOVERY" = "true" ]; then
-            echo "dSYM recovery: nothing is built, no CI check."
+            echo "dSYM recovery: the build job is skipped, only the dsyms-recovery job runs; no CI check."
             exit 0
           fi
 
@@ -288,13 +299,16 @@ jobs:
             if [ "$A" -eq 2 ] || [ "$E" -eq 2 ]; then WAIT=1; fi
             if [ "$N" -le 3 ]; then WAIT=1; fi
             if [ "$WAIT" -eq 0 ] || [ "$N" -ge "$MAX_POLLS" ]; then
-              fail "CI is not green on ${SHA}. Needed: ios-app-tests.yml from a push to main (or a manual dispatch on this commit) with ${APP_JOBS// /, } all successful, and engine-tests.yml with ios-simulator-tests successful. If a push to main skipped ios-app-tests.yml because of its path filter, run it on this commit: gh workflow run ios-app-tests.yml --ref <tag>."
+              fail "CI is not green on ${SHA}. Needed: ios-app-tests.yml from a push to main (or a manual dispatch on this commit) with ${APP_JOBS// /, } all successful, and engine-tests.yml with ios-simulator-tests successful. If a push to main did not start one of them (ios-app-tests.yml has a path filter), dispatch it on this commit: gh workflow run ios-app-tests.yml --ref <tag> and gh workflow run engine-tests.yml --ref <tag>."
             fi
             sleep "$POLL_SECONDS"
           done
 
   build:
     needs: gate
+    # Not for the dSYM recovery dispatch: that one runs the `dsyms-recovery` job below and must never
+    # sign, build or upload a build.
+    if: ${{ !(github.event_name == 'workflow_dispatch' && github.event.inputs.download_dsyms == 'true') }}
     # The release is built with Xcode 27 (iOS 27 SDK) on the runner image that
     # carries it (label xcode-27); the minimum deployment target stays 16.0.
     # XCODE_VERSION below pins the family and the "Select Xcode" step fails
@@ -328,11 +342,6 @@ jobs:
       # The share extension in this build (QAudionApp/project-share.yml). 'true' only for a workflow_dispatch with
       # share=true; a tag push is always 'false'.
       SHARE_BUILD: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.share == 'true' && 'true' || 'false' }}
-      # age public key (X25519) the dSYM artifacts are encrypted to. PUBLIC by design: it can
-      # only encrypt. The matching private key is kept off GitHub. Rotating it means a new
-      # key pair and a new value here; artifacts already uploaded stay readable only with
-      # the old key, so keep the old one until they have expired (90 days).
-      DSYM_AGE_RECIPIENT: age19jh648g49rpsthzlnm2qrq9h8tmymnv7xmxncwhew4us9qc70s6shnu2pq
       # WebRTC key-material logging gate (scripts/ci/assert-no-key-logging.sh, step
       # "Assert no WebRTC key-material logging in the IPA" below).
       #   '1' = ENFORCE (current): the step fails the job, BEFORE the TestFlight upload, if
@@ -1900,8 +1909,34 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
+  # dSYM recovery (download_dsyms=true, manual dispatch only). A separate job, so that this dispatch can
+  # never reach the signing, build or upload steps of `build` (which is skipped for it). It needs only
+  # fastlane (on the macOS runner image), age and the App Store Connect key.
+  dsyms-recovery:
+    needs: gate
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.download_dsyms == 'true' }}
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      BUNDLE_ID: com.qaudion.app
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+
+      - name: Install age (pinned release, SHA-256 verified)
+        continue-on-error: true
+        run: |
+          set -e
+          test -f scripts/ci/install-age.sh
+          sh scripts/ci/install-age.sh "$RUNNER_TEMP/age-bin"
+          echo "$RUNNER_TEMP/age-bin" >> "$GITHUB_PATH"
+
       # ----------------------------------------------------------
-      # 12) P0-A FALLBACK -- recover dSYMs from App Store Connect for a
+      # P0-A FALLBACK -- recover dSYMs from App Store Connect for a
       #     build whose 90-day artifact already expired. OPT-IN ONLY:
       #     runs solely on a manual workflow_dispatch with
       #     download_dsyms=true (never on a normal tag push). Uses
@@ -1917,8 +1952,8 @@ jobs:
       #     documents intent. Boolean dispatch inputs serialize to the
       #     strings 'true'/'false'.
       # ----------------------------------------------------------
-      - name: Recover dSYMs from App Store Connect (opt-in)
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.download_dsyms == 'true' }}
+      - name: Recover dSYMs from App Store Connect
+        id: recover
         continue-on-error: true
         env:
           APP_STORE_CONNECT_KEY_IDENTIFIER: ${{ secrets.APP_STORE_CONNECT_KEY_IDENTIFIER }}
@@ -1927,7 +1962,6 @@ jobs:
           # SEC (Aikido, 2026-08-21): env, not ${{ }} spliced into the
           # script — see the "Bump version" step's identical fix above.
           TAG_INPUT: ${{ github.event.inputs.tag }}
-          MARKETING_VERSION_OUTPUT: ${{ steps.version.outputs.marketing_version }}
         run: |
           # NB: intentionally NO `set -x` -- it would echo the .p8 secret.
           set -uo pipefail
@@ -1967,10 +2001,8 @@ jobs:
           mkdir -p "$REC_OUT"
 
           # version: prefer the bumped value, else parse the dispatch tag.
-          VER="$MARKETING_VERSION_OUTPUT"
-          if [ -z "$VER" ]; then
-            VER="$(echo "$TAG_INPUT" | sed -E 's/^v//; s/-[A-Za-z].*$//')"
-          fi
+          VER="$(echo "$TAG_INPUT" | sed -E 's/^v//; s/-[A-Za-z].*$//')"
+          echo "ver=${VER}" >> "$GITHUB_OUTPUT"
           echo "Recovering dSYMs for app $BUNDLE_ID${VER:+ version $VER}"
 
           # download_dsyms pulls every dSYM Apple holds for the app
@@ -1993,20 +2025,18 @@ jobs:
       # recovered files are encrypted with age to DSYM_AGE_RECIPIENT and only the .age
       # files are uploaded. age was installed by the "Install age" step above (PATH);
       # if that step failed this one fails and nothing is uploaded.
-      - name: Encrypt recovered dSYMs (opt-in)
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.download_dsyms == 'true' }}
+      - name: Encrypt recovered dSYMs
         continue-on-error: true
         run: |
           set -e
           rm -rf dsyms-recovered-enc
           sh scripts/ci/encrypt-dsyms.sh dsyms-recovered dsyms-recovered-enc "$DSYM_AGE_RECIPIENT"
 
-      - name: Upload recovered dSYMs (opt-in, encrypted)
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.download_dsyms == 'true' }}
+      - name: Upload recovered dSYMs (encrypted)
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
-          name: dsyms-recovered-${{ steps.version.outputs.marketing_version || github.run_number }}
+          name: dsyms-recovered-${{ steps.recover.outputs.ver || github.run_number }}
           # Only .age files; dsyms-recovered/ (the plaintext) is not listed.
           path: dsyms-recovered-enc/*.age
           retention-days: 90

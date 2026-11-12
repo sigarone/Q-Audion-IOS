@@ -36,7 +36,9 @@
 #
 # Which variant jobs run (2026-11): on a pull request only those whose files changed, decided by the
 # `changes` job through scripts/ci/ios-variant-changes.sh (the rules and the reasons are in the header
-# of that script). A change to the build configuration, or the label `full-ci`, runs all four. On push to
+# of that script, which is always taken from the BASE of the pull request, never from the pull request itself).
+# A change to the build configuration, or the label `full-ci` (read when the run starts: push, or re-run, after
+# adding it), runs all four. On push to
 # main and on a manual dispatch all four always run: a tag of ios-testflight.yml is released only when they
 # passed on the tagged commit (job `gate` there).
 #
@@ -73,8 +75,6 @@ on:
       - '.github/workflows/ios-app-tests.yml'
   pull_request:
     branches: [main]
-    # `labeled` so that adding the label `full-ci` starts the full run.
-    types: [opened, synchronize, reopened, labeled]
     paths:
       - 'QAudionApp/**'
       - 'QAudionAppTests/**'
@@ -102,10 +102,10 @@ permissions:
 
 # A newer push to a pull request replaces the run in progress; a run on main is
 # never cancelled, so the step that writes the cache on main always completes.
-# Adding any other label starts a run whose jobs all skip; it gets its own group so that it never cancels
-# the run in progress.
+# A push to main has a group of its own per commit, so a newer merge never replaces the run still pending for
+# an older commit (the TestFlight gate needs the run of the exact commit it ships).
 concurrency:
-  group: ios-app-tests-${{ github.ref }}${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && format('-label-{0}', github.run_id) || '' }}
+  group: ios-app-tests-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -113,7 +113,6 @@ jobs:
   # `full-ci` run all of them. A failure of this job (file list unreadable or truncated, checkout error)
   # also runs all of them: the variant jobs treat "failure" as "needed", never as "skip".
   changes:
-    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'full-ci' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -137,7 +136,6 @@ jobs:
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           set -u
           all() {
@@ -146,7 +144,12 @@ jobs:
             exit 0
           }
           [ "$EVENT" = "pull_request" ] || all "Event ${EVENT}"
-          if printf '%s' "$LABELS" | jq -e 'index("full-ci")' >/dev/null 2>&1; then
+          # The labels now (not those of the event payload), so a re-run after adding the label sees it.
+          if ! LABELS=$(gh api "repos/${REPO}/issues/${PR}/labels" --paginate --jq '.[].name'); then
+            echo "::warning::could not read the labels of the pull request: running all variants"
+            all "Labels unavailable"
+          fi
+          if printf '%s\n' "$LABELS" | grep -qx 'full-ci'; then
             all "Label full-ci"
           fi
           if ! FILES=$(gh api "repos/${REPO}/pulls/${PR}/files?per_page=100" --paginate --jq '.[] | .filename, (.previous_filename // empty)'); then
@@ -159,15 +162,19 @@ jobs:
             echo "::warning::file list of ${COUNT} entries is empty or possibly truncated: running all variants"
             all "File list untrusted"
           fi
-          # The base side, so a deleted file or a removed flag is read as it was. Without it, a path that
-          # cannot be read is treated by the script as "all".
-          BASE_REV=""
-          if git fetch --no-tags --depth=1 origin "$BASE_SHA" >/dev/null 2>&1; then
-            BASE_REV="$BASE_SHA"
-          else
-            echo "::warning::base commit not fetched: deleted files will run all variants"
+          # The base side: the decision script is the one on the base branch, never the pull request's own
+          # (a pull request that changes it must not decide with its own version), and the base content is
+          # what a deleted file or a removed flag is read from. Neither available: all variants.
+          if ! git fetch --no-tags --depth=1 origin "$BASE_SHA" >/dev/null 2>&1; then
+            echo "::warning::base commit not fetched: running all variants"
+            all "Base unavailable"
           fi
-          if ! OUT=$(printf '%s\n' "$FILES" | BASE_REV="$BASE_REV" sh scripts/ci/ios-variant-changes.sh); then
+          SCRIPT="${RUNNER_TEMP}/ios-variant-changes.base.sh"
+          if ! git show "${BASE_SHA}:scripts/ci/ios-variant-changes.sh" > "$SCRIPT" 2>/dev/null; then
+            echo "::warning::scripts/ci/ios-variant-changes.sh is not on the base branch: running all variants"
+            all "Script not on base"
+          fi
+          if ! OUT=$(printf '%s\n' "$FILES" | BASE_REV="$BASE_SHA" sh "$SCRIPT"); then
             echo "::warning::decision script failed: running all variants"
             all "Script failed"
           fi
@@ -175,7 +182,6 @@ jobs:
           printf '%s\n' "$OUT"
 
   app-build-and-tests:
-    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'full-ci' }}
     runs-on: xcode-27
     timeout-minutes: 60
 

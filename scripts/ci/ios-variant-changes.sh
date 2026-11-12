@@ -23,11 +23,24 @@
 # break a variant only if it holds that variant's flag (or, for release, a DEBUG condition): those are found by
 # reading the file. The default Debug build, the app tests and the gate scripts run on every pull request anyway.
 #
-# EVERYTHING ELSE FORCES ALL FOUR: project.yml, *.xcconfig, *.entitlements and Info.plist outside the two extension
-# folders, *.xcprivacy, Package.swift / Package.resolved, scripts/ci/**, this workflow, the `full-ci` label, and any
-# file that cannot be read on either side.
-# Known limit: a symbol removed from a file without a flag, but still used inside a flagged region of ANOTHER
-# file, breaks only that variant and is not seen here; the run on main builds all four after the merge.
+# FORCES ALL FOUR: project.yml and every project-*.yml, *.xcconfig, *.entitlements and Info.plist outside the two
+# extension folders, *.xcprivacy, *.xcassets, *.xcstrings and Localizable files, Package.swift / Package.resolved,
+# scripts/ci/**, the workflow ios-app-tests.yml, the `full-ci` label, a Swift file that cannot be read on either
+# side, and ANY other path under QAudionApp, QAudionEngine, QAudionShare, QAudionPacketTunnel, QAudionIntents,
+# QAudionLiveActivity or QAudionNotificationService that no rule below names (an unknown path is never skipped).
+# NOTHING: docs/**, maestro/**, .jules/**, the other workflows, and Swift files of the two test folders, which no
+# variant compiles (the default build runs the app tests on every pull request).
+#
+# The workflow runs the copy of this script that is on the BASE branch, not the one of the pull request, so a pull
+# request cannot decide with its own version; a change to this file is under scripts/ci/ and forces all four.
+#
+# Known limits, stated plainly:
+#  - A symbol removed from a file without a flag, but still used inside a flagged region of ANOTHER file, breaks
+#    only that variant and is not seen here.
+#  - release-config-build is skipped for a Swift file that has no `#if DEBUG` / `#if RELEASE`, so a warning that
+#    only the optimised Release build reports can slip through the pull request. It surfaces on main, where all
+#    four variants run after the merge, and the TestFlight gate (ios-testflight.yml, job `gate`) refuses to ship a
+#    commit on which any of them failed.
 set -u
 LC_ALL=C
 export LC_ALL
@@ -69,21 +82,22 @@ while IFS= read -r f; do
   [ -z "$f" ] && continue
   COUNT=$((COUNT + 1))
   case "$f" in
-    # the extensions and the specs that belong to one variant
+    # the entitlements that only some variants read
     QAudionApp/QAudionShareApp.entitlements) SHARE=true; VPN=true; NOTE "share+vpn: $f" ;;
     QAudionApp/QAudionVPN.entitlements)      VPN=true; NOTE "vpn: $f" ;;
-    QAudionApp/project-share.yml)            SHARE=true; NOTE "share: $f" ;;
-    QAudionApp/project-vpn.yml)              VPN=true; EARBUD=true; NOTE "vpn+earbud: $f" ;;
-    QAudionApp/project-vpn-earbud.yml|QAudionApp/project-earbud.yml) EARBUD=true; NOTE "earbud: $f" ;;
-    QAudionApp/project-apptests.yml)         NOTE "none (app tests only): $f" ;;
-    QAudionShare/*)                          SHARE=true; NOTE "share: $f" ;;
-    QAudionApp/Share/*)                      SHARE=true; NOTE "share: $f" ;;
-    QAudionPacketTunnel/*)                   VPN=true; NOTE "vpn: $f" ;;
-    # build configuration: all variants
-    .github/workflows/ios-app-tests.yml|scripts/ci/*|*Package.swift|*Package.resolved|*.xcconfig|*.entitlements|*Info.plist|*.xcprivacy|QAudionApp/project.yml|project.yml)
+    # build configuration and resources that every variant takes in: all variants
+    *project-*.yml|*project.yml|.github/workflows/ios-app-tests.yml|scripts/ci/*|*Package.swift|*Package.resolved|*.xcconfig|*.xcassets|*.xcassets/*|*.xcstrings|*Localizable*|*.xcprivacy)
       ALL=true; NOTE "all: $f" ;;
-    # sources compiled into the app: only the regions of a variant can differ
-    QAudionApp/*|QAudionEngine/Sources/*|QAudionIntents/*|QAudionLiveActivity/*|QAudionNotificationService/*)
+    # the extensions, each in its own variant (their own entitlements and Info.plist included)
+    QAudionShare/*|QAudionApp/Share/*)       SHARE=true; NOTE "share: $f" ;;
+    QAudionPacketTunnel/*)                   VPN=true; NOTE "vpn: $f" ;;
+    *.entitlements|*Info.plist)              ALL=true; NOTE "all: $f" ;;
+    # paths no variant reads
+    docs/*|maestro/*|.jules/*|.github/workflows/*) NOTE "none: $f" ;;
+    # Swift tests: no variant compiles them
+    QAudionEngine/Tests/*.swift|QAudionAppTests/*.swift) NOTE "none (tests): $f" ;;
+    # Swift sources compiled into the app: only the regions of a variant can differ
+    QAudionApp/*.swift|QAudionEngine/Sources/*.swift|QAudionIntents/*.swift|QAudionLiveActivity/*.swift|QAudionNotificationService/*.swift)
       if ! readable "$f"; then
         ALL=true; NOTE "all: $f cannot be read on either side"
         continue
@@ -93,7 +107,10 @@ while IFS= read -r f; do
       if content_has "$f" 'QAUDION_EARBUD|QAUDION_DEV_TOOLS'; then EARBUD=true; NOTE "earbud: $f"; fi
       if content_has "$f" '^[[:space:]]*#(if|elseif)[[:space:]].*\b(DEBUG|RELEASE)\b'; then REL=true; NOTE "release: $f"; fi
       ;;
-    *) ;;
+    # anything else in the code folders is unknown: never skipped
+    QAudionApp/*|QAudionEngine/*|QAudionShare/*|QAudionPacketTunnel/*|QAudionIntents/*|QAudionLiveActivity/*|QAudionNotificationService/*)
+      ALL=true; NOTE "all (unknown path): $f" ;;
+    *) NOTE "none: $f" ;;
   esac
 done
 
