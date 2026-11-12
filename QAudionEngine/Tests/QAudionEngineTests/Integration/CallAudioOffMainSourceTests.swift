@@ -61,14 +61,14 @@ final class CallAudioOffMainSourceTests: XCTestCase {
         let engage = try body(of: "public func engageAudioSrtpFallback(", in: text)
         XCTAssertTrue(engage.contains("queueFallbackEngageUnitSwitch("))
         for forbidden in ["AVAudioSession", "AVAudioEngine", ".start()", ".stop(deactivateSession",
-                          "setNativeAudioActive(", "startAudioIOIfReady()", "beginFallbackRelayStart(", "audioCapture"] {
+                          "applySwitchOnAudioQueue(", "startAudioIOIfReady()", "beginFallbackRelayStart(", "audioCapture"] {
             XCTAssertFalse(engage.contains(forbidden), "engageAudioSrtpFallback must not contain \(forbidden)")
         }
 
         // The unit switch is inside the queue closure, after the submit.
         let queued = try body(of: "private func queueFallbackEngageUnitSwitch(", in: text)
         let submit = try XCTUnwrap(queued.range(of: "audioEngineQueue.submitStart("))
-        let unitOff = try XCTUnwrap(queued.range(of: "NativeAudioSessionGate.setNativeAudioActive("))
+        let unitOff = try XCTUnwrap(queued.range(of: "NativeAudioSessionGate.applySwitchOnAudioQueue("))
         XCTAssertLessThan(submit.lowerBound, unitOff.lowerBound)
     }
 
@@ -84,25 +84,86 @@ final class CallAudioOffMainSourceTests: XCTestCase {
         XCTAssertTrue(skipped.contains("handBackToNativeSender()"))
     }
 
-    /// Every switch of WebRTC's audio unit (off or on) is made on the audio queue, never on the main
-    /// thread: the switch takes the RTCAudioSession configuration lock.
+    /// THE RULE: every switch of WebRTC's audio unit (off or on) is made on the audio queue and is
+    /// owner-checked; the only synchronous one is the release of a peer connection's own arm. The switch
+    /// takes the RTCAudioSession configuration lock, which the main thread does not wait for.
     func test_everyNativeUnitSwitchRunsOnTheAudioQueue() throws {
-        let text = try source("QAudionApp/Services/CallService.swift")
-        let lines = codeOnly(text).components(separatedBy: "\n")
-        var found = 0
-        for (index, line) in lines.enumerated()
-        where line.contains("NativeAudioSessionGate.setNativeAudioActive(")
-            || line.contains("NativeAudioSessionGate.enableNativeAudio(") {
-            found += 1
-            let window = lines[max(0, index - 10)..<index].joined(separator: "\n")
-            XCTAssertTrue(window.contains("audioEngineQueue.submit"),
-                          "unit switch outside the audio queue: \(line.trimmingCharacters(in: .whitespaces))")
-        }
-        XCTAssertGreaterThanOrEqual(found, 3)
+        let gate = try source("QAudionEngine/Sources/QAudionEngine/WebRTC/NativeAudioSessionGate.swift")
+        XCTAssertFalse(gate.contains("public static func setNativeAudioActive(_ active: Bool, reason: Int)"),
+                       "an unowned switch")
+        XCTAssertFalse(gate.contains("public static func enableNativeAudio("), "an unowned switch")
 
-        let teardown = try body(of: "private func teardownAudioStack(", in: text)
+        let files = [
+            "QAudionApp/Services/CallService.swift",
+            "QAudionApp/AppState.swift",
+            "QAudionEngine/Sources/QAudionEngine/GroupCall/GroupAudioUnitDriver.swift",
+            "QAudionEngine/Sources/QAudionEngine/WebRTC/QAudionWebRtcCallController.swift",
+            "QAudionEngine/Sources/QAudionEngine/WebRTC/QAudionPeerConnection.swift",
+        ]
+        var applied = 0
+        for file in files {
+            let text = try source(file)
+            let lines = codeOnly(text).components(separatedBy: "\n")
+            for (index, line) in lines.enumerated() {
+                XCTAssertFalse(line.contains("NativeAudioSessionGate.setNativeAudioActive("), "\(file): unowned switch")
+                XCTAssertFalse(line.contains("NativeAudioSessionGate.enableNativeAudio("), "\(file): unowned switch")
+                if line.contains("NativeAudioSessionGate.setNativeAudioInactive(") {
+                    // The one allowed synchronous switch: the peer connection's own arm release.
+                    XCTAssertTrue(file.hasSuffix("QAudionPeerConnection.swift"),
+                                  "\(file): a synchronous switch outside the peer connection close")
+                    let before = lines[max(0, index - 8)..<index].joined(separator: "\n")
+                    XCTAssertTrue(text.contains("THE ONE ALLOWED SYNCHRONOUS SWITCH") && !before.isEmpty)
+                }
+                if line.contains("NativeAudioSessionGate.applySwitchOnAudioQueue(") {
+                    applied += 1
+                    let window = lines[max(0, index - 10)..<index].joined(separator: "\n")
+                    XCTAssertTrue(window.contains("audioEngineQueue.submit"),
+                                  "\(file): applySwitchOnAudioQueue outside the audio queue: \(line)")
+                }
+            }
+        }
+        XCTAssertGreaterThanOrEqual(applied, 2)
+
+        // The shapes that carry the owner: queued by `submitSwitch` / `switchOnQueue`, owner read on the caller's thread.
+        let service = try source("QAudionApp/Services/CallService.swift")
+        let teardown = try body(of: "private func teardownAudioStack(", in: service)
         XCTAssertTrue(teardown.contains("switchNativeUnitOffOnQueue("))
-        XCTAssertFalse(teardown.contains("NativeAudioSessionGate.setNativeAudioActive("))
+        let offSwitch = try body(of: "private func switchNativeUnitOffOnQueue(", in: service)
+        XCTAssertTrue(offSwitch.contains("NativeAudioSessionGate.submitSwitch(false, ifCurrent: nativeUnitSwitchOwner()"))
+        let deactivated = try body(of: "public func handleAudioSessionDeactivated(", in: service)
+        XCTAssertTrue(deactivated.contains("NativeAudioSessionGate.submitSwitch("))
+        let driver = try source("QAudionEngine/Sources/QAudionEngine/GroupCall/GroupAudioUnitDriver.swift")
+        XCTAssertGreaterThanOrEqual(driver.components(separatedBy: "NativeAudioSessionGate.submitSwitch(").count - 1, 3)
+        let controller = try source("QAudionEngine/Sources/QAudionEngine/WebRTC/QAudionWebRtcCallController.swift")
+        XCTAssertTrue(controller.contains("NativeAudioSessionGate.switchOnQueue("))
+    }
+
+    /// The owner of the enable is recorded on the main thread when the switch is submitted, before it runs.
+    func test_enableRecordsTheOwnerAtSubmitTime() throws {
+        let service = try source("QAudionApp/Services/CallService.swift")
+        let gate = try body(of: "private func applyNativeAudioUnitGate(", in: service)
+        let recorded = try XCTUnwrap(gate.range(of: "nativeUnitOwnerToken = owner"))
+        let submitted = try XCTUnwrap(gate.range(of: "NativeAudioSessionGate.submitSwitch(true"))
+        XCTAssertLessThan(recorded.lowerBound, submitted.lowerBound)
+        XCTAssertFalse(gate.contains("self.nativeUnitOwnerToken = token"), "the owner is not assigned after a hop back")
+    }
+
+    /// The capture serial is bumped right after the defensive teardown of a new call, before the session is
+    /// configured, and the deactivation is decided after the stop.
+    func test_backToBackCalls_serialBumpAndLateDecision() throws {
+        let service = try source("QAudionApp/Services/CallService.swift")
+        let start = try body(of: "func startCall(engine: QAudionEngine, contactId: String) throws {", in: service)
+        let teardownAt = try XCTUnwrap(start.range(of: "teardownAudioStack(resetDcCounters: true)"))
+        let bumpAt = try XCTUnwrap(start.range(of: "bumpCaptureSerial()"))
+        let configureAt = try XCTUnwrap(start.range(of: "configureForVoIP()"))
+        XCTAssertLessThan(teardownAt.lowerBound, bumpAt.lowerBound)
+        XCTAssertLessThan(bumpAt.lowerBound, configureAt.lowerBound)
+        XCTAssertTrue(service.contains("teardownAudioStack(resetSrtpFallback: false, resetDcCounters: true)\n        bumpCaptureSerial()"))
+
+        let stop = try body(of: "private func stopCaptureOnAudioQueue(", in: service)
+        let stopAt = try XCTUnwrap(stop.range(of: "capture?.stop(deactivateSession: false)"))
+        let decideAt = try XCTUnwrap(stop.range(of: "CaptureStopPolicy.shouldDeactivateSession("))
+        XCTAssertLessThan(stopAt.lowerBound, decideAt.lowerBound, "decided after the stop, at the deactivation")
     }
 
     func test_startPath_runsTheRelayStartThroughTheQueue() throws {
@@ -168,10 +229,79 @@ final class CallAudioOffMainSourceTests: XCTestCase {
             XCTAssertFalse(function.code.contains("DispatchQueue.main.async"),
                            "\(function.name) schedules engine work on the main queue")
         }
-        XCTAssertTrue(text.contains("self?.runOnEngineQueue { $0.handleInterruption(note) }"))
+        XCTAssertTrue(text.contains("self.runOnEngineQueue { $0.handleInterruption(note, observedEpoch: observedEpoch) }"))
         XCTAssertTrue(text.contains("self?.runOnEngineQueue { $0.handleRouteChange(note) }"))
         XCTAssertTrue(text.contains("self?.runOnEngineQueue { $0.noteEngineConfigurationChange(note) }"))
         XCTAssertTrue(text.contains("engineQueue.submitAfter(milliseconds: 350, work)"))
+    }
+
+    /// Reads of the engine objects included: only the queue-confined functions (start, stop, restart,
+    /// interruption, the watchdog and retry bodies, the beacon, the config-change note), the bounded
+    /// diagnostic reader, and the try-locked playout touch `engine`, `playerNode`, `inputSink`, `playFormat`.
+    func test_engineObjectsAreReadOnlyInQueueConfinedFunctions() throws {
+        let text = try source("QAudionEngine/Sources/QAudionEngine/Audio/AudioCapture.swift")
+        let allowed: Set<String> = [
+            "startLocked", "stopLocked", "restartEngineForRoute", "handleInterruption", "deinit",
+            "noteVpioStarve", "noteEngineConfigurationChange", "noteRunningAtEndNow", "scheduleForPlayout",
+            "fireVpioRetry", "emitStateBeacon",
+        ]
+        let regex = try NSRegularExpression(pattern: #"(?<![\w.])(?:self\.)?(engine|playerNode|inputSink|playFormat)\b(?!\s*:)"#)
+        let strings = try NSRegularExpression(pattern: #""(?:[^"\\]|\\.)*""#)
+        for function in memberFunctions(in: text) {
+            let ns = function.code as NSString
+            let noStrings = strings.stringByReplacingMatches(
+                in: function.code, range: NSRange(location: 0, length: ns.length), withTemplate: "\"\"")
+            let nsClean = noStrings as NSString
+            let hits = regex.numberOfMatches(in: noStrings, range: NSRange(location: 0, length: nsClean.length))
+            if hits > 0 {
+                XCTAssertTrue(allowed.contains(function.name), "\(function.name) touches the engine outside the audio queue")
+            }
+        }
+        // The readers that are not themselves the lifecycle are only called from a queued, locked context.
+        let readers = ["noteVpioStarve(", "noteEngineConfigurationChange(", "fireVpioRetry(", "emitStateBeacon("]
+        for function in memberFunctions(in: text) {
+            for reader in readers where function.code.contains(reader) && !function.name.hasPrefix(String(reader.dropLast())) {
+                XCTAssertTrue(
+                    function.code.contains("engineOpLock.lock()") || function.code.contains("runOnEngineQueue"),
+                    "\(function.name) calls \(reader) outside a locked, queued context")
+            }
+        }
+    }
+
+    /// No timer on the main queue calls the engine (it may only hop to the audio queue).
+    func test_noMainQueueTimerCallsTheEngine() throws {
+        let text = try source("QAudionEngine/Sources/QAudionEngine/Audio/AudioCapture.swift")
+        let callees = ["restartEngineForRoute(", "restartEngineWithRecovery(", "try start()", "try self.start()",
+                       "stopLocked(", "handleInterruption(", "handleRouteChange(", "fireVpioRetry(",
+                       "noteVpioStarve(", "emitStateBeacon(", "noteEngineConfigurationChange("]
+        for function in memberFunctions(in: text) {
+            let onMain = function.code.contains("DispatchQueue.main.async") || function.code.contains("queue: .main")
+            guard onMain else { continue }
+            let direct = function.code.split(separator: "\n").filter { !$0.contains("runOnEngineQueue") }
+                .joined(separator: "\n")
+            for callee in callees {
+                XCTAssertFalse(direct.contains(callee), "\(function.name): the main queue calls \(callee)")
+            }
+        }
+    }
+
+    /// `stopLocked` clears the interrupted flag, and the interruption handler drops a notification that
+    /// reaches the queue after a stop.
+    func test_interruptionEndedAfterAStop_isDropped() throws {
+        let text = try source("QAudionEngine/Sources/QAudionEngine/Audio/AudioCapture.swift")
+        let stop = try body(of: "private func stopLocked(", in: text)
+        XCTAssertTrue(stop.contains("wasInterrupted = false"))
+        let handler = try body(of: "private func handleInterruption(", in: text)
+        XCTAssertTrue(handler.contains("InterruptionHandlingGuard.shouldHandle("))
+        XCTAssertTrue(handler.contains("interruptionObserver != nil"))
+    }
+
+    /// Telemetry on a lock timeout is "unknown", never false.
+    func test_runningAtEndTimeoutIsUnknown() throws {
+        let text = try source("QAudionEngine/Sources/QAudionEngine/Audio/AudioCapture.swift")
+        let note = try body(of: "public func noteRunningAtEndNow()", in: text)
+        XCTAssertTrue(note.contains("noteEngineRunningAtEndUnknown()"))
+        XCTAssertFalse(note.contains("withBoundedEngineLock(false)"))
     }
 
     /// The playout path try-locks before it reads or uses any engine object, and drops the frame

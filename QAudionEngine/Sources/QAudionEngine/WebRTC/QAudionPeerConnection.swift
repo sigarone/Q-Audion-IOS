@@ -2354,6 +2354,9 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
         // and enabled its unit meanwhile is never switched off from here.
         let armedToken = manualAudioToken
         if armedToken != 0 {
+            // THE ONE ALLOWED SYNCHRONOUS SWITCH (see `NativeAudioSessionGate.currentArmToken`): the
+            // release of this connection's own arm. Owner-checked against `armedToken`, atomically with
+            // the switch, and it must precede `peerConnection?.close()` below.
             NativeAudioSessionGate.setNativeAudioInactive(
                 ifCurrent: armedToken,
                 reason: NativeAudioUnitGateDecisions.ChangeReason.peerConnectionClose.rawValue)

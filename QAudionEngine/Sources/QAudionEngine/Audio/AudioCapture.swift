@@ -1513,8 +1513,13 @@ public final class AudioCapture {
     /// the pipeline right after, so the latch was always read as false (92 of 92 iOS records since
     /// 14/9). CallService calls this first, while the engine is still up; idempotent.
     public func noteRunningAtEndNow() {
-        let running = withBoundedEngineLock(false) { isRunning && (engine?.isRunning ?? false) }
-        audioPipeline.noteEngineRunningAtEnd(running)
+        // Tri-state: when the lock stays busy the value is unknown, never "not running".
+        let running: Bool? = withBoundedEngineLock(nil) { isRunning && (engine?.isRunning ?? false) }
+        if let running {
+            audioPipeline.noteEngineRunningAtEnd(running)
+        } else {
+            audioPipeline.noteEngineRunningAtEndUnknown()
+        }
     }
 
     /// W-VPIOOBS — one-time environment read (no engine access): hardware model, OS build, the
@@ -2311,7 +2316,9 @@ public final class AudioCapture {
             object: nil,
             queue: .main
         ) { [weak self] note in
-            self?.runOnEngineQueue { $0.handleInterruption(note) }
+            guard let self else { return }
+            let observedEpoch = self.engineQueue.currentEpoch
+            self.runOnEngineQueue { $0.handleInterruption(note, observedEpoch: observedEpoch) }
         }
         // W571 — route change observer. Handles headset plug/unplug and
         // Bluetooth HFP connect/disconnect. On .oldDeviceUnavailable
@@ -2675,10 +2682,16 @@ public final class AudioCapture {
         })
     }
 
-    private func handleInterruption(_ note: Notification) {
+    private func handleInterruption(_ note: Notification, observedEpoch: Int) {
         guard let info = note.userInfo,
               let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+        // A stop (or the end of the call) since the notification was observed: nothing to pause or resume.
+        // The observer is removed by `stopLocked`, which also clears `wasInterrupted`.
+        guard InterruptionHandlingGuard.shouldHandle(
+            observerActive: interruptionObserver != nil,
+            observedEpoch: observedEpoch,
+            currentEpoch: engineQueue.currentEpoch) else { return }
         switch type {
         case .began:
             // OS seized the audio session (phone call / Siri / alarm).
@@ -2971,6 +2984,9 @@ public final class AudioCapture {
         let wasRunningAtEnd = isRunning && (engine?.isRunning ?? false)
         isRunning = false
         stopGeneration += 1
+        // A stopped capture is not "interrupted": an interruption-ended notification queued behind this
+        // stop must not resume it.
+        wasInterrupted = false
         audioPipeline.noteEngineRunningAtEnd(wasRunningAtEnd)
         flushVpioFirstFrame()  // W-VPIOOBS — a first buffer nobody judged is booked to THIS generation, before it is bumped
         vpioWatchdogGen += 1  // W-VPIOOBS — a watchdog timer armed for this engine must not judge a later one

@@ -2409,6 +2409,9 @@ final class CallService: @unchecked Sendable {
     func startCall(engine: QAudionEngine, contactId: String) throws {
         // W65: defensive cleanup se startCall è chiamato 2x senza endCall.
         teardownAudioStack(resetDcCounters: true)
+        // The stop queued by that teardown belongs to the previous capture: from here on a newer one is
+        // being set up, so that stop must not deactivate the session this call configures next.
+        bumpCaptureSerial()
         // W-PADOVERFLOW — after the defensive teardown, so that teardown
         // reports the PREVIOUS call rather than this one's empty counters.
         audioEngineRef = engine
@@ -2772,6 +2775,7 @@ final class CallService: @unchecked Sendable {
         // W-SRTPFBRESET — keep the fallback latch: this runs at ANSWER time
         // inside the incoming call (see teardownAudioStack's kdoc).
         teardownAudioStack(resetSrtpFallback: false, resetDcCounters: true)
+        bumpCaptureSerial()  // see startCall: the stop queued above must not deactivate the new session
         if let cid = _savedSealerCallId, _savedSealerSend != nil {
             let active: String = getCallId?()?.lowercased() ?? ""
             // Restore when the sealer matches the active call, or when the
@@ -4664,7 +4668,7 @@ final class CallService: @unchecked Sendable {
                     // engine_running_at_end = false confirms it lasted to hangup.
                     "engine_restart_fail":  diag.engineRestartFailures,
                     "playout_dropped":      diag.playoutDropped,
-                    "engine_running_at_end": diag.engineRunningAtEnd,
+                    "engine_running_at_end": diag.engineRunningAtEndAttr,
                     // W-IOSPLAYOUT (2026-07-25) — the player node's OWN queue, which no
                     // counter observed. `playout_dropped` above covers frames that never
                     // reached the player; these cover what happened to the ones that did.
@@ -5315,21 +5319,29 @@ final class CallService: @unchecked Sendable {
     ) {
         let submittedSerial = currentCaptureSerial()
         Self.audioEngineQueue.submitStop { [weak self] in
+            capture?.stop(deactivateSession: false)
+            // Decided now, after the stop and right before the deactivation: a capture created since this
+            // stop was submitted belongs to a newer call, whose session must stay active.
             let deactivate = CaptureStopPolicy.shouldDeactivateSession(
                 requested: deactivateSession,
                 submittedGeneration: submittedSerial,
                 currentGeneration: self?.currentCaptureSerial() ?? submittedSerial)
-            capture?.stop(deactivateSession: deactivate)
+            if deactivate { capture?.processingPipeline.deactivateSession() }
             if let completion { DispatchQueue.main.async(execute: completion) }
         }
     }
 
     /// Switches WebRTC's audio unit off on the audio queue, in order with every other audio operation:
     /// the switch takes the RTCAudioSession configuration lock, which the main thread does not wait for.
+    /// The switch is owner-checked: the owner is captured here, on the main thread, at submit time.
     private func switchNativeUnitOffOnQueue(reason: Int) {
-        Self.audioEngineQueue.submit {
-            NativeAudioSessionGate.setNativeAudioActive(false, reason: reason)
-        }
+        NativeAudioSessionGate.submitSwitch(false, ifCurrent: nativeUnitSwitchOwner(), reason: reason)
+    }
+
+    /// The arm that owns this call's unit for a switch submitted now: the one its enable was
+    /// submitted for, else the arm in force. Main thread.
+    private func nativeUnitSwitchOwner() -> Int {
+        nativeUnitOwnerToken != 0 ? nativeUnitOwnerToken : NativeAudioSessionGate.currentArmToken
     }
 
     /// `AudioCapture.isGroupCallActive` runs on the audio queue too; the live answer is main-thread
@@ -5435,34 +5447,24 @@ final class CallService: @unchecked Sendable {
             // fully stopped before WebRTC's starts. It normally never runs on
             // a native call (this branch skips it); it can only be up if it
             // started before the negotiation landed, or from a fallback.
+            // The owner is captured and recorded NOW, on the main thread: a didDeactivate that arrives
+            // before the queued switch runs sees this owner and queues its switch-off behind it.
+            let owner = NativeAudioSessionGate.currentArmToken
+            nativeUnitOwnerToken = owner
+            let reasonRaw = reason.rawValue
             if let capture = audioCapture, capture.isCapturing || audioStartsInFlight > 0 {
                 // The stop and the unit switch-on run in this order on the audio queue.
                 audioEnginesStarted = false
-                let generation = currentCallGeneration()
-                let reasonRaw = reason.rawValue
                 Self.audioEngineQueue.submitStop { [weak self] in
                     capture.stop(deactivateSession: false)
-                    // W-DEACTOWN — same switch as `setNativeAudioActive(true, ...)`,
-                    // plus the arm it was made for: this call's deactivation stops
-                    // that arm only.
-                    let token = NativeAudioSessionGate.enableNativeAudio(reason: reasonRaw)
+                    NativeAudioSessionGate.applySwitchOnAudioQueue(true, ifCurrent: owner, reason: reasonRaw)
                     DispatchQueue.main.async {
-                        guard let self else { return }
+                        guard self != nil else { return }
                         RTLog.info("call", "admgate capstop=1")
-                        if self.currentCallGeneration() == generation { self.nativeUnitOwnerToken = token }
                     }
                 }
             } else {
-                // Same switch, on the audio queue like every other unit switch.
-                let generation = currentCallGeneration()
-                let reasonRaw = reason.rawValue
-                Self.audioEngineQueue.submit { [weak self] in
-                    let token = NativeAudioSessionGate.enableNativeAudio(reason: reasonRaw)
-                    DispatchQueue.main.async {
-                        guard let self, self.currentCallGeneration() == generation else { return }
-                        self.nativeUnitOwnerToken = token
-                    }
-                }
+                NativeAudioSessionGate.submitSwitch(true, ifCurrent: owner, reason: reasonRaw)
             }
         case .awaitingCallKit:
             scheduleNativeUnitCallKitWait()
@@ -5603,8 +5605,9 @@ final class CallService: @unchecked Sendable {
     private func queueFallbackEngageUnitSwitch(seq: Int, generation: Int, requeues: Int) {
         let epoch = Self.audioEngineQueue.currentEpoch
         let changeReason = NativeAudioUnitGateDecisions.ChangeReason.fallbackEngage.rawValue
+        let owner = nativeUnitSwitchOwner()
         Self.audioEngineQueue.submitStart(epoch: epoch, work: { [weak self] in
-            let unitStopped = NativeAudioSessionGate.setNativeAudioActive(false, reason: changeReason)
+            let unitStopped = NativeAudioSessionGate.applySwitchOnAudioQueue(false, ifCurrent: owner, reason: changeReason)
             DispatchQueue.main.async {
                 self?.continueFallbackEngage(unitStopped: unitStopped, seq: seq, generation: generation)
             }
@@ -5919,8 +5922,10 @@ final class CallService: @unchecked Sendable {
             let ownerToken: Int = nativeUnitOwnerToken
             let ownerCode: Int = owner.rawValue
             RTLog.info("call", "admgate deact=1 own=\(ownerCode) tok=\(ownerToken)")
-            NativeAudioSessionGate.setNativeAudioInactive(
-                ifCurrent: ownerToken,
+            // Queued behind this call's enable (the owner was recorded when it was submitted) and
+            // owner-checked, so the unit ends up off.
+            NativeAudioSessionGate.submitSwitch(
+                false, ifCurrent: ownerToken,
                 reason: NativeAudioUnitGateDecisions.ChangeReason.sessionDeactivated.rawValue)
             audioSessionActive = false
             resetNativeAudioUnitGateState()

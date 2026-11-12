@@ -282,8 +282,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // unit, switch the SUCCESSOR's unit off. A stale owner stops here:
             // no restart request and no relay-fallback escalation below.
             let nudgeReason: Int = NativeAudioUnitGateDecisions.ChangeReason.captureLiveNudge.rawValue
-            let stopped: Bool = NativeAudioSessionGate.setNativeAudioInactive(
-                ifCurrent: armToken, reason: nudgeReason)
+            let stopped: Bool = await NativeAudioSessionGate.switchOnQueue(
+                false, ifCurrent: armToken, reason: nudgeReason)
             let ownership = NativeAudioUnitGateDecisions.nudgeOwnership(
                 ownerToken: armToken,
                 stopped: stopped,

@@ -52,3 +52,12 @@ public enum FallbackEngageSkipPolicy {
         return requeuesSoFar < maxRequeues ? .requeue : .handBack
     }
 }
+
+/// Whether an audio-session interruption notification is still worth handling once it reaches the audio
+/// queue: the capture's observer is still registered (a stop removes it) and no stop or end of call was
+/// submitted since the notification was observed.
+public enum InterruptionHandlingGuard {
+    public static func shouldHandle(observerActive: Bool, observedEpoch: Int, currentEpoch: Int) -> Bool {
+        observerActive && observedEpoch == currentEpoch
+    }
+}
