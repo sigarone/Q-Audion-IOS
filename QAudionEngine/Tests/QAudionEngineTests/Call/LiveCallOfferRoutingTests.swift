@@ -210,8 +210,8 @@ final class LiveCallOfferRoutingTests: XCTestCase {
     private final class ResumeBox: @unchecked Sendable {
         private let lock = NSLock()
         private var calls: [Data?] = []
-        func add(_ v: Data?) { lock.lock(); calls.append(v); lock.unlock() }
-        var count: Int { lock.lock(); defer { lock.unlock() }; return calls.count }
+        func add(_ v: Data?) { lock.withLock { calls.append(v) } }
+        var count: Int { lock.withLock { calls.count } }
     }
 
     /// An ACCEPT of another call writes no capability and does not consume the live rekey; the honest ACCEPT afterwards
@@ -264,8 +264,7 @@ final class LiveCallOfferRoutingTests: XCTestCase {
             if FileManager.default.fileExists(atPath: c.path) { src = try String(contentsOf: c, encoding: .utf8); break }
         }
         let text = try XCTUnwrap(src, "source not found")
-        let acceptCase = try XCTUnwrap(text.range(of: "case .accept:
-            // Originator side"))
+        let acceptCase = try XCTUnwrap(text.range(of: "case .accept:\n            // Originator side"))
         let tail = String(text[acceptCase.upperBound...])
         let guardAt = try XCTUnwrap(tail.range(of: "but no sent-OFFER transcript is stashed"))
         let takeAt = try XCTUnwrap(tail.range(of: "takeWaitingReKeyAttempt(round: waitingRekeyRound)"))
