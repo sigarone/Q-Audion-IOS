@@ -1283,8 +1283,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     public var capsBindFlag: (() -> Bool?)?
     /// Local switch for advertising `capsBindV1` (pins already stored keep working). On by default.
     public nonisolated(unsafe) static var capsBindV1Enabled = true
-    /// A pin anomaly of the call's round 1: the visible warning. Never ends, refuses or holds the call.
-    public var onCapsPinAnomaly: ((_ callId: String, _ peerId: String, _ reason: CapsPinReason) -> Void)?
+    /// A pin anomaly of the call's round 1, or a rekey round refused for a missing second signature: the visible warning, with every
+    /// reason (the signature reason first). Never ends, refuses or holds the call.
+    public var onCapsPinAnomaly: ((_ callId: String, _ peerId: String, _ reasons: [PqWarnReason]) -> Void)?
+
+    /// The second handshake signature: its signer, the peer key lookup and the per-call state. Without the runtime the tag is never
+    /// advertised and no signature is sent or judged.
+    public var pqSig: PqSigRuntime?
+    let pqLayer = PqCallLayer()
+    /// Upper bound of the peer key lookup on the handshake path.
+    static let pqResolveTimeoutSeconds = 2.0
+    /// `pskFingerprints` and `pskRoles` carry at most this many entries: a sender advertises its first ones, a receiver treats more
+    /// as malformed.
+    static let maxPskAdvertEntries = 64
 
     /// W-KCMAC (ship step 5) — the RAW fingerprint list WE advertised in the OFFER
     /// (`onAndroidCallSetupStarted`'s `advertisedPskFingerprints`), stashed so the
@@ -1526,7 +1537,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             candidates: PskAdvertising.candidatesForAdvertisement(
                 pskAdvertEntries, store: CallKeyPriorityStore.live(vault: pskVault))
         )
-        let advertisedPskFingerprints: [String] = advert.fingerprints
+        let advertisedPskFingerprints: [String] = Array(advert.fingerprints.prefix(Self.maxPskAdvertEntries))
         // W-NFCVISIBLE — parallel role array, same order (both derive from the
         // same `pskAdvertEntries`).
         // W-PSKBLIND — nil under v3, where the roles live inside the tags. `advEnc`
@@ -1536,7 +1547,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // ABSENT on the wire, matching Android and Desktop byte for byte. `[]` would
         // decode to the same all-zero meaning but is not the same JSON, and wire
         // parity across the three clients is not a thing to leave to chance.
-        let advertisedPskRoles: [Int]? = advert.roles
+        let advertisedPskRoles: [Int]? = advert.roles.map { Array($0.prefix(Self.maxPskAdvertEntries)) }
         // This call's round 1: generate the call's own random freshness nonce ONCE, in memory, and
         // start this offerer's own round counter at 1. Both are reused (never regenerated) by every
         // `performPqcReKey` round this integration later initiates for the SAME callId.
@@ -1744,6 +1755,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             ownEphemeralX25519Pub: x25519RawPub,
             candidates: PskAdvertising.candidatesForAdvertisement(
                 pskAdvertEntries, store: CallKeyPriorityStore.live(vault: pskVault)))
+        let rekeyAdvertFingerprints: [String] = Array(advert.fingerprints.prefix(Self.maxPskAdvertEntries))
+        let rekeyAdvertRoles: [Int]? = advert.roles.map { Array($0.prefix(Self.maxPskAdvertEntries)) }
         // CALL-3 — this OFFERER's own next round: reuse the nonce round 1
         // established (never regenerate mid-call) and increment the round
         // counter. A call that somehow never went through
@@ -1777,8 +1790,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // `state == .active`) and its stashed transcript is never read again — the ACCEPT-verify
         // path for THIS round needs THIS round's transcript.
         lock.withLock {
-            sentOfferPskFingerprintsByCall[callId.lowercased()] = advert.fingerprints
-            sentOfferPskRolesByCall[callId.lowercased()] = advert.roles ?? []
+            sentOfferPskFingerprintsByCall[callId.lowercased()] = rekeyAdvertFingerprints
+            sentOfferPskRolesByCall[callId.lowercased()] = rekeyAdvertRoles ?? []
         }
         // W-REKEYSYNC — see this function's `armedPeriodMs` param doc. Untrusted-input clamp
         // mirrors Android: no legitimate ReKeyScheduler period ever falls outside
@@ -1794,7 +1807,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // carries NO SAS commitment (R-COMMIT-SCOPE: only round 1 has one).
             bundleToSend = try buildSignedOffer(
                 callId: callId, pqcRawPub: pqcRawPub, x25519RawPub: x25519RawPub,
-                advertisedPskFingerprints: advert.fingerprints, advertisedPskRoles: advert.roles,
+                advertisedPskFingerprints: rekeyAdvertFingerprints, advertisedPskRoles: rekeyAdvertRoles,
                 rekeyNonce: thisRoundNonce, rekeyRound: thisRound, rekeyNextPeriodMs: nextPeriodMs,
                 sasCommit: nil)
         } catch {
@@ -2120,10 +2133,23 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true, ratchetV5Capable: ratchetV5Capable)
                 offerSigOk = true
             }
+            // The second signature of the OFFER, checked only under a key that verified sigV6.
+            let offerPq = await pqVerifyInbound(
+                isOffer: true, bundle: bundle, callId: callId, peerId: callerId, deviceId: callerDeviceId,
+                signerKey: offerSigOk ? Self.rawSignerKey(bundle.signerIdentityKey) : nil,
+                transcript: offerCheck.transcript, peerOwnFp: offerCheck.peerFingerprint, answeredFp: nil, peerCaps: peerCaps)
+            // A rekey round of a call that round 1 authenticated with the second signature is used only under a valid signature of the
+            // same key: no ACCEPT, nothing armed, the send side stays on the current round and the call goes on.
+            if !isFirstOfferOfCall, (bundle.rekeyRound ?? 1) > 1,
+               pqRekeyRefuses(callId: callId, peerId: callerId, pq: offerPq, round: bundle.rekeyRound ?? 0, isOfferer: false) {
+                print("[QAudionCallIntegration] re-key OFFER refused (no valid second signature under the call's key) round=\(bundle.rekeyRound ?? 0) callId=\(callId.prefix(8))… — call continues on its current key")
+                return
+            }
             // capsBindV1: the first round is judged against the sticky pin of its verified signer key (a warning at most).
             if isFirstOfferOfCall {
                 judgeCapsRound1(callId: callId, peerId: callerId, peer: peerCaps,
-                                verifiedKey: offerSigOk ? Self.rawSignerKey(bundle.signerIdentityKey) : nil)
+                                verifiedKey: offerSigOk ? Self.rawSignerKey(bundle.signerIdentityKey) : nil,
+                                bundle: bundle, pq: offerPq)
             }
             // Every non-malformed verdict carries the transcript, the parsed peer fingerprint and
             // the signer key (the policy returns `.malformed` otherwise).
@@ -2327,8 +2353,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 candidates: PskAdvertising.candidatesForAdvertisement(
                     acceptPskAdvertEntries, store: CallKeyPriorityStore.live(vault: acceptPskVault))
             )
-            let acceptAdvertisedPskFingerprints: [String] = acceptAdvert.fingerprints
-            let acceptAdvertisedPskRoles: [Int]? = acceptAdvert.roles
+            let acceptAdvertisedPskFingerprints: [String] = Array(acceptAdvert.fingerprints.prefix(Self.maxPskAdvertEntries))
+            let acceptAdvertisedPskRoles: [Int]? = acceptAdvert.roles.map { Array($0.prefix(Self.maxPskAdvertEntries)) }
 
             // W-UNKNOWNMIRROR — the notice iOS never had. Android and Desktop both warn
             // when they hold candidates and still end up with no PSK; this leg degraded in
@@ -2396,7 +2422,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                       offerBinding: verifiedOfferBinding, dtlsFingerprint: fpSelf) else {
                 throw IntegrationError.handshakeAborted(code: "sign_unavailable")
             }
-            let acceptToSend = try signedBundle(of: accept, transcript: acceptT, fingerprint: fpSelf)
+            let sigV6SignedAccept = try signedBundle(of: accept, transcript: acceptT, fingerprint: fpSelf)
+            // The second signature (HT binds the offerer's fingerprint too). A rekey ACCEPT that cannot carry it is never sent, so
+            // this side never arms a round the offerer would refuse; the offerer abandons it and keeps its key.
+            let acceptToSend: AndroidHandshakeBundle
+            do {
+                acceptToSend = try pqLayer.finalizeOwn(
+                    bundle: sigV6SignedAccept, kind: Pqsig.kindAccept, round: max(1, bundle.rekeyRound ?? 1), callId: callId,
+                    transcript: acceptT, fpSelf: fpSelf, fpPeer: peerFp, runtime: pqSig, capsBindEnabled: Self.capsBindV1Enabled)
+            } catch PqCallLayer.LayerError.roundNotSent {
+                print("[QAudionCallIntegration] re-key ACCEPT not sent (second signature unavailable) callId=\(callId.prefix(8))… — call continues on its current key")
+                return
+            }
             // capsBindV1: this round's facts, from the bytes this side sends and the bytes it received. Round 1 also fixes the role of
             // the legacy outer layer for a same-account call, before any sealer is installed.
             let capsOwnInfo = CapsBind.analyze(bundle: acceptToSend)
@@ -2975,6 +3012,19 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true, ratchetV5Capable: ratchetV5Capable)
                 acceptSigOk = true
             }
+            // The second signature of the ACCEPT, checked only under a key that verified sigV6: HT binds the acceptor's fingerprint and
+            // the fingerprint of this side's OFFER. A refused rekey round is judged before anything of it is used: the waiting attempt
+            // is resolved with nil by the defer above, no key is derived, no MAC window is armed and no MAC is sent for it.
+            let acceptPq = await pqVerifyInbound(
+                isOffer: false, bundle: bundle, callId: callId, peerId: callerId, deviceId: callerDeviceId,
+                signerKey: acceptSigOk ? Self.rawSignerKey(bundle.signerIdentityKey) : nil,
+                transcript: acceptCheck.transcript, peerOwnFp: acceptCheck.peerFingerprint,
+                answeredFp: provideLocalDtlsFingerprint?(callId), peerCaps: peerCaps)
+            if isReKeyAccept,
+               pqRekeyRefuses(callId: callId, peerId: callerId, pq: acceptPq, round: bundle.rekeyRound ?? 0, isOfferer: true) {
+                print("[QAudionCallIntegration] re-key ACCEPT refused (no valid second signature under the call's key) round=\(bundle.rekeyRound ?? 0) callId=\(callId.prefix(8))… — call continues on its current key")
+                return
+            }
             // capsBindV1: this round's facts, from the bytes this side sent (its OFFER of the round) and the bytes it received.
             let capsOwnInfo = capsBindState.sent(callId: callId) ?? CapsBind.analyze(json: "{}")
             let capsExt = CapsBind.isActive(own: capsOwnInfo, peer: peerCaps)
@@ -2982,7 +3032,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             if !isReKeyAccept {
                 capsBindState.noteRound1(callId: callId, ownTag: capsOwnInfo.hasTag, peerTag: peerCaps.hasTag, selfIsCaller: true, epoch: capsEpoch)
                 judgeCapsRound1(callId: callId, peerId: callerId, peer: peerCaps,
-                                verifiedKey: acceptSigOk ? Self.rawSignerKey(bundle.signerIdentityKey) : nil)
+                                verifiedKey: acceptSigOk ? Self.rawSignerKey(bundle.signerIdentityKey) : nil,
+                                bundle: bundle, pq: acceptPq)
             }
             CapsBindLog.line("capsbind ext=\(capsExt ? 1 : 0) own=\(capsOwnInfo.hasTag ? 1 : 0) peer=\(peerCaps.hasTag ? 1 : 0) round=\(capsRound)")
             guard let acceptT = acceptCheck.transcript, let peerFp = acceptCheck.peerFingerprint else {
@@ -3576,7 +3627,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             rekeyNonce: bundle.rekeyNonce,
             rekeyRound: bundle.rekeyRound,
             // W-REKEYSYNC — carried through verbatim, or it would silently drop from every OFFER.
-            rekeyNextPeriodMs: bundle.rekeyNextPeriodMs
+            rekeyNextPeriodMs: bundle.rekeyNextPeriodMs,
+            mldsaKeyId: bundle.mldsaKeyId,
+            sigHybrid: bundle.sigHybrid,
+            capsWithdrawn: bundle.capsWithdrawn
         )
     }
 
@@ -3615,7 +3669,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             from: unsigned, callId: callId, signerKeyRaw: idKey, dtlsFingerprint: fpSelf) else {
             throw IntegrationError.handshakeAborted(code: "transcript_unbuildable")
         }
-        let signed = try signedBundle(of: unsigned, transcript: transcript, fingerprint: fpSelf)
+        let sigV6Signed = try signedBundle(of: unsigned, transcript: transcript, fingerprint: fpSelf)
+        // The second signature, after sigV6 (the members it binds are final once set here). A rekey OFFER that cannot carry it is not
+        // sent: the error reaches the caller, which keeps the current key.
+        let signed = try pqLayer.finalizeOwn(
+            bundle: sigV6Signed, kind: Pqsig.kindOffer, round: Int(rekeyRound), callId: callId, transcript: transcript,
+            fpSelf: fpSelf, fpPeer: nil, runtime: pqSig, capsBindEnabled: Self.capsBindV1Enabled)
         lock.withLock { sentOfferTranscriptByCall[callId.lowercased()] = transcript }
         // The bytes this side sends, per round: the input of its own CAPSX/EXTX when the round's key confirmation is built.
         capsBindState.noteSent(callId: callId, info: CapsBind.analyze(bundle: signed))
@@ -3648,6 +3707,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         if let code = HandshakeSigningPolicy.sasCommitMalformedCode(
             isOffer: bundle.kind == .offer, round: bundle.rekeyRound, sasCommitB64: bundle.sasCommit) {
             return InboundCheck(verdict: .malformed(code: code), transcript: nil, peerFingerprint: nil)
+        }
+        // A bundle that advertises more than 64 PSK fingerprints or roles is malformed (a sender never sends more).
+        if (bundle.pskFingerprints?.count ?? 0) > Self.maxPskAdvertEntries || (bundle.pskRoles?.count ?? 0) > Self.maxPskAdvertEntries {
+            return InboundCheck(verdict: .malformed(code: CallCloseReason.handshakeMalformed.rawValue), transcript: nil, peerFingerprint: nil)
         }
         // capsBindV1: when the round would run the extension, a repeated or unusable member name in the peer's `capabilities` makes
         // the bundle malformed. A bundle without the tag, and a build that does not advertise it, are never checked.
@@ -3766,19 +3829,114 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     /// Judge the peer's round-1 bundle against the sticky pin of its verified signer key and report an anomaly as a visible warning.
     /// Never ends, refuses or (with the hold compiled off) holds the call.
-    private func judgeCapsRound1(callId: String, peerId: String, peer: BundleCapsBind, verifiedKey: Data?) {
+    func judgeCapsRound1(callId: String, peerId: String, peer: BundleCapsBind, verifiedKey: Data?,
+                                 bundle: AndroidHandshakeBundle, pq: HybridBundleVerifier.Outcome?) {
         let flag = capsBindFlag?()
         capsBindBook.observeFlag(flag)
         let armed = CapsPinPolicy.isArmedForHold(book: capsBindBook, flagValue: flag)
+        // a new round 1 starts the call's anchor clean (set below, only when the second-signature layer judged the bundle)
+        pqLayer.clearAnchor(callId: callId)
+        let verification = pq.map {
+            PqVerification(result: $0.result, keyId: $0.keyId, sigHybridV1: bundle.capabilities?.sigHybridV1 == true)
+        }
         guard let call = capsBindState.judgeRound1(
             callId: callId, peerUserId: peerId, peer: peer, verifiedSignerKey: verifiedKey,
-            book: capsBindBook, armedForHold: armed) else { return }
-        guard call.pin == .anomaly, let reason = call.reason else { return }
+            book: capsBindBook, armedForHold: armed, pq: verification) else { return }
+        if let ctx = call.pq {
+            pqLayer.setAnchor(callId: callId, PqCallLayer.Anchor(
+                auth: ctx.auth, keyId: ctx.auth == "H" ? pq?.keyId : nil, result: ctx.result))
+        }
+        guard call.pin == .anomaly else { return }
         if call.hold {
             markHeld(callId: callId)
             onHandshakeIdentityUnverified?(callId, "pin_anomaly")
         }
-        onCapsPinAnomaly?(callId, peerId, reason)
+        onCapsPinAnomaly?(callId, peerId, call.warns.isEmpty ? [.capsBindV1Missing] : call.warns)
+    }
+
+    /// The second signature of a received bundle (design section 5.5, steps 1 to 3), or nil when it is not judged: no runtime, or no
+    /// signer key that verified sigV6. The peer key lookup is bounded and timed. Never throws.
+    func pqVerifyInbound(
+        isOffer: Bool, bundle: AndroidHandshakeBundle, callId: String, peerId: String, deviceId: String?, signerKey: Data?,
+        transcript: Data?, peerOwnFp: Data?, answeredFp: Data?, peerCaps: BundleCapsBind
+    ) async -> HybridBundleVerifier.Outcome? {
+        guard let runtime = pqSig, let signerKey else { return nil }
+        guard let transcript, let peerOwnFp, isOffer || answeredFp != nil else {
+            return HybridBundleVerifier.Outcome(result: .unavailable, keyId: nil)
+        }
+        let resolver = runtime.resolvePeerKey
+        let round = max(1, bundle.rekeyRound ?? 1)
+        // A rekey round is checked under the key round 1 of this call verified under, not under a fresh lookup of the evictable
+        // store of peer keys (which a slow fetch or a flush could leave empty).
+        let anchoredKey: Pqsig.MlDsaPublicKey? = round > 1 ? pqLayer.round1Key(callId: callId) : nil
+        var resolvedKey: Pqsig.MlDsaPublicKey?
+        let outcome = await HybridBundleVerifier.verify(
+            kind: isOffer ? Pqsig.kindOffer : Pqsig.kindAccept, transcript: transcript, signerEdPub: signerKey,
+            dtlsFpSelf: peerOwnFp, dtlsFpPeer: isOffer ? nil : answeredFp, peer: peerCaps,
+            mldsaKeyIdB64: bundle.mldsaKeyId, sigHybridB64: bundle.sigHybrid,
+            resolveKey: { keyId in
+                if let anchoredKey, anchoredKey.keyId() == keyId { return anchoredKey }
+                let waited = await BoundedWait.run(seconds: Self.pqResolveTimeoutSeconds) {
+                    await resolver(peerId, deviceId, signerKey, keyId)
+                }
+                CapsBindLog.line("pq resolve ms=\(waited.elapsedMs) limit=2000 found=\(waited.value == nil ? 0 : 1)")
+                resolvedKey = waited.value
+                return waited.value
+            })
+        if round == 1, outcome.result == .valid, let resolvedKey { pqLayer.setRound1Key(callId: callId, resolvedKey) }
+        CapsBindLog.line("pq verify kind=\(isOffer ? "offer" : "accept") pq_sig=\(outcome.result.rawValue)")
+        return outcome
+    }
+
+    /// A rekey bundle of a call that is `auth=H` on this side and does not carry a valid second signature under the call's anchor key is
+    /// refused: true. The caller sends no ACCEPT / derives no key, arms nothing and leaves the send side on the current round. Logs
+    /// `pq_sig=<r> round=<n> pin=anomaly hold=0 rekey=refused` and shows the warning for the rest of the call; the pin record is
+    /// not read or changed (the anchor comes from this side's round-1 result alone).
+    func pqRekeyRefuses(callId: String, peerId: String, pq: HybridBundleVerifier.Outcome?, round: Int, isOfferer: Bool) -> Bool {
+        guard pqSig != nil else { return false }
+        let reason: PqWarnReason
+        let logLine: String
+        if let anchor = pqLayer.anchor(callId: callId) {
+            let decision = HybridSigPolicy.decideRekey(HybridSigPolicy.RekeyInput(
+                auth1: anchor.auth, anchorKeyId: anchor.keyId, isOfferer: isOfferer, round: round,
+                sigHybrid: pq?.result ?? .unavailable, sigKeyId: pq?.keyId, armed: false))
+            guard decision.action == .refuse else {
+                // an auth=C call logs a valid signature of an accepted rekey round (it does not raise the call to H)
+                if !decision.log.isEmpty { CapsBindLog.line(decision.log) }
+                return false
+            }
+            reason = decision.reason ?? .absent
+            logLine = decision.log
+        } else {
+            // No anchor. When round 1 of this call was judged by the second-signature layer (its pin state says so), or an anchor
+            // had to be dropped for lack of room, the round cannot be checked: it is refused (fail closed), never used unsigned.
+            guard capsBindState.pinCall(callId: callId)?.pq != nil || pqLayer.anchorsOverflowed else { return false }
+            let result = pq?.result ?? .unavailable
+            reason = result == .invalid ? .invalid : .absent
+            logLine = "pq_sig=\(result.rawValue) round=\(round) pin=anomaly hold=0 rekey=refused"
+        }
+        pqLayer.noteRefusal(callId: callId, round: round, reason: reason)
+        CapsBindLog.line(logLine)
+        onCapsPinAnomaly?(callId, peerId, [reason])
+        return true
+    }
+
+    /// Fetch the peer's second key ahead of the handshake (a callee while ringing, a caller when it starts the call).
+    public func prefetchPeerSecondKey(peerUserId: String) {
+        pqSig?.prefetch?(peerUserId)
+    }
+
+    /// The round-1 key confirmation of this call verified. True when the second-signature layer owns the pin record of the call (it
+    /// is written here); false: the caller applies the call-settings rule.
+    @discardableResult
+    public func noteRound1KeyConfirmed(callId: String, ext: Bool) -> Bool {
+        capsBindState.round1KeyConfirmed(callId: callId, ext: ext, book: capsBindBook)
+    }
+
+    /// The words of the protection line that belong to the second signature: `auth=`, `pqstate=`, `pq_sig=`, `rekey=`, `round=`
+    /// (empty: no word).
+    public func pqLineWords(callId: String) -> (auth: String, pqstate: String, pqSig: String, rekey: String, round: String) {
+        pqLayer.lineWords(callId: callId, pqState: capsBindState.pqStateWord(callId: callId))
     }
 
     /// Exit 1 of the pins: the user confirmed the safety code of this call. When its round 1 was a pin anomaly the record of the
@@ -4626,6 +4784,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         sentOfferTranscriptByCall.removeAll()
         // capsBindV1: the per-call facts go with the call; the pin records stay.
         capsBindState.reset()
+        pqLayer.reset()
         // The round/nonce ratchets and the pinned peer DTLS fingerprint: a reused integration
         // instance must not carry a prior call's nonce, accepted-round watermark or fingerprint
         // pin into the next call — clearing unconditionally is the same "never trust stale

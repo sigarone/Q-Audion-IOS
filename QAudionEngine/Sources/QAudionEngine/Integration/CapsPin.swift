@@ -6,14 +6,24 @@ public enum CapsPinReason: String, CaseIterable, Sendable {
     case capsBindV1Missing = "capsBindV1_missing"
 }
 
-/// The warning of the live call: which call and which missing protection.
+/// The warning of the live call: which call and which missing protections, the signature reason first.
 public struct CapsPinWarning: Equatable, Sendable {
     public let callId: String
-    public let reason: CapsPinReason
+    public let reasons: [PqWarnReason]
 
-    public init(callId: String, reason: CapsPinReason) {
+    /// The first reason.
+    public var reason: PqWarnReason { reasons.first ?? .capsBindV1Missing }
+
+    public init(callId: String, reasons: [PqWarnReason]) {
         self.callId = callId
-        self.reason = reason
+        self.reasons = reasons
+    }
+
+    /// The same warning with `added` in front when it is not there yet (a rekey round refused later in the call).
+    public func adding(_ added: [PqWarnReason]) -> CapsPinWarning {
+        var merged = reasons
+        for reason in added.reversed() where !merged.contains(reason) { merged.insert(reason, at: 0) }
+        return CapsPinWarning(callId: callId, reasons: merged)
     }
 }
 
@@ -194,6 +204,19 @@ public final class CapsPinBook: @unchecked Sendable {
                 state.pins.removeValue(forKey: k)
             } else {
                 state.pins[k] = record
+            }
+        }
+    }
+
+    /// Replaces the whole record of a key with the result of the pin policy (`HybridSigPolicy`), or deletes it (nil). The policy is the
+    /// one place that knows every exit of the record, so what it returns is written as it is.
+    public func putRecord(peerUserId: String, signerKey: Data, record: CapsPinRecord?) {
+        let k = Self.pinKey(peerUserId: peerUserId, signerKey: signerKey)
+        persistence.update { state in
+            if let record {
+                state.pins[k] = record
+            } else {
+                state.pins.removeValue(forKey: k)
             }
         }
     }

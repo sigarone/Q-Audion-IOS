@@ -180,9 +180,13 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         /// reads as absent and never makes the bundle undecodable.
         public let capsBindV1: Bool?
 
+        /// The bundle carries a second signature over the handshake (`mldsaKeyId`, `sigHybrid`). Needs `capsBindV1` in the same
+        /// bundle. Not one of the nine signed bits. OPTIONAL, omitted while not advertised, read leniently like `capsBindV1`.
+        public let sigHybridV1: Bool?
+
         private enum CodingKeys: String, CodingKey {
             case ratchetV3, sframeV1, vkeyV1, sessionKdfV3, ratchetV4, srtpDirKeyV1, pskMixV1, hsTranscriptBindV1
-            case innerAudioAadV1, ratchetV5, capsBindV1
+            case innerAudioAadV1, ratchetV5, capsBindV1, sigHybridV1
         }
 
         public init(from decoder: Decoder) throws {
@@ -198,6 +202,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             innerAudioAadV1 = try c.decodeIfPresent(Bool.self, forKey: .innerAudioAadV1)
             ratchetV5 = try c.decodeIfPresent(Bool.self, forKey: .ratchetV5)
             capsBindV1 = try? c.decodeIfPresent(Bool.self, forKey: .capsBindV1)
+            sigHybridV1 = try? c.decodeIfPresent(Bool.self, forKey: .sigHybridV1)
         }
 
         public init(
@@ -211,7 +216,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             hsTranscriptBindV1: Bool? = nil,
             innerAudioAadV1: Bool? = nil,
             ratchetV5: Bool? = nil,
-            capsBindV1: Bool? = nil
+            capsBindV1: Bool? = nil,
+            sigHybridV1: Bool? = nil
         ) {
             self.ratchetV3 = ratchetV3
             self.sframeV1 = sframeV1
@@ -224,6 +230,15 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             self.innerAudioAadV1 = innerAudioAadV1
             self.ratchetV5 = ratchetV5
             self.capsBindV1 = capsBindV1
+            self.sigHybridV1 = sigHybridV1
+        }
+
+        /// The same capabilities with `sigHybridV1` replaced (nil omits it).
+        func with(sigHybridV1 value: Bool?) -> Capabilities {
+            Capabilities(
+                ratchetV3: ratchetV3, sframeV1: sframeV1, vkeyV1: vkeyV1, sessionKdfV3: sessionKdfV3, ratchetV4: ratchetV4,
+                srtpDirKeyV1: srtpDirKeyV1, pskMixV1: pskMixV1, hsTranscriptBindV1: hsTranscriptBindV1,
+                innerAudioAadV1: innerAudioAadV1, ratchetV5: ratchetV5, capsBindV1: capsBindV1, sigHybridV1: value)
         }
     }
 
@@ -346,6 +361,56 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     /// `ReKeyScheduler` default and this class of drift cannot yet exist.
     public let rekeyNextPeriodMs: Int?
 
+    /// Base64 of SHA-256 of the signer's second public key (32 bytes). Sent with `sigHybrid`, bound by EXTX. A value that is
+    /// present but not a string reads as the empty string (which no canonical decoder accepts), never as absent.
+    public let mldsaKeyId: String?
+
+    /// Base64 of the 4691-byte second signature over the handshake. Same lenient read as `mldsaKeyId`.
+    public let sigHybrid: String?
+
+    /// Names of tags this build stops advertising on purpose (at most 16), bound by EXTX. Only a client release names one.
+    public let capsWithdrawn: [String]?
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, callId, pqcPublicKey, x25519PublicKey, strongBoxPublicKey, dualCurvePublicKey, ciphertext, capabilities
+        case pskFingerprints, selectedPskFingerprint, pskRoles, signerIdentityKey, sigV6, dtlsFingerprint, sasCommit
+        case rekeyNonce, rekeyRound, rekeyNextPeriodMs, mldsaKeyId, sigHybrid, capsWithdrawn
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(Kind.self, forKey: .kind)
+        callId = try c.decode(String.self, forKey: .callId)
+        pqcPublicKey = try c.decodeIfPresent(String.self, forKey: .pqcPublicKey)
+        x25519PublicKey = try c.decodeIfPresent(String.self, forKey: .x25519PublicKey)
+        strongBoxPublicKey = try c.decodeIfPresent(String.self, forKey: .strongBoxPublicKey)
+        dualCurvePublicKey = try c.decodeIfPresent(String.self, forKey: .dualCurvePublicKey)
+        ciphertext = try c.decodeIfPresent(Ciphertext.self, forKey: .ciphertext)
+        capabilities = try c.decodeIfPresent(Capabilities.self, forKey: .capabilities)
+        pskFingerprints = try c.decodeIfPresent([String].self, forKey: .pskFingerprints)
+        selectedPskFingerprint = try c.decodeIfPresent(String.self, forKey: .selectedPskFingerprint)
+        pskRoles = try c.decodeIfPresent([Int].self, forKey: .pskRoles)
+        signerIdentityKey = try c.decodeIfPresent(String.self, forKey: .signerIdentityKey)
+        sigV6 = try c.decodeIfPresent(String.self, forKey: .sigV6)
+        dtlsFingerprint = try c.decodeIfPresent(String.self, forKey: .dtlsFingerprint)
+        sasCommit = try c.decodeIfPresent(String.self, forKey: .sasCommit)
+        rekeyNonce = try c.decodeIfPresent(String.self, forKey: .rekeyNonce)
+        rekeyRound = try c.decodeIfPresent(Int.self, forKey: .rekeyRound)
+        rekeyNextPeriodMs = try c.decodeIfPresent(Int.self, forKey: .rekeyNextPeriodMs)
+        // The second-signature members never make a bundle undecodable: a wrong type is read as a value that cannot verify.
+        mldsaKeyId = Self.lenientString(c, .mldsaKeyId)
+        sigHybrid = Self.lenientString(c, .sigHybrid)
+        capsWithdrawn = (try? c.decodeIfPresent([String].self, forKey: .capsWithdrawn)) ?? nil
+    }
+
+    /// Absent or JSON null: nil. A string: the string. Anything else that is present: the empty string.
+    private static func lenientString(_ c: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> String? {
+        guard c.contains(key) else { return nil }
+        if (try? c.decodeNil(forKey: key)) == true { return nil }
+        if let text = try? c.decode(String.self, forKey: key) { return text }
+        return ""
+    }
+
     public init(
         kind: Kind,
         callId: String,
@@ -364,7 +429,10 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         sasCommit: String? = nil,
         rekeyNonce: String? = nil,
         rekeyRound: Int? = nil,
-        rekeyNextPeriodMs: Int? = nil
+        rekeyNextPeriodMs: Int? = nil,
+        mldsaKeyId: String? = nil,
+        sigHybrid: String? = nil,
+        capsWithdrawn: [String]? = nil
     ) {
         self.kind = kind
         self.callId = callId
@@ -384,6 +452,9 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         self.rekeyNonce = rekeyNonce
         self.rekeyRound = rekeyRound
         self.rekeyNextPeriodMs = rekeyNextPeriodMs
+        self.mldsaKeyId = mldsaKeyId
+        self.sigHybrid = sigHybrid
+        self.capsWithdrawn = capsWithdrawn
     }
 
     /// The same bundle with `sasCommit` replaced (used by the parser to represent a JSON null).
@@ -395,7 +466,22 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             selectedPskFingerprint: selectedPskFingerprint, pskRoles: pskRoles,
             signerIdentityKey: signerIdentityKey, sigV6: sigV6, dtlsFingerprint: dtlsFingerprint,
             sasCommit: value, rekeyNonce: rekeyNonce, rekeyRound: rekeyRound,
-            rekeyNextPeriodMs: rekeyNextPeriodMs)
+            rekeyNextPeriodMs: rekeyNextPeriodMs,
+            mldsaKeyId: mldsaKeyId, sigHybrid: sigHybrid, capsWithdrawn: capsWithdrawn)
+    }
+
+    /// The same bundle with the members of the second signature replaced: its capability tag, key id, signature and withdrawal list.
+    func withSecondSignature(capabilities newCapabilities: Capabilities?, mldsaKeyId newKeyId: String?,
+                             sigHybrid newSig: String?, capsWithdrawn newWithdrawn: [String]?) -> AndroidHandshakeBundle {
+        AndroidHandshakeBundle(
+            kind: kind, callId: callId, pqcPublicKey: pqcPublicKey, x25519PublicKey: x25519PublicKey,
+            strongBoxPublicKey: strongBoxPublicKey, dualCurvePublicKey: dualCurvePublicKey,
+            ciphertext: ciphertext, capabilities: newCapabilities, pskFingerprints: pskFingerprints,
+            selectedPskFingerprint: selectedPskFingerprint, pskRoles: pskRoles,
+            signerIdentityKey: signerIdentityKey, sigV6: sigV6, dtlsFingerprint: dtlsFingerprint,
+            sasCommit: sasCommit, rekeyNonce: rekeyNonce, rekeyRound: rekeyRound,
+            rekeyNextPeriodMs: rekeyNextPeriodMs,
+            mldsaKeyId: newKeyId, sigHybrid: newSig, capsWithdrawn: newWithdrawn)
     }
 }
 

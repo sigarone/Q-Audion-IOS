@@ -106,6 +106,13 @@ public enum MldsaIdentityPublication {
         return (nowMs, "\(hash):\(nowMs)")
     }
 
+    /// Whether `stored` is the creation record of exactly this (uuid, Ed25519 key, device id) binding, that is, a certificate was
+    /// built for it on this device. A record of another binding does not count.
+    public static func hasStoredCreation(stored: String?, uuidRaw: Data, edPub: Data, deviceId: String) -> Bool {
+        guard let stored else { return false }
+        return createdMsFor(stored: stored, uuidRaw: uuidRaw, edPub: edPub, deviceId: deviceId, nowMs: 1).record == stored
+    }
+
     // MARK: - Fetch
 
     /// Verifies the fields of a fetched bundle. Every field the publish requires must be present, `gen` must be 0

@@ -73,6 +73,7 @@ enum LocalCryptoWipe {
         // to the account that is leaving.
         UserDefaults.standard.removeObject(forKey: "com.qaudion.identity.mldsa_xc_created_v1")
         PeerMldsaStore.clear()
+        MldsaOwnPublicationState.reset()
         // The notification key and the list of names and avatars of the notification extension.
         NotifyKeychain.production()?.delete()
         if let directory = NotifyRubricaFiles.defaultDirectory() { NotifyRubricaFiles.clear(in: directory) }
