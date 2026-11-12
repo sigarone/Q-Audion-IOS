@@ -61,3 +61,31 @@ public enum InterruptionHandlingGuard {
         observerActive && observedEpoch == currentEpoch
     }
 }
+
+/// The arm of THIS call's own peer connection, as the call service knows it. It is the owner of every
+/// unit switch of the call that has no enable of its own to point at (the unit may have been enabled by
+/// the connection's own arm), and it is never replaced by "whatever arm is in force now": after a promotion
+/// to a group that arm is the group's. Main thread only.
+public struct CallArmTracker: Equatable {
+    public private(set) var token = 0
+
+    public init() {}
+
+    /// The peer connection of the call was created and armed (0 = not armed). `wiredGeneration` is the
+    /// call generation the report was wired in: a report from an earlier call is ignored.
+    public mutating func note(_ newToken: Int, wiredGeneration: Int, currentGeneration: Int) {
+        guard wiredGeneration == currentGeneration else { return }
+        token = newToken
+    }
+
+    /// A new call starts: nothing of the previous one carries over.
+    public mutating func reset() {
+        token = 0
+    }
+
+    /// The owner of a switch submitted now: the owner of this call's own enable when it has one, else this
+    /// call's arm. Never the arm in force. 0 means nothing of this call can be on: the switch is a no-op.
+    public func switchOwner(enableOwner: Int) -> Int {
+        enableOwner != 0 ? enableOwner : token
+    }
+}

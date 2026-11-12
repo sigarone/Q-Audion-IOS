@@ -2412,6 +2412,7 @@ final class CallService: @unchecked Sendable {
         // The stop queued by that teardown belongs to the previous capture: from here on a newer one is
         // being set up, so that stop must not deactivate the session this call configures next.
         bumpCaptureSerial()
+        callArm.reset()  // a new call does not inherit the previous call's arm
         // W-PADOVERFLOW — after the defensive teardown, so that teardown
         // reports the PREVIOUS call rather than this one's empty counters.
         audioEngineRef = engine
@@ -5340,8 +5341,19 @@ final class CallService: @unchecked Sendable {
 
     /// The arm that owns this call's unit for a switch submitted now: the one its enable was
     /// submitted for, else the arm in force. Main thread.
+    /// Never the arm in force now: after a promotion to a group that is the group's.
     private func nativeUnitSwitchOwner() -> Int {
-        nativeUnitOwnerToken != 0 ? nativeUnitOwnerToken : NativeAudioSessionGate.currentArmToken
+        callArm.switchOwner(enableOwner: nativeUnitOwnerToken)
+    }
+
+    /// The arm of this call's own peer connection (see `CallArmTracker`). Main thread only. Not cleared at
+    /// teardown: a late deactivation of the ended call still has to point at that call's arm.
+    private var callArm = CallArmTracker()
+
+    /// Called (main thread) when the call's peer connection was created and armed. `wiredGeneration` is the
+    /// generation the report was wired in; a report from an earlier call is dropped.
+    public func noteCallArmToken(_ token: Int, wiredGeneration: Int) {
+        callArm.note(token, wiredGeneration: wiredGeneration, currentGeneration: currentCallGeneration())
     }
 
     /// `AudioCapture.isGroupCallActive` runs on the audio queue too; the live answer is main-thread
@@ -5449,7 +5461,7 @@ final class CallService: @unchecked Sendable {
             // started before the negotiation landed, or from a fallback.
             // The owner is captured and recorded NOW, on the main thread: a didDeactivate that arrives
             // before the queued switch runs sees this owner and queues its switch-off behind it.
-            let owner = NativeAudioSessionGate.currentArmToken
+            let owner = callArm.token
             nativeUnitOwnerToken = owner
             let reasonRaw = reason.rawValue
             if let capture = audioCapture, capture.isCapturing || audioStartsInFlight > 0 {

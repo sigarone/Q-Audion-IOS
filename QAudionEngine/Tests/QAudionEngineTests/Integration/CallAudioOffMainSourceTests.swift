@@ -138,6 +138,27 @@ final class CallAudioOffMainSourceTests: XCTestCase {
         XCTAssertTrue(controller.contains("NativeAudioSessionGate.switchOnQueue("))
     }
 
+    /// The arm in force is read only inside the gate. A call's switches are owned by the call's own arm
+    /// (recorded when its peer connection is created), never by whatever arm is in force now.
+    func test_currentArmTokenIsReadOnlyInsideTheGate() throws {
+        for file in ["QAudionApp/Services/CallService.swift", "QAudionApp/AppState.swift",
+                     "QAudionEngine/Sources/QAudionEngine/GroupCall/GroupAudioUnitDriver.swift",
+                     "QAudionEngine/Sources/QAudionEngine/WebRTC/QAudionWebRtcCallController.swift"] {
+            let text = try source(file)
+            XCTAssertFalse(codeOnly(text).contains("currentArmToken"), "\(file) reads the arm in force")
+        }
+        let service = try source("QAudionApp/Services/CallService.swift")
+        let owner = try body(of: "private func nativeUnitSwitchOwner(", in: service)
+        XCTAssertTrue(owner.contains("callArm.switchOwner(enableOwner: nativeUnitOwnerToken)"))
+        XCTAssertTrue(service.contains("callArm.reset()"))
+        XCTAssertFalse(try body(of: "private func teardownAudioStack(", in: service).contains("callArm"),
+                       "the call's arm is not cleared at teardown")
+        let app = try source("QAudionApp/AppState.swift")
+        XCTAssertGreaterThanOrEqual(app.components(separatedBy: "callService.noteCallArmToken(").count - 1, 2)
+        let controller = try source("QAudionEngine/Sources/QAudionEngine/WebRTC/QAudionWebRtcCallController.swift")
+        XCTAssertEqual(controller.components(separatedBy: "reportNativeAudioArm(of: pc)").count - 1, 3)
+    }
+
     /// The owner of the enable is recorded on the main thread when the switch is submitted, before it runs.
     func test_enableRecordsTheOwnerAtSubmitTime() throws {
         let service = try source("QAudionApp/Services/CallService.swift")

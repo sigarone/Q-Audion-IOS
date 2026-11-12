@@ -21358,6 +21358,11 @@ final class AppState: ObservableObject {
                 // `CallService.engageAudioSrtpFallback` drops a request from another
                 // generation instead of re-latching the fallback for a dead call.
                 let fallbackWiredGeneration: Int = offerCallGeneration
+                controller.onNativeAudioArmed = { [weak self] token in
+                    Task { @MainActor [weak self] in
+                        self?.callService.noteCallArmToken(token, wiredGeneration: fallbackWiredGeneration)
+                    }
+                }
                 controller.onAudioSrtpFallbackEngage = { [weak self] in
                     Task { @MainActor [weak self] in
                         self?.callService.engageAudioSrtpFallback(capturedGeneration: fallbackWiredGeneration)
@@ -31092,6 +31097,11 @@ extension AppState {
         // W-FALLBACKLATCH (2026-10-03) — responder mirror of the caller-side wiring:
         // the generation read at the top of this function (before any await-free setup),
         // so an engage for a call that was torn down since is ignored in `CallService`.
+        controller.onNativeAudioArmed = { [weak self] token in
+            Task { @MainActor [weak self] in
+                self?.callService.noteCallArmToken(token, wiredGeneration: fallbackWiredGeneration)
+            }
+        }
         controller.onAudioSrtpFallbackEngage = { [weak self] in
             Task { @MainActor [weak self] in
                 self?.callService.engageAudioSrtpFallback(capturedGeneration: fallbackWiredGeneration)
