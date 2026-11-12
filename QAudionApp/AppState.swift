@@ -16057,6 +16057,14 @@ final class AppState: ObservableObject {
                 print("[AppState] Android OFFER REJECTED — senderId=\(senderId.prefix(8))… does not match established callContactId=\(expected.prefix(8))…")
                 return
             }
+            // An OFFER names its call: while a call with this peer is live, an OFFER of another call is dropped here.
+            if self.callState == .active || self.callState == .encrypted,
+               let liveId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(),
+               !liveId.isEmpty,
+               liveId.caseInsensitiveCompare(parsed.callId) != .orderedSame {
+                print("[AppState] Android OFFER dropped — another call is live callId=\(parsed.callId.prefix(8))… live=\(liveId.prefix(8))…")
+                return
+            }
         } else {
             // W-OFFERBUFFER — callContactId not set yet (this OFFER arrived
             // before call_incoming). Buffer; replayed only if callContactId

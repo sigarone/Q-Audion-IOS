@@ -243,6 +243,16 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         lock.withLock { _ = heldCalls.insert(id) }
     }
 
+    /// True when a call is live on this integration and `offerCallId` is not one of the calls it holds a session for.
+    static func isOfferForOtherLiveCall(offerCallId: String, sessionCallIds: Set<String>, isLive: Bool) -> Bool {
+        isLive && !sessionCallIds.isEmpty && !sessionCallIds.contains(offerCallId.lowercased())
+    }
+
+    /// Test seam: a live call on this integration, with its session held under `callId`.
+    func configureLiveCallForTesting(callId: String) {
+        lock.withLock { sessionInitializedByCall.insert(callId.lowercased()); state = .active }
+    }
+
     /// Test seam (A2): the transport closure the held-ACCEPT release writes through (set by an OFFER's processing in
     /// production).
     func setResponderSenderForTesting(_ sender: @escaping (String) async throws -> Void) {
@@ -2002,6 +2012,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
         switch bundle.kind {
         case .offer:
+            // An OFFER names the call it belongs to. While a call is live on this integration, an OFFER for any
+            // other call is not this call's handshake: it is dropped before it touches the engine or any key.
+            if Self.isOfferForOtherLiveCall(
+                offerCallId: callId, sessionCallIds: lock.withLock { sessionInitializedByCall },
+                isLive: lock.withLock { state == .active }) {
+                print("[QAudionCallIntegration] OFFER dropped — another call is live callId=\(callId.prefix(8))…")
+                return
+            }
             // Pre-negotiation: emit
             // `call_processing` the moment the OFFER lands so the Android
             // caller's UI flips "Calling…" → "Connecting…". The Android
