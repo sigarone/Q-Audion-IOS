@@ -395,7 +395,7 @@ public final class RuntimeLogSink: ObservableObject {
         teeAttached = true
         // Confirm via OSLog so even if stdout gets weird the wiring
         // is visible in Console.app.
-        osLogger.info("[RuntimeLogSink] stdout/stderr tee attached")
+        runtimeOSLogger.info("[RuntimeLogSink] stdout/stderr tee attached")
     }
 
     /// Detach the stdout tee. Mostly for tests — production app
