@@ -471,9 +471,9 @@ final class LiveCallCryptoTests: XCTestCase {
         XCTAssertEqual(analysis.chainBaseTokens, [Array("2".utf8)])
         let decoded = try JSONDecoder().decode(AndroidHandshakeBundle.self, from: Data(onText.utf8))
         XCTAssertNil(decoded.chainBase, "the typed decode never reads the base: the validated text does")
-        XCTAssertFalse(QAudionCallIntegration.rekeyChainV1Enabled)
-        XCTAssertFalse(QAudionCallIntegration.frameKeyV6Enabled)
-        XCTAssertFalse(QAudionCallIntegration.innerSealV2Enabled)
+        XCTAssertTrue(QAudionCallIntegration.rekeyChainV1Enabled)
+        XCTAssertTrue(QAudionCallIntegration.frameKeyV6Enabled)
+        XCTAssertTrue(QAudionCallIntegration.innerSealV2Enabled)
 
         // The inner seal tag is written only when advertised, and survives the copy that every signed bundle goes through.
         let sealedOn = AndroidHandshakeBundle(
