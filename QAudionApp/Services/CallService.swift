@@ -1994,7 +1994,9 @@ final class CallService: @unchecked Sendable {
         out.level = level.token
         out.sas = sasConfirmedThisCall ? "1" : "0"
         out.dtls = dtls ?? ""
-        out.frame = rtpUsed ? "v5" : ""
+        // The frame scheme, the capability words and a refused chained rekey come from the call's key state.
+        let liveWords = integration.liveLineWords()
+        out.frame = rtpUsed ? (liveWords.frame.isEmpty ? "v5" : liveWords.frame) : ""
         out.relay = outerState.rawValue
         out.dcmux = outerState.rawValue
         out.inner = "legacy"
@@ -2002,7 +2004,9 @@ final class CallService: @unchecked Sendable {
         let capsWords = integration.capsBindLineWords(callId: cid)
         out.pin = capsWords.pin
         out.withdraw = capsWords.withdraw
-        out.caps = capsWords.caps
+        var capsList: [String] = capsWords.caps.isEmpty ? [] : [capsWords.caps]
+        capsList.append(contentsOf: liveWords.caps)
+        out.caps = capsList.joined(separator: ",")
         // The second handshake signature: what round 1 proved (auth H only after a valid signature), the record state, the first
         // signature result, and a rekey round that was refused.
         let pqWords = integration.pqLineWords(callId: cid)
@@ -2011,6 +2015,12 @@ final class CallService: @unchecked Sendable {
         out.pqSig = pqWords.pqSig
         out.rekey = pqWords.rekey
         out.round = pqWords.round
+        // A chained rekey refused here (sticky): the epoch of the refused round and its own reason word.
+        if let refusedEpoch = liveWords.refusedEpoch, pqWords.rekey != "refused" {
+            out.rekey = "refused"
+            out.round = String(refusedEpoch)
+            out.rreason = "chain_base"
+        }
         out.outer = mode == .sealed ? "sealed" : "off"
         switch mode {
         case .offPeerInstall: out.reason = "peer_install"

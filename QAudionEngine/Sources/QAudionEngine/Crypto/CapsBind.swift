@@ -14,6 +14,23 @@ public struct BundleCapsBind: Equatable, Sendable {
     public let extx: Data
     /// The normalised `capsWithdrawn` list: valid names, deduplicated, sorted bytewise, at most 16.
     public let withdrawn: [String]
+    /// The names in the raw `capabilities` object whose value is the literal `true` (after unescaping; a bad name and a name that
+    /// does not match the tag pattern are left out). `"true"` and `1` do not count.
+    public let tags: Set<String>
+    /// The raw tokens of the top-level members named `chainBase` (names compared after unescaping), read from the grammar-checked
+    /// member list; empty when the text is not a valid object.
+    public let chainBaseTokens: [[UInt8]]
+
+    public init(hasTag: Bool, duplicate: Bool, capsx: Data, extx: Data, withdrawn: [String], tags: Set<String> = [],
+                chainBaseTokens: [[UInt8]] = []) {
+        self.hasTag = hasTag
+        self.duplicate = duplicate
+        self.capsx = capsx
+        self.extx = extx
+        self.withdrawn = withdrawn
+        self.tags = tags
+        self.chainBaseTokens = chainBaseTokens
+    }
 }
 
 /// `capsBindV1` (WIRE_SPEC 3.7.1 extension): the unsigned capability members and the optional key-carrying members of a bundle
@@ -252,6 +269,14 @@ public enum CapsBind {
         return out
     }
 
+    private static func trueTags(_ members: [CapsMember]) -> Set<String> {
+        var names = Set<String>()
+        for m in members where m.isTrue && !m.bad && matchesTagPattern(m.name) {
+            names.insert(String(decoding: m.name, as: UTF16.self))
+        }
+        return names
+    }
+
     private static func tagAndDuplicates(_ members: [CapsMember]) -> (hasTag: Bool, duplicate: Bool) {
         var seen = Set<[UInt16]>()
         var duplicate = false
@@ -354,8 +379,11 @@ public enum CapsBind {
         let flags = tagAndDuplicates(members)
         let parsed = (try? JSONSerialization.jsonObject(with: Data(bytes))) as? [String: Any]
         let ext = extx(ofBundleObject: parsed)
+        var chainTokens: [[UInt8]] = []
+        if case .valid(let top) = StrictBundleJSON.validate(json) { chainTokens = RekeyChain.chainBaseTokens(of: top) }
         return BundleCapsBind(hasTag: flags.hasTag, duplicate: flags.duplicate, capsx: capsx(of: members),
-                              extx: ext.extx, withdrawn: ext.withdrawn)
+                              extx: ext.extx, withdrawn: ext.withdrawn, tags: trueTags(members),
+                              chainBaseTokens: chainTokens)
     }
 
     /// Analyse a typed bundle by encoding it exactly as it goes on the wire.
@@ -368,6 +396,12 @@ public enum CapsBind {
     /// `ext_r`: both bundles of the round carry the tag.
     public static func isActive(own: BundleCapsBind, peer: BundleCapsBind) -> Bool {
         own.hasTag && peer.hasTag
+    }
+
+    /// A capability that rides on `capsBindV1` is in effect when the round binds its capabilities and both bundles carry its
+    /// name with the literal `true`.
+    public static func negotiateS8b(own: BundleCapsBind, peer: BundleCapsBind, tag: String) -> Bool {
+        isActive(own: own, peer: peer) && own.tags.contains(tag) && peer.tags.contains(tag)
     }
 
     /// The duplicate rule: only for a round whose `ext_r` would be true, a repeated member name (or an unusable name) in the peer's

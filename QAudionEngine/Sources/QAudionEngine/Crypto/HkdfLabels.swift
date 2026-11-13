@@ -72,7 +72,22 @@ public enum HkdfLabels {
     /// exactly as in the transcript). See `OneToOneFrameKeys`. 22 bytes, NOT null-terminated.
     public static let frameKeyInfoPrefixV5: Data = Data("q-audion-frame-key-v5:".utf8)
 
+    /// Chained rekeys: `info` prefix of the per-round chain key. The full info is this label, the call id (lower-cased ASCII) as a
+    /// 16-bit length-prefixed field, and the round epoch as 4 bytes big-endian. 17 bytes.
+    public static let rekeyChainKeyV1: Data = Data("qa-rekey-chain-v1".utf8)
+
+    /// Chained rekeys: `info` prefix of the session key. The full info is this label, the base epoch as 4 bytes big-endian and the
+    /// 32-byte hash of the ACCEPT. 23 bytes.
+    public static let sessionKeyChainedV1: Data = Data("q-audion-session-key-c1".utf8)
+
+    /// Directional per-media frame keys: `info` prefix. The full info is this label followed by three 16-bit length-prefixed
+    /// fields: the call id (lower-cased ASCII), the media kind and the direction. 21 bytes.
+    public static let frameKeyInfoPrefixV6: Data = Data("q-audion-frame-key-v6".utf8)
+
     // MARK: - Salts (UTF-8)
+
+    /// Directional per-media frame keys: HKDF salt. 21 bytes.
+    public static let frameKeySaltV6: Data = Data("qaudion-frame-salt-v6".utf8)
 
     /// 1:1 directional frame keys (transcript v6): HKDF salt. 21 bytes.
     public static let frameKeySaltV5: Data = Data("qaudion-frame-salt-v5".utf8)
@@ -100,7 +115,7 @@ public enum HkdfLabels {
             deviceLinkPsk, frameChainAudio, frameChainVideo, fileKey,
             recoveryAuth, recoverySalt, hybridPqcSaltV1, hybridCtBindV1,
             deviceLinkSalt, frameKeyInfoPrefixV5, frameKeySaltV5,
-            sasV6
+            sasV6, rekeyChainKeyV1, sessionKeyChainedV1, frameKeyInfoPrefixV6, frameKeySaltV6
         ]
         for label in labels {
             guard let s = String(data: label, encoding: .utf8),

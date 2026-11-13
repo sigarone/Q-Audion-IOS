@@ -65,6 +65,9 @@ OKAY = [
     REAL.replace("level=PQ2", "level=PQ2S"),
     REAL.replace("level=PQ2", "level=CL"),
     REAL.replace("caps=-", "caps=capsBindV1,innerSealV2"),
+    REAL.replace("round=-", "round=2147483646"),
+    REAL.replace("rekey=- round=-", "rekey=refused round=3 rreason=chain_base"),
+    REAL.replace("rekey=- round=-", "rekey=refused round=2147483646 rreason=chain_base"),
     REAL + " tl=pq kd=cl unk=2",
     REAL.replace("kind=1to1", "kind=group") + " tl=pq kd=pq unk=0",
 ]
@@ -89,6 +92,15 @@ for vec in kat["level"]["logLine"]["vectors"]:
     checks += 1
     if red(line) != line:
         failures.append("known-answer line not shipped verbatim: %r -> %r" % (line, red(line)))
+
+# The rekey lines of the shared file that this build can emit (the other reasons of that section are not part of this grammar).
+for vec in kat["level"]["logLine"]["rekeyVectors"]:
+    if vec.get("name") not in ("chain-base-refusal", "chain-base-refusal-then-x25519-zero", "indrot-without-rreason"):
+        continue
+    line = re.sub(r"call=\S+", "call=0a1b2c3d", vec["line"], count=1)
+    checks += 1
+    if red(line) != line:
+        failures.append("known-answer rekey line not shipped verbatim: %r -> %r" % (line, red(line)))
 
 # Scoped to the call / stdout tags: not a free pass under another tag.
 for tag in ("chat", "net", "ice", "media", "crypto", "livelog"):
@@ -129,7 +141,11 @@ FORGED = [
     REAL.replace("caps=-", "caps=capsBindV1;innerSealV2"),
     REAL.replace("outer=sealed", "outer=maybe"),
     REAL.replace("reason=-", "reason=alice"),
-    REAL.replace("round=-", "round=1234567890"),
+    REAL.replace("round=-", "round=12345678901"),
+    REAL.replace("round=-", "round=1234567890 rreason=other"),
+    REAL.replace("round=-", "round=3 rreason="),
+    REAL.replace("round=-", "round=3 rreason=chain_base rreason=chain_base"),
+    REAL.replace("rekey=- round=-", "rekey=refused rreason=chain_base round=3"),
     REAL.replace("round=-", "round=x"),
     REAL.replace(" hold=0", ""),
     REAL.replace(" hold=0", "  hold=0"),

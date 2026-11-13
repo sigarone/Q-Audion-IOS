@@ -1347,8 +1347,28 @@ _RE_PQLEVEL_FULL = re.compile(
     r" pqstate=(?:pinned|withdrawn-unsigned|invalid|other-key|-)"
     r" pq_sig=(?:valid|absent|unavailable|invalid|otherkey|anomaly_confirmed|-)"
     r" outer=(?:sealed|off|-) reason=(?:peer_install|local_install|x25519_zero|chain_base|-)"
-    r" rekey=(?:ok|refused|-) round=(?:[0-9]{1,9}|-)"
+    r" rekey=(?:ok|refused|-) round=(?:[0-9]{1,10}|-)(?: rreason=chain_base)?"
     r"(?: tl=(?:pq|cl|-) kd=(?:pq|cl|-) unk=[0-9]{1,3})?\Z"
+)
+
+# CALL KEY STATE LINES (call tag): the fixed-word lines of the per-call key bookkeeping (QAudionCallIntegration, written through
+# CapsBindLog.line to RTLog.info("call", ...)) and the extended capability line. Every value is a decimal number from a closed
+# range, no id, name or key by construction. The generic gate gives bare words a budget of zero, so each shape is accepted here by
+# the whole-line match only: one extra word, a value outside its set or any suffix and it is not one of them and goes through the
+# ordinary gates as before. Pinned by test_ship_ios_live_vocab.py.
+_RE_LIVE_FULL = re.compile(
+    r"\A(?:"
+    r"live adopt gen=[0-9]{1,9} role=[01] chain=[01] fk=[56]"
+    r"|live close gen=[0-9]{1,9} staged=[0-9]{1,2} why=[1-4]"
+    r"|live chain refuse round=[0-9]{1,10} why=[1-7]"
+    r"|live defer why=[1-3]"
+    r"|live stage round=[0-9]{1,10} chain=[01] staged=[0-9]{1,2}"
+    r"|live confirm round=[0-9]{1,10} retained=[0-9]{1,2}"
+    r"|live fail round=[0-9]{1,10}"
+    r"|live offerer drop round=[0-9]{1,10}"
+    r"|live fk why=[1-3]"
+    r"|capsbind ext=[01] own=[01] peer=[01] round=[0-9]{1,10} chain=[01] fk=[01]"
+    r")\Z"
 )
 
 
@@ -1362,7 +1382,8 @@ def _is_closed_grammar_line(tag, norm_body):
     if t.startswith(_MESH_TAG_PREFIXES):
         return bool(_RE_MESH_FULL.match(norm_body))
     if t.startswith(_HANDSHAKE_TAG_PREFIXES):
-        return bool(_RE_HANDSHAKE_FULL.match(norm_body) or _RE_PQLEVEL_FULL.match(norm_body))
+        return bool(_RE_HANDSHAKE_FULL.match(norm_body) or _RE_PQLEVEL_FULL.match(norm_body)
+                    or _RE_LIVE_FULL.match(norm_body))
     return False
 
 

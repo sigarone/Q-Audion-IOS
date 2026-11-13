@@ -136,6 +136,8 @@ public struct PqLevelLine: Equatable, Sendable {
     public var reason: String = ""
     public var rekey: String = ""
     public var round: String = ""
+    /// One-to-one lines only: why a chained rekey was refused. A slot of its own after `round=`; empty prints nothing.
+    public var rreason: String = ""
     /// Group lines only.
     public var tl: String?
     public var kd: String?
@@ -170,6 +172,9 @@ public struct PqLevelLine: Equatable, Sendable {
             "rekey=" + Self.v(rekey),
             "round=" + Self.v(round),
         ]
+        if kind != "group", !rreason.isEmpty {
+            parts.append("rreason=" + rreason)
+        }
         if kind == "group" {
             parts.append("tl=" + Self.v(tl ?? ""))
             parts.append("kd=" + Self.v(kd ?? ""))

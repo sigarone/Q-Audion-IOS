@@ -537,7 +537,7 @@ final class CapsBindPinTests: XCTestCase {
     private func rawOffer(extra: String) -> String {
         callId + "|{\"kind\":\"OFFER\",\"callId\":\"" + callId + "\",\"pqcPublicKey\":\"AA==\",\"x25519PublicKey\":\"AA==\","
             + "\"capabilities\":{\"ratchetV3\":true,\"sframeV1\":true,\"vkeyV1\":true,\"srtpDirKeyV1\":true,\"pskMixV1\":true,"
-            + "\"hsTranscriptBindV1\":true,\"capsBindV1\":true,\"frameKeyV6\":true}" + extra + "}"
+            + "\"hsTranscriptBindV1\":true,\"capsBindV1\":true,\"futureCapV9\":true}" + extra + "}"
     }
 
     func testTheParsedBundleCarriesTheRawAnalysisWithItsUnknownMembers() throws {

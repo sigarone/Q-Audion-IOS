@@ -50,20 +50,23 @@ final class HandshakeRoundValidationTests: XCTestCase {
 
     func testOfferWithNegativeOrHugeRoundIsMalformed() {
         XCTAssertNil(offerT(offerBundle(round: -1)))
-        XCTAssertNil(offerT(offerBundle(round: Int(UInt32.max) + 1)))
+        XCTAssertNil(offerT(offerBundle(round: Int(Int32.max) + 1)))
+        XCTAssertNil(offerT(offerBundle(round: Int(UInt32.max))))
     }
 
     func testOfferWithRoundOneAndLaterRoundsBuilds() throws {
         let one = try XCTUnwrap(offerT(offerBundle(round: 1)))
         let two = try XCTUnwrap(offerT(offerBundle(round: 2)))
         XCTAssertNotEqual(one, two, "the round is bound into the transcript")
-        XCTAssertNotNil(offerT(offerBundle(round: Int(UInt32.max))))
+        XCTAssertNotNil(offerT(offerBundle(round: Int(Int32.max))))
     }
 
     func testAcceptWithRoundZeroOrMissingIsMalformed() {
         XCTAssertNil(acceptT(acceptBundle(round: 0)))
         XCTAssertNil(acceptT(acceptBundle(round: nil)))
         XCTAssertNotNil(acceptT(acceptBundle(round: 1)))
+        XCTAssertNotNil(acceptT(acceptBundle(round: Int(Int32.max))))
+        XCTAssertNil(acceptT(acceptBundle(round: Int(Int32.max) + 1)))
     }
 }
 
