@@ -104,6 +104,15 @@ public enum HkdfLabels {
     /// Per-round inner audio seal: HKDF salt. 26 bytes.
     public static let innerSealSaltV2: Data = Data("qaudion-inner-seal-salt-v2".utf8)
 
+    /// Outer relay layer: the label of the digest that binds both key-exchange members. 20 bytes.
+    public static let relayBindLabelV1: Data = Data("qaudion-relay-kem-v1".utf8)
+
+    /// Outer relay layer: HKDF salt. 21 bytes.
+    public static let relaySaltV1: Data = Data("qaudion-relay-salt-v1".utf8)
+
+    /// Outer relay layer: HKDF info prefix of the per-kind, per-direction keys. 17 bytes.
+    public static let relayInfoPrefixV1: Data = Data("q-audion-relay-v1".utf8)
+
     /// Hybrid PQC session key salt (used as the HKDF Extract salt when no
     /// PSK is present; the PSK replaces it when one is negotiated).
     public static let hybridPqcSaltV1: Data = Data("q-audion-hybrid-pqc-v1".utf8)
@@ -128,7 +137,8 @@ public enum HkdfLabels {
             recoveryAuth, recoverySalt, hybridPqcSaltV1, hybridCtBindV1,
             deviceLinkSalt, frameKeyInfoPrefixV5, frameKeySaltV5,
             sasV6, rekeyChainKeyV1, sessionKeyChainedV1, frameKeyInfoPrefixV6, frameKeySaltV6,
-            innerSealInfoPrefixV2, innerSealAadPrefixV2, innerSealSaltV2
+            innerSealInfoPrefixV2, innerSealAadPrefixV2, innerSealSaltV2,
+            relayBindLabelV1, relaySaltV1, relayInfoPrefixV1
         ]
         for label in labels {
             guard let s = String(data: label, encoding: .utf8),

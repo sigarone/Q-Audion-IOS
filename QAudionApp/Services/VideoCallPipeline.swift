@@ -204,6 +204,10 @@ public final class VideoCallPipeline: NSObject {
     private nonisolated(unsafe) var pqcEncryptor: PqcFrameEncryptor?
     private nonisolated(unsafe) var pqcDecryptor: PqcFrameDecryptor?
     private let sealerLock = NSLock()
+    /// The layers of relay video of a call whose key exchange is in effect (the outer layer, with the inner one when negotiated):
+    /// one set for the call, written from the main actor and read on the encoder and WS queues, both under `sealerLock`. nil for
+    /// every other call, which keeps the legacy encryptor and decryptor above.
+    private nonisolated(unsafe) var relayLayers: RelayVideoLayers?
     /// Task 10 holistic review — rate-limits the drop warnings below so a
     /// sustained pre-handshake/failure window can't spam the log at
     /// 24-30fps. Guarded by `dropWarnLock` (separate from `sealerLock`:
@@ -508,22 +512,33 @@ public final class VideoCallPipeline: NSObject {
     /// `BcryptoWsVideoRelayTransport.parseAndUnseal`, which has no
     /// pass-through-unsealed mode for video and drops + rate-limited-WARNs
     /// on the exact same two conditions.
-    public nonisolated func acceptInboundFragment(_ payload: Data) {
+    @discardableResult
+    public nonisolated func acceptInboundFragment(_ payload: Data) -> Bool {
         let unwrapped: Data
         #if canImport(WebRTC)
         sealerLock.lock()
         let dec = pqcDecryptor
+        let layers = relayLayers
         sealerLock.unlock()
-        guard let dec = dec else {
-            warnInboundDropRateLimited("acceptInboundFragment: no decryptor installed, dropping inbound video fragment")
-            return
+        if let layers = layers {
+            // A call of the exchange: the layers open the fragment (the members of the WS envelope are never read).
+            guard let openedLayers = layers.openFragment(payload) else {
+                warnInboundDropRateLimited("acceptInboundFragment: relay layers could not open the fragment, dropping inbound video fragment")
+                return false
+            }
+            unwrapped = openedLayers.fragment
+        } else {
+            guard let dec = dec else {
+                warnInboundDropRateLimited("acceptInboundFragment: no decryptor installed, dropping inbound video fragment")
+                return false
+            }
+            let opened = dec.decryptCiphertext(payload)
+            guard !opened.isEmpty else {
+                warnInboundDropRateLimited("acceptInboundFragment: decryptCiphertext failed, dropping inbound video fragment")
+                return false
+            }
+            unwrapped = opened
         }
-        let opened = dec.decryptCiphertext(payload)
-        guard !opened.isEmpty else {
-            warnInboundDropRateLimited("acceptInboundFragment: decryptCiphertext failed, dropping inbound video fragment")
-            return
-        }
-        unwrapped = opened
         #else
         unwrapped = payload
         #endif
@@ -543,6 +558,46 @@ public final class VideoCallPipeline: NSObject {
                 warnInboundDropRateLimited("decode failed")
             }
         }
+        return true
+    }
+
+    /// A call of the key exchange installs the layers of relay video once: the same ports again change nothing, and the legacy
+    /// encryptor and decryptor are dropped (no legacy pair exists on such a call).
+    public func installRelayLayers(mode: RelayVideoMode, outer: OuterSealPort?, inner: InnerVideoPort?) {
+        #if canImport(WebRTC)
+        sealerLock.lock()
+        defer { sealerLock.unlock() }
+        if let existing = relayLayers, existing.isBuilt(mode: mode, outer: outer, inner: inner) { return }
+        relayLayers = RelayVideoLayers(mode: mode, outer: outer, inner: inner)
+        pqcEncryptor = nil
+        pqcDecryptor = nil
+        #endif
+    }
+
+    /// The layers of the call, or nil for a call that keeps the legacy pair.
+    public nonisolated func relayLayersSnapshot() -> RelayVideoLayers? {
+        #if canImport(WebRTC)
+        sealerLock.lock()
+        defer { sealerLock.unlock() }
+        return relayLayers
+        #else
+        return nil
+        #endif
+    }
+
+    /// One outbound fragment to its wire bytes and the rounds it was sealed under: through the layers when the call has them (a
+    /// fragment whose sub-header does not parse is dropped), through the legacy sealer otherwise (-1, -1). nil: drop the fragment.
+    public nonisolated func sealOutbound(
+        _ fragment: Data, parsed: AndroidVideoWireAdapter.ParsedFragment?
+    ) -> (wire: Data, outerEpoch: Int32, innerEpoch: Int32)? {
+        if let layers = relayLayersSnapshot() {
+            guard let parsed = parsed,
+                  let sealed = layers.sealFragment(
+                    fragment, fragIdx: parsed.fragIdx, totalFrags: parsed.totalFrags, isKey: parsed.isKeyFrame) else { return nil }
+            return (sealed.wire, sealed.outerEpoch, sealed.innerEpoch)
+        }
+        guard let wire = sealOutboundFragment(fragment) else { return nil }
+        return (wire, -1, -1)
     }
 
     /// W394 / Task 10 holistic-review fix (2026-07-01) — PQC seal helper
@@ -752,6 +807,7 @@ public final class VideoCallPipeline: NSObject {
         guard let key = newKey, key.count == 32, !callId.isEmpty else {
             pqcEncryptor = nil
             pqcDecryptor = nil
+            relayLayers = nil
             return
         }
         do {
@@ -1053,5 +1109,24 @@ extension VideoCallPipeline: AVCaptureVideoDataOutputSampleBufferDelegate {
         } catch {
             print("[VideoCallPipeline] encode failed: \(error)")
         }
+    }
+}
+
+/// Relay video of a call of the key exchange: a fragment that could not be sealed drops itself and every later fragment of the same
+/// frame (a partial frame is useless to the peer's reassembler). One gate per pipeline.
+final class RelayVideoFrameDropGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var droppedFrameId: UInt16?
+
+    func isDropped(frameId: UInt16) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return droppedFrameId == frameId
+    }
+
+    func drop(frameId: UInt16) {
+        lock.lock()
+        droppedFrameId = frameId
+        lock.unlock()
     }
 }

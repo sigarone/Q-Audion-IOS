@@ -1588,6 +1588,17 @@ final class CallService: @unchecked Sendable {
     private var relaySealerSend: PqcRtpFrameSealer?
     private var relaySealerRecv: PqcRtpFrameSealer?
 
+    /// The outer layer of a call whose key exchange is in effect: the port of its set, and the (lowercased) call it belongs to. A
+    /// call that has this never builds the legacy pair above. Guarded by `relaySlotLock`; cleared at teardown.
+    private var relayOuterPort: OuterSealPort?
+    private var relayOuterPortCallId: String?
+    /// Frames the outer layer refused to seal or to open, for the throttled lines. Guarded by `relaySlotLock`.
+    private var outerSealFailCount = 0
+    /// Relay video carried media on a call of the exchange, so the protection line may report it. Guarded by `relaySlotLock`.
+    private var relayVideoUsed = false
+    /// The peer's hold as the outer layer of the caller last heard of it. Main thread.
+    private var lastSyncedOuterHold = false
+
     /// The call runs without the outer seal because one side could not install it (`outer-off-v1`).
     /// nil while the outer layer is as negotiated. Guarded by `relaySlotLock`; cleared at teardown.
     private var outerOffMode: OuterLayerMode?
@@ -1983,6 +1994,99 @@ final class CallService: @unchecked Sendable {
         }
     }
 
+    /// A call whose outer layer is the one of the key exchange (`outerNegotiation().kout`) publishes its PORT here, through the
+    /// guards of `installRelaySealers`: the call generation (checked again atomically with the publish) and the active call id. The
+    /// same object again is a no-op (no counter belongs to this slot); another object (the key state of the call was replaced)
+    /// replaces it. A layer that could not be set up on this side is announced as a local install failure. Returns true for a call
+    /// of the exchange, whatever became of the port: the caller never builds the legacy pair for it. False: not such a call.
+    @discardableResult
+    func installRelayOuterPort(integration: QAudionCallIntegration?, callId: String, expectedGeneration: Int) -> Bool {
+        guard let integration = integration else { return false }
+        // Read before the slot lock is taken: the callee runs this under its install lock, which is legal only in this order.
+        let negotiation = integration.outerNegotiation()
+        guard negotiation.kout else { return false }
+        let cid = callId.lowercased()
+        let p: String = String(cid.prefix(8))
+        guard RelaySealerInstallGuard.shouldInstall(
+            capturedGeneration: expectedGeneration, currentGeneration: relaySlotLock.withLock({ _callGeneration })) else {
+            RTLog.warn("call", "relay outer port install dropped (call ended) cid=" + p)
+            return true
+        }
+        if let active = getCallId?()?.lowercased(), !active.isEmpty, active != cid {
+            RTLog.warn("call", "relay outer port install ignored for another call cid=" + p)
+            return true
+        }
+        if negotiation.failed {
+            noteLocalOuterInstallFailure(callId: cid)
+            return true
+        }
+        guard let port = integration.liveOuterPort() else { return true }
+        // 0: dropped (the call ended), 1: the same object, 2: published, 3: replaced another object
+        let outcome: Int = relaySlotLock.withLock {
+            guard RelaySealerInstallGuard.shouldInstall(capturedGeneration: expectedGeneration, currentGeneration: _callGeneration) else {
+                return 0
+            }
+            if let existing = relayOuterPort, existing === port { return 1 }
+            let hadPort: Bool = relayOuterPort != nil
+            relayOuterPort = port
+            relayOuterPortCallId = cid
+            return hadPort ? 3 : 2
+        }
+        if outcome == 0 {
+            RTLog.warn("call", "relay outer port install dropped (call ended) cid=" + p)
+            return true
+        }
+        if outcome == 1 { return true }
+        let line: String = "[CallService] outer layer port published callId=" + p + "…"
+        print(line)
+        // Frames that arrived before the port existed were held: open them now.
+        DispatchQueue.main.async { [weak self] in
+            self?.drainRxPreBuffer()
+            self?.holdNoteEvent(outcome == 3 ? "rekey" : "outer")
+        }
+        return true
+    }
+
+    /// The caller's trial of a new outer round pauses while the peer is held (it sends no media): the layer follows the receiver's
+    /// state of CALL_HOLD. Main thread. Only an outer layer of the caller acts on it.
+    private func syncOuterHold() {
+        let held: Bool = holdReceiver.held
+        guard held != lastSyncedOuterHold else { return }
+        lastSyncedOuterHold = held
+        callIntegration?.liveSetOuterHold(held)
+    }
+
+    /// Relay video carried media on a call of the exchange: the protection line reports it from now on (never more than observed).
+    func noteRelayVideoUsed() {
+        let first: Bool = relaySlotLock.withLock {
+            if relayVideoUsed { return false }
+            relayVideoUsed = true
+            return true
+        }
+        guard first else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.emitPqLevelIfChanged()
+        }
+    }
+
+    /// The throttled line of a frame the outer layer refused: the first one and every 250th.
+    private func noteOuterSealRefused(_ why: Int) {
+        let n: Int = relaySlotLock.withLock {
+            outerSealFailCount &+= 1
+            return outerSealFailCount
+        }
+        guard n == 1 || n % 250 == 0 else { return }
+        let line: String = "live outer seal fail why=" + String(describing: why)
+        RTLog.info("call", line)
+    }
+
+    /// The throttled line of a frame the outer layer dropped: the first of each reason and every 500th.
+    private func noteOuterDrop(_ why: OuterFailure, nth: Int) {
+        guard nth == 1 || nth % 500 == 0 else { return }
+        let line: String = "live outer drop why=" + String(describing: why.rawValue) + " n=" + String(describing: nth)
+        RTLog.info("call", line)
+    }
+
     // MARK: - Protection level line (QA-PQLEVEL)
 
     /// Group of the PeerConnection's DTLS handshake (`pq` hybrid, `cl` otherwise), from its own report line. nil until seen.
@@ -2010,7 +2114,8 @@ final class CallService: @unchecked Sendable {
         guard mode != .unknown else { return }
         let dtls: String? = relaySlotLock.withLock { dtlsGroupToken }
         let dtlsPq: Bool = dtls == "pq"
-        let outerState: PqOuterState = (mode == .sealed) ? .same : .off
+        let outerWords: OuterLevelWords? = integration.liveOuterLevelWords()
+        let outerState: PqOuterState = (mode == .sealed) ? (outerWords?.kout ?? .same) : .off
         let nativeRtp: Bool = getUsesNativeAudioSrtp?() == true && !audioSrtpFallbackActive
         let rtpUsed: Bool = nativeRtp && (getAudioRtpPacketsReceived?() ?? 0) > 0
         let dcUsed: Bool = txFramesDc + rxFramesDc > 0
@@ -2019,6 +2124,12 @@ final class CallService: @unchecked Sendable {
         if rtpUsed { paths.append(PqLevelCalc.rtp(dtlsPq: dtlsPq)) }
         if dcUsed { paths.append(PqLevelCalc.dcmux(dtlsPq: dtlsPq, innerPq: true, outer: outerState)) }
         if relayUsed { paths.append(PqLevelCalc.relay(innerPq: true, outer: outerState)) }
+        // Relay video of the exchange, once it carried media: only a call of the exchange reports it, so the line of every other
+        // call is what it was.
+        let videoMode: RelayVideoMode = integration.liveRelayVideoMode()
+        let videoCarried: Bool = relaySlotLock.withLock { relayVideoUsed }
+        let reportsVideo: Bool = videoCarried && (videoMode == .outerOnly || videoMode == .double)
+        if reportsVideo { paths.append(PqLevelCalc.relay(innerPq: videoMode == .double, outer: outerState)) }
         guard let level = PqLevelCalc.callLevel(paths: paths) else { return }
         var out = PqLevelLine()
         out.call = Self.short8(cid) == "none" ? "" : Self.short8(cid)
@@ -2031,6 +2142,7 @@ final class CallService: @unchecked Sendable {
         out.relay = outerState.rawValue
         out.dcmux = outerState.rawValue
         out.inner = liveWords.inner == "v2" ? "v2" : "legacy"
+        if reportsVideo { out.rvideo = videoMode == .double ? "two" : "one" }
         out.hold = integration.isMediaHeld(callId: cid) ? "1" : "0"
         let capsWords = integration.capsBindLineWords(callId: cid)
         out.pin = capsWords.pin
@@ -2058,6 +2170,8 @@ final class CallService: @unchecked Sendable {
         case .offLocalInstall: out.reason = "local_install"
         default: break
         }
+        // The reasons of the outer layer come after the off reasons.
+        if out.reason.isEmpty, let words = outerWords, !words.reason.isEmpty { out.reason = words.reason }
         let line = out.format()
         guard line != lastPqLevelLine else { return }
         lastPqLevelLine = line
@@ -2072,8 +2186,11 @@ final class CallService: @unchecked Sendable {
     /// closed) before that.
     private func currentOuterMode(integration: QAudionCallIntegration?) -> OuterLayerMode {
         if let off = relaySlotLock.withLock({ outerOffMode }) { return off }
-        guard let integration = integration, integration.srtpNegotiationKnown else { return .unknown }
-        return integration.negotiatedSrtpDirKey ? .sealed : .noOuter
+        guard let integration = integration else { return .unknown }
+        // One reading: the peer bundle seen, and whether the older per-direction keys or the keys of the exchange seal the call.
+        let negotiation = integration.outerNegotiation()
+        guard negotiation.known else { return .unknown }
+        return negotiation.sealed ? .sealed : .noOuter
     }
 
     private static func outerLeg(_ t: AudioRxTransport) -> OuterLayerLeg {
@@ -2083,18 +2200,28 @@ final class CallService: @unchecked Sendable {
     /// The ONE place the outer seal of an outgoing frame is applied (audio, hang-up, NACK request). Returns the bytes to put
     /// on the wire and whether the relay leg may carry them, or nil when the frame must not be sent at all: sealed call whose
     /// sealer is not installed yet (held), or the seal failed. A frame of a sealed call is never sent plain.
-    private func outerTx(_ frame: Data, integration: QAudionCallIntegration?) -> (wire: Data, relayAllowed: Bool)? {
-        let sealer: PqcRtpFrameSealer? = relaySlotLock.withLock { relaySealerSend }
-        switch OuterLayerPolicy.tx(mode: currentOuterMode(integration: integration), sealerInstalled: sealer != nil) {
+    private func outerTx(_ frame: Data, integration: QAudionCallIntegration?) -> (wire: Data, relayAllowed: Bool, outerEpoch: Int32)? {
+        // One reading of both slots; the cipher runs after the lock is released.
+        let (sealer, port): (PqcRtpFrameSealer?, OuterSealPort?) = relaySlotLock.withLock { (relaySealerSend, relayOuterPort) }
+        switch OuterLayerPolicy.tx(mode: currentOuterMode(integration: integration), sealerInstalled: sealer != nil || port != nil) {
         case .seal:
+            if let port = port {
+                switch port.seal(.audio, frame) {
+                case .sealed(let wire, let epoch):
+                    return (wire, true, epoch)
+                case .refused(let why):
+                    noteOuterSealRefused(why.rawValue)
+                    return nil
+                }
+            }
             guard let sealer = sealer, let wire = try? sealer.seal(frame) else { return nil }
-            return (wire, true)
+            return (wire, true, -1)
         case .hold:
             return nil
         case .plainDataChannelOnly:
-            return (frame, false)
+            return (frame, false, -1)
         case .plainEitherLeg:
-            return (frame, true)
+            return (frame, true, -1)
         }
     }
 
@@ -2110,12 +2237,21 @@ final class CallService: @unchecked Sendable {
     /// The receive side of the same decision. A frame of a sealed call is opened or held, never delivered raw.
     private func outerRx(_ data: Data, leg: OuterLayerLeg, integration: QAudionCallIntegration?) -> OuterRxResult {
         // One reading of the sealer slot and of the mode, used for the decision and for the opening of this frame.
-        let sealer: PqcRtpFrameSealer? = relaySlotLock.withLock { relaySealerRecv }
+        let (sealer, port): (PqcRtpFrameSealer?, OuterSealPort?) = relaySlotLock.withLock { (relaySealerRecv, relayOuterPort) }
         let mode: OuterLayerMode = currentOuterMode(integration: integration)
-        let decision = OuterLayerPolicy.rx(mode: mode, leg: leg, recvSealerInstalled: sealer != nil)
+        let decision = OuterLayerPolicy.rx(mode: mode, leg: leg, recvSealerInstalled: sealer != nil || port != nil)
         let authenticated: Bool = HoldRxTrust.frameIsAuthenticated(rx: decision, mode: mode, leg: leg)
         switch decision {
         case .open:
+            if let port = port {
+                switch port.open(.audio, data) {
+                case .opened(let payload, _):
+                    return .inner(payload, authenticated: authenticated)
+                case .dropped(let why, let nth):
+                    noteOuterDrop(why, nth: nth)
+                    return .openFailed
+                }
+            }
             guard let inner = unsealRelayFrame(data, with: sealer) else { return .openFailed }
             return .inner(inner, authenticated: authenticated)
         case .hold:
@@ -2143,9 +2279,12 @@ final class CallService: @unchecked Sendable {
             guard outerOffMode == nil else { return false }
             outerOffMode = .offLocalInstall
             outerOffAnnounceRemaining = 1 + OuterLayerPolicy.outerOffRepeats
+            relayOuterPort = nil
             return true
         }
         guard first else { return }
+        // No later round stages an outer slot and the video layers go fail-closed.
+        callIntegration?.liveOuterOff()
         RTLog.warn("call", "outer=off reason=local_install")
         announceOuterOffIfNeeded()
         DispatchQueue.main.async { [weak self] in
@@ -2173,9 +2312,11 @@ final class CallService: @unchecked Sendable {
         let changed: Bool = relaySlotLock.withLock {
             guard outerOffMode == nil else { return false }
             outerOffMode = .offPeerInstall
+            relayOuterPort = nil
             return true
         }
         guard changed else { return }
+        callIntegration?.liveOuterOff()
         RTLog.warn("call", "outer=off reason=peer_install")
         drainRxPreBuffer()
         emitPqLevelIfChanged()
@@ -2797,6 +2938,13 @@ final class CallService: @unchecked Sendable {
             relaySlotLock.withLock {
                 (relaySealerSend, relaySealerRecv, relaySealerCallId, relaySealerKeyFp, _callGeneration)
             }
+        // The outer layer of the exchange rides the same save and restore: a port that is not restored leaves the callee silent after
+        // the answer, and an `outer-off-v1` state that is not restored comes back as a sealed call with no port.
+        let (_savedOuterPort, _savedOuterPortCallId, _savedOuterOffMode, _savedOuterOffRemaining):
+            (OuterSealPort?, String?, OuterLayerMode?, Int) =
+            relaySlotLock.withLock {
+                (relayOuterPort, relayOuterPortCallId, outerOffMode, outerOffAnnounceRemaining)
+            }
         // W-FALLBACKLATCH (2026-10-03) — the latch is kept across the teardown below ONLY if it
         // was set for the call being answered. Any other latch is a leftover (field: an engage
         // that landed after the previous call's teardown) and would mute this call's native
@@ -2818,7 +2966,8 @@ final class CallService: @unchecked Sendable {
         // inside the incoming call (see teardownAudioStack's kdoc).
         teardownAudioStack(resetSrtpFallback: false, resetDcCounters: true)
         bumpCaptureSerial()  // see startCall: the stop queued above must not deactivate the new session
-        if let cid = _savedSealerCallId, _savedSealerSend != nil {
+        let _savedCallId: String? = _savedSealerCallId ?? _savedOuterPortCallId
+        if let cid = _savedCallId, _savedSealerSend != nil || _savedOuterPort != nil {
             let active: String = getCallId?()?.lowercased() ?? ""
             // Restore when the sealer matches the active call, or when the
             // active id is unknown (the sealer was installed by W574h only for
@@ -2849,6 +2998,10 @@ final class CallService: @unchecked Sendable {
                     relaySealerRecv = _savedSealerRecv
                     relaySealerCallId = cid
                     relaySealerKeyFp = _savedSealerKeyFp
+                    if let savedPort = _savedOuterPort {
+                        relayOuterPort = savedPort
+                        relayOuterPortCallId = cid
+                    }
                     return true
                 }
                 let p: String = String(cid.prefix(8))
@@ -2858,6 +3011,16 @@ final class CallService: @unchecked Sendable {
                 } else {
                     RTLog.warn("call", "relay sealer restore dropped (call ended) cid=" + p)
                 }
+            }
+        }
+
+        // The `outer-off-v1` state of the call, and the announcements still owed, survive the answer-time teardown as well.
+        if let savedOff = _savedOuterOffMode {
+            relaySlotLock.withLock {
+                guard outerOffMode == nil,
+                      RelaySealerInstallGuard.shouldInstall(capturedGeneration: _savedGeneration, currentGeneration: _callGeneration) else { return }
+                outerOffMode = savedOff
+                outerOffAnnounceRemaining = _savedOuterOffRemaining
             }
         }
 
@@ -3188,7 +3351,7 @@ final class CallService: @unchecked Sendable {
     /// sealer? Cheap (one lock + one flag): checked BEFORE the mic frame is encoded and encrypted,
     /// so a held frame does not advance the inner audio sequence (the peer sees no gap to NACK).
     private func relayTxHeldForSealer(integration: QAudionCallIntegration?) -> Bool {
-        let installed: Bool = relaySlotLock.withLock { relaySealerSend != nil }
+        let installed: Bool = relaySlotLock.withLock { relaySealerSend != nil || relayOuterPort != nil }
         if installed { return false }
         return OuterLayerPolicy.tx(mode: currentOuterMode(integration: integration), sealerInstalled: false) == .hold
     }
@@ -3575,7 +3738,7 @@ final class CallService: @unchecked Sendable {
     }
 
     private func holdOuterState() -> HoldOuterState {
-        let sealerInstalled: Bool = relaySlotLock.withLock { relaySealerSend != nil }
+        let sealerInstalled: Bool = relaySlotLock.withLock { relaySealerSend != nil || relayOuterPort != nil }
         return HoldOuterState.from(mode: currentOuterMode(integration: callIntegration), sealerInstalled: sealerInstalled)
     }
 
@@ -3729,6 +3892,7 @@ final class CallService: @unchecked Sendable {
                                                       "seq": Int(hold.seq)])
         guard outcome.changed else { return }
         holdLastBeepAtMs = HoldToneSynth.never
+        syncOuterHold()
         if hold.held {
             holdTick()  // the tone plays at t=0 of HELD
         } else {
@@ -3794,6 +3958,8 @@ final class CallService: @unchecked Sendable {
             holdLastHintStamp = lastRealInboundDecodeAtMs
             holdHint.onEvidence(nowMs: nowMs)
         }
+        // The 30 minute limit and the clear of a lost RESUMED also end the peer's hold: the layer hears of it here.
+        syncOuterHold()
         let peerHeld: Bool = holdReceiver.held
         let suppressed: Bool = peerHeld || (holdHintSuppressed?() ?? false)
         let shown: Bool = holdHint.evaluate(nowMs: nowMs, suppressed: suppressed)
@@ -4047,6 +4213,15 @@ final class CallService: @unchecked Sendable {
         RTLog.info("call", "audionack tx=1 seq=" + String(seq))
     }
 
+    /// The byte 1 a resent frame must carry: the outer round the layer sends under now, for a call whose layer rotates. nil: no check.
+    private func outerEpochByteForResend() -> UInt8? {
+        guard let port: OuterSealPort = relaySlotLock.withLock({ relayOuterPort }),
+              callIntegration?.outerNegotiation().rot == true else { return nil }
+        let epoch = port.sendEpoch()
+        guard epoch >= 0 else { return nil }
+        return UInt8(truncatingIfNeeded: epoch)
+    }
+
     /// W-AUDIONACK — TX side of loss repair: the peer told us it never got
     /// frame `seq`. Replay the EXACT bytes already sent — `nackRing` stores
     /// the final fully-sealed `Data` that actually went on the wire, so
@@ -4059,12 +4234,15 @@ final class CallService: @unchecked Sendable {
         for byte in body { seq = (seq << 8) | Int64(byte) }
         // A call with the per-round inner seal resends only a frame sealed under the round the send pointer is on now; any other
         // call looks the entry up as before.
+        // A call whose outer layer rotates its keys also resends only a frame sealed under the outer round it sends under now.
         let envelope: Data
+        let outerByte: UInt8? = outerEpochByteForResend()
         if let sendEpoch = callIntegration?.innerSendEpoch {
-            guard let found = nackRing.lookup(seq: seq, sendEpochByte: UInt8(truncatingIfNeeded: sendEpoch)) else { return }
+            guard let found = nackRing.lookup(
+                seq: seq, sendEpochByte: UInt8(truncatingIfNeeded: sendEpoch), outerEpochByte: outerByte) else { return }
             envelope = found
         } else {
-            guard let found = nackRing.lookup(seq: seq) else { return }
+            guard let found = nackRing.lookup(seq: seq, outerEpochByte: outerByte) else { return }
             envelope = found
         }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
@@ -5065,6 +5243,11 @@ final class CallService: @unchecked Sendable {
         relaySlotLock.withLock {
             relaySealerSend = nil  // W574e — fresh M-15 sealers per call (new key)
             relaySealerRecv = nil
+            relayOuterPort = nil
+            relayOuterPortCallId = nil
+            outerSealFailCount = 0
+            relayVideoUsed = false
+            lastSyncedOuterHold = false
             outerOffMode = nil
             outerOffAnnounceRemaining = 0
             dtlsGroupToken = nil

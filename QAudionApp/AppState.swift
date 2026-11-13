@@ -1404,9 +1404,20 @@ final class AppState: ObservableObject {
         }
         // The send pointer of the per-round inner seal moved to a later round: no cached frame sealed under the earlier one is
         // ever resent.
-        integration.onInnerSendSwitch = { [weak self] _, _ in
-            Task { @MainActor [weak self] in
+        integration.onInnerSendSwitch = { [weak self, weak integration] _, _ in
+            Task { @MainActor [weak self, weak integration] in
                 self?.callService.dropNackCacheAtSendSwitch()
+                // Relay video with the inner seal keeps fragments sealed under the inner round: the earlier ones are not resent.
+                if integration?.liveRelayVideoMode() == .double { self?.videoNackCache?.reset() }
+            }
+        }
+        // The send pointer of the outer layer moved or was put back: no cached frame sealed under the earlier round is ever resent
+        // (the audio ring, and the video cache in the modes of the exchange). Never in a call without the layer, never at a stage.
+        integration.onOuterSendSwitch = { [weak self, weak integration] _, _ in
+            Task { @MainActor [weak self, weak integration] in
+                self?.callService.dropNackCacheAtSendSwitch()
+                let videoMode: RelayVideoMode = integration?.liveRelayVideoMode() ?? .legacy
+                if videoMode == .outerOnly || videoMode == .double { self?.videoNackCache?.reset() }
             }
         }
     }
@@ -1541,6 +1552,13 @@ final class AppState: ObservableObject {
     ) {
         guard let callService = callService, !callId.isEmpty else { return }
         guard !isReKeyRound else { return }
+        // A call whose outer layer is the one of the key exchange publishes its port and never builds the legacy pair, whatever
+        // `srtpDirKeyV1` says. A call whose media is held behind the identity confirmation waits for the queued path.
+        if integration?.outerNegotiation().kout == true {
+            guard integration?.isMediaHeld(callId: callId) != true else { return }
+            callService.installRelayOuterPort(integration: integration, callId: callId, expectedGeneration: generation)
+            return
+        }
         guard integration?.negotiatedSrtpDirKey == true else { return }
         guard !selfId.isEmpty, !peerId.isEmpty else { return }
         guard integration?.isMediaHeld(callId: callId) != true else { return }
@@ -16513,10 +16531,25 @@ final class AppState: ObservableObject {
                 print("[AppState] VNACK dropped — sender \(senderId.prefix(8))… is not the call peer, or no active cache")
                 return
             }
+            // The call id of a request is compared exactly with the id of the call's round-1 OFFER (a case variant is another id).
+            if let exactId = distinctCallIntegrations().compactMap({ $0.liveExactCallId() }).first, exactId != callId {
+                print("[AppState] VNACK dropped — another call id than the live call's")
+                return
+            }
             let ws = liveProvider?.getWebSocketClient()
+            let resendLayers: RelayVideoLayers? = videoPipeline?.relayLayersSnapshot()
+            var currentInnerStamp: Int32 = -1
+            if let layers = resendLayers, layers.mode == .double,
+               let innerNow = distinctCallIntegrations().compactMap({ $0.innerSendEpoch }).first {
+                currentInnerStamp = RelayVideoLayers.innerStamp(forEpoch: innerNow)
+            }
             var hits = 0
             for fragIdx in missing {
                 guard let entry = cache.lookup(frameId: frameId, fragIdx: fragIdx) else { continue }
+                // A fragment sealed under an earlier outer or inner round is not resent.
+                if let layers = resendLayers,
+                   !RelayVideoLayers.mayResend(entryOuter: entry.outerEpoch, entryInner: entry.innerEpoch,
+                                               currentOuter: layers.currentOuterEpoch(), currentInner: currentInnerStamp) { continue }
                 ws?.sendVideoFrame(
                     recipientId: senderId, frame: entry.wire, callId: callId,
                     fragIdx: UInt16(fragIdx), totalFrags: UInt16(entry.totalFrags),
@@ -16569,6 +16602,7 @@ final class AppState: ObservableObject {
                 // Only a round-1 callee ever holds its MAC (the SAS words exist from round 1 on).
                 kcCalls[key]?.states[1]?.ownMacSent = true
                 kcCalls[key]?.states[1]?.ownMacSentAtMs = SasCommit.monotonicNowMs()
+                if let releasedGen = kcCalls[key]?.states[1]?.liveGen { noteOwnKcmacSent(liveGen: releasedGen, round: 1) }
                 OpaqueSelfEchoFilter.shared.markSent(pending.wire)
                 Task {
                     try? await provider.callingApi.sendOpaqueMessageString(recipientId: pending.peerId, payload: pending.wire)
@@ -16735,6 +16769,7 @@ final class AppState: ObservableObject {
             // one-shot per handshake, not periodic/symmetric, but marking it is
             // free and keeps every piggy-back send on this channel consistent.
             OpaqueSelfEchoFilter.shared.markSent(wire)
+            noteOwnKcmacSent(liveGen: state.liveGen, round: state.round)
             if let provider = liveProvider {
                 Task {
                     try? await provider.callingApi.sendOpaqueMessageString(recipientId: peerId, payload: wire)
@@ -16966,6 +17001,15 @@ final class AppState: ObservableObject {
             if !out.contains(where: { $0 === candidate }) { out.append(candidate) }
         }
         return out
+    }
+
+    /// Our own key confirmation of a round was handed to the transport: the outer layer keeps the first time only.
+    @MainActor
+    private func noteOwnKcmacSent(liveGen: UInt64, round: Int) {
+        guard liveGen != 0 else { return }
+        for integration in distinctCallIntegrations() {
+            integration.liveKcmacSent(gen: liveGen, round: UInt32(truncatingIfNeeded: round))
+        }
     }
 
     /// The peer's key confirmation of a round verified: the call's key state learns it by generation.
@@ -17781,8 +17825,10 @@ final class AppState: ObservableObject {
                 // persistMessagePsk / consumeDeferredAnswerIfReady below are
                 // NOT media and are unaffected by the gate.
                 let cidLower = cid.lowercased()
-                let installAudioMedia: () -> Void = { [weak self] in
+                let installAudioMedia: () -> Void = { [weak self, weak integration] in
                     guard let self = self else { return }
+                    // The outer layer of the key exchange: its port, never the legacy pair (the same install, behind the same gate).
+                    if self.callService.installRelayOuterPort(integration: integration, callId: cid, expectedGeneration: firedGeneration) { return }
                     // W-STALESEALER — `firedGeneration` (the integration's own
                     // entry-time capture, see above) travels into
                     // `installRelaySealers`, which validates it against the
@@ -20844,8 +20890,10 @@ final class AppState: ObservableObject {
                         // persistMessagePsk below is NOT media and stays unaffected by
                         // the gate, exactly like the responder leg.
                         let cidLower = cid.lowercased()
-                        let installAudioMedia: () -> Void = { [weak self] in
+                        let installAudioMedia: () -> Void = { [weak self, weak integration] in
                             guard let self = self else { return }
+                            // The outer layer of the key exchange: its port, never the legacy pair (the same install, behind the same gate).
+                            if self.callService.installRelayOuterPort(integration: integration, callId: cid, expectedGeneration: firedGeneration) { return }
                             // W-STALESEALER — see the responder leg's identical comment:
                             // `installRelaySealers` itself validates `firedGeneration`
                             // atomically with the sealer-slot publish and logs the warn.
@@ -25471,8 +25519,9 @@ extension AppState {
                     // `.abort`, contradicting the gate's "hold ALL media" intent
                     // (audio already deferred via pendingIdentityGatedMedia). Same
                     // stash-and-replay pattern as the audio install closures.
-                    let rotateVideo: () -> Void = { [weak pipeline] in
-                        pipeline?.rotatePqcSealer(key, callId: videoCallId, selfIsRoleA: videoSelfIsRoleA, selfIsCaller: videoSelfIsCaller)
+                    let rotateVideo: () -> Void = { [weak pipeline, weak self] in
+                        self?.applyRelayVideoKeying(
+                            pipeline: pipeline, videoCallId: videoCallId, key: key, selfIsRoleA: videoSelfIsRoleA, selfIsCaller: videoSelfIsCaller)
                         print("[AppState] video pipeline PQC sealer rotated (\(key.count) bytes)")
                     }
                     if self.identityUnverifiedCallIds.contains(videoCallId.lowercased()) {
@@ -29387,7 +29436,9 @@ extension AppState {
         let initialRotateVideo: () -> Void = { [weak pipeline, weak self] in
             // G7 — feeds a sealer: assert against `videoCallId`, the same
             // id passed alongside it to `rotatePqcSealer` itself.
-            pipeline?.rotatePqcSealer(self?.callPqcSessionKey(forCallId: videoCallId), callId: videoCallId, selfIsRoleA: videoSelfIsRoleA, selfIsCaller: self?.currentCallIsCaller())
+            self?.applyRelayVideoKeying(
+                pipeline: pipeline, videoCallId: videoCallId, key: self?.callPqcSessionKey(forCallId: videoCallId),
+                selfIsRoleA: videoSelfIsRoleA, selfIsCaller: self?.currentCallIsCaller())
         }
         if self.identityUnverifiedCallIds.contains(videoCallId.lowercased()) {
             self.pendingIdentityGatedMedia[videoCallId.lowercased(), default: []].append(initialRotateVideo)
@@ -29415,6 +29466,7 @@ extension AppState {
         // W-VNACK — fresh cache per call, same lifecycle as abrController.
         let nackCache = VideoNackFragmentCache()
         self.videoNackCache = nackCache
+        let relayFrameDrops = RelayVideoFrameDropGate()
 
         pipeline.onOutboundFragment = { [weak self, weak ws, weak pipeline, callingImpl] fragment in
             // Task 10 holistic-review fix — sealOutboundFragment now
@@ -29424,7 +29476,18 @@ extension AppState {
             // pipeline itself deallocated) is treated the same way: no
             // sealed bytes, no send — never fall back to `fragment`.
             guard let pipeline else { return }
-            guard let sealed = pipeline.sealOutboundFragment(fragment) else {
+            // A call of the key exchange seals through the layers of the exchange. A fragment that WebRTC already carries is not
+            // sealed at all there (it would spend an outer and an inner counter and two cipher operations for nothing); the order
+            // of a call without them is unchanged.
+            let layered: Bool = pipeline.relayLayersSnapshot() != nil
+            #if canImport(WebRTC)
+            if layered, self?.isVideoSendCarriedByWebRtc == true { return }
+            #endif
+            let parsed = AndroidVideoWireAdapter.parseIosFragment(fragment)
+            // A fragment that could not be sealed drops itself and every later fragment of the same frame.
+            if layered, let parsed = parsed, relayFrameDrops.isDropped(frameId: parsed.frameId) { return }
+            guard let sealedOut = pipeline.sealOutbound(fragment, parsed: parsed) else {
+                if layered, let parsed = parsed { relayFrameDrops.drop(frameId: parsed.frameId) }
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.videoSealDropCount &+= 1
@@ -29456,6 +29519,7 @@ extension AppState {
                 RTLog.warn("call", "W-STALEPIPE onOutboundFragment fired for a pipeline that is no longer self.videoPipeline — dropping frame (would have been rejected server-side anyway)")
                 return
             }
+            let sealed: Data = sealedOut.wire
             #if canImport(WebRTC)
             // W-VIDEOSENDGATE (2026-08-26) — skip the redundant WS-relay
             // copy once THIS call's video-carrying ICE has been confirmed
@@ -29481,7 +29545,6 @@ extension AppState {
                 return
             }
             #endif
-            let parsed = AndroidVideoWireAdapter.parseIosFragment(fragment)
             let cid = callingImpl?.getActiveCallId()
             let effectiveWs = self?.liveProvider?.getWebSocketClient() ?? ws
             // W-VNACK — cache the SEALED bytes BEFORE sending, same reason
@@ -29496,8 +29559,10 @@ extension AppState {
                 nackCache.store(
                     frameId: Int(parsed.frameId), fragIdx: Int(parsed.fragIdx),
                     wire: sealed, totalFrags: Int(parsed.totalFrags), isKeyFrame: parsed.isKeyFrame,
-                    nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+                    nowMs: Int64(Date().timeIntervalSince1970 * 1000),
+                    outerEpoch: sealedOut.outerEpoch, innerEpoch: sealedOut.innerEpoch)
             }
+            if layered { self?.callService.noteRelayVideoUsed() }
             effectiveWs?.sendVideoFrame(
                 recipientId: peerId, frame: sealed, callId: cid,
                 fragIdx: parsed?.fragIdx ?? 0,
@@ -29628,8 +29693,28 @@ extension AppState {
                   let cid = incomingCallId,
                   cid.caseInsensitiveCompare(activeCallId) == .orderedSame
             else { return }
-            pipeline.acceptInboundFragment(raw)
+            // A fragment of a call of the key exchange that opened: the protection line may report relay video from now on.
+            if pipeline.acceptInboundFragment(raw), pipeline.relayLayersSnapshot() != nil {
+                self?.callService.noteRelayVideoUsed()
+            }
         }
+    }
+
+    /// The keying of relay video, at the two sites that gave the legacy pair its key (the start of the pipeline and the session key
+    /// of the call), both inside the identity gate. A call of the key exchange installs its single set of layers once and never
+    /// rotates anything; every other call runs the legacy rotation exactly as before.
+    @MainActor
+    private func applyRelayVideoKeying(pipeline: VideoCallPipeline?, videoCallId: String, key: Data?, selfIsRoleA: Bool, selfIsCaller: Bool?) {
+        guard let pipeline = pipeline else { return }
+        let integration: QAudionCallIntegration? = sasIntegration(forCallId: videoCallId)
+        let mode: RelayVideoMode = integration?.liveRelayVideoMode() ?? .legacy
+        if mode == .legacy || integration == nil {
+            pipeline.rotatePqcSealer(key, callId: videoCallId, selfIsRoleA: selfIsRoleA, selfIsCaller: selfIsCaller)
+            return
+        }
+        pipeline.installRelayLayers(mode: mode, outer: integration?.liveOuterPort(), inner: integration?.liveInnerVideoPort())
+        let line: String = "live video layers mode=" + String(describing: mode.logCode)
+        RTLog.info("call", line)
     }
 
     /// W393: bridge for VideoCallView's "Inverti" button.
