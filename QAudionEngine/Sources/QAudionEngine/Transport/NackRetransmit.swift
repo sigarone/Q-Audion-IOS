@@ -72,21 +72,39 @@ public final class NackRetransmitRing {
     /// best-effort miss, never an error. Only an entry recorded WITHOUT an
     /// epoch byte is returned: a frame of the per-round inner seal is never served as a legacy one.
     public func lookup(seq: Int64) -> Data? {
+        lookup(seq: seq, outerEpochByte: nil)
+    }
+
+    /// The same, for a call whose outer layer rotates its keys: the final bytes carry the epoch byte of the outer round in byte 1, and
+    /// an entry sealed under another outer round is a miss. nil: no check.
+    public func lookup(seq: Int64, outerEpochByte: UInt8?) -> Data? {
         lock.lock()
         defer { lock.unlock() }
         let idx = index(for: seq)
         guard slotSeq[idx] == seq, slotEpoch[idx] == nil else { return nil }
-        return slots[idx]
+        return Self.matchingOuterEpoch(slots[idx], outerEpochByte)
     }
 
     /// Look up a frame of the per-round inner seal: returned only when it was sealed under the round the send pointer is on now
     /// (`sendEpochByte`). A frame of an earlier round is a miss.
     public func lookup(seq: Int64, sendEpochByte: UInt8) -> Data? {
+        lookup(seq: seq, sendEpochByte: sendEpochByte, outerEpochByte: nil)
+    }
+
+    /// The same, with the check of the outer round (see `lookup(seq:outerEpochByte:)`).
+    public func lookup(seq: Int64, sendEpochByte: UInt8, outerEpochByte: UInt8?) -> Data? {
         lock.lock()
         defer { lock.unlock() }
         let idx = index(for: seq)
         guard slotSeq[idx] == seq, slotEpoch[idx] == sendEpochByte else { return nil }
-        return slots[idx]
+        return Self.matchingOuterEpoch(slots[idx], outerEpochByte)
+    }
+
+    private static func matchingOuterEpoch(_ entry: Data?, _ outerEpochByte: UInt8?) -> Data? {
+        guard let entry else { return nil }
+        guard let want = outerEpochByte else { return entry }
+        guard entry.count > 1, entry[entry.startIndex + 1] == want else { return nil }
+        return entry
     }
 
     /// Zero-fill and forget every entry. Called when the send pointer moves to a later round, and at teardown.

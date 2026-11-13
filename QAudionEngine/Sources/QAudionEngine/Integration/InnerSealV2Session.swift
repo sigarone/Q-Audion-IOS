@@ -90,16 +90,27 @@ public protocol InnerSealPort: AnyObject, Sendable {
     func openAudio(wire: Data) -> InnerOpenOutcome
 }
 
+/// What the relay video layers see of the inner seal: one plain video fragment in, one envelope out, and back.
+public protocol InnerVideoPort: AnyObject, Sendable {
+    func sealVideo(fragment: Data) -> InnerSealOutcome
+    func openVideo(wire: Data) -> InnerOpenOutcome
+}
+
 // MARK: - Slot table
 
 /// The two audio keys of one round, one per direction. Each is a buffer of its own that is wiped when the slot is erased.
 struct InnerRoundKeys {
     let offererToAcceptor: ChainKeyBuffer
     let acceptorToOfferer: ChainKeyBuffer
+    /// The two video keys: derived only in a call that negotiated the outer relay layer next to the inner seal.
+    var videoOffererToAcceptor: ChainKeyBuffer? = nil
+    var videoAcceptorToOfferer: ChainKeyBuffer? = nil
 
     func wipe() {
         offererToAcceptor.wipe()
         acceptorToOfferer.wipe()
+        videoOffererToAcceptor?.wipe()
+        videoAcceptorToOfferer?.wipe()
     }
 }
 
@@ -228,7 +239,7 @@ struct RoundSlotTable<Payload> {
 
 // MARK: - Session
 
-public final class InnerSealV2Session: InnerSealPort, @unchecked Sendable {
+public final class InnerSealV2Session: InnerSealPort, InnerVideoPort, @unchecked Sendable {
 
     /// What the tests read: epochs and counters, never bytes.
     struct Snapshot: Equatable {
@@ -249,9 +260,14 @@ public final class InnerSealV2Session: InnerSealPort, @unchecked Sendable {
     /// The last counter consumed. 0 before the first seal.
     private var txCtr: UInt64 = 0
     private var window = InnerAudioReplayWindow()
+    /// The same for the video kind: its own counter and its own window.
+    private var txVideoCtr: UInt64 = 0
+    private var videoWindow = InnerAudioReplayWindow()
+    private let withVideo: Bool
     private var closed = false
 
-    init(callIdL: String, role: LiveCallCrypto.Role, nowMs: @escaping @Sendable () -> Int) {
+    init(callIdL: String, role: LiveCallCrypto.Role, withVideo: Bool = false, nowMs: @escaping @Sendable () -> Int) {
+        self.withVideo = withVideo
         self.callIdL = callIdL
         self.sendDirection = role == .offerer ? .offererToAcceptor : .acceptorToOfferer
         self.receiveDirection = role == .offerer ? .acceptorToOfferer : .offererToAcceptor
@@ -283,7 +299,22 @@ public final class InnerSealV2Session: InnerSealPort, @unchecked Sendable {
             o2a.wipe()
             return nil
         }
-        return InnerRoundKeys(offererToAcceptor: o2a, acceptorToOfferer: a2o)
+        var keys = InnerRoundKeys(offererToAcceptor: o2a, acceptorToOfferer: a2o)
+        if withVideo {
+            guard let videoO2A = InnerSealV2.deriveKeyBuffer(
+                    sessionKey: sessionKey, callIdL: callIdL, kind: .video, direction: .offererToAcceptor) else {
+                keys.wipe()
+                return nil
+            }
+            keys.videoOffererToAcceptor = videoO2A
+            guard let videoA2O = InnerSealV2.deriveKeyBuffer(
+                    sessionKey: sessionKey, callIdL: callIdL, kind: .video, direction: .acceptorToOfferer) else {
+                keys.wipe()
+                return nil
+            }
+            keys.videoAcceptorToOfferer = videoA2O
+        }
+        return keys
     }
 
     /// What would refuse the slot of `epoch` now. Read-only: nothing is erased or written.
@@ -334,6 +365,8 @@ public final class InnerSealV2Session: InnerSealPort, @unchecked Sendable {
         table.removeAll()
         txCtr = 0
         window = InnerAudioReplayWindow()
+        txVideoCtr = 0
+        videoWindow = InnerAudioReplayWindow()
     }
 
     // MARK: Media path
@@ -387,6 +420,56 @@ public final class InnerSealV2Session: InnerSealPort, @unchecked Sendable {
         return .opened(block: block, ctr: ctr)
     }
 
+    public func sealVideo(fragment: Data) -> InnerSealOutcome {
+        lock.lock()
+        defer { lock.unlock() }
+        if closed { return .refused(.closed) }
+        table.sweep(nowMs: nowMs())
+        guard let slot = table.sendSlot() else { return .refused(.noSendSlot) }
+        let ctr = txVideoCtr &+ 1
+        guard ctr <= InnerSealV2.maxCounter else { return .refused(.ctrExhausted) }
+        // Consumed before the cipher runs: a failed seal never repeats a value.
+        txVideoCtr = ctr
+        let keyBuffer = sendDirection == .offererToAcceptor ? slot.payload.videoOffererToAcceptor : slot.payload.videoAcceptorToOfferer
+        guard let buffer = keyBuffer else { return .refused(.sealFailed) }
+        var sealed: Data?
+        _ = buffer.withBytes { raw in
+            sealed = InnerSealV2.seal(
+                key: SymmetricKey(data: raw), callIdL: callIdL, direction: sendDirection, kind: .video, epoch: slot.epoch, ctr: ctr,
+                plaintext: fragment)
+        }
+        guard let wire = sealed else { return .refused(.sealFailed) }
+        return .sealed(wire: wire, ctr: ctr, epochByte: slot.byte)
+    }
+
+    public func openVideo(wire: Data) -> InnerOpenOutcome {
+        lock.lock()
+        defer { lock.unlock() }
+        if closed { return .dropped(.closed) }
+        table.sweep(nowMs: nowMs())
+        let parsed = InnerSealV2.parse(wire)
+        guard case .envelope(let eByte, let ctr, let ciphertext) = parsed else {
+            return .dropped(parsed == .unknownType ? .unknownType : .malformed)
+        }
+        guard let slot = table.slot(forByte: eByte) else { return .dropped(.noSlot) }
+        switch videoWindow.check(ctr) {
+        case .fresh: break
+        case .duplicate: return .dropped(.replay)
+        case .tooOld: return .dropped(.tooOld)
+        }
+        let keyBuffer = receiveDirection == .offererToAcceptor ? slot.payload.videoOffererToAcceptor : slot.payload.videoAcceptorToOfferer
+        guard let buffer = keyBuffer else { return .dropped(.noSlot) }
+        var opened: Data?
+        _ = buffer.withBytes { raw in
+            opened = InnerSealV2.open(
+                key: SymmetricKey(data: raw), callIdL: callIdL, direction: receiveDirection, kind: .video, epoch: slot.epoch, ctr: ctr,
+                ciphertextAndTag: ciphertext)
+        }
+        guard let fragment = opened else { return .dropped(.aead) }
+        guard videoWindow.commit(ctr) == .fresh else { return .dropped(.replay) }
+        return .opened(block: fragment, ctr: ctr)
+    }
+
     // MARK: Reads
 
     var isClosed: Bool {
@@ -429,6 +512,13 @@ public final class InnerSealV2Session: InnerSealPort, @unchecked Sendable {
     func keyBuffersForTesting() -> [ChainKeyBuffer] {
         lock.lock()
         defer { lock.unlock() }
-        return table.slots.flatMap { [$0.payload.offererToAcceptor, $0.payload.acceptorToOfferer] }
+        var out: [ChainKeyBuffer] = []
+        for slot in table.slots {
+            out.append(slot.payload.offererToAcceptor)
+            out.append(slot.payload.acceptorToOfferer)
+            if let buffer = slot.payload.videoOffererToAcceptor { out.append(buffer) }
+            if let buffer = slot.payload.videoAcceptorToOfferer { out.append(buffer) }
+        }
+        return out
     }
 }
