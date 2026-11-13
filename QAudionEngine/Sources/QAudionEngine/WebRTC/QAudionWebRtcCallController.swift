@@ -1394,6 +1394,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// (`OneToOneFrameKeys`). Set by the app at every construction site.
     public var isHandshakeOfferer: Bool = false
 
+    /// The frame-key scheme of the call, read from the call's key state. Set by the app where the controller is bound; it may run on
+    /// any thread, so it holds nothing of the app. nil: every call runs the v5 keys.
+    public var frameKeyModeProvider: (@Sendable () -> FrameKeyDecision)?
+    private let frameKeyLatch = FrameKeyLatch()
+
     /// A DTLS fingerprint check failed (WIRE_SPEC §3.5 / §3.6). Verdict-only stage string:
     /// `sdp_remote`, `sdp_local`, `stats`, `stats_timeout` (no verdict within the deadline:
     /// unverified, not proven benign) or `pin_timeout`. The app ends the call with reason
@@ -1410,13 +1415,36 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// with. `nil` until a 32-byte session key and the call id are both known. The call id is the
     /// WIRE call id (lowercased) the handshake transcript carries — the id of `dtlsContext` —
     /// NOT `pqcCallId`, which on the caller device is CallKit's own random UUID.
-    func currentFrameKeys() -> (send: Data, recv: Data)? {
+    ///
+    /// The scheme comes from the call's key state through `frameKeyModeProvider`: v5 keys (one pair for audio and video), v6 keys (one
+    /// pair per kind) or no key at all while the scheme is not resolved. Without a provider the keys are the v5 ones, as before.
+    /// May run on any thread.
+    func currentFrameKeys(kind: FrameKeysV6.Kind = .audio) -> (send: Data, recv: Data)? {
         guard let sessionKey = pqcSessionKey, sessionKey.count == 32,
-              let callId = dtlsContext?.callId, !callId.isEmpty,
-              let keys = OneToOneFrameKeys.derive(sessionKey: sessionKey, callId: callId) else {
+              let callId = dtlsContext?.callId, !callId.isEmpty else {
             return nil
         }
-        return (keys.sendKey(isOfferer: isHandshakeOfferer), keys.receiveKey(isOfferer: isHandshakeOfferer))
+        let decision: FrameKeyDecision
+        if let provider = frameKeyModeProvider {
+            decision = frameKeyLatch.resolve(provider())
+        } else {
+            decision = FrameKeyDecision(mode: .v5(gen: 0))
+        }
+        let keys = FrameKeyResolver.keys(
+            decision: decision, sessionKey: sessionKey, wireCallId: callId, isOfferer: isHandshakeOfferer, kind: kind)
+        if keys == nil, let word = Self.frameKeyWithholdWord(decision.mode), frameKeyLatch.noteWithheld(word) {
+            log?("live fk why=\(word)")
+        }
+        return keys
+    }
+
+    /// The reason a key is withheld, as the number of the log line: 1 the scheme is not resolved, 2 the key is not usable under v6.
+    private static func frameKeyWithholdWord(_ mode: FrameKeyMode) -> Int? {
+        switch mode {
+        case .pending: return 1
+        case .v6: return 2
+        case .v5: return nil
+        }
     }
 
     /// Forward the PeerConnection's DTLS fingerprint verdicts: the app ends the call on a
@@ -4672,7 +4700,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // rotation (the native KeyProvider replaces the keys at the new ring slot in place —
         // no cryptor rebuild). Do NOT no-op like the other cases below.
         if case .native = videoSealer {
-            if let keys = currentFrameKeys(), let c = peerConnection?.nativeVideoCryptor {
+            if let keys = currentFrameKeys(kind: .video), let c = peerConnection?.nativeVideoCryptor {
                 let epoch = pqcSessionKeyEpoch
                 let slot = epoch % 16
                 if c.installKeys(send: keys.send, recv: keys.recv, slot: slot) {
@@ -4748,7 +4776,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         if negotiated.useSFrame {
             // Fail closed: need real 32-byte keys; reject the all-zero
             // earbud-SPE placeholder (Android PeerConnectionHolder.kt:346-353).
-            guard let keys = currentFrameKeys(),
+            guard let keys = currentFrameKeys(kind: .video),
                   keys.send.contains(where: { $0 != 0 }), keys.recv.contains(where: { $0 != 0 }) else {
                 return nil  // defer until real keys arrive
             }

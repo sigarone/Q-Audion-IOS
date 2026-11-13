@@ -1396,6 +1396,12 @@ final class AppState: ObservableObject {
             }
         }
         integration.pqSig = makePqSigRuntime()
+        // A rekey that was deferred (no confirmed base yet, one round undecided, the 5 s spacing) can run now.
+        integration.onRekeyRearm = { [weak self] reason in
+            Task { @MainActor [weak self] in
+                self?.reKeyScheduler.forceReKey(reason: reason)
+            }
+        }
     }
 
     /// The second handshake signature of a call: its signer, the peer key lookup and whether this device may advertise it.
@@ -2723,6 +2729,8 @@ final class AppState: ObservableObject {
         let advertIsBlinded: Bool
         /// `ext_r` of this round (`KcMacReadyEvent.capsBindExt`): the round's MAC covers both bundles' capability members.
         let capsBindExt: Bool
+        /// The generation of the call's key state this round was armed for (`KcMacReadyEvent.liveGen`, 0: none).
+        let liveGen: UInt64
         var kcStatus: KeyConfirmation.Status = .absent
         /// Set once the FINAL verdict (verified / wrong / timed-out-absent) is
         /// recorded, so a late-arriving duplicate KCMAC or a race between the
@@ -2757,6 +2765,7 @@ final class AppState: ObservableObject {
 
         init(event: QAudionCallIntegration.KcMacReadyEvent) {
             capsBindExt = event.capsBindExt
+            liveGen = event.liveGen
             isRound1 = event.round == 1
             round = Int(event.round)
             peerId = event.peerId
@@ -9082,6 +9091,8 @@ final class AppState: ObservableObject {
         // can evict it in between.
         controller.dtlsContext = cid.isEmpty ? nil : CallDtlsContextStore.shared.context(forCallId: cid, hold: true)
         controller.isHandshakeOfferer = isOfferer
+        // The frame-key scheme of the call is read from its key state through a provider that holds nothing of the app.
+        controller.frameKeyModeProvider = cid.isEmpty ? nil : QAudionCallIntegration.makeFrameKeyModeProvider(wireCallId: cid)
         controller.onDtlsFingerprintFailure = { [weak self, weak controller] stage in
             // The stage only reaches the LOCAL log (`hsfatal r=1 dstage=<n>`): it tells a real
             // certificate mismatch (3) from a check (b) timeout (5: no verdict within the deadline,
@@ -16103,6 +16114,17 @@ final class AppState: ObservableObject {
             }
             return
         }
+        // Only the caller of a call that negotiated chained rekeys rekeys: a rekey OFFER signed by the callee is dropped here, before
+        // the responder integration is used. The call keeps its keys. The facts come from the key state of the call's own integration.
+        if let ownIntegration = callService.callIntegration,
+           let roleFacts = ownIntegration.liveRoleFacts(exactCallId: parsed.callId),
+           RekeyOffererRule.dropsCalleeRekeyOffer(
+               liveIsChainedOfferer: roleFacts.isChainedOfferer, exactIdMatches: roleFacts.exactIdMatches,
+               round: parsed.bundle.rekeyRound) {
+            let droppedEpoch = max((parsed.bundle.rekeyRound ?? 1) - 1, 0)
+            RTLog.info("call", "live offerer drop round=\(droppedEpoch)")
+            return
+        }
         let integration = ensureResponderIntegration(forCaller: senderId)
         // D11: the OFFER opaque carries no device id; use the one stamped on the
         // matching `call_incoming` envelope (stashed by sender_id). nil ⇒ legacy.
@@ -16779,6 +16801,7 @@ final class AppState: ObservableObject {
             state.kcStatus = .verified
             state.resultRecorded = true
             state.deadlineTask?.cancel()
+            confirmLiveRound(state: state)
             // GROUP_CALLS_V2 2.7, Consent: the peer's round-1 KCMAC is what lets a promotion token admit an automatic join.
             if round == 1 {
                 promotionContexts[key]?.anchor.noteKcMacVerified(round: round)
@@ -16896,6 +16919,8 @@ final class AppState: ObservableObject {
     /// (R-KCMAC-ROUNDS).
     @MainActor
     private func failKeyConfirmation(callId: String, state: KeyConfirmationCallState, expired: Bool = false) {
+        // The key of the failed round is dropped first, so it is gone even if the end of the call is late.
+        failLiveRound(state: state)
         // A call that already ended (and is not the active one) is not ended again: the round is recorded as failed,
         // never as decided in the peer's favour, and nothing else runs.
         guard !endedCalls.isStale(callId: callId, activeCallId: canonicalActiveCallId(),
@@ -16924,6 +16949,34 @@ final class AppState: ObservableObject {
                 callId: callId))
         }
         handleHandshakeFatal(callId: callId, reason: "kcmac_mismatch")
+    }
+
+    /// The integrations of the app, each once (on the callee the call's integration IS the responder integration).
+    @MainActor
+    private func distinctCallIntegrations() -> [QAudionCallIntegration] {
+        var out: [QAudionCallIntegration] = []
+        for candidate in [callService.callIntegration, responderCallIntegration].compactMap({ $0 }) {
+            if !out.contains(where: { $0 === candidate }) { out.append(candidate) }
+        }
+        return out
+    }
+
+    /// The peer's key confirmation of a round verified: the call's key state learns it by generation.
+    @MainActor
+    private func confirmLiveRound(state: KeyConfirmationCallState) {
+        guard state.liveGen != 0 else { return }
+        for integration in distinctCallIntegrations() {
+            integration.liveConfirm(gen: state.liveGen, round: UInt32(truncatingIfNeeded: state.round))
+        }
+    }
+
+    /// The key confirmation of a round failed or ended without a verdict: the key state wipes the round's chain key.
+    @MainActor
+    private func failLiveRound(state: KeyConfirmationCallState) {
+        guard state.liveGen != 0 else { return }
+        for integration in distinctCallIntegrations() {
+            integration.liveFail(gen: state.liveGen, round: UInt32(truncatingIfNeeded: state.round))
+        }
     }
 
     /// T5 (R-CONFIRM-TELEMETRY): a confirmation timer ended the call. One local log line (hsfatal style: numbers and
