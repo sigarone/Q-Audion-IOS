@@ -35,6 +35,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     struct HybridLocalKeys {
         let pqcPair: PqcKeyExchange.KeyPair
         let x25519Priv: Curve25519.KeyAgreement.PrivateKey
+        /// The offerer's key pair of the outer relay layer for this round. A reference: every copy of this struct (the id and its
+        /// lowercase alias, the attempt of a rekey) holds the same object. Consumed and wiped by the step that reads the ACCEPT,
+        /// wiped by every site that drops the holder, and by its deinit as the last resort.
+        var relay: RelayOfferKeys? = nil
     }
     private var localHybridKeysByCall: [String: HybridLocalKeys] = [:]
 
@@ -292,9 +296,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     }
 
     /// The peer's advertised capability bits of a bundle that is taken up. The caller holds `lock`.
-    private func applyPeerCapabilitiesLocked(bundle: AndroidHandshakeBundle, srtpDirKeyAdvertised: Bool) {
+    private func applyPeerCapabilitiesLocked(bundle: AndroidHandshakeBundle, srtpDirKeyAdvertised: Bool, relayRound1: Bool? = nil) {
         peerAdvertisedSrtpDirKey = srtpDirKeyAdvertised
         peerBundleSeen = true
+        // Round 1 only: whether the outer relay layer of the exchange is in effect (decided from the two round-1 bundles).
+        if let relayRound1 { round1RelayKem = relayRound1 }
         // Phase 18: a bundle that omits the v4 field (older peer / un-opted-in) reads false, so v4 stays off for the pair.
         peerAdvertisedRatchetV4 = (bundle.capabilities?.ratchetV4 ?? false)
     }
@@ -473,6 +479,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             return attempt
         }
         guard let expired else { return false }
+        expired.localKeys.relay?.wipe()
         expired.lease?.close()
         liveAbandonOwnRound(attemptRound: expired.round)
         expired.resume(nil)
@@ -489,6 +496,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             return attempt
         }
         guard let resolved else { return }
+        resolved.localKeys.relay?.wipe()
         // The round is decided: the copy of the base round's chain key is wiped, and a round that ended without a key gives the
         // call's own undecided record up.
         resolved.lease?.close()
@@ -635,6 +643,33 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// True once a peer bundle of this call has been read, i.e. `peerAdvertisedSrtpDirKey` is a decided answer and not the
     /// initial `false`. Reset with the other per-call state.
     private var peerBundleSeen: Bool = false
+
+    /// The exchange of the outer relay layer is in effect for round 1 of this call (both bundles carry a valid member). Written under
+    /// `lock` when the round-1 bundle of the peer is taken up (and cleared by an all-zero X25519 output at the offerer), before the key
+    /// state is adopted, so a frame that reaches the media paths in between is already read as sealed. Reset with the call.
+    private var round1RelayKem: Bool = false
+
+    /// What the media paths read, in one critical section.
+    public struct OuterNegotiation: Equatable, Sendable {
+        public let known: Bool
+        /// Every frame of both legs is sealed: the per-direction legacy keys, or the keys of the exchange.
+        public let sealed: Bool
+        /// The exchange of the outer relay layer is in effect (the keys are `kOut`, not the legacy pair).
+        public let kout: Bool
+        public let rot: Bool
+        /// The layer of the exchange could not be set up on this side (the failure after the ACCEPT): the caller announces it.
+        public let failed: Bool
+    }
+
+    public func outerNegotiation() -> OuterNegotiation {
+        lock.withLock { () -> OuterNegotiation in
+            let legacy: Bool = Self.srtpDirKeysEnabled && peerAdvertisedSrtpDirKey
+            let object: LiveCallCrypto? = live
+            let rotating: Bool = object?.features.relayRotV1 ?? false
+            let failedNow: Bool = round1RelayKem && object?.outerStatusValue == .failed
+            return OuterNegotiation(known: peerBundleSeen, sealed: legacy || round1RelayKem, kout: round1RelayKem, rot: rotating, failed: failedNow)
+        }
+    }
 
     /// Whether the outcome of the outer-seal negotiation is known for this call (a peer bundle has been read).
     public var srtpNegotiationKnown: Bool {
@@ -1348,6 +1383,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     public nonisolated(unsafe) static var rekeyChainV1Enabled = false
     public nonisolated(unsafe) static var frameKeyV6Enabled = false
     public nonisolated(unsafe) static var innerSealV2Enabled = false
+    /// Local switches for the outer relay layer keyed by its own exchange, and for its rotation. Off by default.
+    public nonisolated(unsafe) static var relayKemV1Enabled = false
+    public nonisolated(unsafe) static var relayRotV1Enabled = false
     /// The key state of the call in flight, created where the round-1 session is installed and closed when the call ends. Guarded by
     /// `lock`. See `LiveCallCrypto` for the rules.
     private var live: LiveCallCrypto?
@@ -1361,6 +1399,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// The send pointer of the per-round inner seal moved from one round to another (previous round, new round). Called once per
     /// move, after every lock is released; the app hops to its own actor.
     public var onInnerSendSwitch: ((Int32, Int32) -> Void)?
+    /// The send pointer of the outer relay layer moved, or was put back (previous round, new round). Called after every lock is
+    /// released; the app hops to its own actor.
+    public var onOuterSendSwitch: ((Int32, Int32) -> Void)?
     /// A pin anomaly of the call's round 1, or a rekey round refused for a missing second signature: the visible warning, with every
     /// reason (the signature reason first). Never ends, refuses or holds the call.
     public var onCapsPinAnomaly: ((_ callId: String, _ peerId: String, _ reasons: [PqWarnReason]) -> Void)?
@@ -1544,6 +1585,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         try engine.initialize()
         let pqcKp = try consumeOrGenerateKeyPair()
         let x25519Priv = Curve25519.KeyAgreement.PrivateKey()
+        // The outer relay layer: the offerer's own pair, only when this build advertises the layer. A pair that cannot be made
+        // sends the OFFER as if the layer were off (a bundle of a build without it), never a refusal.
+        let wantsRelay: Bool = Self.relayKemV1Enabled && Self.capsBindV1Enabled
+        let relayKeys: RelayOfferKeys? = wantsRelay ? RelayKem.generateOfferKeys() : nil
+        let offerCapabilities: AndroidHandshakeBundle.Capabilities? = (wantsRelay && relayKeys == nil)
+            ? Self.selfCapabilities().withoutRelayTags() : nil
 
         // INVARIANT (per OpenRouter glm-5.1 review 2026-05-06 P0 #2):
         // STASH PRIVATE KEYS BEFORE INVOKING ANY SEND CLOSURE. The
@@ -1561,7 +1608,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         lock.withLock {
             localKeyPair = pqcKp
             pendingOutgoingCallId = callId
-            let keys = HybridLocalKeys(pqcPair: pqcKp, x25519Priv: x25519Priv)
+            let keys = HybridLocalKeys(pqcPair: pqcKp, x25519Priv: x25519Priv, relay: relayKeys)
             localHybridKeysByCall[callId] = keys
             let lc = callId.lowercased()
             if lc != callId { localHybridKeysByCall[lc] = keys }
@@ -1660,11 +1707,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // Transcript v6 (WIRE_SPEC §3.7): build, SIGN and stash the OFFER. The call's own DTLS
         // certificate fingerprint is bound into it, so the certificate exists before this point
         // (`provideLocalDtlsFingerprint`); a call without one or without a signer is never started.
+        let relayMember: AndroidHandshakeBundle.RelayKemMember? = relayKeys.map { AndroidHandshakeBundle.RelayKemMember(wire: $0.pub) }
         let bundleToSend = try buildSignedOffer(
             callId: callId, pqcRawPub: pqcRawPub, x25519RawPub: x25519RawPub,
             advertisedPskFingerprints: advertisedPskFingerprints, advertisedPskRoles: advertisedPskRoles,
+            capabilities: offerCapabilities, relayKem: relayMember,
             rekeyNonce: rekeyNonceRound1, rekeyRound: 1, rekeyNextPeriodMs: nil,
             sasCommit: sasCommitRound1)
+        // The 24 KiB rule may have taken the member (and both tags) off the OFFER: the pair has no use then.
+        if relayKeys != nil, bundleToSend.relayKem == nil { relayKeys?.wipe() }
         let jsonWire = AndroidHandshakeEnvelope.serialize(callId: callId, bundle: bundleToSend)
         lock.withLock { sentRound1Capabilities = bundleToSend.capabilities }
 
@@ -1823,7 +1874,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             print("[QAudionCallIntegration] performPqcReKey keygen failed callId=\(callId.prefix(8))…: \(error)")
             return false
         }
-        let localKeys = HybridLocalKeys(pqcPair: pqcKp, x25519Priv: x25519Priv)
+        var localKeys = HybridLocalKeys(pqcPair: pqcKp, x25519Priv: x25519Priv)
         let x25519RawPub = Data(x25519Priv.publicKey.rawRepresentation)
 
         // Same PSK-advertisement construction as onAndroidCallSetupStarted
@@ -1895,6 +1946,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 return false
             }
         }
+        // The outer relay layer of a rotating call: this round's own pair, made after the reservation (a refused trigger costs
+        // nothing). No pair, and no member on the OFFER, when the round's outer slot would collide or the layer is gone.
+        var relayForRound: RelayOfferKeys?
+        var relayHandedToAttempt = false
+        defer {
+            if !relayHandedToAttempt { relayForRound?.wipe() }
+        }
+        if let liveForRekey, let epoch = ownEpoch, liveForRekey.features.relayRotV1, liveForRekey.outerStatusValue == .ok,
+           liveForRekey.outerRefusal(epoch: epoch) == nil {
+            relayForRound = RelayKem.generateOfferKeys()
+            localKeys.relay = relayForRound
+        }
         // Stash the advert list (KCMAC needs it, same as the original handshake) — deliberately
         // OVERWRITING the ORIGINAL handshake's stash (callId-keyed, not round-keyed): by the time a
         // re-key round starts, the original handshake is long complete (glare-guard above requires
@@ -1920,8 +1983,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 callId: callId, pqcRawPub: pqcRawPub, x25519RawPub: x25519RawPub,
                 advertisedPskFingerprints: rekeyAdvertFingerprints, advertisedPskRoles: rekeyAdvertRoles,
                 capabilities: liveForRekey?.features.ownCapabilities, chainBase: ownLease?.base,
+                relayKem: relayForRound.map { AndroidHandshakeBundle.RelayKemMember(wire: $0.pub) },
                 rekeyNonce: thisRoundNonce, rekeyRound: thisRound, rekeyNextPeriodMs: nextPeriodMs,
                 sasCommit: nil)
+            // The 24 KiB rule took the member off this OFFER (the tags stay): the pair has no use.
+            if relayForRound != nil, bundleToSend.relayKem == nil {
+                relayForRound?.wipe()
+                localKeys.relay = nil
+            }
         } catch {
             print("[QAudionCallIntegration] performPqcReKey OFFER build failed callId=\(callId.prefix(8))…: \(error)")
             return false
@@ -1936,13 +2005,15 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // resume, so the other is guaranteed a no-op.
         let attemptId = UUID()
         let epochForSend = ownEpoch
+        let attemptKeys = localKeys
         let combined: Data? = await withCheckedContinuation { (cont: CheckedContinuation<Data?, Never>) in
             lock.withLock {
-                pendingReKeyAttempt = PendingReKeyAttempt(id: attemptId, round: Int(thisRound), localKeys: localKeys) { value in
+                pendingReKeyAttempt = PendingReKeyAttempt(id: attemptId, round: Int(thisRound), localKeys: attemptKeys) { value in
                     cont.resume(returning: value)
                 }
                 pendingReKeyAttempt?.lease = ownLease
                 ownHandedToAttempt = true
+                relayHandedToAttempt = true
             }
             Task { [weak self] in
                 guard let self else { return }
@@ -2360,7 +2431,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     CapsBindLog.line("live chain refuse round=\(gateEpoch) why=7")
                     return
                 }
-                if chained.features.innerSealV2 {
+                if chained.features.innerSealV2 || chained.features.relayRotV1 {
                     switch livePrecheckInner(chained, epoch: gateEpoch, offerSigOk: offerSigOk) {
                     case .go: break
                     case .drop: return
@@ -2378,7 +2449,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     reportHandshakeFatal(callId: callId, reason: CallCloseReason.kcmacMismatch.rawValue)
                     throw IntegrationError.handshakeAborted(code: CallCloseReason.kcmacMismatch.rawValue)
                 }
-            } else if let sealed = liveForRound, sealed.features.innerSealV2 {
+            } else if let sealed = liveForRound, sealed.features.innerSealV2 || sealed.features.relayRotV1 {
                 // A call with the per-round inner seal and without chained rekeys: the same exact-id rule and the same read-only check,
                 // before anything of the round is written.
                 guard let innerEpoch = Self.keyEpoch(forRekeyRound: round) else { return }
@@ -2403,6 +2474,49 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // 3. iOS dual-hybrid encapsulate — drop X448 + StrongBox legs.
             let pqcResult = try pqc.encapsulate(remotePublicKey: pqcPub)
             let x25519Result = try Self.x25519Encap(remotePub: x25519Pub)
+
+            // The outer relay layer, acceptor side. The capabilities that LEAVE on the ACCEPT are one local, used for the ACCEPT and
+            // for the gate. Round 1 runs the exchange when both sides carry the layer and the OFFER's member is valid; a rekey runs
+            // it when the call negotiated rotation, this side is the acceptor, the layer is up and the round's outer slot is free.
+            // Any failure sends the ACCEPT without a member (both sides read it as absent), never a refusal.
+            let acceptCaps: AndroidHandshakeBundle.Capabilities = liveForRound?.features.ownCapabilities ?? Self.selfCapabilities()
+            var relayAcceptSecrets: RelaySecrets?
+            defer { relayAcceptSecrets?.wipe() }
+            var relayAcceptMember: AndroidHandshakeBundle.RelayKemMember?
+            var relayRekeyHold: OuterHoldReason?
+            var relayAcceptZero = false
+            if !isReKeyRoundV3 {
+                if acceptCaps.relayKemV1 == true, acceptCaps.capsBindV1 == true, peerCaps.hasTag,
+                   peerCaps.tags.contains("relayKemV1"), case .valid(let offerWire) = peerCaps.relay {
+                    switch RelayKem.encapsulate(offer: offerWire) {
+                    case .ok(let acceptWire, let secrets):
+                        relayAcceptSecrets = secrets
+                        relayAcceptMember = AndroidHandshakeBundle.RelayKemMember(wire: acceptWire)
+                    case .x25519Zero:
+                        // The acceptor cannot encapsulate: the ACCEPT carries no member, both sides read it as absent.
+                        relayAcceptZero = true
+                    case .badKey, .failed:
+                        break
+                    }
+                }
+            } else if let relayLive = liveForRound, relayLive.features.relayRotV1, relayLive.role == .acceptor,
+                      relayLive.outerStatusValue == .ok, let relayEpoch = Self.keyEpoch(forRekeyRound: round) {
+                if let refusal = relayLive.outerRefusal(epoch: relayEpoch) {
+                    relayRekeyHold = refusal == .slotCollision ? .slotCollision : .relayKem
+                } else if case .valid(let offerWire) = peerCaps.relay {
+                    switch RelayKem.encapsulate(offer: offerWire) {
+                    case .ok(let acceptWire, let secrets):
+                        relayAcceptSecrets = secrets
+                        relayAcceptMember = AndroidHandshakeBundle.RelayKemMember(wire: acceptWire)
+                    case .x25519Zero:
+                        relayRekeyHold = .x25519Zero
+                    case .badKey, .failed:
+                        relayRekeyHold = .relayKem
+                    }
+                } else {
+                    relayRekeyHold = .relayKem
+                }
+            }
 
             // 4. PSK selection — CALLER'S PRIORITY COMMANDS (revised
             // 2026-06-02, WIRE_SPEC §3.3). The initiator advertises its
@@ -2588,7 +2702,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     pqc: pqcResult.ciphertext.base64EncodedString(),
                     x25519: x25519Result.ephemeralPublicKey.base64EncodedString()
                 ),
-                capabilities: liveForRound?.features.ownCapabilities ?? Self.selfCapabilities(),
+                capabilities: acceptCaps,
                 pskFingerprints: acceptAdvertisedPskFingerprints,
                 // W-PSKBLIND — the RECEIVED wire value, verbatim, not our static
                 // fingerprint. Dialect-agnostic: the initiator resolves it through the
@@ -2599,7 +2713,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // Echo the OFFER's own (rekeyNonce, rekeyRound) pair: both are bound into the
                 // ACCEPT transcript, so a tampered/replayed round or nonce invalidates it.
                 rekeyNonce: bundle.rekeyNonce,
-                rekeyRound: bundle.rekeyRound
+                rekeyRound: bundle.rekeyRound,
+                relayKem: relayAcceptMember
             )
 
             // Transcript v6: build and SIGN the ACCEPT, binding it to the verified OFFER
@@ -2627,6 +2742,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 print("[QAudionCallIntegration] re-key ACCEPT not sent (second signature unavailable) callId=\(callId.prefix(8))… — call continues on its current key")
                 return
             }
+            // The 24 KiB rule may have taken the member off the ACCEPT (round 1: and both tags): the secrets have no use then, and a
+            // rekey round of a rotating call holds its epoch.
+            if relayAcceptMember != nil, acceptToSend.relayKem == nil {
+                relayAcceptSecrets?.wipe()
+                relayAcceptSecrets = nil
+                if isReKeyRoundV3 { relayRekeyHold = .relayKem }
+            }
             // capsBindV1: this round's facts, from the bytes this side sends and the bytes it received. Round 1 also fixes the role of
             // the legacy outer layer for a same-account call, before any sealer is installed.
             let capsOwnInfo = CapsBind.analyze(bundle: acceptToSend)
@@ -2642,8 +2764,31 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let offerChainWord = offerLineFeatures.rekeyChainV1 ? 1 : 0
             let offerFkWord = offerLineFeatures.frameKeyV6 ? 1 : 0
             CapsBindLog.line("capsbind ext=\(capsExt ? 1 : 0) own=\(capsOwnInfo.hasTag ? 1 : 0) peer=\(peerCaps.hasTag ? 1 : 0) round=\(capsRound) chain=\(offerChainWord) fk=\(offerFkWord)")
+            if capsRound == 1 { logRelayOff(own: capsOwnInfo, peer: peerCaps, zero: relayAcceptZero) }
             // `SHA-256(ACCEPT_v6)`: the KDF / SAS / KCMAC binding (F4 — unconditional).
             let acceptBinding = HandshakeTranscript.offerBinding(acceptT)
+            // What the outer layer is given: round 1 the exchange (or nothing, when the bytes say it is not in effect); a rekey the
+            // exchange, or the reason this side installs no key for the round.
+            var relayOuter1: OuterRound1Input = .none
+            if liveFeaturesOffer.relayKemV1 {
+                if let secrets = relayAcceptSecrets {
+                    relayOuter1 = .kem(secrets: secrets, acceptBinding: acceptBinding)
+                } else {
+                    relayOuter1 = .failed
+                }
+            } else if relayAcceptZero {
+                relayOuter1 = .zero
+            }
+            var relayRekeyInput: OuterStageInput = .none
+            if isReKeyRoundV3, let relayLive = liveForRound, relayLive.features.relayRotV1, relayLive.outerStatusValue == .ok {
+                if let hold = relayRekeyHold {
+                    relayRekeyInput = .hold(hold)
+                } else if let secrets = relayAcceptSecrets {
+                    relayRekeyInput = .kem(secrets: secrets, acceptBinding: acceptBinding)
+                } else {
+                    relayRekeyInput = .hold(.relayKem)
+                }
+            }
             let combined: Data
             if let lease = acceptReservation?.lease {
                 // A chained rekey derives from the lease of its reservation; a closed lease derives nothing, never an unchained key.
@@ -2706,7 +2851,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 let wasAlreadyHandshaked = sessionInitializedByCall.contains(normalizedOId)
                 if !dup {
                     // The OFFER is accepted: only now are its capability bits kept (written under this same lock).
-                    applyPeerCapabilitiesLocked(bundle: bundle, srtpDirKeyAdvertised: peerSrtpDirKeyAdvertised)
+                    applyPeerCapabilitiesLocked(
+                        bundle: bundle, srtpDirKeyAdvertised: peerSrtpDirKeyAdvertised,
+                        relayRound1: wasAlreadyHandshaked ? nil : liveFeaturesOffer.relayKemV1)
                     processedOfferFingerprintsByCall.insert(offerDedupKey)
                     acceptWireByOfferFingerprint[offerDedupKey] = wire
                     sessionInitializedByCall.insert(normalizedOId)
@@ -2822,7 +2969,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 let stageEpoch = Self.keyEpoch(forRekeyRound: installRound) ?? 0
                 if !isReKeyRound {
                     guard let adopted = liveAdopt(
-                        callId: callId, role: .acceptor, features: liveFeaturesOffer, sessionKey: combined, capsEpoch: capsEpoch) else {
+                        callId: callId, role: .acceptor, features: liveFeaturesOffer, sessionKey: combined, capsEpoch: capsEpoch,
+                        outer: relayOuter1) else {
                         return false
                     }
                     // A call with the per-round inner seal is installed only together with its port.
@@ -2833,7 +2981,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     roundLive = adopted
                     adoptedHere = true
                 } else if let staging = roundLive {
-                    let staged = liveStage(staging, epoch: stageEpoch, sessionKey: combined, ours: false, handle: acceptReservation)
+                    let staged = liveStage(
+                        staging, epoch: stageEpoch, sessionKey: combined, ours: false, handle: acceptReservation,
+                        offerSigOk: offerSigOk, outer: relayRekeyInput)
                     reservationConsumed = true
                     guard staged == .staged || staged == .alreadyStaged else { return false }
                 }
@@ -3166,7 +3316,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 }
             }
             // A call that negotiated chained rekeys compares the id of its rounds exactly: a case-variant id is not this call's.
-            if let tagged = liveForAccept, tagged.features.rekeyChainV1 || tagged.features.innerSealV2, !tagged.matches(callId) {
+            if let tagged = liveForAccept, tagged.features.rekeyChainV1 || tagged.features.innerSealV2 || tagged.features.relayRotV1,
+               !tagged.matches(callId) {
                 print("[QAudionCallIntegration] re-key ACCEPT names another id than the call's own — dropped, the round is given up")
                 return
             }
@@ -3279,6 +3430,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let acceptChainWord = acceptLineFeatures.rekeyChainV1 ? 1 : 0
             let acceptFkWord = acceptLineFeatures.frameKeyV6 ? 1 : 0
             CapsBindLog.line("capsbind ext=\(capsExt ? 1 : 0) own=\(capsOwnInfo.hasTag ? 1 : 0) peer=\(peerCaps.hasTag ? 1 : 0) round=\(capsRound) chain=\(acceptChainWord) fk=\(acceptFkWord)")
+            if capsRound == 1 { logRelayOff(own: capsOwnInfo, peer: peerCaps) }
             guard let acceptT = acceptCheck.transcript, let peerFp = acceptCheck.peerFingerprint else {
                 reportHandshakeFatal(callId: callId, reason: CallCloseReason.peerIncompatible.rawValue)
                 throw IntegrationError.handshakeAborted(code: "transcript_unbuildable")
@@ -3381,7 +3533,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let alreadyInit = lock.withLock {
                 let r = processedAcceptFingerprintsByCall.contains(acceptDedupKey)
                 if !r {
-                    applyPeerCapabilitiesLocked(bundle: bundle, srtpDirKeyAdvertised: peerSrtpDirKeyAdvertised)
+                    applyPeerCapabilitiesLocked(
+                        bundle: bundle, srtpDirKeyAdvertised: peerSrtpDirKeyAdvertised,
+                        relayRound1: isReKeyAccept ? nil : liveFeaturesAccept.relayKemV1)
                     processedAcceptFingerprintsByCall.insert(acceptDedupKey)
                     sessionInitializedByCall.insert(normalizedIdForDedup)
                 }
@@ -3396,6 +3550,54 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // BEFORE any callback announces the new key.
             HandshakeTranscriptHashStore.shared.set(acceptBinding, forCallId: callId)
 
+            // The outer relay layer, offerer side: the private keys are used exactly once, here, after the duplicate check (a
+            // duplicate ACCEPT never touches them) and before anything is installed. The first ACCEPT that is not a duplicate
+            // always ends them: the decapsulation consumes and wipes, every other path wipes at once. The secrets are wiped when
+            // this case ends, whatever way it ends.
+            var relayOfferSecrets: RelaySecrets?
+            defer { relayOfferSecrets?.wipe() }
+            var relayFeatures: LiveCallCrypto.Features = liveFeaturesAccept
+            var relayOuter1: OuterRound1Input = .none
+            var relayRekeyInput: OuterStageInput = .none
+            if !isReKeyAccept {
+                if liveFeaturesAccept.relayKemV1, let offered = local.relay, case .valid(let acceptWire) = peerCaps.relay {
+                    switch offered.decapsulate(acceptWire) {
+                    case .ok(let secrets):
+                        relayOfferSecrets = secrets
+                        relayOuter1 = .kem(secrets: secrets, acceptBinding: acceptBinding)
+                    case .x25519Zero:
+                        // Round 1, 4a: no outer layer of this exchange; the call goes on with the legacy path.
+                        relayFeatures = liveFeaturesAccept.droppingRelay()
+                        relayOuter1 = .zero
+                        lock.withLock { round1RelayKem = false }
+                        CapsBindLog.line("live outer off why=4")
+                    case .failed:
+                        // 4b: the ACCEPT was received and the local derivation failed; the layer of the call is off.
+                        relayOuter1 = .failed
+                    }
+                } else {
+                    local.relay?.wipe()
+                    if liveFeaturesAccept.relayKemV1 { relayOuter1 = .failed }
+                }
+            } else if let relayLive = liveForAccept, relayLive.features.relayRotV1, relayLive.outerStatusValue == .ok {
+                if let offered = local.relay, case .valid(let acceptWire) = peerCaps.relay {
+                    switch offered.decapsulate(acceptWire) {
+                    case .ok(let secrets):
+                        relayOfferSecrets = secrets
+                        relayRekeyInput = .kem(secrets: secrets, acceptBinding: acceptBinding)
+                    case .x25519Zero:
+                        relayRekeyInput = .hold(.x25519Zero)
+                    case .failed:
+                        relayRekeyInput = .hold(.relayKem)
+                    }
+                } else {
+                    local.relay?.wipe()
+                    relayRekeyInput = .hold(.relayKem)
+                }
+            } else {
+                local.relay?.wipe()
+            }
+
             // 6. Initialise the audio session and fire the broker hook. No
             //    engine.initialize() call in this case (unlike the .offer
             //    case) — engine.initSession() alone is already safe to call
@@ -3409,7 +3611,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let stageEpochCaller = Self.keyEpoch(forRekeyRound: installRoundCaller) ?? 0
             if !isReKeyAccept {
                 guard let adopted = liveAdopt(
-                    callId: callId, role: .offerer, features: liveFeaturesAccept, sessionKey: combined, capsEpoch: capsEpoch) else {
+                    callId: callId, role: .offerer, features: relayFeatures, sessionKey: combined, capsEpoch: capsEpoch,
+                    outer: relayOuter1) else {
                     print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… no key state could be created — nothing installed")
                     return
                 }
@@ -3422,7 +3625,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 roundLive = adopted
                 adoptedHere = true
             } else if let staging = roundLive {
-                let staged = liveStage(staging, epoch: stageEpochCaller, sessionKey: combined, ours: true, handle: nil)
+                let staged = liveStage(
+                    staging, epoch: stageEpochCaller, sessionKey: combined, ours: true, handle: nil, offerSigOk: true, outer: relayRekeyInput)
                 switch staged {
                 case .staged, .alreadyStaged:
                     break
@@ -3755,7 +3959,10 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             rekeyChainV1: (rekeyChainV1Enabled && capsBindV1Enabled) ? true : nil,
             frameKeyV6: (frameKeyV6Enabled && capsBindV1Enabled && FrameKeyV6Policy.keyMaterialIsSessionKeyE(earbudPaired: false))
                 ? true : nil,
-            innerSealV2: (innerSealV2Enabled && capsBindV1Enabled) ? true : nil
+            innerSealV2: (innerSealV2Enabled && capsBindV1Enabled) ? true : nil,
+            // The outer relay layer: relayRotV1 only together with relayKemV1 in the same bundle.
+            relayKemV1: (relayKemV1Enabled && capsBindV1Enabled) ? true : nil,
+            relayRotV1: (relayRotV1Enabled && relayKemV1Enabled && capsBindV1Enabled) ? true : nil
         )
     }
 
@@ -3928,7 +4135,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             rekeyNextPeriodMs: bundle.rekeyNextPeriodMs,
             mldsaKeyId: bundle.mldsaKeyId,
             sigHybrid: bundle.sigHybrid,
-            capsWithdrawn: bundle.capsWithdrawn
+            capsWithdrawn: bundle.capsWithdrawn,
+            chainBase: bundle.chainBase,
+            relayKem: bundle.relayKem
         )
     }
 
@@ -3942,6 +4151,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         advertisedPskRoles: [Int]?,
         capabilities: AndroidHandshakeBundle.Capabilities? = nil,
         chainBase: Int32? = nil,
+        relayKem: AndroidHandshakeBundle.RelayKemMember? = nil,
         rekeyNonce: Data,
         rekeyRound: UInt32,
         rekeyNextPeriodMs: Int?,
@@ -3973,10 +4183,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // The base round of a chained rekey: outside the signed transcript, attached before the second signature so the size check
         // of `finalizeOwn` sees the bytes that are sent.
         let sigV6WithBase = chainBase.map { sigV6Signed.with(chainBase: Int($0)) } ?? sigV6Signed
+        // The key-exchange member of the outer relay layer: after the signature of the handshake (the key confirmation and the second
+        // signature bind it), before the size rule is judged.
+        let sigV6WithRelay = relayKem.map { sigV6WithBase.with(relayKem: $0) } ?? sigV6WithBase
         // The second signature, after sigV6 (the members it binds are final once set here). A rekey OFFER that cannot carry it is not
         // sent: the error reaches the caller, which keeps the current key.
         let signed = try pqLayer.finalizeOwn(
-            bundle: sigV6WithBase, kind: Pqsig.kindOffer, round: Int(rekeyRound), callId: callId, transcript: transcript,
+            bundle: sigV6WithRelay, kind: Pqsig.kindOffer, round: Int(rekeyRound), callId: callId, transcript: transcript,
             fpSelf: fpSelf, fpPeer: nil, runtime: pqSig, capsBindEnabled: Self.capsBindV1Enabled)
         lock.withLock { sentOfferTranscriptByCall[callId.lowercased()] = transcript }
         // The bytes this side sends, per round: the input of its own CAPSX/EXTX when the round's key confirmation is built.
@@ -5058,6 +5271,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         localKeyPair = nil
         isCaller = false
         peerBundleSeen = false
+        round1RelayKem = false
         isLocallyRinging = false
         pendingResponderCallId = nil
         pendingResponderCallerId = nil
@@ -5080,6 +5294,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         processedAcceptFingerprintsByCall.removeAll()
         let orphanedReKeyResume = pendingReKeyAttempt?.resume
         let orphanedLease = pendingReKeyAttempt?.lease
+        // The offerer's private keys of the outer layer go before the holders that reference them.
+        pendingReKeyAttempt?.localKeys.relay?.wipe()
+        for held in localHybridKeysByCall.values { held.relay?.wipe() }
         pendingReKeyAttempt = nil
         orphanedReKeyResume?(nil)
         // The call's key state, its rekey lease and its timer are detached here and closed after the lock is released: the lock is
@@ -5883,7 +6100,7 @@ extension QAudionCallIntegration {
     /// the step does not install: the call ended meanwhile (`capsEpoch` moved), or the round-1 bundle does not belong to the call
     /// this integration serves.
     func liveAdopt(callId: String, role: LiveCallCrypto.Role, features: LiveCallCrypto.Features,
-                   sessionKey: Data, capsEpoch: Int) -> LiveCallCrypto? {
+                   sessionKey: Data, capsEpoch: Int, outer outerInput: OuterRound1Input = .none) -> LiveCallCrypto? {
         var orphan: LiveCallCrypto?
         var createdNew = false
         let adopted: LiveCallCrypto? = lock.withLock { () -> LiveCallCrypto? in
@@ -5901,7 +6118,8 @@ extension QAudionCallIntegration {
                 exactId = pending
             }
             if let existing = live, existing.matches(exactId), !existing.isClosed { return existing }
-            guard let created = LiveCallCrypto.adopt(callId: exactId, role: role, features: features, sessionKey: sessionKey) else {
+            guard let created = LiveCallCrypto.adopt(
+                callId: exactId, role: role, features: features, sessionKey: sessionKey, outer: outerInput) else {
                 return nil
             }
             orphan = live
@@ -5915,6 +6133,21 @@ extension QAudionCallIntegration {
             let chainWord = features.rekeyChainV1 ? 1 : 0
             let fkWord = features.frameKeyV6 ? 6 : 5
             CapsBindLog.line("live adopt gen=\(adopted.gen) role=\(roleWord) chain=\(chainWord) fk=\(fkWord)")
+            if features.relayKemV1 {
+                // Events born inside a seal or an open of the layer come back here after the layer's lock is released, one hop
+                // later, and act only for the object that is still the call's.
+                let weakSelf = WeakCallIntegration(self)
+                adopted.setOuterEventSink { [weak adopted] events in
+                    DispatchQueue.main.async {
+                        weakSelf.value?.dispatchOuterEvents(events, from: adopted)
+                    }
+                }
+                if let snapshot = adopted.outerSnapshot() {
+                    let slots = min(snapshot.epochs.count, 99)
+                    let staged = min(snapshot.epochs.count - snapshot.verified.count, 99)
+                    CapsBindLog.line("live outer install round=0 slots=\(slots) staged=\(staged)")
+                }
+            }
         }
         return adopted
     }
@@ -6025,21 +6258,70 @@ extension QAudionCallIntegration {
     // MARK: Both sides
 
     func liveStage(_ object: LiveCallCrypto, epoch: Int32, sessionKey: Data, ours: Bool,
-                   handle: AcceptReservation?) -> LiveCallCrypto.StageResult {
-        let result = object.stageRound(epoch: epoch, sessionKey: sessionKey, ours: ours, handle: handle)
+                   handle: AcceptReservation?, offerSigOk: Bool = true, outer: OuterStageInput = .none) -> LiveCallCrypto.StageResult {
+        let report = object.stageRoundReport(epoch: epoch, sessionKey: sessionKey, ours: ours, handle: handle, outer: outer)
+        let result = report.result
         if result == .staged {
             let chainWord = object.features.rekeyChainV1 ? 1 : 0
             CapsBindLog.line("live stage round=\(epoch) chain=\(chainWord) staged=\(min(object.stagedCount, 99))")
             if object.features.innerSealV2 {
                 CapsBindLog.line("live inner stage round=\(epoch) slots=\(min(object.innerSlotCount, 99))")
             }
+            logOuterStage(report, epoch: epoch, object: object)
         } else if result == .slotCollision {
-            object.noteInnerRefusal(epoch: epoch)
+            // The sticky refusal is written only for an OFFER whose signature verified.
+            if offerSigOk { object.noteInnerRefusal(epoch: epoch) }
             CapsBindLog.line("live inner refuse round=\(epoch) why=1")
         } else if result == .deriveFailed {
             CapsBindLog.line("live inner refuse round=\(epoch) why=3")
         }
+        dispatchOuterEvents(report.outerEvents, from: object)
         return result
+    }
+
+    /// The lines of the outer layer for a staged round (numbers only).
+    private func logOuterStage(_ report: LiveCallCrypto.StageReport, epoch: Int32, object: LiveCallCrypto) {
+        if report.outerInstalled, let snapshot = object.outerSnapshot() {
+            let slots = min(snapshot.epochs.count, 99)
+            let staged = min(snapshot.epochs.count - snapshot.verified.count, 99)
+            CapsBindLog.line("live outer install round=\(epoch) slots=\(slots) staged=\(staged)")
+        }
+        if let hold = report.outerHold {
+            CapsBindLog.line("live outer hold why=\(hold.rawValue) round=\(epoch)")
+        }
+    }
+
+    /// Why the outer relay layer is not in effect for round 1 although this build carries it: 1 the peer's member is absent, 2 it is
+    /// invalid, 3 the peer does not carry the tag, 4 (logged by the offerer) an all-zero X25519 output.
+    private func logRelayOff(own: BundleCapsBind, peer: BundleCapsBind, zero: Bool = false) {
+        guard own.tags.contains("relayKemV1"), !RelayDecision.inEffect(own: own, peer: peer).kem else { return }
+        var why = 1
+        if zero {
+            why = 4
+        } else if !peer.tags.contains("relayKemV1") {
+            why = 3
+        } else if case .invalid = peer.relay {
+            why = 2
+        }
+        CapsBindLog.line("live outer off why=\(why)")
+    }
+
+    /// Events of the outer layer, handed out after every lock is released: the bookkeeping of the protection line follows them, one
+    /// line each (numbers only) and the app hears about a send switch or a revert. Acts only for the call's current object.
+    func dispatchOuterEvents(_ events: OuterEvents, from object: LiveCallCrypto?) {
+        guard let object, !events.isEmpty, liveIsCurrent(object) else { return }
+        object.noteOuterEvents(events)
+        if let moved = events.switched {
+            CapsBindLog.line("live outer switch round=\(moved.to) prev=\(moved.from) trial=\(moved.trial ? 1 : 0)")
+            onOuterSendSwitch?(moved.from, moved.to)
+        }
+        if let back = events.reverted {
+            CapsBindLog.line("live outer revert from=\(back.from) to=\(back.to)")
+            onOuterSendSwitch?(back.from, back.to)
+        }
+        for erased in events.erased {
+            CapsBindLog.line("live outer erase round=\(erased.epoch) why=\(erased.why.rawValue)")
+        }
     }
 
     /// What the acceptor does with a rekey OFFER after the read-only check of the inner seal's slot.
@@ -6083,6 +6365,7 @@ extension QAudionCallIntegration {
             CapsBindLog.line("live inner switch round=\(moved.to) prev=\(moved.from)")
             onInnerSendSwitch?(moved.from, moved.to)
         }
+        dispatchOuterEvents(result.outerEvents, from: current)
     }
 
     /// The key confirmation of a round failed or ended without a verdict: its chain key is wiped at once.
@@ -6094,9 +6377,64 @@ extension QAudionCallIntegration {
     }
 
     func liveFailEpoch(_ object: LiveCallCrypto, epoch: Int32) {
-        let rearm = object.failRound(epoch: epoch)
+        let report = object.failRoundReport(epoch: epoch)
         CapsBindLog.line("live fail round=\(epoch)")
-        fireRekeyRearm(rearm)
+        dispatchOuterEvents(report.outerEvents, from: object)
+        fireRekeyRearm(report.rearm)
+    }
+
+    // MARK: The outer layer, for the media paths and the app
+
+    /// Our own confirmation of `round` was handed to the transport. Acts only when `gen` is the generation of the call's object.
+    public func liveKcmacSent(gen: UInt64, round: UInt32) {
+        guard let epoch = Self.keyEpoch(forRekeyRound: round) else { return }
+        let current: LiveCallCrypto? = lock.withLock { live }
+        guard let current, current.gen == gen else { return }
+        dispatchOuterEvents(current.markOuterKcmacSent(epoch: epoch), from: current)
+    }
+
+    /// The peer's CALL_HOLD began or ended (the caller's trial pauses while the peer sends no media).
+    public func liveSetOuterHold(_ on: Bool) {
+        let current: LiveCallCrypto? = lock.withLock { live }
+        guard let current else { return }
+        dispatchOuterEvents(current.setOuterHold(on), from: current)
+    }
+
+    /// The port of the outer layer: nil unless the exchange is in effect, the layer is up and the call's object is open.
+    public func liveOuterPort() -> OuterSealPort? {
+        let current: LiveCallCrypto? = lock.withLock { live }
+        return current?.outerSealPort
+    }
+
+    /// The outer layer is gone for the rest of the call (a failed local install, or the peer's `outer-off-v1`).
+    public func liveOuterOff() {
+        let current: LiveCallCrypto? = lock.withLock { live }
+        _ = current?.outerOff()
+    }
+
+    /// How relay video is carried on this call. `legacy` when there is no key state or the exchange is not in effect.
+    public func liveRelayVideoMode() -> RelayVideoMode {
+        let current: LiveCallCrypto? = lock.withLock { live }
+        return current?.relayVideoMode ?? .legacy
+    }
+
+    public func liveInnerVideoPort() -> InnerVideoPort? {
+        let current: LiveCallCrypto? = lock.withLock { live }
+        return current?.innerVideoPort
+    }
+
+    /// The id of the round-1 OFFER of the call in flight, for the receive-side checks that compare it exactly.
+    public func liveExactCallId() -> String? {
+        let current: LiveCallCrypto? = lock.withLock { live }
+        guard let current, !current.isClosed else { return nil }
+        return current.callId
+    }
+
+    /// The words of the protection line that come from the outer layer (nil without an open key state).
+    public func liveOuterLevelWords() -> OuterLevelWords? {
+        let current: LiveCallCrypto? = lock.withLock { live }
+        guard let current, !current.isClosed else { return nil }
+        return OuterLevelWords.compute(current.outerLevelInput())
     }
 
     // MARK: Reads
@@ -6168,6 +6506,8 @@ extension QAudionCallIntegration {
         if current.features.rekeyChainV1 { caps.append("rekeyChainV1") }
         if current.features.frameKeyV6 { caps.append("frameKeyV6") }
         if current.features.innerSealV2 { caps.append("innerSealV2") }
+        if current.features.relayKemV1 { caps.append("relayKemV1") }
+        if current.features.relayRotV1 { caps.append("relayRotV1") }
         return (current.features.frameKeyV6 ? "v6" : "v5", caps, current.features.innerSealV2 ? "v2" : "",
                 current.lastRefusalEpoch, current.chainRefusalEpoch != nil)
     }

@@ -8,7 +8,7 @@ import Foundation
 /// - one `NSLock` inside the object; every method is one critical section; nothing suspends and nothing is called out under it
 ///   (no closure parameter, no callback); a method returns a value and the caller reacts after every lock is released;
 /// - lock order: integration `offerInstallLock` -> integration `lock` -> `LiveCallCrypto.lock` -> `InnerSealV2Session.lock` /
-///   `ChainLease.lock`, never the reverse;
+///   `OuterSealerSet.lock` / `ChainLease.lock`, never the reverse; the ports of the two layers never take `LiveCallCrypto.lock`;
 /// - no table is keyed by a call id, no round is evicted to make room: at most `KcMacRoundBook.maxPendingRounds` rounds are
 ///   undecided, the seventeenth is refused;
 /// - key bytes live only in `ChainKeyBuffer` (wiped on every path); a lease and a reservation own COPIES.
@@ -64,6 +64,33 @@ public final class AcceptReservation: @unchecked Sendable {
     }
 }
 
+/// What the outer relay layer of round 1 is built from.
+enum OuterRound1Input {
+    /// No exchange in effect.
+    case none
+    case kem(secrets: RelaySecrets, acceptBinding: Data)
+    /// The local derivation failed after the ACCEPT was received: the outer layer of the call is off.
+    case failed
+    /// The offerer read an all-zero X25519 output: no outer layer of this exchange (the features already dropped it).
+    case zero
+}
+
+/// What a rekey round hands to the outer layer.
+enum OuterStageInput {
+    /// The round has no outer step (the layer does not rotate).
+    case none
+    /// This side installs no key for the round, and says why.
+    case hold(OuterHoldReason)
+    case kem(secrets: RelaySecrets, acceptBinding: Data)
+}
+
+enum OuterStatus: Int, Equatable, Sendable {
+    case none = 0
+    case ok = 1
+    case failed = 2
+    case off = 3
+}
+
 public final class LiveCallCrypto: @unchecked Sendable {
 
     public enum Role: Equatable, Sendable {
@@ -86,20 +113,27 @@ public final class LiveCallCrypto: @unchecked Sendable {
         public let frameKeyV6: Bool
         /// The per-round inner audio seal.
         public let innerSealV2: Bool
+        /// The outer relay layer keyed by its own exchange, IN EFFECT (both bundles carry a valid member).
+        public let relayKemV1: Bool
+        /// The outer relay layer rotates its keys at every rekey, IN EFFECT. Implies `relayKemV1`.
+        public let relayRotV1: Bool
         /// OUR round-1 bundle's capabilities as sent: every later round of the call carries the same ones.
         public let ownCapabilities: AndroidHandshakeBundle.Capabilities
         public let ownTag: Bool
         public let peerTag: Bool
         public let selfIsCaller: Bool
 
-        public var anyS8bTag: Bool { rekeyChainV1 || frameKeyV6 || innerSealV2 }
+        public var anyS8bTag: Bool { rekeyChainV1 || frameKeyV6 || innerSealV2 || relayKemV1 }
 
         public init(ext: Bool, rekeyChainV1: Bool, frameKeyV6: Bool, innerSealV2: Bool = false,
+                    relayKemV1: Bool = false, relayRotV1: Bool = false,
                     ownCapabilities: AndroidHandshakeBundle.Capabilities, ownTag: Bool, peerTag: Bool, selfIsCaller: Bool) {
             self.ext = ext
             self.rekeyChainV1 = rekeyChainV1
             self.frameKeyV6 = frameKeyV6
             self.innerSealV2 = innerSealV2
+            self.relayKemV1 = relayKemV1
+            self.relayRotV1 = relayRotV1
             self.ownCapabilities = ownCapabilities
             self.ownTag = ownTag
             self.peerTag = peerTag
@@ -110,12 +144,23 @@ public final class LiveCallCrypto: @unchecked Sendable {
         public static func negotiate(
             own: BundleCapsBind, peer: BundleCapsBind, ownCapabilities: AndroidHandshakeBundle.Capabilities, selfIsCaller: Bool
         ) -> Features {
-            Features(
+            let relay = RelayDecision.inEffect(own: own, peer: peer)
+            return Features(
                 ext: CapsBind.isActive(own: own, peer: peer),
                 rekeyChainV1: CapsBind.negotiateS8b(own: own, peer: peer, tag: "rekeyChainV1"),
                 frameKeyV6: CapsBind.negotiateS8b(own: own, peer: peer, tag: "frameKeyV6"),
                 innerSealV2: CapsBind.negotiateS8b(own: own, peer: peer, tag: "innerSealV2"),
+                relayKemV1: relay.kem, relayRotV1: relay.rot,
                 ownCapabilities: ownCapabilities, ownTag: own.hasTag, peerTag: peer.hasTag, selfIsCaller: selfIsCaller)
+        }
+
+        /// The same features without the outer relay layer: the offerer's reading of a round-1 ACCEPT whose key exchange came out
+        /// as an all-zero X25519 output. The bundles keep their tags (later rounds carry the ones of round 1).
+        public func droppingRelay() -> Features {
+            Features(
+                ext: ext, rekeyChainV1: rekeyChainV1, frameKeyV6: frameKeyV6, innerSealV2: innerSealV2,
+                relayKemV1: false, relayRotV1: false,
+                ownCapabilities: ownCapabilities, ownTag: ownTag, peerTag: peerTag, selfIsCaller: selfIsCaller)
         }
     }
 
@@ -159,12 +204,31 @@ public final class LiveCallCrypto: @unchecked Sendable {
         public let rearm: DeferKind?
         /// The send pointer of the per-round inner seal moved: returned, never called out under a lock.
         public let innerSendMoved: InnerSendMove?
+        /// What the outer layer did at the confirmation (a send switch, an erase): returned, never called out under a lock.
+        public let outerEvents: OuterEvents
 
-        public init(alreadyConfirmed: Bool, rearm: DeferKind?, innerSendMoved: InnerSendMove? = nil) {
+        public init(alreadyConfirmed: Bool, rearm: DeferKind?, innerSendMoved: InnerSendMove? = nil, outerEvents: OuterEvents = OuterEvents()) {
             self.alreadyConfirmed = alreadyConfirmed
             self.rearm = rearm
             self.innerSendMoved = innerSendMoved
+            self.outerEvents = outerEvents
         }
+    }
+
+    /// What staging a round did, the outer layer included.
+    struct StageReport: Equatable {
+        let result: StageResult
+        /// The round's outer keys were installed.
+        let outerInstalled: Bool
+        /// This side installed no outer key for the round, and why.
+        let outerHold: OuterHoldReason?
+        let outerEvents: OuterEvents
+    }
+
+    /// What failing a round did.
+    struct FailReport: Equatable {
+        let rearm: DeferKind?
+        let outerEvents: OuterEvents
     }
 
     /// What the tests read: the rounds, the reservations and the two watermarks.
@@ -237,6 +301,17 @@ public final class LiveCallCrypto: @unchecked Sendable {
     private var closed = false
     /// The state of the per-round inner seal; nil for a call that did not negotiate it. The reference never changes.
     private let inner: InnerSealV2Session?
+    /// The outer relay layer; nil for a call whose exchange is not in effect or could not be set up. Set once, before the object is
+    /// shared.
+    private var outer: OuterSealerSet?
+    private var outerPortObject: OuterSealPort?
+    private var outerState: OuterStatus = .none
+    /// The last round that gave up its outer keys and why, the sticky reason of round 1, the round the send pointer was put back
+    /// from, and the highest round that authenticated a frame: the words of the protection line.
+    private var outerHold: (epoch: Int32, reason: OuterHoldReason)?
+    private var outerRound1Reason: OuterHoldReason?
+    private var outerRevertFrom: Int32?
+    private var outerRxEpoch: Int32 = -1
 
     private init(callId: String, role: Role, features: Features, nowMs: @escaping @Sendable () -> Int) {
         self.gen = Self.nextGen()
@@ -245,12 +320,13 @@ public final class LiveCallCrypto: @unchecked Sendable {
         self.callIdL = lowered
         self.role = role
         self.features = features
-        self.inner = features.innerSealV2 ? InnerSealV2Session(callIdL: lowered, role: role, nowMs: nowMs) : nil
+        self.inner = features.innerSealV2
+            ? InnerSealV2Session(callIdL: lowered, role: role, withVideo: features.relayKemV1, nowMs: nowMs) : nil
     }
 
     /// Creates the object and stages round 0 with the round-1 session key. nil when a key of round 0 cannot be derived: every key
     /// derived so far is wiped and nothing is returned.
-    static func adopt(callId: String, role: Role, features: Features, sessionKey: Data,
+    static func adopt(callId: String, role: Role, features: Features, sessionKey: Data, outer outerInput: OuterRound1Input = .none,
                       nowMs: @escaping @Sendable () -> Int = { SasCommit.monotonicNowMs() }) -> LiveCallCrypto? {
         let object = LiveCallCrypto(callId: callId, role: role, features: features, nowMs: nowMs)
         var ck: ChainKeyBuffer?
@@ -262,10 +338,34 @@ public final class LiveCallCrypto: @unchecked Sendable {
             ck?.wipe()
             return nil
         }
+        // An outer failure never refuses the object: the layer is marked failed and the call goes on.
+        object.setUpOuterRound1(input: outerInput, sessionKey: sessionKey, nowMs: nowMs)
         object.rounds = [RoundRecord(epoch: 0, confirmed: false, ck: ck)]
         object.maxStagedE = 0
         object.maxAdmittedE = 0
         return object
+    }
+
+    /// Round 1 of the outer layer: the four keys of round 0 and the set that holds them. Before the object is shared.
+    private func setUpOuterRound1(input: OuterRound1Input, sessionKey: Data, nowMs: @escaping @Sendable () -> Int) {
+        if case .zero = input { outerRound1Reason = .x25519Zero }
+        guard features.relayKemV1 else { return }
+        guard case .kem(let secrets, let binding) = input else {
+            outerState = .failed
+            return
+        }
+        guard let keys = RelayKem.deriveOuterKeys(secrets: secrets, sessionKey: sessionKey, acceptBinding: binding, callIdL: callIdL) else {
+            outerState = .failed
+            return
+        }
+        let created = OuterSealerSet(role: role, rot: features.relayRotV1, nowMs: nowMs)
+        guard created.installRound0(keys).result == .ok else {
+            outerState = .failed
+            return
+        }
+        outer = created
+        outerPortObject = created.makePort()
+        outerState = .ok
     }
 
     // MARK: - Read-only
@@ -318,6 +418,73 @@ public final class LiveCallCrypto: @unchecked Sendable {
     /// The number of round slots the inner seal holds.
     public var innerSlotCount: Int {
         inner?.slotCount ?? 0
+    }
+
+    /// The port the media paths seal and open through: nil unless the outer layer is up, and nil once this object is closed.
+    public var outerSealPort: OuterSealPort? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, outerState == .ok else { return nil }
+        return outerPortObject
+    }
+
+    var outerStatusValue: OuterStatus {
+        lock.lock()
+        defer { lock.unlock() }
+        return outerState
+    }
+
+    /// The inner video port: only for a call that negotiated the exchange next to the inner seal, and only while open.
+    public var innerVideoPort: InnerVideoPort? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, features.relayKemV1, let session = inner else { return nil }
+        return session
+    }
+
+    /// How relay video is carried. `legacy` unless the exchange is in effect; then `none` when the outer layer is not up (the video
+    /// never goes out without it), `double` with the inner seal and `outerOnly` without.
+    public var relayVideoMode: RelayVideoMode {
+        lock.lock()
+        defer { lock.unlock() }
+        guard features.relayKemV1 else { return .legacy }
+        guard !closed, outerState == .ok else { return .none }
+        return features.innerSealV2 ? .double : .outerOnly
+    }
+
+    /// What the words of the protection line read.
+    func outerLevelInput() -> OuterLevelInput {
+        lock.lock()
+        defer { lock.unlock() }
+        return OuterLevelInput(
+            status: outerState, relayKemInEffect: features.relayKemV1, relayRotInEffect: features.relayRotV1,
+            holdEpoch: outerHold?.epoch, holdReason: outerHold?.reason, round1Reason: outerRound1Reason,
+            revertFrom: outerRevertFrom, rxEpoch: outerRxEpoch)
+    }
+
+    /// What would refuse a slot of `epoch` in the outer layer now (read-only); nil when none, or when the layer is not up.
+    func outerRefusal(epoch: Int32) -> OuterInstallResult? {
+        lock.lock()
+        let set = outer
+        lock.unlock()
+        return set?.refusal(epoch: epoch)
+    }
+
+    /// Epochs and counters of the outer layer, never bytes; nil without the layer.
+    func outerSnapshot() -> OuterSnapshot? {
+        lock.lock()
+        let set = outer
+        lock.unlock()
+        return set?.snapshot()
+    }
+
+    /// The round the outer layer seals under; nil without the layer or once closed.
+    var outerSendEpoch: Int32? {
+        lock.lock()
+        let set = outer
+        lock.unlock()
+        guard let value = set?.sendEpoch(), value >= 0 else { return nil }
+        return value
     }
 
     /// The acceptor's read-only check, before its ACCEPT, that a slot for `epoch` can be taken: nothing is written or erased.
@@ -456,24 +623,36 @@ public final class LiveCallCrypto: @unchecked Sendable {
     /// of staging and refuses only a closed object; the offerer path (`ours: true`) is ordered by round. A call without a tag
     /// of the rekey family never refuses except when closed.
     public func stageRound(epoch: Int32, sessionKey: Data, ours: Bool, handle: AcceptReservation?) -> StageResult {
+        stageRoundReport(epoch: epoch, sessionKey: sessionKey, ours: ours, handle: handle, outer: .none).result
+    }
+
+    /// The same, with the outer layer: after the chain key and the slot of the inner seal, and before the round is recorded, the
+    /// outer keys of the round are derived and installed. An outer failure never changes the result of the round: the round is
+    /// staged, the outer layer stays on its epoch and the report says why.
+    func stageRoundReport(epoch: Int32, sessionKey: Data, ours: Bool, handle: AcceptReservation?,
+                          outer input: OuterStageInput) -> StageReport {
         lock.lock()
         defer { lock.unlock() }
+        func refused(_ result: StageResult) -> StageReport {
+            if case .kem(let secrets, _) = input { secrets.wipe() }
+            return StageReport(result: result, outerInstalled: false, outerHold: nil, outerEvents: OuterEvents())
+        }
         if closed {
-            return .closed
+            return refused(.closed)
         }
         if rounds.contains(where: { $0.epoch == epoch }) {
             consumeLocked(handle)
-            return .alreadyStaged
+            return refused(.alreadyStaged)
         }
         if ours, features.anyS8bTag {
-            if epoch <= maxStagedE { return .staleEpoch }
-            if undecidedLocked() >= Self.maxUndecided { return .pendingFull }
+            if epoch <= maxStagedE { return refused(.staleEpoch) }
+            if undecidedLocked() >= Self.maxUndecided { return refused(.pendingFull) }
         }
         var ck: ChainKeyBuffer?
         if features.rekeyChainV1 {
             guard let derived = RekeyChain.deriveChainKey(sessionKey: sessionKey, callIdL: callIdL, epoch: epoch) else {
                 consumeLocked(handle)
-                return .closed
+                return refused(.closed)
             }
             ck = ChainKeyBuffer(copying: derived)
         }
@@ -483,19 +662,49 @@ public final class LiveCallCrypto: @unchecked Sendable {
             guard let prepared = inner.prepare(sessionKey: sessionKey) else {
                 ck?.wipe()
                 consumeLocked(handle)
-                return .deriveFailed
+                return refused(.deriveFailed)
             }
             if let refusal = inner.install(epoch: epoch, prepared: prepared) {
                 ck?.wipe()
                 consumeLocked(handle)
                 switch refusal {
-                case .duplicate: return .alreadyStaged
-                case .slotCollision: return .slotCollision
-                case .pendingFull: return .pendingFull
-                case .closed: return .closed
+                case .duplicate: return refused(.alreadyStaged)
+                case .slotCollision: return refused(.slotCollision)
+                case .pendingFull: return refused(.pendingFull)
+                case .closed: return refused(.closed)
                 }
             }
         }
+        var outerInstalled = false
+        var outerHoldReason: OuterHoldReason?
+        var outerEvents = OuterEvents()
+        if let outerSet = outer, features.relayRotV1, outerState == .ok {
+            switch input {
+            case .none:
+                break
+            case .hold(let reason):
+                outerHoldReason = reason
+            case .kem(let secrets, let binding):
+                if let why = outerSet.refusal(epoch: epoch) {
+                    // a collision derives nothing; any other refusal is a failure of the exchange
+                    outerHoldReason = why == .slotCollision ? .slotCollision : .relayKem
+                } else if let keys = RelayKem.deriveOuterKeys(
+                    secrets: secrets, sessionKey: sessionKey, acceptBinding: binding, callIdL: callIdL) {
+                    let report = outerSet.install(epoch: epoch, keys: keys)
+                    outerEvents = report.events
+                    if report.result == .ok {
+                        outerInstalled = true
+                    } else {
+                        outerHoldReason = report.result == .slotCollision ? .slotCollision : .relayKem
+                    }
+                } else {
+                    outerHoldReason = .relayKem
+                }
+            }
+        }
+        if case .kem(let secrets, _) = input { secrets.wipe() }
+        if let reason = outerHoldReason { outerHold = (epoch: epoch, reason: reason) }
+        noteOuterEventsLocked(outerEvents)
         rounds.append(RoundRecord(epoch: epoch, confirmed: false, ck: ck))
         maxStagedE = max(maxStagedE, epoch)
         if ours, var current = own, current.epoch == epoch {
@@ -503,7 +712,7 @@ public final class LiveCallCrypto: @unchecked Sendable {
             own = current
         }
         consumeLocked(handle)
-        return .staged
+        return StageReport(result: .staged, outerInstalled: outerInstalled, outerHold: outerHoldReason, outerEvents: outerEvents)
     }
 
     /// The peer's key confirmation of the round verified. Confirming a round twice does nothing.
@@ -521,25 +730,36 @@ public final class LiveCallCrypto: @unchecked Sendable {
         }
         // The only mover of the send pointer of the inner seal: the peer's confirmation of a later round.
         let moved = inner?.peerKcmac(epoch: epoch)
+        // The same for the outer layer, whose policy may start the caller's trial or move the callee's pointer.
+        let outerEvents = outer?.peerKcmac(epoch: epoch) ?? OuterEvents()
+        noteOuterEventsLocked(outerEvents)
         retainLocked()
-        return ConfirmResult(alreadyConfirmed: false, rearm: takeRearmLocked(), innerSendMoved: moved)
+        return ConfirmResult(alreadyConfirmed: false, rearm: takeRearmLocked(), innerSendMoved: moved, outerEvents: outerEvents)
     }
 
     /// The key confirmation of the round failed or ended without a verdict: its chain key is wiped at once.
     public func failRound(epoch: Int32) -> DeferKind? {
+        failRoundReport(epoch: epoch).rearm
+    }
+
+    /// The same, with what the outer layer did (its staged slot of the round is erased).
+    func failRoundReport(epoch: Int32) -> FailReport {
         lock.lock()
         defer { lock.unlock() }
-        guard !closed else { return nil }
+        guard !closed else { return FailReport(rearm: nil, outerEvents: OuterEvents()) }
+        var outerEvents = OuterEvents()
         if let index = rounds.firstIndex(where: { $0.epoch == epoch && !$0.confirmed }) {
             rounds[index].ck?.wipe()
             rounds.remove(at: index)
             inner?.abandon(epoch: epoch)
+            outerEvents = outer?.abandon(epoch: epoch) ?? OuterEvents()
+            noteOuterEventsLocked(outerEvents)
         }
         if let current = own, current.epoch == epoch {
             current.lease?.close()
             own = nil
         }
-        return takeRearmLocked()
+        return FailReport(rearm: takeRearmLocked(), outerEvents: outerEvents)
     }
 
     /// Ends an acceptor reservation without staging: its lease copy is wiped.
@@ -572,6 +792,8 @@ public final class LiveCallCrypto: @unchecked Sendable {
     public func close() {
         lock.lock()
         closed = true
+        // The outer layer first: every key wiped, the sink dropped, every later seal and open refused.
+        outer?.close()
         for index in rounds.indices {
             rounds[index].ck?.wipe()
             rounds[index].ck = nil
@@ -587,6 +809,70 @@ public final class LiveCallCrypto: @unchecked Sendable {
         reservations.removeAll()
         deferred = nil
         lock.unlock()
+    }
+
+    // MARK: - The outer layer (reached only from the wrappers of the integration)
+
+    /// Our own confirmation of `epoch` was handed to the transport.
+    func markOuterKcmacSent(epoch: Int32) -> OuterEvents {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, let set = outer else { return OuterEvents() }
+        let events = set.markKcmacSent(epoch: epoch)
+        noteOuterEventsLocked(events)
+        return events
+    }
+
+    /// The peer's CALL_HOLD began or ended: only the caller's layer acts on it.
+    func setOuterHold(_ on: Bool) -> OuterEvents {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, let set = outer else { return OuterEvents() }
+        let events = set.setHold(on)
+        noteOuterEventsLocked(events)
+        return events
+    }
+
+    /// Time passes for the outer layer (the lazy evaluation also runs inside every seal, open and mutator).
+    func tickOuter() -> OuterEvents {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, let set = outer else { return OuterEvents() }
+        let events = set.tick()
+        noteOuterEventsLocked(events)
+        return events
+    }
+
+    /// The outer layer is gone for the rest of the call (a failed local install, or the peer's `outer-off-v1`): the set is closed,
+    /// nothing is sealed or opened through it and no later round stages an outer slot. True when the state changed.
+    @discardableResult
+    func outerOff() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, outerState != .off else { return false }
+        outerState = .off
+        outer?.close()
+        return true
+    }
+
+    /// The receiver of the events born inside a seal or an open of the set.
+    func setOuterEventSink(_ sink: (@Sendable (OuterEvents) -> Void)?) {
+        lock.lock()
+        let set = outer
+        lock.unlock()
+        set?.setEventSink(sink)
+    }
+
+    /// Events that left the set by its sink: the bookkeeping of the protection line follows them.
+    func noteOuterEvents(_ events: OuterEvents) {
+        lock.lock()
+        defer { lock.unlock() }
+        noteOuterEventsLocked(events)
+    }
+
+    private func noteOuterEventsLocked(_ events: OuterEvents) {
+        if let revert = events.reverted { outerRevertFrom = revert.from }
+        if let rx = events.rxEpoch, rx > outerRxEpoch { outerRxEpoch = rx }
     }
 
     // MARK: - Under the lock
@@ -659,6 +945,21 @@ public final class LiveCallCrypto: @unchecked Sendable {
     /// The key buffers of the inner seal, to check that a close wipes them.
     func innerKeyBuffersForTesting() -> [ChainKeyBuffer] {
         inner?.keyBuffersForTesting() ?? []
+    }
+
+    /// The key buffers of the outer layer, to check that a close wipes them.
+    func outerKeyBuffersForTesting() -> [ChainKeyBuffer] {
+        lock.lock()
+        let set = outer
+        lock.unlock()
+        return set?.keyBuffersForTesting() ?? []
+    }
+
+    /// The set of the outer layer (nil without it).
+    var outerSetForTesting: OuterSealerSet? {
+        lock.lock()
+        defer { lock.unlock() }
+        return outer
     }
 
     /// The state of the inner seal without any byte of key material.

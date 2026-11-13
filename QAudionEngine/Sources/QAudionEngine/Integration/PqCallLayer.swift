@@ -183,16 +183,32 @@ final class PqCallLayer: @unchecked Sendable {
             capsBindEnabled: capsBindEnabled, available: runtime?.isAvailable() ?? false)
         let mustSign = sticky?.sent == true
 
+        // The 24 KiB rule, on the frame this app writes.
+        func fits(_ candidate: AndroidHandshakeBundle) -> Bool {
+            OpaqueFrameRule.fits(payload: AndroidHandshakeEnvelope.serialize(callId: callId, bundle: candidate))
+        }
+        // What is given up first when a bundle that carries the key-exchange member of the outer relay layer does not fit: that member,
+        // and in round 1 also the two tags (the bundle then reads as one of a build without the layer, and the call uses the older
+        // outer layer); in a rekey the member only (its tags must equal those of round 1). The second signature is never given up
+        // for it. Every way out of this function goes through the same rule.
+        func givingUpRelay(_ candidate: AndroidHandshakeBundle) -> AndroidHandshakeBundle {
+            round == 1 ? candidate.withoutRelay() : candidate.with(relayKem: nil)
+        }
+        func fitted(_ candidate: AndroidHandshakeBundle) -> AndroidHandshakeBundle {
+            if candidate.relayKem != nil, !fits(candidate) { return givingUpRelay(candidate) }
+            return candidate
+        }
+
         func fail(_ why: String) throws -> AndroidHandshakeBundle {
             CapsBindLog.line("pq sign=0 round=\(round) why=\(why) sent=\(mustSign ? 0 : 1)")
             if mustSign { throw LayerError.roundNotSent }
             setOwn(callId: callId, plan: .off, sent: false)
-            return Self.stripped(bundle)
+            return fitted(Self.stripped(bundle))
         }
 
         guard let runtime, plan != .off else {
             if sticky == nil { setOwn(callId: callId, plan: .off, sent: false) }
-            let plain = Self.stripped(bundle)
+            let plain = fitted(Self.stripped(bundle))
             // the size rule is checked on every send, signed or not
             if !OpaqueFrameRule.fits(payload: AndroidHandshakeEnvelope.serialize(callId: callId, bundle: plain)) {
                 CapsBindLog.line("pq size=over round=\(round) signed=0")
@@ -200,27 +216,35 @@ final class PqCallLayer: @unchecked Sendable {
             return plain
         }
         guard let signer = runtime.makeSigner() else { return try fail("no_key") }
-        var caps = (bundle.capabilities ?? AndroidHandshakeBundle.Capabilities(ratchetV3: false)).with(sigHybridV1: nil)
-        if plan == .advertise {
-            // the tag requires `capsBindV1` in the same bundle
-            guard caps.capsBindV1 == true else { return try fail("no_capsbind") }
-            caps = caps.with(sigHybridV1: true)
-        }
         let withdrawn: [String]? = plan == .withdraw ? [HybridSigPolicy.tag] : nil
         let keyIdB64 = signer.keyId.base64EncodedString()
-        let unsignedWork = bundle.withSecondSignature(capabilities: caps, mldsaKeyId: keyIdB64, sigHybrid: nil, capsWithdrawn: withdrawn)
-        if runtime.forceSignFailure?() == true { return try fail("hook") }
-        let ownInfo = CapsBind.analyze(bundle: unsignedWork)
-        guard let sig = signer.sign(kind: kind, transcript: transcript, dtlsFpSelf: fpSelf, dtlsFpPeer: fpPeer,
-                                    capsx: ownInfo.capsx, extx: ownInfo.extx) else { return try fail("sign") }
-        let signedWork = unsignedWork.withSecondSignature(capabilities: caps, mldsaKeyId: keyIdB64,
-                                                          sigHybrid: sig.base64EncodedString(), capsWithdrawn: withdrawn)
-        // the 24 KiB rule, on the frame this app writes
-        guard OpaqueFrameRule.fits(payload: AndroidHandshakeEnvelope.serialize(callId: callId, bundle: signedWork)) else {
-            return try fail("size")
+        // CAPSX and EXTX are computed from the bundle exactly as it will be sent, so a bundle that gives up the member is signed
+        // again from its reduced form.
+        func signWork(_ base: AndroidHandshakeBundle) -> (work: AndroidHandshakeBundle, failure: String?) {
+            var caps = (base.capabilities ?? AndroidHandshakeBundle.Capabilities(ratchetV3: false)).with(sigHybridV1: nil)
+            if plan == .advertise {
+                // the tag requires `capsBindV1` in the same bundle
+                guard caps.capsBindV1 == true else { return (base, "no_capsbind") }
+                caps = caps.with(sigHybridV1: true)
+            }
+            let unsignedWork = base.withSecondSignature(capabilities: caps, mldsaKeyId: keyIdB64, sigHybrid: nil, capsWithdrawn: withdrawn)
+            if runtime.forceSignFailure?() == true { return (base, "hook") }
+            let ownInfo = CapsBind.analyze(bundle: unsignedWork)
+            guard let sig = signer.sign(kind: kind, transcript: transcript, dtlsFpSelf: fpSelf, dtlsFpPeer: fpPeer,
+                                        capsx: ownInfo.capsx, extx: ownInfo.extx) else { return (base, "sign") }
+            let signedWork = unsignedWork.withSecondSignature(capabilities: caps, mldsaKeyId: keyIdB64,
+                                                              sigHybrid: sig.base64EncodedString(), capsWithdrawn: withdrawn)
+            return (signedWork, nil)
         }
+        var attempt = signWork(bundle)
+        if let why = attempt.failure { return try fail(why) }
+        if bundle.relayKem != nil, !fits(attempt.work) {
+            attempt = signWork(givingUpRelay(bundle))
+            if let why = attempt.failure { return try fail(why) }
+        }
+        guard fits(attempt.work) else { return try fail("size") }
         setOwn(callId: callId, plan: plan, sent: true)
-        return signedWork
+        return attempt.work
     }
 
     // MARK: - Words of the protection line
