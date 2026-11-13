@@ -184,9 +184,17 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         /// bundle. Not one of the nine signed bits. OPTIONAL, omitted while not advertised, read leniently like `capsBindV1`.
         public let sigHybridV1: Bool?
 
+        /// Rekeys name a confirmed earlier round as their base. Needs `capsBindV1` in the same bundle. Not one of the nine signed
+        /// bits; the decision is taken from the raw text (`BundleCapsBind.tags`), never from this typed value. OPTIONAL, omitted
+        /// while not advertised (never encoded as `false`), read leniently like `capsBindV1`.
+        public let rekeyChainV1: Bool?
+
+        /// Directional per-media frame keys. Same rules as `rekeyChainV1`.
+        public let frameKeyV6: Bool?
+
         private enum CodingKeys: String, CodingKey {
             case ratchetV3, sframeV1, vkeyV1, sessionKdfV3, ratchetV4, srtpDirKeyV1, pskMixV1, hsTranscriptBindV1
-            case innerAudioAadV1, ratchetV5, capsBindV1, sigHybridV1
+            case innerAudioAadV1, ratchetV5, capsBindV1, sigHybridV1, rekeyChainV1, frameKeyV6
         }
 
         public init(from decoder: Decoder) throws {
@@ -203,6 +211,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             ratchetV5 = try c.decodeIfPresent(Bool.self, forKey: .ratchetV5)
             capsBindV1 = try? c.decodeIfPresent(Bool.self, forKey: .capsBindV1)
             sigHybridV1 = try? c.decodeIfPresent(Bool.self, forKey: .sigHybridV1)
+            rekeyChainV1 = try? c.decodeIfPresent(Bool.self, forKey: .rekeyChainV1)
+            frameKeyV6 = try? c.decodeIfPresent(Bool.self, forKey: .frameKeyV6)
         }
 
         public init(
@@ -217,7 +227,9 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             innerAudioAadV1: Bool? = nil,
             ratchetV5: Bool? = nil,
             capsBindV1: Bool? = nil,
-            sigHybridV1: Bool? = nil
+            sigHybridV1: Bool? = nil,
+            rekeyChainV1: Bool? = nil,
+            frameKeyV6: Bool? = nil
         ) {
             self.ratchetV3 = ratchetV3
             self.sframeV1 = sframeV1
@@ -231,6 +243,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             self.ratchetV5 = ratchetV5
             self.capsBindV1 = capsBindV1
             self.sigHybridV1 = sigHybridV1
+            self.rekeyChainV1 = rekeyChainV1
+            self.frameKeyV6 = frameKeyV6
         }
 
         /// The same capabilities with `sigHybridV1` replaced (nil omits it).
@@ -238,7 +252,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             Capabilities(
                 ratchetV3: ratchetV3, sframeV1: sframeV1, vkeyV1: vkeyV1, sessionKdfV3: sessionKdfV3, ratchetV4: ratchetV4,
                 srtpDirKeyV1: srtpDirKeyV1, pskMixV1: pskMixV1, hsTranscriptBindV1: hsTranscriptBindV1,
-                innerAudioAadV1: innerAudioAadV1, ratchetV5: ratchetV5, capsBindV1: capsBindV1, sigHybridV1: value)
+                innerAudioAadV1: innerAudioAadV1, ratchetV5: ratchetV5, capsBindV1: capsBindV1, sigHybridV1: value,
+                rekeyChainV1: rekeyChainV1, frameKeyV6: frameKeyV6)
         }
     }
 
@@ -371,10 +386,16 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     /// Names of tags this build stops advertising on purpose (at most 16), bound by EXTX. Only a client release names one.
     public let capsWithdrawn: [String]?
 
+    /// The earlier round a chained rekey OFFER is based on. Written by a sender that negotiated `rekeyChainV1`, outside the
+    /// signed transcript. Appended LAST: the member order is part of the wire. A receiver never reads it from this typed value
+    /// (the decoder leaves it nil): the raw text decides, so a wrong type or an out-of-range token never makes a bundle
+    /// undecodable here.
+    public let chainBase: Int?
+
     private enum CodingKeys: String, CodingKey {
         case kind, callId, pqcPublicKey, x25519PublicKey, strongBoxPublicKey, dualCurvePublicKey, ciphertext, capabilities
         case pskFingerprints, selectedPskFingerprint, pskRoles, signerIdentityKey, sigV6, dtlsFingerprint, sasCommit
-        case rekeyNonce, rekeyRound, rekeyNextPeriodMs, mldsaKeyId, sigHybrid, capsWithdrawn
+        case rekeyNonce, rekeyRound, rekeyNextPeriodMs, mldsaKeyId, sigHybrid, capsWithdrawn, chainBase
     }
 
     public init(from decoder: Decoder) throws {
@@ -401,6 +422,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         mldsaKeyId = Self.lenientString(c, .mldsaKeyId)
         sigHybrid = Self.lenientString(c, .sigHybrid)
         capsWithdrawn = (try? c.decodeIfPresent([String].self, forKey: .capsWithdrawn)) ?? nil
+        chainBase = nil
     }
 
     /// Absent or JSON null: nil. A string: the string. Anything else that is present: the empty string.
@@ -432,7 +454,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         rekeyNextPeriodMs: Int? = nil,
         mldsaKeyId: String? = nil,
         sigHybrid: String? = nil,
-        capsWithdrawn: [String]? = nil
+        capsWithdrawn: [String]? = nil,
+        chainBase: Int? = nil
     ) {
         self.kind = kind
         self.callId = callId
@@ -455,6 +478,20 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         self.mldsaKeyId = mldsaKeyId
         self.sigHybrid = sigHybrid
         self.capsWithdrawn = capsWithdrawn
+        self.chainBase = chainBase
+    }
+
+    /// The same bundle with `chainBase` replaced (nil omits it).
+    func with(chainBase value: Int?) -> AndroidHandshakeBundle {
+        AndroidHandshakeBundle(
+            kind: kind, callId: callId, pqcPublicKey: pqcPublicKey, x25519PublicKey: x25519PublicKey,
+            strongBoxPublicKey: strongBoxPublicKey, dualCurvePublicKey: dualCurvePublicKey,
+            ciphertext: ciphertext, capabilities: capabilities, pskFingerprints: pskFingerprints,
+            selectedPskFingerprint: selectedPskFingerprint, pskRoles: pskRoles,
+            signerIdentityKey: signerIdentityKey, sigV6: sigV6, dtlsFingerprint: dtlsFingerprint,
+            sasCommit: sasCommit, rekeyNonce: rekeyNonce, rekeyRound: rekeyRound,
+            rekeyNextPeriodMs: rekeyNextPeriodMs,
+            mldsaKeyId: mldsaKeyId, sigHybrid: sigHybrid, capsWithdrawn: capsWithdrawn, chainBase: value)
     }
 
     /// The same bundle with `sasCommit` replaced (used by the parser to represent a JSON null).
@@ -467,7 +504,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             signerIdentityKey: signerIdentityKey, sigV6: sigV6, dtlsFingerprint: dtlsFingerprint,
             sasCommit: value, rekeyNonce: rekeyNonce, rekeyRound: rekeyRound,
             rekeyNextPeriodMs: rekeyNextPeriodMs,
-            mldsaKeyId: mldsaKeyId, sigHybrid: sigHybrid, capsWithdrawn: capsWithdrawn)
+            mldsaKeyId: mldsaKeyId, sigHybrid: sigHybrid, capsWithdrawn: capsWithdrawn, chainBase: chainBase)
     }
 
     /// The same bundle with the members of the second signature replaced: its capability tag, key id, signature and withdrawal list.
@@ -481,7 +518,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             signerIdentityKey: signerIdentityKey, sigV6: sigV6, dtlsFingerprint: dtlsFingerprint,
             sasCommit: sasCommit, rekeyNonce: rekeyNonce, rekeyRound: rekeyRound,
             rekeyNextPeriodMs: rekeyNextPeriodMs,
-            mldsaKeyId: newKeyId, sigHybrid: newSig, capsWithdrawn: newWithdrawn)
+            mldsaKeyId: newKeyId, sigHybrid: newSig, capsWithdrawn: newWithdrawn, chainBase: chainBase)
     }
 }
 

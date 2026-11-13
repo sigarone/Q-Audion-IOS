@@ -4379,12 +4379,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         var ikm = Data(capacity: pqcSharedSecret.count + x25519Shared.count)
         ikm.append(pqcSharedSecret)
         ikm.append(x25519Shared)
-        let salt: Data
-        if let psk = psk, !psk.isEmpty {
-            salt = psk
-        } else {
-            salt = HkdfLabels.hybridPqcSaltV1
-        }
+        let salt = RekeyChain.sessionKeySalt(psk: psk)
         var info = Data(capacity: HkdfLabels.hybridPqcSessionKey.count + transcriptHash.count)
         info.append(HkdfLabels.hybridPqcSessionKey)
         info.append(transcriptHash)
