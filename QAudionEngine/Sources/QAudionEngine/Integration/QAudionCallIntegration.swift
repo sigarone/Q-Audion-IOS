@@ -297,20 +297,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         peerBundleSeen = true
         // Phase 18: a bundle that omits the v4 field (older peer / un-opted-in) reads false, so v4 stays off for the pair.
         peerAdvertisedRatchetV4 = (bundle.capabilities?.ratchetV4 ?? false)
-        // MEDIA-3/4/5: same additive/AND-negotiated shape; inert while `innerAudioAadV1Enabled` is false.
-        peerAdvertisedInnerAudioAad = (bundle.capabilities?.innerAudioAadV1 ?? false)
     }
 
     /// Test seam: the capability bits as held.
-    var peerCapabilitiesForTesting: (srtpDirKey: Bool, seen: Bool, ratchetV4: Bool, innerAudioAad: Bool) {
-        lock.withLock { (peerAdvertisedSrtpDirKey, peerBundleSeen, peerAdvertisedRatchetV4, peerAdvertisedInnerAudioAad) }
+    var peerCapabilitiesForTesting: (srtpDirKey: Bool, seen: Bool, ratchetV4: Bool) {
+        lock.withLock { (peerAdvertisedSrtpDirKey, peerBundleSeen, peerAdvertisedRatchetV4) }
     }
 
     /// Test seam: the capability bits of a live call, as an accepted OFFER left them.
-    func setPeerCapabilitiesForTesting(srtpDirKey: Bool, ratchetV4: Bool, innerAudioAad: Bool) {
+    func setPeerCapabilitiesForTesting(srtpDirKey: Bool, ratchetV4: Bool) {
         lock.withLock {
             peerAdvertisedSrtpDirKey = srtpDirKey; peerBundleSeen = true
-            peerAdvertisedRatchetV4 = ratchetV4; peerAdvertisedInnerAudioAad = innerAudioAad
+            peerAdvertisedRatchetV4 = ratchetV4
         }
     }
 
@@ -629,27 +627,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `AndroidBundleHandshake.SRTP_DIR_KEYS_ENABLED`.
     public static let srtpDirKeysEnabled = true
 
-    /// MEDIA-3/MEDIA-4/MEDIA-5 (2026-09-02 protocol audit, backlog item 4) go-live
-    /// gate for the inner sealed-audio wire's per-direction keys + AAD + replay
-    /// window (`QAudionEngine.initSession`'s `innerAudioAadV1` param). Mirrors
-    /// this platform's own `srtpDirKeysEnabled` pattern directly above, and
-    /// Android/Desktop's equivalent constant for the
-    /// SAME capability bit — grep either sibling repo for `innerAudioAadV1` or
-    /// `INNER_AUDIO_AAD_V1_ENABLED` before flipping this.
-    ///
-    /// DEFAULT FALSE. This bit's exact construction (HKDF info-string pair,
-    /// AAD byte layout, replay-window shape — see `QAudionEngine.swift`'s
-    /// `W-INNERAUDIOAAD` block) was implemented on iOS alone in this session,
-    /// with no live cross-platform KAT against Android/Desktop's own
-    /// implementations of the same audit finding: a mismatched
-    /// construction under the same wire capability bit position would make
-    /// two peers that both advertise it derive different directional keys
-    /// from each other, breaking the call (not a security downgrade — the
-    /// call simply stops decrypting audio). Flip to `true` only after a real
-    /// cross-platform KAT reconciliation pins one byte layout and all three
-    /// platforms implement that exact layout.
-    public static let innerAudioAadV1Enabled = false
-
     /// W574x — whether the PEER advertised `srtpDirKeyV1` in its last received
     /// OFFER/ACCEPT bundle (set in `onAndroidBundleReceived`, before
     /// `onRelaySessionReady` fires).
@@ -664,11 +641,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         lock.withLock { peerBundleSeen }
     }
 
-    /// MEDIA-3/4/5 — whether the PEER advertised `innerAudioAadV1` in its last
-    /// received OFFER/ACCEPT bundle. Same set-site/timing as
-    /// `peerAdvertisedSrtpDirKey` immediately above.
-    private var peerAdvertisedInnerAudioAad: Bool = false
-
     /// W574x — directional sealer keys are used only when BOTH peers advertise
     /// support. Read by AppState at relay-sealer install time.
     ///
@@ -682,26 +654,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         return lock.withLock { peerAdvertisedSrtpDirKey }
     }
 
-    /// MEDIA-3/4/5 — the inner sealed-audio wire's per-direction-key/AAD/
-    /// replay-window scheme is used only when BOTH peers advertise support
-    /// (same AND-negotiation shape as `negotiatedSrtpDirKey`). Read internally
-    /// at the `engine.initSession(...)` call sites below; with the kill
-    /// switch off this is always `false` regardless of what any peer sends.
-    public var negotiatedInnerAudioAadV1: Bool {
-        Self.innerAudioAadV1Enabled && peerAdvertisedInnerAudioAad
-    }
-
-    /// MEDIA-3/4/5 — resolves THIS device's own user id, needed to compute
-    /// `PqcRtpFrameSealer.selfIsRoleA(selfUserId:peerUserId:)` for the inner
-    /// sealed-audio wire's per-direction key assignment (same role rule the
-    /// outer M-15 sealer already uses — see `AppState.installRelaySealers`'s
-    /// callers). `QAudionCallIntegration` has no notion of the app-level
-    /// signed-in user itself; AppState wires this closure once at integration
-    /// construction time, mirroring how it already resolves `currentUserId`
-    /// for the outer sealer's own `selfIsRoleA` computation. `nil`/unset (or
-    /// throwing) resolves to `""`, which is a safe, deterministic (if
-    /// arbitrary) fallback role — inert in practice since the kill switch
-    /// above keeps `negotiatedInnerAudioAadV1` false regardless.
+    /// Resolves THIS device's own user id. `QAudionCallIntegration` has no notion of the app-level signed-in user itself; AppState
+    /// wires this closure once at integration construction time. `nil`/unset resolves to `""`.
     public var resolveSelfUserId: (() -> String)?
 
     /// W-STALESEALER (2026-09-26, fix-3) — resolves `CallService`'s monotonic
@@ -1393,6 +1347,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Local switches for advertising the two tags that ride on `capsBindV1`. Off by default.
     public nonisolated(unsafe) static var rekeyChainV1Enabled = false
     public nonisolated(unsafe) static var frameKeyV6Enabled = false
+    public nonisolated(unsafe) static var innerSealV2Enabled = false
     /// The key state of the call in flight, created where the round-1 session is installed and closed when the call ends. Guarded by
     /// `lock`. See `LiveCallCrypto` for the rules.
     private var live: LiveCallCrypto?
@@ -1403,6 +1358,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// A rekey that was deferred can run now (the reason is a word for the scheduler's log). Called once per deferral, after every
     /// lock is released; the app hops to its own actor.
     public var onRekeyRearm: ((String) -> Void)?
+    /// The send pointer of the per-round inner seal moved from one round to another (previous round, new round). Called once per
+    /// move, after every lock is released; the app hops to its own actor.
+    public var onInnerSendSwitch: ((Int32, Int32) -> Void)?
     /// A pin anomaly of the call's round 1, or a rekey round refused for a missing second signature: the visible warning, with every
     /// reason (the signature reason first). Never ends, refuses or holds the call.
     public var onCapsPinAnomaly: ((_ callId: String, _ peerId: String, _ reasons: [PqWarnReason]) -> Void)?
@@ -2402,12 +2360,36 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     CapsBindLog.line("live chain refuse round=\(gateEpoch) why=7")
                     return
                 }
+                if chained.features.innerSealV2 {
+                    switch livePrecheckInner(chained, epoch: gateEpoch, offerSigOk: offerSigOk) {
+                    case .go: break
+                    case .drop: return
+                    case .fatal:
+                        reportHandshakeFatal(callId: callId, reason: CallCloseReason.kcmacMismatch.rawValue)
+                        throw IntegrationError.handshakeAborted(code: CallCloseReason.kcmacMismatch.rawValue)
+                    }
+                }
                 switch liveGate(chained, epoch: gateEpoch, offerSigOk: offerSigOk, tokens: peerCaps.chainBaseTokens) {
                 case .admitted(let handle):
                     acceptReservation = handle
                 case .refused, .staleEpoch, .closed:
                     return
                 case .pendingFull:
+                    reportHandshakeFatal(callId: callId, reason: CallCloseReason.kcmacMismatch.rawValue)
+                    throw IntegrationError.handshakeAborted(code: CallCloseReason.kcmacMismatch.rawValue)
+                }
+            } else if let sealed = liveForRound, sealed.features.innerSealV2 {
+                // A call with the per-round inner seal and without chained rekeys: the same exact-id rule and the same read-only check,
+                // before anything of the round is written.
+                guard let innerEpoch = Self.keyEpoch(forRekeyRound: round) else { return }
+                guard sealed.matches(callId) else {
+                    CapsBindLog.line("live inner refuse round=\(innerEpoch) why=4")
+                    return
+                }
+                switch livePrecheckInner(sealed, epoch: innerEpoch, offerSigOk: offerSigOk) {
+                case .go: break
+                case .drop: return
+                case .fatal:
                     reportHandshakeFatal(callId: callId, reason: CallCloseReason.kcmacMismatch.rawValue)
                     throw IntegrationError.handshakeAborted(code: CallCloseReason.kcmacMismatch.rawValue)
                 }
@@ -2831,28 +2813,21 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // managers in place (state == .sessionActive is an explicit
                 // allowed transition) without touching the audio profile latch
                 // or rebuilding the codec — see the isReKeyRound doc above.
-                // MEDIA-3/4/5 — per-direction inner-audio keys/AAD/replay window,
-                // only actually applied when negotiated (kill switch default
-                // false — see `negotiatedInnerAudioAadV1`'s doc). Role assignment
-                // reuses the SAME rule the outer M-15 sealer uses
-                // (`PqcRtpFrameSealer.selfIsRoleA`, lexicographically-smaller
-                // userId), so a future go-live can't disagree with the outer
-                // layer about which side is "A". `epoch` reuses this round's
-                // already-agreed CALL-3 re-key round number (both peers derive
-                // the SAME value from the signed bundle) rather than a fresh,
-                // possibly-divergent counter.
-                let innerAadNegotiated = negotiatedInnerAudioAadV1
-                let innerAadSelfIsRoleA = innerAadNegotiated
-                    ? PqcRtpFrameSealer.selfIsRoleA(resolveSelfUserId?() ?? "", callerId)
-                    : false
-                let innerAadEpoch = UInt32(max(1, min(bundle.rekeyRound ?? 1, Int(UInt32.max))))
+                // `installRound` is this round's already-agreed CALL-3 re-key round number (both peers derive the
+                // SAME value from the signed bundle).
+                let installRound = UInt32(max(1, min(bundle.rekeyRound ?? 1, Int(UInt32.max))))
                 // The key state of the call: round 1 creates it, a rekey round is staged in it, both before the session is installed.
                 var roundLive: LiveCallCrypto? = liveForRound
                 var adoptedHere = false
-                let stageEpoch = Self.keyEpoch(forRekeyRound: innerAadEpoch) ?? 0
+                let stageEpoch = Self.keyEpoch(forRekeyRound: installRound) ?? 0
                 if !isReKeyRound {
                     guard let adopted = liveAdopt(
                         callId: callId, role: .acceptor, features: liveFeaturesOffer, sessionKey: combined, capsEpoch: capsEpoch) else {
+                        return false
+                    }
+                    // A call with the per-round inner seal is installed only together with its port.
+                    if adopted.features.innerSealV2 && adopted.innerPort == nil {
+                        liveClose(expected: adopted)
                         return false
                     }
                     roundLive = adopted
@@ -2860,12 +2835,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 } else if let staging = roundLive {
                     let staged = liveStage(staging, epoch: stageEpoch, sessionKey: combined, ours: false, handle: acceptReservation)
                     reservationConsumed = true
-                    if staged == .closed { return false }
+                    guard staged == .staged || staged == .alreadyStaged else { return false }
                 }
                 do {
                     try engine.initSession(sharedSecret: combined, adaptivePadding: true,
-                                           innerAudioAadV1: innerAadNegotiated, callId: callId,
-                                           selfIsRoleA: innerAadSelfIsRoleA, epoch: innerAadEpoch,
+                                           innerSealV2: roundLive?.innerPort,
                                            selfIsCaller: currentIsCaller)
                 } catch {
                     if let failing = roundLive {
@@ -2873,7 +2847,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     }
                     throw error
                 }
-                recordKeyRound(callId: callId, key: combined, round: innerAadEpoch, transcriptHash: acceptBinding)
+                recordKeyRound(callId: callId, key: combined, round: installRound, transcriptHash: acceptBinding)
                 // W-M15SEALERONCE: a re-key round must NOT rebuild the M-15 outer pair.
                 fireRelaySessionReady(combined, callId: callId, isReKey: isReKeyRound, generation: entryGeneration)
                 lock.withLock { state = .active }
@@ -3000,7 +2974,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     peerSupportsMix: kcPeerSupportsMix, sigOk: offerSigOk,
                     signerIdentityKey: offerSigOk ? v4PeerSik : nil,
                     mutualFingerprints: kcMutualFingerprints, selectedFp: selectedFp,
-                    round: innerAadEpoch, advertIsBlinded: resolvedAdvert.dialect == .v3Blinded,
+                    round: installRound, advertIsBlinded: resolvedAdvert.dialect == .v3Blinded,
                     acceptBinding: acceptBinding, ownSignerKey: localSignerIdentityKey,
                     capsBindExt: capsExt, liveGen: roundLive?.gen ?? 0
                 ))
@@ -3192,7 +3166,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 }
             }
             // A call that negotiated chained rekeys compares the id of its rounds exactly: a case-variant id is not this call's.
-            if let tagged = liveForAccept, tagged.features.rekeyChainV1, !tagged.matches(callId) {
+            if let tagged = liveForAccept, tagged.features.rekeyChainV1 || tagged.features.innerSealV2, !tagged.matches(callId) {
                 print("[QAudionCallIntegration] re-key ACCEPT names another id than the call's own — dropped, the round is given up")
                 return
             }
@@ -3428,21 +3402,21 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             //    again mid-session, so this step needed no isReKeyRound
             //    guard to begin with.
             // W479 — Android peer (caller side): same AdaptivePadding scheme.
-            // MEDIA-3/4/5 — same negotiated per-direction inner-audio keys/AAD/
-            // replay window as the .offer branch above; see its comment.
-            let innerAadNegotiatedCaller = negotiatedInnerAudioAadV1
-            let innerAadSelfIsRoleACaller = innerAadNegotiatedCaller
-                ? PqcRtpFrameSealer.selfIsRoleA(resolveSelfUserId?() ?? "", callerId)
-                : false
-            let innerAadEpochCaller = UInt32(max(1, min(bundle.rekeyRound ?? 1, Int(UInt32.max))))
+            let installRoundCaller = UInt32(max(1, min(bundle.rekeyRound ?? 1, Int(UInt32.max))))
             // The key state of the call: round 1 creates it, a rekey round is staged in it, both before the session is installed.
             var roundLive: LiveCallCrypto? = liveForAccept
             var adoptedHere = false
-            let stageEpochCaller = Self.keyEpoch(forRekeyRound: innerAadEpochCaller) ?? 0
+            let stageEpochCaller = Self.keyEpoch(forRekeyRound: installRoundCaller) ?? 0
             if !isReKeyAccept {
                 guard let adopted = liveAdopt(
                     callId: callId, role: .offerer, features: liveFeaturesAccept, sessionKey: combined, capsEpoch: capsEpoch) else {
                     print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… no key state could be created — nothing installed")
+                    return
+                }
+                // A call with the per-round inner seal is installed only together with its port.
+                if adopted.features.innerSealV2 && adopted.innerPort == nil {
+                    liveClose(expected: adopted)
+                    print("[QAudionCallIntegration] ACCEPT for callId=\(callId.prefix(8))… no inner seal could be created — nothing installed")
                     return
                 }
                 roundLive = adopted
@@ -3455,15 +3429,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 case .pendingFull:
                     reportHandshakeFatal(callId: callId, reason: CallCloseReason.kcmacMismatch.rawValue)
                     throw IntegrationError.handshakeAborted(code: CallCloseReason.kcmacMismatch.rawValue)
-                case .staleEpoch, .closed:
+                case .staleEpoch, .closed, .slotCollision, .deriveFailed:
                     print("[QAudionCallIntegration] re-key ACCEPT not installed (round refused by the key state) callId=\(callId.prefix(8))…")
                     return
                 }
             }
             do {
                 try engine.initSession(sharedSecret: combined, adaptivePadding: true,
-                                       innerAudioAadV1: innerAadNegotiatedCaller, callId: callId,
-                                       selfIsRoleA: innerAadSelfIsRoleACaller, epoch: innerAadEpochCaller,
+                                       innerSealV2: roundLive?.innerPort,
                                        selfIsCaller: currentIsCaller)
             } catch {
                 if let failing = roundLive {
@@ -3471,7 +3444,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 }
                 throw error
             }
-            recordKeyRound(callId: callId, key: combined, round: innerAadEpochCaller, transcriptHash: acceptBinding)
+            recordKeyRound(callId: callId, key: combined, round: installRoundCaller, transcriptHash: acceptBinding)
             // W-M15SEALERONCE: a re-key round must NOT rebuild the M-15 outer pair.
             // W-M15ORDER (2026-10-03) — fired RIGHT HERE, straight after `engine.initSession` and
             // BEFORE the awaited REVEAL send below (it used to follow it): the engine can encrypt
@@ -3736,7 +3709,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // branch of AssuranceState.decide() unreachable whenever iOS
                 // placed the call — see establishedPskFp's derivation at :2177.
                 selectedFp: establishedPskFp,
-                round: innerAadEpochCaller,
+                round: installRoundCaller,
                 advertIsBlinded: kcCallerResolved.dialect == .v3Blinded,
                 acceptBinding: acceptBinding, ownSignerKey: localSignerIdentityKey,
                 capsBindExt: capsExt, liveGen: roundLive?.gen ?? 0
@@ -3760,7 +3733,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     // bytes).
 
     /// This build's own advertised capabilities — identical on every OFFER and ACCEPT. Nine of the
-    /// flags are SIGNED (CAPS9); `innerAudioAadV1` only gates local behaviour.
+    /// flags are SIGNED (CAPS9); the tags that ride on `capsBindV1` are bound by it.
     private static func selfCapabilities() -> AndroidHandshakeBundle.Capabilities {
         return AndroidHandshakeBundle.Capabilities(
             ratchetV3: true,
@@ -3776,14 +3749,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // The transcript-bound KDF/SAS/KCMAC is unconditional (F4); the bit stays advertised
             // because it is part of the signed CAPS9.
             hsTranscriptBindV1: true,
-            // MEDIA-3/4/5 — gated by innerAudioAadV1Enabled (default false).
-            innerAudioAadV1: innerAudioAadV1Enabled ? true : nil,
             // capsBindV1: omitted while off, like every other tag.
             capsBindV1: capsBindV1Enabled ? true : nil,
             // The two tags that ride on capsBindV1 are omitted (never false) while off.
             rekeyChainV1: (rekeyChainV1Enabled && capsBindV1Enabled) ? true : nil,
             frameKeyV6: (frameKeyV6Enabled && capsBindV1Enabled && FrameKeyV6Policy.keyMaterialIsSessionKeyE(earbudPaired: false))
-                ? true : nil
+                ? true : nil,
+            innerSealV2: (innerSealV2Enabled && capsBindV1Enabled) ? true : nil
         )
     }
 
@@ -6058,8 +6030,42 @@ extension QAudionCallIntegration {
         if result == .staged {
             let chainWord = object.features.rekeyChainV1 ? 1 : 0
             CapsBindLog.line("live stage round=\(epoch) chain=\(chainWord) staged=\(min(object.stagedCount, 99))")
+            if object.features.innerSealV2 {
+                CapsBindLog.line("live inner stage round=\(epoch) slots=\(min(object.innerSlotCount, 99))")
+            }
+        } else if result == .slotCollision {
+            object.noteInnerRefusal(epoch: epoch)
+            CapsBindLog.line("live inner refuse round=\(epoch) why=1")
+        } else if result == .deriveFailed {
+            CapsBindLog.line("live inner refuse round=\(epoch) why=3")
         }
         return result
+    }
+
+    /// What the acceptor does with a rekey OFFER after the read-only check of the inner seal's slot.
+    enum LivePrecheck {
+        case go
+        /// The round is dropped here: no ACCEPT, nothing written, the call goes on.
+        case drop
+        /// Sixteen rounds wait for the peer: the handshake ends.
+        case fatal
+    }
+
+    /// The acceptor's check, before its ACCEPT and before the gate takes anything, that the slot of a rekey round can be taken. A
+    /// refusal consumes nothing. The sticky refusal record is written only for an OFFER whose signature verified.
+    func livePrecheckInner(_ object: LiveCallCrypto, epoch: Int32, offerSigOk: Bool) -> LivePrecheck {
+        switch object.precheckInnerStage(epoch: epoch) {
+        case nil, .duplicate?:
+            return .go
+        case .slotCollision?:
+            if offerSigOk { object.noteInnerRefusal(epoch: epoch) }
+            CapsBindLog.line("live inner refuse round=\(epoch) why=1")
+            return .drop
+        case .pendingFull?:
+            return .fatal
+        case .closed?:
+            return .drop
+        }
     }
 
     /// The peer's key confirmation of a round verified. `round` is the signed `rekeyRound` (round 1 is 1): the epoch is computed here
@@ -6072,6 +6078,11 @@ extension QAudionCallIntegration {
         guard !result.alreadyConfirmed else { return }
         CapsBindLog.line("live confirm round=\(epoch) retained=\(min(current.snapshot().retained.count, 99))")
         fireRekeyRearm(result.rearm)
+        // The send pointer of the inner seal moved: logged and handed to the app with no lock held.
+        if let moved = result.innerSendMoved {
+            CapsBindLog.line("live inner switch round=\(moved.to) prev=\(moved.from)")
+            onInnerSendSwitch?(moved.from, moved.to)
+        }
     }
 
     /// The key confirmation of a round failed or ended without a verdict: its chain key is wiped at once.
@@ -6148,15 +6159,31 @@ extension QAudionCallIntegration {
         }
     }
 
-    /// The words of the protection line that come from the call's key state: the frame scheme, the capability words and the epoch
-    /// of a chained rekey that was refused here.
-    public func liveLineWords() -> (frame: String, caps: [String], refusedEpoch: Int32?) {
+    /// The words of the protection line that come from the call's key state: the frame scheme, the capability words, the inner
+    /// scheme (`v2`, or empty: the caller prints `legacy`), the round of the last refusal and whether a chained rekey was refused.
+    public func liveLineWords() -> (frame: String, caps: [String], inner: String, lastRefusal: Int32?, chainRefused: Bool) {
         let current: LiveCallCrypto? = lock.withLock { live }
-        guard let current, !current.isClosed else { return ("", [], nil) }
+        guard let current, !current.isClosed else { return ("", [], "", nil, false) }
         var caps: [String] = []
         if current.features.rekeyChainV1 { caps.append("rekeyChainV1") }
         if current.features.frameKeyV6 { caps.append("frameKeyV6") }
-        return (current.features.frameKeyV6 ? "v6" : "v5", caps, current.chainRefusalEpoch)
+        if current.features.innerSealV2 { caps.append("innerSealV2") }
+        return (current.features.frameKeyV6 ? "v6" : "v5", caps, current.features.innerSealV2 ? "v2" : "",
+                current.lastRefusalEpoch, current.chainRefusalEpoch != nil)
+    }
+
+    /// The call negotiated the per-round inner seal and its key state is open. Takes `lock` and nothing else: never call it while
+    /// `lock` is held.
+    public var isInnerSealV2Call: Bool {
+        let current: LiveCallCrypto? = lock.withLock { live }
+        guard let current else { return false }
+        return current.features.innerSealV2 && !current.isClosed
+    }
+
+    /// The round the inner seal sends under now; nil without the seal or without an open key state.
+    public var innerSendEpoch: Int32? {
+        let current: LiveCallCrypto? = lock.withLock { live }
+        return current?.innerSendEpoch
     }
 
     // MARK: Replay of an answered OFFER
@@ -6187,8 +6214,9 @@ extension QAudionCallIntegration {
 
     /// Test seam: installs a key state for `callId` the way the round-1 install does, without the handshake.
     func adoptLiveForTesting(callId: String, role: LiveCallCrypto.Role, features: LiveCallCrypto.Features,
-                             sessionKey: Data) -> LiveCallCrypto? {
-        guard let created = LiveCallCrypto.adopt(callId: callId, role: role, features: features, sessionKey: sessionKey) else {
+                             sessionKey: Data, nowMs: @escaping @Sendable () -> Int = { SasCommit.monotonicNowMs() }) -> LiveCallCrypto? {
+        guard let created = LiveCallCrypto.adopt(
+            callId: callId, role: role, features: features, sessionKey: sessionKey, nowMs: nowMs) else {
             return nil
         }
         let orphan: LiveCallCrypto? = lock.withLock {

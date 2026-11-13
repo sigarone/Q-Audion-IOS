@@ -1402,6 +1402,13 @@ final class AppState: ObservableObject {
                 self?.reKeyScheduler.forceReKey(reason: reason)
             }
         }
+        // The send pointer of the per-round inner seal moved to a later round: no cached frame sealed under the earlier one is
+        // ever resent.
+        integration.onInnerSendSwitch = { [weak self] _, _ in
+            Task { @MainActor [weak self] in
+                self?.callService.dropNackCacheAtSendSwitch()
+            }
+        }
     }
 
     /// The second handshake signature of a call: its signer, the peer key lookup and whether this device may advertise it.
@@ -17815,9 +17822,9 @@ final class AppState: ObservableObject {
         // W389: forward the ML-KEM secret to the broker. peerId is the
         // CALLER (we're the responder), so SAS / video sealer rotate
         // are bound to the right peer for this device.
-        integration.onPqcSessionKeyEstablished = { [weak self] sharedSecret in
+        integration.onPqcSessionKeyEstablished = { [weak self, weak integration] sharedSecret in
             let peerId = callerId
-            Task { @MainActor [weak self] in
+            Task { @MainActor [weak self, weak integration] in
                 guard let self = self else { return }
                 // M-9: reject an all-zero / empty shared secret — a
                 // degenerate key must never be registered as a call's
@@ -17831,8 +17838,9 @@ final class AppState: ObservableObject {
                 // W-AUDIONACK — every session-key install (initial handshake
                 // AND every re-key) must invalidate any cached retransmit
                 // frames sealed under the OLD key. This closure is the one
-                // signal that fires for both.
-                self.callService.resetNackState()
+                // signal that fires for both. A call with the per-round inner seal keeps its
+                // cache until the send pointer moves (`onInnerSendSwitch`), and ends it at teardown.
+                if integration?.isInnerSealV2Call != true { self.callService.resetNackState() }
                 // W574e/g — M-15 relay sealer install moved to the race-free
                 // integration.onRelaySessionReady callback (wired below); the
                 // callContactId guard here raced the inbound OFFER on the
@@ -20856,12 +20864,13 @@ final class AppState: ObservableObject {
                         self.persistMessagePsk(sessionKey: sessionKey, callId: cid, peerContactId: peerId)
                     }
                 }
-                integration.onPqcSessionKeyEstablished = { [weak self] sharedSecret in
+                integration.onPqcSessionKeyEstablished = { [weak self, weak integration] sharedSecret in
                     // The integration fires this from its WS dispatch
                     // queue. Both AppState and CallSessionKeyBroker are
                     // @MainActor, so hop explicitly via a MainActor Task.
                     let peerId = contactId
                     let weakSelf = self  // re-capture for Task scope
+                    let weakIntegration = integration  // re-capture for Task scope
                     Task { @MainActor in
                         guard let strongSelf = weakSelf else { return }
                         // M-9: reject an all-zero / empty shared secret.
@@ -20873,8 +20882,8 @@ final class AppState: ObservableObject {
                         // identical comment: every session-key install
                         // (initial handshake AND every re-key) must
                         // invalidate any cached retransmit frames sealed
-                        // under the OLD key.
-                        strongSelf.callService.resetNackState()
+                        // under the OLD key. A call with the per-round inner seal keeps its cache until the send pointer moves.
+                        if weakIntegration?.isInnerSealV2Call != true { strongSelf.callService.resetNackState() }
                         // W574e/g — M-15 sealer install moved to the race-free
                         // integration.onRelaySessionReady callback (wired below).
                         // Bind broker on first use; idempotent.

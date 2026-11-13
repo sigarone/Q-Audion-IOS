@@ -27,9 +27,8 @@ import Foundation
 ///    ever grows, and a late arrival simply increments `received`.
 ///  - DUPLICATES. A replayed frame must not make the count go negative. Loss
 ///    is therefore floored at zero, and duplicates are counted separately.
-///  - RESETS. The sender's counter restarts at zero on every re-key
-///    (`QAudionEngine.initSession`'s `txSeqAdaptive = 0` / fresh
-///    `SessionManager`). Treating that as a huge backward jump would produce
+///  - RESETS. The sender's counter restarts at zero on every re-key of the
+///    ratchet path (a fresh `SessionManager`). Treating that as a huge backward jump would produce
 ///    nonsense, so a large regression closes the current span into an
 ///    accumulator and re-anchors — see `onFrame`.
 ///

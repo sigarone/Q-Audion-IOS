@@ -26,19 +26,22 @@ final class LiveCallCryptoTests: XCTestCase {
         return try XCTUnwrap(section["vectors"] as? [[String: Any]], name)
     }
 
-    private func features(chain: Bool, fk: Bool = false, caller: Bool = true) -> LiveCallCrypto.Features {
+    private func features(chain: Bool, fk: Bool = false, inner: Bool = false, caller: Bool = true) -> LiveCallCrypto.Features {
         LiveCallCrypto.Features(
-            ext: true, rekeyChainV1: chain, frameKeyV6: fk, ownCapabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true),
-            ownTag: true, peerTag: true, selfIsCaller: caller)
+            ext: true, rekeyChainV1: chain, frameKeyV6: fk, innerSealV2: inner,
+            ownCapabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true), ownTag: true, peerTag: true, selfIsCaller: caller)
     }
 
     private func key(_ seed: Int) -> Data {
         Data(repeating: UInt8(truncatingIfNeeded: seed), count: 32)
     }
 
-    private func adopted(chain: Bool, fk: Bool = false, role: LiveCallCrypto.Role = .offerer, id: String = "kat-call") throws -> LiveCallCrypto {
+    private func adopted(
+        chain: Bool, fk: Bool = false, inner: Bool = false, role: LiveCallCrypto.Role = .offerer, id: String = "kat-call"
+    ) throws -> LiveCallCrypto {
         try XCTUnwrap(LiveCallCrypto.adopt(
-            callId: id, role: role, features: features(chain: chain, fk: fk, caller: role == .offerer), sessionKey: key(1)))
+            callId: id, role: role, features: features(chain: chain, fk: fk, inner: inner, caller: role == .offerer),
+            sessionKey: key(1)))
     }
 
     private func epochs(_ list: Any?) -> [Int32] {
@@ -101,10 +104,11 @@ final class LiveCallCryptoTests: XCTestCase {
     func testOffersAreSpacedByFiveSecondsAndOneRoundAtATime() throws {
         let list = try vectors("offerSpacing")
         XCTAssertEqual(list.count, 5)
-        for chain in [true, false] {
+        // A call whose only tag is the per-round inner seal is spaced by the same rules.
+        for (chain, inner) in [(true, false), (false, false), (false, true)] {
             for v in list {
-                let name = "\(v["name"] as? String ?? "?") chain=\(chain)"
-                let object = try adopted(chain: chain, fk: !chain)
+                let name = "\(v["name"] as? String ?? "?") chain=\(chain) inner=\(inner)"
+                let object = try adopted(chain: chain, fk: !chain && !inner, inner: inner)
                 _ = object.confirmRound(epoch: 0)
                 let undecided = v["ownRoundUndecided"] as? Bool ?? false
                 if let previous = (v["previousOfferHandedOverAtMs"] as? NSNumber)?.intValue {
@@ -408,6 +412,17 @@ final class LiveCallCryptoTests: XCTestCase {
         if case .refused = callee.liveGate(acceptor, epoch: 3, offerSigOk: true, tokens: []) {} else { XCTFail("refused") }
         callee.onCallEnded()
 
+        // The per-round inner seal writes its own lines: a stage, a refusal and the switch of the send pointer.
+        let sealed = QAudionCallIntegration()
+        sealed.didSendOutgoingCallOffer(callId: "C-3")
+        let sealedObject = try XCTUnwrap(sealed.liveAdopt(
+            callId: "c-3", role: .offerer, features: features(chain: false, inner: true), sessionKey: key(4),
+            capsEpoch: sealed.capsBindState.epoch))
+        XCTAssertEqual(sealed.liveStage(sealedObject, epoch: 1, sessionKey: key(5), ours: true, handle: nil), .staged)
+        XCTAssertEqual(sealed.liveStage(sealedObject, epoch: 257, sessionKey: key(6), ours: true, handle: nil), .slotCollision)
+        sealed.liveConfirm(gen: sealedObject.gen, round: 2)
+        sealed.onCallEnded()
+
         let shapes = [
             "^live adopt gen=[0-9]{1,9} role=[01] chain=[01] fk=[56]$",
             "^live close gen=[0-9]{1,9} staged=[0-9]{1,2} why=[1-4]$",
@@ -418,6 +433,9 @@ final class LiveCallCryptoTests: XCTestCase {
             "^live fail round=[0-9]{1,10}$",
             "^live offerer drop round=[0-9]{1,10}$",
             "^live fk why=[1-3]$",
+            "^live inner stage round=[0-9]{1,10} slots=[0-9]{1,2}$",
+            "^live inner switch round=[0-9]{1,10} prev=[0-9]{1,10}$",
+            "^live inner refuse round=[0-9]{1,10} why=[1-4]$",
             "^capsbind ext=[01] own=[01] peer=[01] round=[0-9]{1,10} chain=[01] fk=[01]$"
         ]
         let expressions = try shapes.map { try NSRegularExpression(pattern: $0) }
@@ -438,6 +456,7 @@ final class LiveCallCryptoTests: XCTestCase {
         let offText = AndroidHandshakeEnvelope.jsonPayload(of: off)
         XCTAssertFalse(offText.contains("rekeyChainV1"))
         XCTAssertFalse(offText.contains("frameKeyV6"))
+        XCTAssertFalse(offText.contains("innerSealV2"))
         XCTAssertFalse(offText.contains("chainBase"))
         let on = AndroidHandshakeBundle(
             kind: .offer, callId: "c", pqcPublicKey: "", x25519PublicKey: "",
@@ -454,5 +473,18 @@ final class LiveCallCryptoTests: XCTestCase {
         XCTAssertNil(decoded.chainBase, "the typed decode never reads the base: the validated text does")
         XCTAssertFalse(QAudionCallIntegration.rekeyChainV1Enabled)
         XCTAssertFalse(QAudionCallIntegration.frameKeyV6Enabled)
+        XCTAssertFalse(QAudionCallIntegration.innerSealV2Enabled)
+
+        // The inner seal tag is written only when advertised, and survives the copy that every signed bundle goes through.
+        let sealedOn = AndroidHandshakeBundle(
+            kind: .offer, callId: "c", pqcPublicKey: "", x25519PublicKey: "",
+            capabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true, capsBindV1: true, innerSealV2: true).with(sigHybridV1: true))
+        let sealedText = AndroidHandshakeEnvelope.jsonPayload(of: sealedOn)
+        XCTAssertTrue(sealedText.contains("\"innerSealV2\":true"))
+        XCTAssertTrue(CapsBind.analyze(json: sealedText).tags.contains("innerSealV2"))
+        let sealedOff = AndroidHandshakeBundle(
+            kind: .offer, callId: "c", pqcPublicKey: "", x25519PublicKey: "",
+            capabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true, capsBindV1: true).with(sigHybridV1: true))
+        XCTAssertFalse(AndroidHandshakeEnvelope.jsonPayload(of: sealedOff).contains("innerSealV2"))
     }
 }

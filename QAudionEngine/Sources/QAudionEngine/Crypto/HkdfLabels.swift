@@ -84,6 +84,15 @@ public enum HkdfLabels {
     /// fields: the call id (lower-cased ASCII), the media kind and the direction. 21 bytes.
     public static let frameKeyInfoPrefixV6: Data = Data("q-audion-frame-key-v6".utf8)
 
+    /// Per-round inner audio seal: `info` prefix. The full info is this label followed by three 16-bit length-prefixed fields: the
+    /// call id (lower-cased ASCII), the media kind and the direction. 22 bytes.
+    public static let innerSealInfoPrefixV2: Data = Data("q-audion-inner-seal-v2".utf8)
+
+    /// Per-round inner audio seal: prefix of the associated data. The full AAD is this label, the call id as a 16-bit
+    /// length-prefixed field, the direction tag, the kind tag, the round epoch (4 bytes) and the counter (8 bytes), big-endian.
+    /// 11 bytes.
+    public static let innerSealAadPrefixV2: Data = Data("qa-inner-v2".utf8)
+
     // MARK: - Salts (UTF-8)
 
     /// Directional per-media frame keys: HKDF salt. 21 bytes.
@@ -91,6 +100,9 @@ public enum HkdfLabels {
 
     /// 1:1 directional frame keys (transcript v6): HKDF salt. 21 bytes.
     public static let frameKeySaltV5: Data = Data("qaudion-frame-salt-v5".utf8)
+
+    /// Per-round inner audio seal: HKDF salt. 26 bytes.
+    public static let innerSealSaltV2: Data = Data("qaudion-inner-seal-salt-v2".utf8)
 
     /// Hybrid PQC session key salt (used as the HKDF Extract salt when no
     /// PSK is present; the PSK replaces it when one is negotiated).
@@ -115,7 +127,8 @@ public enum HkdfLabels {
             deviceLinkPsk, frameChainAudio, frameChainVideo, fileKey,
             recoveryAuth, recoverySalt, hybridPqcSaltV1, hybridCtBindV1,
             deviceLinkSalt, frameKeyInfoPrefixV5, frameKeySaltV5,
-            sasV6, rekeyChainKeyV1, sessionKeyChainedV1, frameKeyInfoPrefixV6, frameKeySaltV6
+            sasV6, rekeyChainKeyV1, sessionKeyChainedV1, frameKeyInfoPrefixV6, frameKeySaltV6,
+            innerSealInfoPrefixV2, innerSealAadPrefixV2, innerSealSaltV2
         ]
         for label in labels {
             guard let s = String(data: label, encoding: .utf8),

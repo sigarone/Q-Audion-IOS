@@ -46,6 +46,19 @@ final class NackRetransmitTests: XCTestCase {
         XCTAssertNil(ring.lookup(seq: 1))
     }
 
+    func test_aFrameOfTheInnerSealIsServedOnlyUnderTheRoundItWasSealedUnder() {
+        let ring = NackRetransmitRing(capacity: 4)
+        ring.record(seq: 7, envelope: envelope(0x33), epochByte: 0)
+        XCTAssertEqual(envelope(0x33), ring.lookup(seq: 7, sendEpochByte: 0))
+        XCTAssertNil(ring.lookup(seq: 7, sendEpochByte: 1), "another round is a miss")
+        XCTAssertNil(ring.lookup(seq: 7), "a frame of the inner seal is never served as a legacy one")
+        ring.record(seq: 8, envelope: envelope(0x44))
+        XCTAssertNil(ring.lookup(seq: 8, sendEpochByte: 0), "a legacy frame is never served as a frame of the inner seal")
+        ring.clear()
+        XCTAssertNil(ring.lookup(seq: 7, sendEpochByte: 0))
+        XCTAssertNil(ring.lookup(seq: 8))
+    }
+
     // MARK: - NackRxTracker
 
     func test_accept_returnsTrue_forFirstDeliveryOfEachInOrderSeq() {

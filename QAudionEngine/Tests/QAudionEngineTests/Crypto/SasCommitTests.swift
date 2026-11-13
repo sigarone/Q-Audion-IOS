@@ -826,8 +826,8 @@ final class SasCommitTests: XCTestCase {
         let writeAt = try XCTUnwrap(fn.range(of: "try await sender(wire)"))
         XCTAssertLessThan(stampAt.lowerBound, writeAt.lowerBound, "\"sent\" is the hand-over to the transport")
         XCTAssertTrue(src.contains("senderDeviceId: envelopeSenderDeviceId)"))
-        XCTAssertTrue(src.contains("round: innerAadEpoch, advertIsBlinded:"), "the responder leg reports its signed round")
-        XCTAssertTrue(src.contains("round: innerAadEpochCaller,\n"), "the caller leg reports its signed round")
+        XCTAssertTrue(src.contains("round: installRound, advertIsBlinded:"), "the responder leg reports its signed round")
+        XCTAssertTrue(src.contains("round: installRoundCaller,\n"), "the caller leg reports its signed round")
     }
 
     // MARK: - A2: the newest valid round-1 OFFER replaces an unanswered one

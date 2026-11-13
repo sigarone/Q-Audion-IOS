@@ -41,15 +41,24 @@ public enum RxDecodeFailureKind: Equatable {
     /// burst meter or the loss estimate.
     case preSession
 
+    /// A frame of a call that negotiated the per-round inner seal that was not delivered for a reason that says nothing about the
+    /// key: a repeat, a frame behind the replay window, a round that has no slot, a legacy frame, an unknown type. Counted apart
+    /// and kept out of `rx_dec_err`, the tuner and the failure burst meter: only an authentication failure is evidence about the
+    /// key, and a peer's own late or repeated frames must not force a rekey.
+    case dropped
+
     /// Anything else the receive path throws: an AEAD authentication failure,
-    /// a malformed or replayed frame, or an active engine whose key material is
+    /// a malformed frame, or an active engine whose key material is
     /// missing. These are real and keep their existing handling.
     case decrypt
 
     public static func classify(_ error: Error) -> RxDecodeFailureKind {
-        if let engineError = error as? QAudionEngineError,
-           case .noActiveSession = engineError {
-            return .preSession
+        if let engineError = error as? QAudionEngineError {
+            switch engineError {
+            case .noActiveSession: return .preSession
+            case .innerDropped: return .dropped
+            default: break
+            }
         }
         return .decrypt
     }

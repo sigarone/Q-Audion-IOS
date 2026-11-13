@@ -1,7 +1,7 @@
 import XCTest
 @testable import QAudionEngine
 
-/// MEDIA-5 (W-INNERAUDIOAAD) — the inner sealed-audio replay window as a pure value type.
+/// The inner sealed-audio replay window as a pure value type.
 ///
 /// The old window was a bitmask that aged its bits toward LOWER indices on every advance of the
 /// highest sequence number, so only the highest one stayed protected. The advance sizes below

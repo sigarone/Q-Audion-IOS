@@ -90,7 +90,7 @@ final class LiveCallOfferRoutingTests: XCTestCase {
             kind: .offer, callId: callId,
             pqcPublicKey: Data(repeating: 0xA1, count: 1568).base64EncodedString(),
             x25519PublicKey: Data(repeating: 0xA2, count: 32).base64EncodedString(),
-            capabilities: .init(ratchetV3: nil, ratchetV4: false, srtpDirKeyV1: false, innerAudioAadV1: false),
+            capabilities: .init(ratchetV3: nil, ratchetV4: false, srtpDirKeyV1: false),
             sasCommit: nil,
             rekeyNonce: V6TestFixtures.rekeyNonce.base64EncodedString(), rekeyRound: round)
     }
@@ -99,7 +99,7 @@ final class LiveCallOfferRoutingTests: XCTestCase {
     func testDroppedOfferLeavesTheLiveCallsCapabilitiesAndOuterModeAlone() async {
         let integ = QAudionCallIntegration()
         integ.configureLiveCallForTesting(callId: liveId)
-        integ.setPeerCapabilitiesForTesting(srtpDirKey: true, ratchetV4: true, innerAudioAad: true)
+        integ.setPeerCapabilitiesForTesting(srtpDirKey: true, ratchetV4: true)
         let outerBefore = integ.negotiatedSrtpDirKey
         let before = integ.peerCapabilitiesForTesting
         _ = await receive(integ, offerWithCaps(callId: otherId), callId: otherId)
@@ -107,7 +107,6 @@ final class LiveCallOfferRoutingTests: XCTestCase {
         XCTAssertEqual(after.srtpDirKey, before.srtpDirKey)
         XCTAssertEqual(after.seen, before.seen)
         XCTAssertEqual(after.ratchetV4, before.ratchetV4)
-        XCTAssertEqual(after.innerAudioAad, before.innerAudioAad)
         XCTAssertTrue(after.srtpDirKey, "the bit the dropped OFFER did not advertise is still set")
         XCTAssertEqual(integ.negotiatedSrtpDirKey, outerBefore)
     }
@@ -116,7 +115,7 @@ final class LiveCallOfferRoutingTests: XCTestCase {
     func testOfferDroppedWhileRingingLeavesCapabilitiesAlone() async {
         let integ = QAudionCallIntegration()
         integ.bindOfferCallForTesting(callId: liveId)
-        integ.setPeerCapabilitiesForTesting(srtpDirKey: true, ratchetV4: true, innerAudioAad: false)
+        integ.setPeerCapabilitiesForTesting(srtpDirKey: true, ratchetV4: true)
         let before = integ.peerCapabilitiesForTesting
         let seen = await receive(integ, offerWithCaps(callId: otherId), callId: otherId)
         XCTAssertTrue(seen.processing.isEmpty)
@@ -208,20 +207,19 @@ final class LiveCallOfferRoutingTests: XCTestCase {
         XCTAssertTrue(integ.bindProcessedRound1AcceptForTesting(
             callId: liveId, pqcCt: Data(repeating: 0xB1, count: 1568), x25519Eph: Data(repeating: 0xB2, count: 32),
             acceptHash: Data(repeating: 0x33, count: 32), nonce: Data(repeating: 0x44, count: 32)))
-        integ.setPeerCapabilitiesForTesting(srtpDirKey: false, ratchetV4: false, innerAudioAad: false)
+        integ.setPeerCapabilitiesForTesting(srtpDirKey: false, ratchetV4: false)
         let before = integ.peerCapabilitiesForTesting
         let sibling = AndroidHandshakeBundle(
             kind: .accept, callId: liveId,
             ciphertext: .init(pqc: Data(repeating: 0xC1, count: 1568).base64EncodedString(),
                               x25519: Data(repeating: 0xC2, count: 32).base64EncodedString()),
-            capabilities: .init(ratchetV3: nil, ratchetV4: true, srtpDirKeyV1: true, innerAudioAadV1: true),
+            capabilities: .init(ratchetV3: nil, ratchetV4: true, srtpDirKeyV1: true),
             rekeyRound: 1)
         _ = try? await integ.onAndroidBundleReceived(
             bundle: sibling, callId: liveId, callerId: "peer-1", capsBind: CapsBind.analyze(bundle: sibling), sendOpaqueRaw: { _ in })
         let after = integ.peerCapabilitiesForTesting
         XCTAssertEqual(after.srtpDirKey, before.srtpDirKey)
         XCTAssertEqual(after.ratchetV4, before.ratchetV4)
-        XCTAssertEqual(after.innerAudioAad, before.innerAudioAad)
         XCTAssertFalse(integ.negotiatedSrtpDirKey)
     }
 
@@ -247,7 +245,7 @@ final class LiveCallOfferRoutingTests: XCTestCase {
             kind: .accept, callId: callId,
             ciphertext: .init(pqc: Data(repeating: 0xB1, count: 1568).base64EncodedString(),
                               x25519: Data(repeating: 0xB2, count: 32).base64EncodedString()),
-            capabilities: .init(ratchetV3: nil, ratchetV4: false, srtpDirKeyV1: false, innerAudioAadV1: false),
+            capabilities: .init(ratchetV3: nil, ratchetV4: false, srtpDirKeyV1: false),
             rekeyRound: round)
     }
 
@@ -264,7 +262,7 @@ final class LiveCallOfferRoutingTests: XCTestCase {
         let integ = QAudionCallIntegration()
         integ.configureLiveCallForTesting(callId: liveId)
         integ.stashSentOfferForTesting(callId: liveId)
-        integ.setPeerCapabilitiesForTesting(srtpDirKey: true, ratchetV4: true, innerAudioAad: true)
+        integ.setPeerCapabilitiesForTesting(srtpDirKey: true, ratchetV4: true)
         let resumed = ResumeBox()
         let attemptId = try integ.installWaitingReKeyAttemptForTesting(round: 2) { resumed.add($0) }
         let before = integ.peerCapabilitiesForTesting
@@ -276,7 +274,6 @@ final class LiveCallOfferRoutingTests: XCTestCase {
         let after = integ.peerCapabilitiesForTesting
         XCTAssertEqual(after.srtpDirKey, before.srtpDirKey)
         XCTAssertEqual(after.ratchetV4, before.ratchetV4)
-        XCTAssertEqual(after.innerAudioAad, before.innerAudioAad)
         let pending = try XCTUnwrap(integ.reKeyAttemptForTesting, "the live rekey is still there")
         XCTAssertEqual(pending.id, attemptId)
         XCTAssertFalse(pending.acceptReached)
