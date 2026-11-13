@@ -610,6 +610,65 @@ final class HybridSigWiringTests: XCTestCase {
         XCTAssertEqual(c.call?.withdrawIgnored, true)
     }
 
+    // MARK: - The device of an ACCEPT
+
+    /// The ACCEPT reaches `onAndroidBundleReceived` of the caller, which has no call-scoped device id (`callerDeviceId` is nil) and
+    /// the device id the server stamped on the message. The second key is looked up under that device id; the pin keeps the
+    /// call-scoped one (nil).
+    func testTheSecondKeyOfAnAcceptIsLookedUpUnderTheDeviceThatSentIt() async throws {
+        try installPeerKey()
+        let call = callId(1)
+        let lookups = LogBox()
+        let pinned = LogBox()
+        let integration = QAudionCallIntegration()
+        integration.capsBindBook = CapsPinBook(persistence: MemoryCapsPinPersistence())
+        integration.pqSig = PqSigRuntime(
+            isAvailable: { false }, makeSigner: { nil },
+            resolvePeerKey: { user, device, ed, keyId in
+                lookups.add(device ?? "nil")
+                return await PeerMldsaResolve.resolve(peerUserId: user, deviceId: device, signerEdPub: ed, keyId: keyId, fetchDevice: { _, _ in })
+            })
+        let signerPub = edPub
+        let ownFp = fpOffer
+        integration.resolveServerPeerKey = { _ in signerPub }
+        integration.provideLocalDtlsFingerprint = { _ in ownFp }
+        integration.commitTofuPinForDevice = { _, _, device in pinned.add(device ?? "nil") }
+        integration.stashSentOfferForTesting(callId: call)
+        // a rekey round waiting for its ACCEPT is the narrowest state that holds the caller's local keys; its anchor makes the
+        // round end right after the second signature is judged
+        _ = try integration.installWaitingReKeyAttemptForTesting(round: 2) { _ in }
+        integration.pqLayer.setAnchor(callId: call, PqCallLayer.Anchor(auth: "H", keyId: "aa", result: "valid"))
+
+        func accept(sigV6: String?) -> AndroidHandshakeBundle {
+            AndroidHandshakeBundle(
+                kind: .accept, callId: call,
+                ciphertext: AndroidHandshakeBundle.Ciphertext(
+                    pqc: Data(repeating: 0xB1, count: 1568).base64EncodedString(),
+                    x25519: Data(repeating: 0xB2, count: 32).base64EncodedString()),
+                capabilities: AndroidHandshakeBundle.Capabilities(
+                    ratchetV3: true, sframeV1: true, vkeyV1: true, hsTranscriptBindV1: true, capsBindV1: true, sigHybridV1: true),
+                pskFingerprints: [],
+                signerIdentityKey: signerPub.base64EncodedString(), sigV6: sigV6,
+                dtlsFingerprint: V6TestFixtures.fingerprintText("acceptor"),
+                rekeyNonce: V6TestFixtures.rekeyNonce.base64EncodedString(), rekeyRound: 2,
+                mldsaKeyId: peerKeyId.base64EncodedString(),
+                sigHybrid: Data(repeating: 0x07, count: Pqsig.hybridSigSize).base64EncodedString())
+        }
+        let offerBinding = HandshakeTranscript.offerBinding(Data(repeating: 0x5A, count: 64))
+        let transcript = try XCTUnwrap(QAudionCallIntegration.acceptTranscript(
+            from: accept(sigV6: nil), callId: call, signerKeyRaw: signerPub, offerBinding: offerBinding, dtlsFingerprint: fpAccept))
+        let edSignature = try HandshakeTranscript.sign(transcript: transcript, signingPrivateKeyRaw: edSeed)
+        let parsed = try onTheWire(accept(sigV6: edSignature.base64EncodedString()))
+
+        try await integration.onAndroidBundleReceived(
+            bundle: parsed.bundle, callId: call, callerId: peerUser, callerDeviceId: nil,
+            envelopeSenderDeviceId: deviceId, capsBind: parsed.capsBind, sendOpaqueRaw: { _ in })
+
+        XCTAssertEqual(lookups.lines, [deviceId], log.lines.joined(separator: "\n"))
+        XCTAssertTrue(log.lines.contains { $0.hasPrefix("pq resolve ") && $0.hasSuffix("found=1") }, log.lines.joined(separator: "\n"))
+        XCTAssertEqual(pinned.lines, ["nil"], "the pin keeps the call-scoped device id")
+    }
+
     // MARK: - Rekey rounds
 
     /// A call that round 1 authenticated on this side: the receiver holds the anchor.

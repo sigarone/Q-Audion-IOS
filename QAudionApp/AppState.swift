@@ -16262,10 +16262,12 @@ final class AppState: ObservableObject {
         // case mismatches (iOS uppercase UUID vs Android lowercase echo).
         let intState: String = String(describing: integration.getState())
         print("[AppState] Android ACCEPT callId=\(parsed.callId.prefix(8))… from \(senderId.prefix(8))… integration.state=\(intState)")
-        // D11: the ACCEPT (answer leg) carries no server-stamped device id — the
-        // caller never receives a `call_incoming` for the callee's device — so
-        // this is ALWAYS nil ⇒ legacy single-key + set-membership floor (the
-        // callee's key ∈ its published set), NEVER a fatal mismatch.
+        // D11: the call-scoped device id below is ALWAYS nil on the caller — it never
+        // receives a `call_incoming` for the callee's device — ⇒ legacy single-key +
+        // set-membership floor (the callee's key ∈ its published set), NEVER a fatal
+        // mismatch. The device that sent this ACCEPT is `envelopeSenderDeviceId`
+        // (stamped by the server on the message); the engine uses it only to find
+        // the second signature key.
         //
         // W-ACCEPTDEVSTALE — deliberately NOT `senderDeviceIdByPeer[senderId]`
         // here: that stash is peer-keyed and never cleared, so if this same
