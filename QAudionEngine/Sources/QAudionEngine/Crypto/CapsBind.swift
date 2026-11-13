@@ -20,9 +20,11 @@ public struct BundleCapsBind: Equatable, Sendable {
     /// The raw tokens of the top-level members named `chainBase` (names compared after unescaping), read from the grammar-checked
     /// member list; empty when the text is not a valid object.
     public let chainBaseTokens: [[UInt8]]
+    /// The `relayKem` member as the raw text states it (decoded with the JSON escapes): the decision of the outer relay layer reads it.
+    public let relay: RelayKemState
 
     public init(hasTag: Bool, duplicate: Bool, capsx: Data, extx: Data, withdrawn: [String], tags: Set<String> = [],
-                chainBaseTokens: [[UInt8]] = []) {
+                chainBaseTokens: [[UInt8]] = [], relay: RelayKemState = .absent) {
         self.hasTag = hasTag
         self.duplicate = duplicate
         self.capsx = capsx
@@ -30,6 +32,7 @@ public struct BundleCapsBind: Equatable, Sendable {
         self.withdrawn = withdrawn
         self.tags = tags
         self.chainBaseTokens = chainBaseTokens
+        self.relay = relay
     }
 }
 
@@ -342,11 +345,13 @@ public enum CapsBind {
         return Array(set.sorted(by: bytewiseLess).prefix(maxWithdrawn))
     }
 
-    /// EXTX from the optional members of one parsed bundle object (`relayKem`, `mldsaKeyId`, `capsWithdrawn`).
-    public static func extx(ofBundleObject object: [String: Any]?) -> (extx: Data, withdrawn: [String]) {
+    /// EXTX from the optional members of one parsed bundle object (`relayKem`, `mldsaKeyId`, `capsWithdrawn`). A `relayKem` that is
+    /// structurally invalid in the raw text (`relayStructInvalid`: a repeated member, an extra member, a value that is not an object)
+    /// counts as absent, whatever the parsed object kept of it.
+    public static func extx(ofBundleObject object: [String: Any]?, relayStructInvalid: Bool = false) -> (extx: Data, withdrawn: [String]) {
         var mlkem: Data?
         var x25519: Data?
-        if let kem = object?["relayKem"] as? [String: Any] {
+        if !relayStructInvalid, let kem = object?["relayKem"] as? [String: Any] {
             mlkem = strictBase64(kem["mlkem"])
             x25519 = strictBase64(kem["x25519"])
         }
@@ -359,6 +364,35 @@ public enum CapsBind {
         preimage.append(lp(keyId ?? Data()))
         preimage.append(lp(Data(withdrawn.joined(separator: ",").utf8)))
         return (Data(SHA256.hash(data: preimage)), withdrawn)
+    }
+
+    // MARK: - The `relayKem` member, raw
+
+    /// The member as the raw text states it. The text of a bundle that is not strict JSON has none. More than one top-level
+    /// member of that name, a value that is not an object, a repeated or unknown member name inside it: `invalid` and a
+    /// structural failure (EXTX counts the member as absent). A missing member, a value that is not a string, non-canonical base64
+    /// (decoded WITH the JSON escapes: this app writes every `/` as `\/`) or a wrong length: `invalid`, no structural failure.
+    static func analyzeRelayKemRaw(top: [StrictBundleJSON.Member]) -> (state: RelayKemState, structInvalid: Bool) {
+        let hits = top.filter { $0.name == "relayKem" && !$0.badName }
+        if hits.isEmpty { return (.absent, false) }
+        if hits.count > 1 { return (.invalid, true) }
+        guard case .valid(let inner) = StrictBundleJSON.validate(bytes: Array(hits[0].valueBytes)) else { return (.invalid, true) }
+        var seen = Set<String>()
+        for member in inner {
+            let name = member.name
+            if member.badName || seen.contains(name) || (name != "mlkem" && name != "x25519") { return (.invalid, true) }
+            seen.insert(name)
+        }
+        func bytes(_ name: String, _ length: Int) -> Data? {
+            guard let member = inner.first(where: { $0.name == name }) else { return nil }
+            guard let parsed = try? JSONSerialization.jsonObject(with: Data(member.valueBytes), options: .fragmentsAllowed),
+                  let decoded = strictBase64(parsed), decoded.count == length else { return nil }
+            return decoded
+        }
+        guard let mlkem = bytes("mlkem", RelayKemWire.mlkemBytes), let x25519 = bytes("x25519", RelayKemWire.x25519Bytes) else {
+            return (.invalid, false)
+        }
+        return (.valid(RelayKemWire(mlkem: mlkem, x25519: x25519)), false)
     }
 
     // MARK: - Analysis of a bundle
@@ -378,12 +412,16 @@ public enum CapsBind {
         }
         let flags = tagAndDuplicates(members)
         let parsed = (try? JSONSerialization.jsonObject(with: Data(bytes))) as? [String: Any]
-        let ext = extx(ofBundleObject: parsed)
         var chainTokens: [[UInt8]] = []
-        if case .valid(let top) = StrictBundleJSON.validate(json) { chainTokens = RekeyChain.chainBaseTokens(of: top) }
+        var relayResult: (state: RelayKemState, structInvalid: Bool) = (.absent, false)
+        if case .valid(let top) = StrictBundleJSON.validate(json) {
+            chainTokens = RekeyChain.chainBaseTokens(of: top)
+            relayResult = analyzeRelayKemRaw(top: top)
+        }
+        let ext = extx(ofBundleObject: parsed, relayStructInvalid: relayResult.structInvalid)
         return BundleCapsBind(hasTag: flags.hasTag, duplicate: flags.duplicate, capsx: capsx(of: members),
                               extx: ext.extx, withdrawn: ext.withdrawn, tags: trueTags(members),
-                              chainBaseTokens: chainTokens)
+                              chainBaseTokens: chainTokens, relay: relayResult.state)
     }
 
     /// Analyse a typed bundle by encoding it exactly as it goes on the wire.

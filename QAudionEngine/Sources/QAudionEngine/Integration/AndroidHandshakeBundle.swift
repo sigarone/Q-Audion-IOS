@@ -181,9 +181,15 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         /// The per-round inner audio seal. Same rules as `rekeyChainV1`.
         public let innerSealV2: Bool?
 
+        /// The outer relay layer keyed by its own exchange (`relayKem`). Same rules as `rekeyChainV1`.
+        public let relayKemV1: Bool?
+
+        /// The outer relay layer rotates its keys at every rekey. Needs `relayKemV1` in the same bundle. Same rules as `rekeyChainV1`.
+        public let relayRotV1: Bool?
+
         private enum CodingKeys: String, CodingKey {
             case ratchetV3, sframeV1, vkeyV1, sessionKdfV3, ratchetV4, srtpDirKeyV1, pskMixV1, hsTranscriptBindV1
-            case ratchetV5, capsBindV1, sigHybridV1, rekeyChainV1, frameKeyV6, innerSealV2
+            case ratchetV5, capsBindV1, sigHybridV1, rekeyChainV1, frameKeyV6, innerSealV2, relayKemV1, relayRotV1
         }
 
         public init(from decoder: Decoder) throws {
@@ -202,6 +208,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             rekeyChainV1 = try? c.decodeIfPresent(Bool.self, forKey: .rekeyChainV1)
             frameKeyV6 = try? c.decodeIfPresent(Bool.self, forKey: .frameKeyV6)
             innerSealV2 = try? c.decodeIfPresent(Bool.self, forKey: .innerSealV2)
+            relayKemV1 = try? c.decodeIfPresent(Bool.self, forKey: .relayKemV1)
+            relayRotV1 = try? c.decodeIfPresent(Bool.self, forKey: .relayRotV1)
         }
 
         public init(
@@ -218,7 +226,9 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             sigHybridV1: Bool? = nil,
             rekeyChainV1: Bool? = nil,
             frameKeyV6: Bool? = nil,
-            innerSealV2: Bool? = nil
+            innerSealV2: Bool? = nil,
+            relayKemV1: Bool? = nil,
+            relayRotV1: Bool? = nil
         ) {
             self.ratchetV3 = ratchetV3
             self.sframeV1 = sframeV1
@@ -234,6 +244,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             self.rekeyChainV1 = rekeyChainV1
             self.frameKeyV6 = frameKeyV6
             self.innerSealV2 = innerSealV2
+            self.relayKemV1 = relayKemV1
+            self.relayRotV1 = relayRotV1
         }
 
         /// The same capabilities with `sigHybridV1` replaced (nil omits it).
@@ -242,7 +254,34 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
                 ratchetV3: ratchetV3, sframeV1: sframeV1, vkeyV1: vkeyV1, sessionKdfV3: sessionKdfV3, ratchetV4: ratchetV4,
                 srtpDirKeyV1: srtpDirKeyV1, pskMixV1: pskMixV1, hsTranscriptBindV1: hsTranscriptBindV1,
                 ratchetV5: ratchetV5, capsBindV1: capsBindV1, sigHybridV1: value,
-                rekeyChainV1: rekeyChainV1, frameKeyV6: frameKeyV6, innerSealV2: innerSealV2)
+                rekeyChainV1: rekeyChainV1, frameKeyV6: frameKeyV6, innerSealV2: innerSealV2,
+                relayKemV1: relayKemV1, relayRotV1: relayRotV1)
+        }
+
+        /// The same capabilities without the two tags of the outer relay layer.
+        func withoutRelayTags() -> Capabilities {
+            Capabilities(
+                ratchetV3: ratchetV3, sframeV1: sframeV1, vkeyV1: vkeyV1, sessionKdfV3: sessionKdfV3, ratchetV4: ratchetV4,
+                srtpDirKeyV1: srtpDirKeyV1, pskMixV1: pskMixV1, hsTranscriptBindV1: hsTranscriptBindV1,
+                ratchetV5: ratchetV5, capsBindV1: capsBindV1, sigHybridV1: sigHybridV1,
+                rekeyChainV1: rekeyChainV1, frameKeyV6: frameKeyV6, innerSealV2: innerSealV2,
+                relayKemV1: nil, relayRotV1: nil)
+        }
+    }
+
+    /// The `relayKem` member: the base64 of the ML-KEM key (OFFER) or ciphertext (ACCEPT) and of the X25519 public key.
+    public struct RelayKemMember: Codable, Equatable {
+        public let mlkem: String
+        public let x25519: String
+
+        public init(mlkem: String, x25519: String) {
+            self.mlkem = mlkem
+            self.x25519 = x25519
+        }
+
+        init(wire: RelayKemWire) {
+            self.mlkem = wire.mlkem.base64EncodedString()
+            self.x25519 = wire.x25519.base64EncodedString()
         }
     }
 
@@ -381,10 +420,15 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     /// makes a bundle undecodable here.
     public let chainBase: Int?
 
+    /// The key-exchange member of the outer relay layer. Written by a sender that carries `relayKemV1`, after the signature of the
+    /// handshake, bound by the key confirmation and by the second signature. A receiver never reads it from this typed value (the
+    /// decoder leaves it nil): the raw text decides (`BundleCapsBind.relay`).
+    public let relayKem: RelayKemMember?
+
     private enum CodingKeys: String, CodingKey {
         case kind, callId, pqcPublicKey, x25519PublicKey, strongBoxPublicKey, dualCurvePublicKey, ciphertext, capabilities
         case pskFingerprints, selectedPskFingerprint, pskRoles, signerIdentityKey, sigV6, dtlsFingerprint, sasCommit
-        case rekeyNonce, rekeyRound, rekeyNextPeriodMs, mldsaKeyId, sigHybrid, capsWithdrawn, chainBase
+        case rekeyNonce, rekeyRound, rekeyNextPeriodMs, mldsaKeyId, sigHybrid, capsWithdrawn, chainBase, relayKem
     }
 
     public init(from decoder: Decoder) throws {
@@ -412,6 +456,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         sigHybrid = Self.lenientString(c, .sigHybrid)
         capsWithdrawn = (try? c.decodeIfPresent([String].self, forKey: .capsWithdrawn)) ?? nil
         chainBase = nil
+        relayKem = nil
     }
 
     /// Absent or JSON null: nil. A string: the string. Anything else that is present: the empty string.
@@ -444,7 +489,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         mldsaKeyId: String? = nil,
         sigHybrid: String? = nil,
         capsWithdrawn: [String]? = nil,
-        chainBase: Int? = nil
+        chainBase: Int? = nil,
+        relayKem: RelayKemMember? = nil
     ) {
         self.kind = kind
         self.callId = callId
@@ -468,6 +514,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         self.sigHybrid = sigHybrid
         self.capsWithdrawn = capsWithdrawn
         self.chainBase = chainBase
+        self.relayKem = relayKem
     }
 
     /// The same bundle with `chainBase` replaced (nil omits it).
@@ -480,7 +527,34 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             signerIdentityKey: signerIdentityKey, sigV6: sigV6, dtlsFingerprint: dtlsFingerprint,
             sasCommit: sasCommit, rekeyNonce: rekeyNonce, rekeyRound: rekeyRound,
             rekeyNextPeriodMs: rekeyNextPeriodMs,
-            mldsaKeyId: mldsaKeyId, sigHybrid: sigHybrid, capsWithdrawn: capsWithdrawn, chainBase: value)
+            mldsaKeyId: mldsaKeyId, sigHybrid: sigHybrid, capsWithdrawn: capsWithdrawn, chainBase: value, relayKem: relayKem)
+    }
+
+    /// The same bundle with `relayKem` replaced (nil omits it).
+    func with(relayKem value: RelayKemMember?) -> AndroidHandshakeBundle {
+        AndroidHandshakeBundle(
+            kind: kind, callId: callId, pqcPublicKey: pqcPublicKey, x25519PublicKey: x25519PublicKey,
+            strongBoxPublicKey: strongBoxPublicKey, dualCurvePublicKey: dualCurvePublicKey,
+            ciphertext: ciphertext, capabilities: capabilities, pskFingerprints: pskFingerprints,
+            selectedPskFingerprint: selectedPskFingerprint, pskRoles: pskRoles,
+            signerIdentityKey: signerIdentityKey, sigV6: sigV6, dtlsFingerprint: dtlsFingerprint,
+            sasCommit: sasCommit, rekeyNonce: rekeyNonce, rekeyRound: rekeyRound,
+            rekeyNextPeriodMs: rekeyNextPeriodMs,
+            mldsaKeyId: mldsaKeyId, sigHybrid: sigHybrid, capsWithdrawn: capsWithdrawn, chainBase: chainBase, relayKem: value)
+    }
+
+    /// The same bundle without the key-exchange member and without the two tags of the outer relay layer (the bundle of a build
+    /// that does not carry the layer).
+    func withoutRelay() -> AndroidHandshakeBundle {
+        AndroidHandshakeBundle(
+            kind: kind, callId: callId, pqcPublicKey: pqcPublicKey, x25519PublicKey: x25519PublicKey,
+            strongBoxPublicKey: strongBoxPublicKey, dualCurvePublicKey: dualCurvePublicKey,
+            ciphertext: ciphertext, capabilities: capabilities?.withoutRelayTags(), pskFingerprints: pskFingerprints,
+            selectedPskFingerprint: selectedPskFingerprint, pskRoles: pskRoles,
+            signerIdentityKey: signerIdentityKey, sigV6: sigV6, dtlsFingerprint: dtlsFingerprint,
+            sasCommit: sasCommit, rekeyNonce: rekeyNonce, rekeyRound: rekeyRound,
+            rekeyNextPeriodMs: rekeyNextPeriodMs,
+            mldsaKeyId: mldsaKeyId, sigHybrid: sigHybrid, capsWithdrawn: capsWithdrawn, chainBase: chainBase, relayKem: nil)
     }
 
     /// The same bundle with `sasCommit` replaced (used by the parser to represent a JSON null).
@@ -493,7 +567,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             signerIdentityKey: signerIdentityKey, sigV6: sigV6, dtlsFingerprint: dtlsFingerprint,
             sasCommit: value, rekeyNonce: rekeyNonce, rekeyRound: rekeyRound,
             rekeyNextPeriodMs: rekeyNextPeriodMs,
-            mldsaKeyId: mldsaKeyId, sigHybrid: sigHybrid, capsWithdrawn: capsWithdrawn, chainBase: chainBase)
+            mldsaKeyId: mldsaKeyId, sigHybrid: sigHybrid, capsWithdrawn: capsWithdrawn, chainBase: chainBase, relayKem: relayKem)
     }
 
     /// The same bundle with the members of the second signature replaced: its capability tag, key id, signature and withdrawal list.
@@ -507,7 +581,7 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             signerIdentityKey: signerIdentityKey, sigV6: sigV6, dtlsFingerprint: dtlsFingerprint,
             sasCommit: sasCommit, rekeyNonce: rekeyNonce, rekeyRound: rekeyRound,
             rekeyNextPeriodMs: rekeyNextPeriodMs,
-            mldsaKeyId: newKeyId, sigHybrid: newSig, capsWithdrawn: newWithdrawn, chainBase: chainBase)
+            mldsaKeyId: newKeyId, sigHybrid: newSig, capsWithdrawn: newWithdrawn, chainBase: chainBase, relayKem: relayKem)
     }
 }
 
@@ -929,11 +1003,8 @@ public enum CallPiggyBack: Equatable {
         // than dropping it. Mirrors Android's receive-side parse, which
         // has the same "if any piece fails, ignore the whole frame" shape.
         if let v = stripPrefix(payload, "VNACK:") {
-            let parts = v.split(separator: ":", maxSplits: 1)
-            guard parts.count == 2, let frameId = Int(parts[0]) else { return nil }
-            let missing = parts[1].split(separator: ",").compactMap { Int($0) }
-            guard !missing.isEmpty else { return nil }
-            return .vnack(callId: callId, frameId: frameId, missing: missing)
+            guard let request = parseVnackBody(v) else { return nil }
+            return .vnack(callId: callId, frameId: request.frameId, missing: request.missing)
         }
         // VBWCAP:<int bps> — malformed (non-numeric, <= 0) drops the whole
         // envelope, mirrors Android's `toIntOrNull()` + `bps > 0` receive guard.
@@ -947,6 +1018,30 @@ public enum CallPiggyBack: Equatable {
     private static func stripPrefix(_ s: String, _ prefix: String) -> String? {
         guard s.hasPrefix(prefix) else { return nil }
         return String(s.dropFirst(prefix.count))
+    }
+
+    /// The most fragments one frame can have: an index at or above it is dropped.
+    public static let vnackMaxFragmentsPerFrame = 255
+
+    /// Digits only, at least one; a value too large for an `Int` reads as the largest one (it is dropped by the caller's bound).
+    private static func vnackDecimal(_ text: Substring) -> Int? {
+        guard !text.isEmpty, text.utf8.allSatisfy({ $0 >= 0x30 && $0 <= 0x39 }) else { return nil }
+        return Int(text) ?? Int.max
+    }
+
+    /// The strict form of what follows `VNACK:`: `<frameId>:<idx1>,<idx2>,...`. `frameId` is a decimal 0 to 65535; every entry of the
+    /// list is a non-empty decimal (an empty, signed or non-decimal entry makes the whole message malformed); entries at or above
+    /// `vnackMaxFragmentsPerFrame` are dropped, the rest deduplicated in order of first occurrence; nothing left is malformed too.
+    public static func parseVnackBody(_ body: String) -> (frameId: Int, missing: [Int])? {
+        let parts = body.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2, let frameId = vnackDecimal(parts[0]), frameId <= 65535 else { return nil }
+        var missing: [Int] = []
+        for entry in parts[1].split(separator: ",", omittingEmptySubsequences: false) {
+            guard let index = vnackDecimal(entry) else { return nil }
+            if index < vnackMaxFragmentsPerFrame, !missing.contains(index) { missing.append(index) }
+        }
+        if missing.isEmpty { return nil }
+        return (frameId: frameId, missing: missing)
     }
 
     /// Build a wire string for a SCREEN_SHARE announce — the inverse of

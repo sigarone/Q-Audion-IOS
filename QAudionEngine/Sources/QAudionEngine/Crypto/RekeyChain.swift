@@ -86,7 +86,7 @@ public enum RekeyChain {
         return String(decoding: bytes, as: UTF8.self)
     }
 
-    private static func lp16(_ bytes: [UInt8]) -> Data {
+    static func lp16(_ bytes: [UInt8]) -> Data {
         var out = Data([UInt8((bytes.count >> 8) & 0xFF), UInt8(bytes.count & 0xFF)])
         out.append(contentsOf: bytes)
         return out
