@@ -1367,6 +1367,11 @@ _RE_LIVE_FULL = re.compile(
     r"|live fail round=[0-9]{1,10}"
     r"|live offerer drop round=[0-9]{1,10}"
     r"|live fk why=[1-3]"
+    r"|live inner stage round=[0-9]{1,10} slots=[0-9]{1,2}"
+    r"|live inner switch round=[0-9]{1,10} prev=[0-9]{1,10}"
+    r"|live inner refuse round=[0-9]{1,10} why=[1-4]"
+    r"|live inner drop why=[1-7] n=[0-9]{1,9}"
+    r"|live inner exhausted"
     r"|capsbind ext=[01] own=[01] peer=[01] round=[0-9]{1,10} chain=[01] fk=[01]"
     r")\Z"
 )

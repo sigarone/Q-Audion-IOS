@@ -14,6 +14,11 @@ closed range:
     live fail round=<n>
     live offerer drop round=<n>
     live fk why=<1..3>
+    live inner stage round=<n> slots=<n>
+    live inner switch round=<n> prev=<n>
+    live inner refuse round=<n> why=<1..4>
+    live inner drop why=<1..7> n=<n>
+    live inner exhausted
     capsbind ext=<0|1> own=<0|1> peer=<0|1> round=<n> chain=<0|1> fk=<0|1>
 
 The generic gate gives bare words a budget of zero, so each shape is accepted by a whole-line rule. This test pins that the rule
@@ -73,6 +78,15 @@ OKAY = [
     "live fail round=4",
     "live offerer drop round=2",
     "live fk why=2",
+    "live inner stage round=1 slots=2",
+    "live inner stage round=2147483646 slots=16",
+    "live inner switch round=1 prev=0",
+    "live inner switch round=2147483646 prev=2147483645",
+    "live inner refuse round=300 why=1",
+    "live inner refuse round=3 why=4",
+    "live inner drop why=1 n=1",
+    "live inner drop why=7 n=500",
+    "live inner exhausted",
     "capsbind ext=1 own=1 peer=1 round=1 chain=1 fk=0",
     "capsbind ext=0 own=0 peer=0 round=2147483646 chain=0 fk=0",
 ]
@@ -135,6 +149,19 @@ FORGED += [
     "live offerer drop round=x",
     "live fk why=4",
     "live fk",
+    "live inner stage round=1 slots=100",
+    "live inner stage round=1",
+    "live inner switch round=1",
+    "live inner switch round=1 prev=",
+    "live inner switch prev=0 round=1",
+    "live inner refuse round=3 why=5",
+    "live inner refuse round=3 why=0",
+    "live inner drop why=8 n=1",
+    "live inner drop why=0 n=1",
+    "live inner drop why=1",
+    "live inner drop why=1 n=1234567890",
+    "live inner exhausted now",
+    "live inner",
     "live",
     "live adopt",
     "live adopt gen=1 role=0 chain=0 fk=5 call=0a1b2c3d",

@@ -147,20 +147,6 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         // unconditional; this bit is only one of the nine signed CAPS bytes.
         public let hsTranscriptBindV1: Bool?
 
-        // MEDIA-3/MEDIA-4/MEDIA-5 (2026-09-02 protocol audit, backlog item 4)
-        // — capability bit for the inner sealed-audio wire's per-direction
-        // keys + AAD + replay window (see `QAudionEngine.initSession`'s
-        // `innerAudioAadV1` param and `QAudionCallIntegration
-        // .innerAudioAadV1Enabled`). OPTIONAL, appended LAST, same "omit
-        // when not advertising" convention as `pskMixV1`/`hsTranscriptBindV1`
-        // above: a peer that doesn't carry the field decodes to nil (treated
-        // as `false`), and `JSONEncoder` omits a nil key, so the OFFER/ACCEPT
-        // bytes stay byte-IDENTICAL to today's wire until this ships on
-        // every platform and the kill switch flips on. NOT bound into the
-        // signed transcript CAPS tuple (like `pskMixV1`) — only gates local
-        // behaviour, never authenticated.
-        public let innerAudioAadV1: Bool?
-
         // Q-Audion Dual-Channel Ratchet v5, MUST-FIX #1 (security review 2026-09-16) —
         // capability bit for the future dual-channel (CHAT/CONTROL) ratchet split. PARSE-ONLY
         // this step, same as Android/Desktop today: this build NEVER sets it (untouched by
@@ -192,9 +178,12 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
         /// Directional per-media frame keys. Same rules as `rekeyChainV1`.
         public let frameKeyV6: Bool?
 
+        /// The per-round inner audio seal. Same rules as `rekeyChainV1`.
+        public let innerSealV2: Bool?
+
         private enum CodingKeys: String, CodingKey {
             case ratchetV3, sframeV1, vkeyV1, sessionKdfV3, ratchetV4, srtpDirKeyV1, pskMixV1, hsTranscriptBindV1
-            case innerAudioAadV1, ratchetV5, capsBindV1, sigHybridV1, rekeyChainV1, frameKeyV6
+            case ratchetV5, capsBindV1, sigHybridV1, rekeyChainV1, frameKeyV6, innerSealV2
         }
 
         public init(from decoder: Decoder) throws {
@@ -207,12 +196,12 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             srtpDirKeyV1 = try c.decodeIfPresent(Bool.self, forKey: .srtpDirKeyV1)
             pskMixV1 = try c.decodeIfPresent(Bool.self, forKey: .pskMixV1)
             hsTranscriptBindV1 = try c.decodeIfPresent(Bool.self, forKey: .hsTranscriptBindV1)
-            innerAudioAadV1 = try c.decodeIfPresent(Bool.self, forKey: .innerAudioAadV1)
             ratchetV5 = try c.decodeIfPresent(Bool.self, forKey: .ratchetV5)
             capsBindV1 = try? c.decodeIfPresent(Bool.self, forKey: .capsBindV1)
             sigHybridV1 = try? c.decodeIfPresent(Bool.self, forKey: .sigHybridV1)
             rekeyChainV1 = try? c.decodeIfPresent(Bool.self, forKey: .rekeyChainV1)
             frameKeyV6 = try? c.decodeIfPresent(Bool.self, forKey: .frameKeyV6)
+            innerSealV2 = try? c.decodeIfPresent(Bool.self, forKey: .innerSealV2)
         }
 
         public init(
@@ -224,12 +213,12 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             srtpDirKeyV1: Bool? = nil,
             pskMixV1: Bool? = nil,
             hsTranscriptBindV1: Bool? = nil,
-            innerAudioAadV1: Bool? = nil,
             ratchetV5: Bool? = nil,
             capsBindV1: Bool? = nil,
             sigHybridV1: Bool? = nil,
             rekeyChainV1: Bool? = nil,
-            frameKeyV6: Bool? = nil
+            frameKeyV6: Bool? = nil,
+            innerSealV2: Bool? = nil
         ) {
             self.ratchetV3 = ratchetV3
             self.sframeV1 = sframeV1
@@ -239,12 +228,12 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             self.srtpDirKeyV1 = srtpDirKeyV1
             self.pskMixV1 = pskMixV1
             self.hsTranscriptBindV1 = hsTranscriptBindV1
-            self.innerAudioAadV1 = innerAudioAadV1
             self.ratchetV5 = ratchetV5
             self.capsBindV1 = capsBindV1
             self.sigHybridV1 = sigHybridV1
             self.rekeyChainV1 = rekeyChainV1
             self.frameKeyV6 = frameKeyV6
+            self.innerSealV2 = innerSealV2
         }
 
         /// The same capabilities with `sigHybridV1` replaced (nil omits it).
@@ -252,8 +241,8 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
             Capabilities(
                 ratchetV3: ratchetV3, sframeV1: sframeV1, vkeyV1: vkeyV1, sessionKdfV3: sessionKdfV3, ratchetV4: ratchetV4,
                 srtpDirKeyV1: srtpDirKeyV1, pskMixV1: pskMixV1, hsTranscriptBindV1: hsTranscriptBindV1,
-                innerAudioAadV1: innerAudioAadV1, ratchetV5: ratchetV5, capsBindV1: capsBindV1, sigHybridV1: value,
-                rekeyChainV1: rekeyChainV1, frameKeyV6: frameKeyV6)
+                ratchetV5: ratchetV5, capsBindV1: capsBindV1, sigHybridV1: value,
+                rekeyChainV1: rekeyChainV1, frameKeyV6: frameKeyV6, innerSealV2: innerSealV2)
         }
     }
 

@@ -7,8 +7,8 @@ import Foundation
 /// Rules of the file:
 /// - one `NSLock` inside the object; every method is one critical section; nothing suspends and nothing is called out under it
 ///   (no closure parameter, no callback); a method returns a value and the caller reacts after every lock is released;
-/// - lock order: integration `offerInstallLock` -> integration `lock` -> `LiveCallCrypto.lock` -> `ChainLease.lock`, never the
-///   reverse;
+/// - lock order: integration `offerInstallLock` -> integration `lock` -> `LiveCallCrypto.lock` -> `InnerSealV2Session.lock` /
+///   `ChainLease.lock`, never the reverse;
 /// - no table is keyed by a call id, no round is evicted to make room: at most `KcMacRoundBook.maxPendingRounds` rounds are
 ///   undecided, the seventeenth is refused;
 /// - key bytes live only in `ChainKeyBuffer` (wiped on every path); a lease and a reservation own COPIES.
@@ -84,19 +84,22 @@ public final class LiveCallCrypto: @unchecked Sendable {
         public let ext: Bool
         public let rekeyChainV1: Bool
         public let frameKeyV6: Bool
+        /// The per-round inner audio seal.
+        public let innerSealV2: Bool
         /// OUR round-1 bundle's capabilities as sent: every later round of the call carries the same ones.
         public let ownCapabilities: AndroidHandshakeBundle.Capabilities
         public let ownTag: Bool
         public let peerTag: Bool
         public let selfIsCaller: Bool
 
-        public var anyS8bTag: Bool { rekeyChainV1 || frameKeyV6 }
+        public var anyS8bTag: Bool { rekeyChainV1 || frameKeyV6 || innerSealV2 }
 
-        public init(ext: Bool, rekeyChainV1: Bool, frameKeyV6: Bool, ownCapabilities: AndroidHandshakeBundle.Capabilities,
-                    ownTag: Bool, peerTag: Bool, selfIsCaller: Bool) {
+        public init(ext: Bool, rekeyChainV1: Bool, frameKeyV6: Bool, innerSealV2: Bool = false,
+                    ownCapabilities: AndroidHandshakeBundle.Capabilities, ownTag: Bool, peerTag: Bool, selfIsCaller: Bool) {
             self.ext = ext
             self.rekeyChainV1 = rekeyChainV1
             self.frameKeyV6 = frameKeyV6
+            self.innerSealV2 = innerSealV2
             self.ownCapabilities = ownCapabilities
             self.ownTag = ownTag
             self.peerTag = peerTag
@@ -111,6 +114,7 @@ public final class LiveCallCrypto: @unchecked Sendable {
                 ext: CapsBind.isActive(own: own, peer: peer),
                 rekeyChainV1: CapsBind.negotiateS8b(own: own, peer: peer, tag: "rekeyChainV1"),
                 frameKeyV6: CapsBind.negotiateS8b(own: own, peer: peer, tag: "frameKeyV6"),
+                innerSealV2: CapsBind.negotiateS8b(own: own, peer: peer, tag: "innerSealV2"),
                 ownCapabilities: ownCapabilities, ownTag: own.hasTag, peerTag: peer.hasTag, selfIsCaller: selfIsCaller)
         }
     }
@@ -132,6 +136,10 @@ public final class LiveCallCrypto: @unchecked Sendable {
         case staleEpoch
         case pendingFull
         case closed
+        /// The per-round inner seal has a live slot with the same envelope byte and another round: nothing was written.
+        case slotCollision
+        /// The keys of the per-round inner seal could not be derived: nothing was written.
+        case deriveFailed
     }
 
     public enum OwnReservation {
@@ -149,6 +157,14 @@ public final class LiveCallCrypto: @unchecked Sendable {
     public struct ConfirmResult: Equatable {
         public let alreadyConfirmed: Bool
         public let rearm: DeferKind?
+        /// The send pointer of the per-round inner seal moved: returned, never called out under a lock.
+        public let innerSendMoved: InnerSendMove?
+
+        public init(alreadyConfirmed: Bool, rearm: DeferKind?, innerSendMoved: InnerSendMove? = nil) {
+            self.alreadyConfirmed = alreadyConfirmed
+            self.rearm = rearm
+            self.innerSendMoved = innerSendMoved
+        }
     }
 
     /// What the tests read: the rounds, the reservations and the two watermarks.
@@ -160,6 +176,9 @@ public final class LiveCallCrypto: @unchecked Sendable {
         public let maxAdmittedE: Int32
         public let maxStagedE: Int32
         public let closed: Bool
+        /// The round the inner seal sends under (-1: none), and the rounds that hold a slot. Epochs only, never bytes.
+        public let innerSend: Int32
+        public let innerSlots: [Int32]
     }
 
     private struct RoundRecord {
@@ -212,24 +231,36 @@ public final class LiveCallCrypto: @unchecked Sendable {
     private var lastOfferHandedOverAtMs: Int?
     private var round1Confirmed = false
     private var chainRefusal: Int32?
+    /// The round of the last refusal of any kind (a chained rekey refused, or a slot collision of the inner seal).
+    private var lastRefusal: Int32?
     private var deferred: DeferKind?
     private var closed = false
+    /// The state of the per-round inner seal; nil for a call that did not negotiate it. The reference never changes.
+    private let inner: InnerSealV2Session?
 
-    private init(callId: String, role: Role, features: Features) {
+    private init(callId: String, role: Role, features: Features, nowMs: @escaping @Sendable () -> Int) {
         self.gen = Self.nextGen()
         self.callId = callId
-        self.callIdL = RekeyChain.asciiLower(callId)
+        let lowered = RekeyChain.asciiLower(callId)
+        self.callIdL = lowered
         self.role = role
         self.features = features
+        self.inner = features.innerSealV2 ? InnerSealV2Session(callIdL: lowered, role: role, nowMs: nowMs) : nil
     }
 
-    /// Creates the object and stages round 0 with the round-1 session key. nil when the chain key of round 0 cannot be derived.
-    static func adopt(callId: String, role: Role, features: Features, sessionKey: Data) -> LiveCallCrypto? {
-        let object = LiveCallCrypto(callId: callId, role: role, features: features)
+    /// Creates the object and stages round 0 with the round-1 session key. nil when a key of round 0 cannot be derived: every key
+    /// derived so far is wiped and nothing is returned.
+    static func adopt(callId: String, role: Role, features: Features, sessionKey: Data,
+                      nowMs: @escaping @Sendable () -> Int = { SasCommit.monotonicNowMs() }) -> LiveCallCrypto? {
+        let object = LiveCallCrypto(callId: callId, role: role, features: features, nowMs: nowMs)
         var ck: ChainKeyBuffer?
         if features.rekeyChainV1 {
             guard let derived = RekeyChain.deriveChainKey(sessionKey: sessionKey, callIdL: object.callIdL, epoch: 0) else { return nil }
             ck = ChainKeyBuffer(copying: derived)
+        }
+        if let inner = object.inner, !inner.stageRound0(sessionKey: sessionKey) {
+            ck?.wipe()
+            return nil
         }
         object.rounds = [RoundRecord(epoch: 0, confirmed: false, ck: ck)]
         object.maxStagedE = 0
@@ -264,6 +295,47 @@ public final class LiveCallCrypto: @unchecked Sendable {
         return chainRefusal
     }
 
+    /// The round of the last refusal of any kind, for the level line.
+    public var lastRefusalEpoch: Int32? {
+        lock.lock()
+        defer { lock.unlock() }
+        return lastRefusal
+    }
+
+    /// The port the engine seals and opens through: nil for a call without the seal, and nil once this object is closed.
+    public var innerPort: InnerSealPort? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed, let session = inner else { return nil }
+        return session
+    }
+
+    /// The round the inner seal sends under; nil without the seal or once closed.
+    public var innerSendEpoch: Int32? {
+        inner?.sendEpoch
+    }
+
+    /// The number of round slots the inner seal holds.
+    public var innerSlotCount: Int {
+        inner?.slotCount ?? 0
+    }
+
+    /// The acceptor's read-only check, before its ACCEPT, that a slot for `epoch` can be taken: nothing is written or erased.
+    func precheckInnerStage(epoch: Int32) -> InnerStageRefusal? {
+        lock.lock()
+        defer { lock.unlock() }
+        if closed { return .closed }
+        return inner?.refusal(forEpoch: epoch)
+    }
+
+    /// A round refused for a slot collision: the only write of the refusal record that the check above does not make.
+    func noteInnerRefusal(epoch: Int32) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !closed else { return }
+        lastRefusal = epoch
+    }
+
     public var stagedCount: Int {
         lock.lock()
         defer { lock.unlock() }
@@ -276,7 +348,8 @@ public final class LiveCallCrypto: @unchecked Sendable {
         return Snapshot(
             rounds: rounds.map { $0.epoch }.sorted(), confirmed: rounds.filter { $0.confirmed }.map { $0.epoch }.sorted(),
             retained: rounds.filter { $0.ck != nil }.map { $0.epoch }.sorted(), reservations: reservations.count,
-            maxAdmittedE: maxAdmittedE, maxStagedE: maxStagedE, closed: closed)
+            maxAdmittedE: maxAdmittedE, maxStagedE: maxStagedE, closed: closed,
+            innerSend: inner?.sendEpoch ?? -1, innerSlots: inner?.snapshot().epochs ?? [])
     }
 
     /// The greatest CONFIRMED round whose chain key is still retained (never "the key now installed").
@@ -355,13 +428,19 @@ public final class LiveCallCrypto: @unchecked Sendable {
                 applies: true)
             switch decision {
             case .refuse(let why):
-                if offerSigOk { chainRefusal = epoch }
+                if offerSigOk {
+                    chainRefusal = epoch
+                    lastRefusal = epoch
+                }
                 return .refused(why)
             case .ignored:
                 break
             case .accept(let base):
                 guard let copy = rounds.first(where: { $0.epoch == base })?.ck?.duplicate() else {
-                    if offerSigOk { chainRefusal = epoch }
+                    if offerSigOk {
+                        chainRefusal = epoch
+                        lastRefusal = epoch
+                    }
                     return .refused(.noCk)
                 }
                 lease = ChainLease(base: base, key: copy)
@@ -398,6 +477,25 @@ public final class LiveCallCrypto: @unchecked Sendable {
             }
             ck = ChainKeyBuffer(copying: derived)
         }
+        // The slot of the inner seal is taken before the round is recorded, both under this lock, so the two tables never
+        // disagree: derive first, then install; a refusal writes nothing and wipes what was derived.
+        if let inner {
+            guard let prepared = inner.prepare(sessionKey: sessionKey) else {
+                ck?.wipe()
+                consumeLocked(handle)
+                return .deriveFailed
+            }
+            if let refusal = inner.install(epoch: epoch, prepared: prepared) {
+                ck?.wipe()
+                consumeLocked(handle)
+                switch refusal {
+                case .duplicate: return .alreadyStaged
+                case .slotCollision: return .slotCollision
+                case .pendingFull: return .pendingFull
+                case .closed: return .closed
+                }
+            }
+        }
         rounds.append(RoundRecord(epoch: epoch, confirmed: false, ck: ck))
         maxStagedE = max(maxStagedE, epoch)
         if ours, var current = own, current.epoch == epoch {
@@ -421,8 +519,10 @@ public final class LiveCallCrypto: @unchecked Sendable {
             current.lease?.close()
             own = nil
         }
+        // The only mover of the send pointer of the inner seal: the peer's confirmation of a later round.
+        let moved = inner?.peerKcmac(epoch: epoch)
         retainLocked()
-        return ConfirmResult(alreadyConfirmed: false, rearm: takeRearmLocked())
+        return ConfirmResult(alreadyConfirmed: false, rearm: takeRearmLocked(), innerSendMoved: moved)
     }
 
     /// The key confirmation of the round failed or ended without a verdict: its chain key is wiped at once.
@@ -433,6 +533,7 @@ public final class LiveCallCrypto: @unchecked Sendable {
         if let index = rounds.firstIndex(where: { $0.epoch == epoch && !$0.confirmed }) {
             rounds[index].ck?.wipe()
             rounds.remove(at: index)
+            inner?.abandon(epoch: epoch)
         }
         if let current = own, current.epoch == epoch {
             current.lease?.close()
@@ -476,6 +577,7 @@ public final class LiveCallCrypto: @unchecked Sendable {
             rounds[index].ck = nil
         }
         rounds.removeAll()
+        inner?.close()
         own?.lease?.close()
         own = nil
         for handle in reservations {
@@ -552,6 +654,21 @@ public final class LiveCallCrypto: @unchecked Sendable {
         guard let index = rounds.firstIndex(where: { $0.epoch == epoch }) else { return }
         rounds[index].ck?.wipe()
         rounds[index].ck = nil
+    }
+
+    /// The key buffers of the inner seal, to check that a close wipes them.
+    func innerKeyBuffersForTesting() -> [ChainKeyBuffer] {
+        inner?.keyBuffersForTesting() ?? []
+    }
+
+    /// The state of the inner seal without any byte of key material.
+    func innerSnapshotForTesting() -> InnerSealV2Session.Snapshot? {
+        inner?.snapshot()
+    }
+
+    /// Records a received counter in the replay window, as a frame would.
+    func commitInnerReceivedCounterForTesting(_ ctr: UInt64) {
+        inner?.commitReceivedCounterForTesting(ctr)
     }
 
     /// Whether the chain key of a round is held and wiped (nil: no such round).

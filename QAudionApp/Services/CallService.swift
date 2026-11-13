@@ -250,6 +250,37 @@ final class CallService: @unchecked Sendable {
         nackRing.clear()
     }
 
+    /// The send pointer of the per-round inner seal moved to a later round (the peer confirmed it): every cached frame was sealed
+    /// under the round that is now left behind, so none is ever resent. Safe from any thread.
+    func dropNackCacheAtSendSwitch() {
+        nackRing.clear()
+    }
+
+    /// Frames of a call with the per-round inner seal that were dropped without being a decrypt failure, per reason (the reason
+    /// numbers 1 ... 7 of `InnerDrop`). Main queue only; reset with the other per-call counters.
+    private var innerDropCounts = [Int](repeating: 0, count: 8)
+    /// The exhaustion line is written once per call. Main queue only.
+    private var innerExhaustedLogged = false
+
+    /// Counts one dropped inner frame and writes the first one of each reason and then every 500th. No line comes from the
+    /// media path itself. Main queue only.
+    private func noteInnerDrop(_ error: Error) {
+        guard let engineError = error as? QAudionEngineError, case .innerDropped(let why) = engineError,
+              why.rawValue >= 1, why.rawValue <= 7 else { return }
+        innerDropCounts[why.rawValue] &+= 1
+        let count = innerDropCounts[why.rawValue]
+        if count == 1 || count % 500 == 0 {
+            RTLog.info("call", "live inner drop why=\(why.rawValue) n=\(count)")
+        }
+    }
+
+    /// The TX counter of the inner seal is exhausted: one line per call. Unreachable at 60 ms frames. Main queue only.
+    private func noteInnerExhausted() {
+        guard !innerExhaustedLogged else { return }
+        innerExhaustedLogged = true
+        RTLog.info("call", "live inner exhausted")
+    }
+
     /// W-NACKEPOCH (Copilot follow-up to #106) — session-key epoch for the RX NACK tracker.
     /// Bumped SYNCHRONOUSLY on the handshake's own thread, right after `engine.initSession`
     /// (via `noteSessionKeyInstalled`, called first thing in AppState's `onRelaySessionReady`
@@ -1999,7 +2030,7 @@ final class CallService: @unchecked Sendable {
         out.frame = rtpUsed ? (liveWords.frame.isEmpty ? "v5" : liveWords.frame) : ""
         out.relay = outerState.rawValue
         out.dcmux = outerState.rawValue
-        out.inner = "legacy"
+        out.inner = liveWords.inner == "v2" ? "v2" : "legacy"
         out.hold = integration.isMediaHeld(callId: cid) ? "1" : "0"
         let capsWords = integration.capsBindLineWords(callId: cid)
         out.pin = capsWords.pin
@@ -2015,11 +2046,11 @@ final class CallService: @unchecked Sendable {
         out.pqSig = pqWords.pqSig
         out.rekey = pqWords.rekey
         out.round = pqWords.round
-        // A chained rekey refused here (sticky): the epoch of the refused round and its own reason word.
-        if let refusedEpoch = liveWords.refusedEpoch, pqWords.rekey != "refused" {
+        // A rekey refused here (sticky): the round of the last refusal; the reason word only when a chained rekey was refused.
+        if let refusedEpoch = liveWords.lastRefusal, pqWords.rekey != "refused" {
             out.rekey = "refused"
             out.round = String(refusedEpoch)
-            out.rreason = "chain_base"
+            if liveWords.chainRefused { out.rreason = "chain_base" }
         }
         out.outer = mode == .sealed ? "sealed" : "off"
         switch mode {
@@ -3356,6 +3387,12 @@ final class CallService: @unchecked Sendable {
                     notePreSessionRxDrop()
                     continue
                 }
+                // A frame of a call with the per-round inner seal that was not delivered and says nothing about the key: counted
+                // apart, and the rest of the batch goes on.
+                if RxDecodeFailureKind.classify(error) == .dropped {
+                    noteInnerDrop(error)
+                    continue
+                }
                 rxDecryptErrorCount &+= 1
                 noteAudioAeadDecryptFailure()  // W-AUDIOAEADREKEY (2026-09-02) — B3
             }
@@ -4020,7 +4057,16 @@ final class CallService: @unchecked Sendable {
         guard body.count == 8 else { return }
         var seq: Int64 = 0
         for byte in body { seq = (seq << 8) | Int64(byte) }
-        guard let envelope = nackRing.lookup(seq: seq) else { return }
+        // A call with the per-round inner seal resends only a frame sealed under the round the send pointer is on now; any other
+        // call looks the entry up as before.
+        let envelope: Data
+        if let sendEpoch = callIntegration?.innerSendEpoch {
+            guard let found = nackRing.lookup(seq: seq, sendEpochByte: UInt8(truncatingIfNeeded: sendEpoch)) else { return }
+            envelope = found
+        } else {
+            guard let found = nackRing.lookup(seq: seq) else { return }
+            envelope = found
+        }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         guard nackRateLimiter.tryAcquire(nowMs: nowMs) else { return }
         let cid = getCallId?()
@@ -4319,12 +4365,10 @@ final class CallService: @unchecked Sendable {
             // below). `inner`'s wire shape follows the same
             // `androidAudioWireCompat` choice `encodeAudioForWire` makes on
             // TX, so the same flag picks the right decoder here.
-            let nackSeq: Int64?
-            if self.androidAudioWireCompat {
-                nackSeq = (try? WireRelayFrameCodec.decode(inner)).map { Int64($0.frame.sequenceNumber) }
-            } else {
-                nackSeq = (try? FrameEncoder.deserialize(inner)).map { Int64($0.sequenceNumber) }
-            }
+            // A call with the per-round inner seal reads the counter from the clear header of its envelope; any other call is read
+            // exactly as before.
+            let nackSeq: Int64? = InnerSealV2.nackSeq(
+                inner: inner, innerV2: integration.isInnerSealV2Call, androidAudioWireCompat: self.androidAudioWireCompat)
             // W-REKEYSEQGATE (2026-09-20) — this used to `accept` (i.e. RECORD) the seq here, before
             // decryption. At a re-key the peer's audio counter restarts at 0 with the new key, but
             // still-in-flight OLD-key frames (high seq, which this side can no longer open) had
@@ -4472,6 +4516,10 @@ final class CallService: @unchecked Sendable {
                 // decrypt failure. Kept out of rx_dec_err, the burst meter and the tuner.
                 if RxDecodeFailureKind.classify(error) == .preSession {
                     self.notePreSessionRxDrop()
+                    return
+                }
+                if RxDecodeFailureKind.classify(error) == .dropped {
+                    self.noteInnerDrop(error)
                     return
                 }
                 self.rxDecryptErrorCount &+= 1
@@ -4903,6 +4951,8 @@ final class CallService: @unchecked Sendable {
         txEncryptErrorCount = 0
         rxDecryptErrorCount = 0
         rxPreSessionDropped = 0           // W-RXGATE
+        innerDropCounts = [Int](repeating: 0, count: 8)
+        innerExhaustedLogged = false
         // W-AUDIOAEADREKEY (2026-09-02) — B3: a fresh call must not inherit
         // the previous call's failure history or cooldown clock, same
         // discipline every other per-call counter on this page follows.
@@ -6147,7 +6197,11 @@ final class CallService: @unchecked Sendable {
                 // envelope. `encodeAudioForWire` re-containerises it (the
                 // receiving iOS side auto-detects either format, so this is
                 // also correct for iOS↔iOS).
-                let wireFrame = encodeAudioForWire(encrypted)
+                // A frame of the per-round inner seal is its own framing: it goes out as it is. Every other frame is a
+                // `FrameEncoder` container (its first byte is the container version, never the envelope type), so `header`
+                // is nil for it and the container conversion runs as before.
+                let innerHeader = InnerSealV2.header(ofWire: encrypted)
+                let wireFrame = innerHeader == nil ? encodeAudioForWire(encrypted) : encrypted
                 // W574e — apply the M-15 seal so the on-wire bytes match
                 // Android's BcryptoWsFrameRelayTransport.sendRaw exactly:
                 // seal( 0x01|nonce|seq|ctLen|ct ). Pass-through until the
@@ -6172,7 +6226,9 @@ final class CallService: @unchecked Sendable {
                 // `encodeAudioForWire`'s optional recontainerization) —
                 // cheap, and reuses an already-tested deserializer instead
                 // of threading the seq out through another layer.
-                if let fe = try? FrameEncoder.deserialize(encrypted) {
+                if let header = innerHeader {
+                    nackRing.record(seq: Int64(header.ctr), envelope: sealedFrame, epochByte: header.eByte)
+                } else if let fe = try? FrameEncoder.deserialize(encrypted) {
                     nackRing.record(seq: Int64(fe.sequenceNumber), envelope: sealedFrame)
                 }
                 // W525: include the call_id so Android/Desktop accept
@@ -6359,6 +6415,10 @@ final class CallService: @unchecked Sendable {
             if !txSessionReady {
                 txPreHandshakeDropped &+= 1
                 return
+            }
+            if let engineError = error as? QAudionEngineError, case .txSequenceExhausted = engineError,
+               integration.isInnerSealV2Call {
+                DispatchQueue.main.async { [weak self] in self?.noteInnerExhausted() }
             }
             // W466 — a real post-handshake encrypt failure. Log the first one and
             // every 250th so the telemetry shows whether they persist.
