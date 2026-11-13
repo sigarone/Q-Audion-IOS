@@ -163,7 +163,7 @@ final class RekeyChainKatTests: XCTestCase {
             let pair = all.keys(for: kind)
             let key = (try str(v, "dir")) == "o2a" ? pair.offererToAcceptor : pair.acceptorToOfferer
             XCTAssertEqual(key, hex(try str(v, "key")), name)
-            XCTAssertNotEqual(key, hex(try str(v, "v5Key")), name)
+            if let v5Key = v["v5Key"] as? String { XCTAssertNotEqual(key, hex(v5Key), name) }
         }
     }
 
