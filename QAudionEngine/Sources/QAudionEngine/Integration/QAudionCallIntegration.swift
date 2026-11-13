@@ -3619,7 +3619,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     ) -> Data? {
         guard let pqcB64 = bundle.pqcPublicKey, let pqcRaw = Data(base64Encoded: pqcB64),
               let x25B64 = bundle.x25519PublicKey, let x25Raw = Data(base64Encoded: x25B64),
-              let roundInt = bundle.rekeyRound, roundInt >= 1, roundInt <= Int(UInt32.max),
+              let roundInt = bundle.rekeyRound, roundInt >= 1, roundInt <= Int(Int32.max),
               let nonceRaw = rekeyNonceRaw(from: bundle.rekeyNonce) else {
             return nil
         }
@@ -3672,7 +3672,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         guard let ct = bundle.ciphertext,
               let pqcRaw = Data(base64Encoded: ct.pqc),
               let x25Raw = Data(base64Encoded: ct.x25519),
-              let roundInt = bundle.rekeyRound, roundInt >= 1, roundInt <= Int(UInt32.max),
+              let roundInt = bundle.rekeyRound, roundInt >= 1, roundInt <= Int(Int32.max),
               let nonceRaw = rekeyNonceRaw(from: bundle.rekeyNonce) else {
             return nil
         }

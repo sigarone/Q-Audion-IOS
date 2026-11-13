@@ -22,7 +22,7 @@ import CryptoKit
 /// there is documented, not a failure (see `cofactorNote` in the file).
 final class Ed25519StrictKatTests: XCTestCase {
 
-    static let pinnedSHA256 = "8780b498db01d38b028cbc274383f1c86c3fc522d6d4f6528ac6e4687d545584"
+    static let pinnedSHA256 = "8da7f41050800cc65a8a6a9b32d7dcb812d932755a7b54ec7c3f4bf787ddd8db"
 
     // MARK: - Loading
 

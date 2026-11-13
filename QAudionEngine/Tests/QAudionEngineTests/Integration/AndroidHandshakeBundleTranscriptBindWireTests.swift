@@ -128,10 +128,14 @@ final class AndroidHandshakeBundleTranscriptBindWireTests: XCTestCase {
             envelope("{\"kind\":\"ACCEPT\",\"callId\":\"abc-123\",\"rekeyRound\":\"x\"}")), "abc-123")
     }
 
-    func testOtherJsonOnTheChannelIsNotAHandshakeBundle() {
-        XCTAssertNil(AndroidHandshakeEnvelope.malformedBundleCallId("abc-123|{\"qa_grpcall_ctrl\":1,\"kind\":\"OFFER\"}"))
-        XCTAssertNil(AndroidHandshakeEnvelope.malformedBundleCallId("abc-123|{\"qa_kms\":1,\"env_b64\":\"AA==\"}"))
-        XCTAssertNil(AndroidHandshakeEnvelope.malformedBundleCallId("abc-123|{\"kind\":\"SOMETHING\"}"))
+    func testEveryRoutedPayloadThatDoesNotDecodeIsMalformed() {
+        // WIRE_SPEC 3.1: the routing looks at the first byte after the separator only; a client adds no further condition.
+        XCTAssertEqual(AndroidHandshakeEnvelope.malformedBundleCallId("abc-123|{\"qa_grpcall_ctrl\":1,\"kind\":\"OFFER\"}"), "abc-123")
+        XCTAssertEqual(AndroidHandshakeEnvelope.malformedBundleCallId("abc-123|{\"qa_kms\":1,\"env_b64\":\"AA==\"}"), "abc-123")
+        XCTAssertEqual(AndroidHandshakeEnvelope.malformedBundleCallId("abc-123|{\"kind\":\"SOMETHING\"}"), "abc-123")
+    }
+
+    func testOtherTrafficOnTheChannelIsNotAHandshakeBundle() {
         XCTAssertNil(AndroidHandshakeEnvelope.malformedBundleCallId("abc-123|HANGUP:x"))
         XCTAssertNil(AndroidHandshakeEnvelope.malformedBundleCallId("no-pipe"))
         XCTAssertNil(AndroidHandshakeEnvelope.malformedBundleCallId("|{\"kind\":\"OFFER\"}"))

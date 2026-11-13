@@ -501,19 +501,43 @@ public enum AndroidHandshakeEnvelope {
         }
     }
 
-    /// Parse `"<callId>|<JSON HandshakeBundle>"`.
-    /// Returns nil for any shape that is not a valid Android envelope —
-    /// callers can then fall through to other parsers (e.g. QUAD, hangup
-    /// piggy-back, video CAPS announce) without throwing.
-    public static func parse(_ raw: String) -> Parsed? {
-        guard let pipeIdx = raw.firstIndex(of: "|") else { return nil }
-        let callId = String(raw[raw.startIndex ..< pipeIdx])
-        let payload = String(raw[raw.index(after: pipeIdx)...])
-        guard !callId.isEmpty, payload.hasPrefix("{") else { return nil }
-        guard let bundleData = payload.data(using: .utf8) else { return nil }
+    /// What the routing of one inbound opaque string decided (WIRE_SPEC 3.1).
+    public enum Routed {
+        /// Not a handshake bundle: another parser may claim the string.
+        case notRouted
+        /// A bundle that decoded.
+        case bundle(Parsed)
+        /// A routed payload that failed the strict decode: the call it names ends. `code` is a closed word, never input text.
+        case malformed(callId: String, code: String)
+    }
+
+    /// Splits `"<callId>|<payload>"` at the first `|` BYTE. A `|` that is followed by a combining mark is still the separator,
+    /// so the split never goes through Character boundaries. nil when there is no separator or the call id is empty.
+    static func splitAtFirstBar(_ raw: String) -> (callId: String, payload: [UInt8])? {
+        let bytes = Array(raw.utf8)
+        guard let bar = bytes.firstIndex(of: 0x7C), bar > 0 else { return nil }
+        let callId = String(decoding: bytes[0 ..< bar], as: UTF8.self)
+        return (callId, Array(bytes[(bar + 1)...]))
+    }
+
+    /// True when the payload of a `<callId>|<payload>` string is routed to the bundle decoder: its first byte is `{`.
+    /// Nothing else decides it: no trimming, no look at the last byte, no substring test (WIRE_SPEC 3.1).
+    static func isRoutedPayload(_ payload: [UInt8]) -> Bool {
+        payload.first == 0x7B
+    }
+
+    /// The one routing function. A string that is not `"<callId>|{..."` is not routed. A routed payload must pass the strict
+    /// grammar, the typed decode, the kind-specific shape and the `rekeyRound` range, otherwise the call it names is ended.
+    public static func route(_ raw: String) -> Routed {
+        guard let split = splitAtFirstBar(raw), isRoutedPayload(split.payload) else { return .notRouted }
+        let callId = split.callId
+        if case .invalid = StrictBundleJSON.validate(bytes: split.payload) {
+            return .malformed(callId: callId, code: "json_grammar")
+        }
+        let bundleData = Data(split.payload)
         let decoder = JSONDecoder()
         guard var bundle = try? decoder.decode(AndroidHandshakeBundle.self, from: bundleData) else {
-            return nil
+            return .malformed(callId: callId, code: "bundle_decode")
         }
         // R-COMMIT-FIELD: `"sasCommit": null` is PRESENT. Codable reads it as absent, which is wrong for
         // a rekey OFFER or an ACCEPT (they MUST NOT carry the key at all), so a present-but-null value is
@@ -528,31 +552,36 @@ public enum AndroidHandshakeEnvelope {
         switch bundle.kind {
         case .offer:
             guard let pqc = bundle.pqcPublicKey, !pqc.isEmpty,
-                  let x25 = bundle.x25519PublicKey, !x25.isEmpty else { return nil }
+                  let x25 = bundle.x25519PublicKey, !x25.isEmpty else {
+                return .malformed(callId: callId, code: "bundle_shape")
+            }
         case .accept:
-            guard bundle.ciphertext != nil else { return nil }
+            guard bundle.ciphertext != nil else { return .malformed(callId: callId, code: "bundle_shape") }
         }
-        return Parsed(callId: callId, bundle: bundle, capsBind: CapsBind.analyze(json: payload))
+        // D24: a round that is present must fit a signed 32-bit integer on every call, tags or not. A missing round keeps
+        // the existing path (the transcript refuses it later).
+        if let round = bundle.rekeyRound, round < 0 || round > Int(Int32.max) {
+            return .malformed(callId: callId, code: "round_range")
+        }
+        let payloadText = String(decoding: split.payload, as: UTF8.self)
+        return .bundle(Parsed(callId: callId, bundle: bundle, capsBind: CapsBind.analyze(json: payloadText)))
     }
 
-    /// R-COMMIT-FIELD: the callId of a `"<callId>|{...}"` string that is a handshake bundle (its JSON
-    /// object names `kind` `OFFER` or `ACCEPT`) but did not decode as one, `nil` for anything else.
-    /// Every such string is a malformed bundle and ends the call, instead of being dropped silently.
-    /// Other JSON on the same channel (the group-call control envelopes) never names that `kind`.
+    /// Parse `"<callId>|<JSON HandshakeBundle>"`.
+    /// Returns nil for any shape that is not a valid Android envelope —
+    /// callers can then fall through to other parsers (e.g. QUAD, hangup
+    /// piggy-back, video CAPS announce) without throwing.
+    public static func parse(_ raw: String) -> Parsed? {
+        if case .bundle(let parsed) = route(raw) { return parsed }
+        return nil
+    }
+
+    /// The callId of a `"<callId>|{...}"` string that is routed as a handshake bundle but did not decode, `nil` for anything
+    /// else. Every such string is a malformed bundle and ends the call, instead of being dropped silently (WIRE_SPEC 3.1, D28:
+    /// the routing looks at the first byte after the separator only).
     public static func malformedBundleCallId(_ raw: String) -> String? {
-        guard let pipeIdx = raw.firstIndex(of: "|") else { return nil }
-        let callId = String(raw[raw.startIndex ..< pipeIdx])
-        let payload = String(raw[raw.index(after: pipeIdx)...])
-        guard !callId.isEmpty, payload.hasPrefix("{") else { return nil }
-        if payload.contains("qa_grpcall_ctrl") || payload.contains("\"qa_kms\"") { return nil }
-        if let data = payload.data(using: .utf8),
-           let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
-            guard let kind = object["kind"] as? String, kind == "OFFER" || kind == "ACCEPT" else { return nil }
-            return callId
-        }
-        // Not valid JSON at all: still a handshake bundle if it names the kind.
-        guard payload.contains("\"kind\"") else { return nil }
-        return payload.contains("\"OFFER\"") || payload.contains("\"ACCEPT\"") ? callId : nil
+        if case .malformed(let callId, _) = route(raw) { return callId }
+        return nil
     }
 
     /// Build the wire string `"<callId>|<JSON>"`.
@@ -770,12 +799,12 @@ public enum CallPiggyBack: Equatable {
     /// base64 QUAD binary). Callers should fall through to other
     /// parsers in that case — this method MUST NOT throw.
     public static func parse(_ raw: String) -> CallPiggyBack? {
-        guard let pipeIdx = raw.firstIndex(of: "|") else { return nil }
-        let callId = String(raw[raw.startIndex ..< pipeIdx])
-        let payload = String(raw[raw.index(after: pipeIdx)...])
-        guard !callId.isEmpty, !payload.isEmpty else { return nil }
-        // JSON HandshakeBundle path — not our concern.
-        if payload.hasPrefix("{") { return nil }
+        guard let split = AndroidHandshakeEnvelope.splitAtFirstBar(raw) else { return nil }
+        let callId = split.callId
+        // JSON HandshakeBundle path — not our concern: the same byte test as the bundle routing.
+        if AndroidHandshakeEnvelope.isRoutedPayload(split.payload) { return nil }
+        let payload = String(decoding: split.payload, as: UTF8.self)
+        guard !payload.isEmpty else { return nil }
 
         // SCREEN_SHARE:<state>
         if let v = stripPrefix(payload, "SCREEN_SHARE:") {
