@@ -3403,8 +3403,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // The second signature of the ACCEPT, checked only under a key that verified sigV6: HT binds the acceptor's fingerprint and
             // the fingerprint of this side's OFFER. A refused rekey round is judged before anything of it is used: the waiting attempt
             // is resolved with nil by the defer above, no key is derived, no MAC window is armed and no MAC is sent for it.
+            // The key lookup uses the device that sent this ACCEPT (the envelope's), else the call-scoped one.
             let acceptPq = await pqVerifyInbound(
-                isOffer: false, bundle: bundle, callId: callId, peerId: callerId, deviceId: callerDeviceId,
+                isOffer: false, bundle: bundle, callId: callId, peerId: callerId, deviceId: envelopeSenderDeviceId ?? callerDeviceId,
                 signerKey: acceptSigOk ? Self.rawSignerKey(bundle.signerIdentityKey) : nil,
                 transcript: acceptCheck.transcript, peerOwnFp: acceptCheck.peerFingerprint,
                 answeredFp: provideLocalDtlsFingerprint?(callId), peerCaps: peerCaps)
