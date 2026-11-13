@@ -312,10 +312,10 @@ in the `data` field of an `opaque_message`.
 The following fields are REQUIRED in every OFFER and ACCEPT, including rekey
 rounds: `signerIdentityKey`, `capabilities`, `rekeyNonce`, `rekeyRound`,
 `dtlsFingerprint` (canonical text form, §3.8.1) and `sigV6` (base64, 64 bytes).
-`rekeyRound` MUST be present as a JSON integer in [1, 4294967295] (the initial handshake is 1; the transcript
-encodes it as a u32). A bundle that lacks `sigV6`, `dtlsFingerprint` or `rekeyRound`, or whose
-`rekeyRound` is 0, negative, fractional, above 4294967295 or not a number, is malformed and ends
-the call (§3.8.6). There is no default value: a receiver never reads a missing
+`rekeyRound` MUST be present as a JSON integer in [1, 2^31 − 1] (2147483647) for every call (the initial handshake is 1; the transcript
+encodes it as a u32; `docs/PQC_HARDENING_V1.md` in the server repository, D24). A bundle that lacks `sigV6`, `dtlsFingerprint` or `rekeyRound`, or whose
+`rekeyRound` is 0, negative, fractional, above 2147483647 or not a number, is malformed and ends
+the call (§3.8.6). A handshake bundle MUST be decoded with a strict RFC 8259 JSON parser: any text that is not valid JSON (including a leading zero, a `+` sign, non-JSON whitespace such as U+00A0, U+FEFF or U+2028, or any text after the final `}`) is a JSON decode failure and ends the call with `handshake_malformed` (`docs/PQC_HARDENING_V1.md` in the server repository, D27); a lenient parser is non-conformant. There is no default value: a receiver never reads a missing
 `rekeyRound` as 1. `signature`, `sigV2`, `sigV3`, `sigV4` and `sigV5` are removed: a sender MUST NOT
 emit them and a receiver MUST NOT consult them (a bundle with `sigV5` and no `sigV6` is malformed). The signature is computed over
 the transcript of §3.7, never over the JSON bytes.
@@ -339,6 +339,23 @@ the transcript of §3.7, never over the JSON bytes.
   `call_incoming`) follows the pending-OFFER rule of §3.7.4.
 - Every JSON decode failure of a bundle that was routed as a handshake bundle is malformed as well: the call ends with
   `handshake_malformed` and a hangup on every platform, never with a plain failure that skips the hangup.
+- Routed as a handshake bundle (D28). `opaque_message` is an untyped transport: the envelope `<callId>|<payload>`
+  carries no type. A payload is routed as a handshake bundle if and only if its first byte after the `<callId>|`
+  separator is `{` (0x7B). The test is made on the bytes (UTF-8 code units, or Unicode scalars), never on grapheme
+  clusters, and nothing is trimmed first: a `{` followed by a combining mark is still routed. A payload that does not
+  start with `{`, including one with any text before the first `{` (a U+FEFF byte order mark, U+00A0, U+2028, any
+  whitespace), is not routed as a handshake bundle: it is dropped silently, it does not end the call and it is not
+  `handshake_malformed`. Once a payload is routed, the strict RFC 8259 decode above applies to all of it, and U+FEFF,
+  U+00A0 or U+2028 anywhere inside the object (after the first `{`), or any text after the final `}`, make the bundle
+  malformed. A client MUST NOT add a further routing condition (a last-character test, a required substring such as the
+  compact `"kind":"OFFER"`, a different trim): such a test would drop a bundle that must end the call.
+- Duplicate member names are valid JSON (RFC 8259 permits them), so a strict parser MUST NOT end the call on a
+  duplicate for that reason alone. Duplicates are handled per member, as `docs/PQC_HARDENING_V1.md` in the server
+  repository defines: a duplicate member name inside `capabilities` is `handshake_malformed` only for a round whose
+  CAPSX is active (the receiver's own bundle and the peer's raw object both carry `capsBindV1`), and is decoded as
+  today otherwise (§2.3 of that document); a second `chainBase` member in a rekey OFFER makes that value malformed, so the round is
+  refused and the call goes on (B13, D8, D27); a duplicate member inside `relayKem`, or a duplicated top-level
+  `relayKem`, makes `relayKem` count as absent. No other duplicate rule exists, and no duplicate ends a call by itself.
 
 ### 3.2 QUAD binary frame — handshake dialect RETIRED
 
@@ -849,7 +866,7 @@ JSON text. Optional fields that are absent encode as `LP(empty) = 0x0000`.
 | `advEnc(list)` | `u8(m) ‖ (u8(role_j) ‖ fp32_j)` for `j = 1..m`, in the advertised order. `fp32_j` is the RAW 32-byte value of the advertised `pskFingerprints[j]` (a blinded tag, §3.3.1). `role_j` is the j-th entry of the bundle's optional `pskRoles` array (one unsigned byte), and `0` when the array is absent, null or shorter than the list. The blinded advertisement of §3.3.1 omits `pskRoles`, so on such a bundle every `role_j` is `0`, but a builder MUST still honour a non-zero entry: the KAT vector `v6-psk-rekey-round-2` pins that encoding with roles `[0, 1]`. A string that is not exactly 64 hex characters encodes as 32 zero bytes (it never throws). `m ≤ 255` |
 | `selectedPskFp` | UTF-8 bytes of the bundle `selectedPskFingerprint` string verbatim, empty when none |
 | `rekeyNonce[8]` | the 8 raw bytes of `rekeyNonce`. The offerer mints it once per call in memory and reuses it on every OFFER of that call. The ACCEPT echoes the OFFER's value. It is always present and exactly 8 bytes |
-| `round` | `rekeyRound`: `1` for the initial handshake, strictly increasing for each later rekey OFFER under the same `callId`. It MUST be present and in [1, 4294967295]: a missing, 0, out-of-range or non-integer value is malformed and ends the call (§3.1), a verifier never substitutes a default. The ACCEPT echoes the OFFER's value |
+| `round` | `rekeyRound`: `1` for the initial handshake, strictly increasing for each later rekey OFFER under the same `callId`. It MUST be present and in [1, 2^31 − 1]: a missing, 0, out-of-range or non-integer value is malformed and ends the call (§3.1), a verifier never substitutes a default. The ACCEPT echoes the OFFER's value |
 | `sasCommit` | the 32 raw bytes of the OFFER's `sasCommit` when `round` = 1; empty when `round` >= 2 (§3.7.4) |
 
 A receiver that has accepted round N for a `callId` MUST reject any later OFFER whose `round` is not greater than N,
@@ -1554,10 +1571,10 @@ still DTLS end to end, so it is fully covered.
 - A fingerprint mismatch (a, b, a changed fingerprint in a rekey round, or a differing `fpPeer`) never has a benign
   cause. It ends the call with reason `dtls_fp_mismatch`. It is NOT the hold-pending-SAS path and no SAS comparison
   can override it.
-- A bundle without `sigV6`, without `dtlsFingerprint` or without a valid `rekeyRound` ([1, 4294967295]) is malformed (every
+- A bundle without `sigV6`, without `dtlsFingerprint` or without a valid `rekeyRound` ([1, 2^31 − 1] = [1, 2147483647], for every call, D24) is malformed (every
   client emits all three) and ends the call with reason `handshake_malformed`. So does a bundle with a missing,
   misplaced, non-canonical or wrong-length `sasCommit`, a first OFFER whose `rekeyRound` is not 1, and any JSON
-  decode failure of a bundle routed as a handshake bundle (§3.1, §3.7.4).
+  decode failure of a bundle routed as a handshake bundle (§3.1, §3.7.4; a payload is routed if and only if its first byte after the `<callId>|` separator is `{`, §3.1, D28). A handshake bundle MUST be decoded with a strict RFC 8259 JSON parser: any text that is not valid JSON (including a leading zero, a `+` sign, non-JSON whitespace such as U+00A0, U+FEFF or U+2028, or any text after the final `}`) is a JSON decode failure and ends the call with `handshake_malformed` (`docs/PQC_HARDENING_V1.md` in the server repository, D27); a lenient parser is non-conformant.
 - An *invalid* signature or an unknown identity key aborts the handshake and holds media pending SAS, as before. The
   SAS covers both fingerprints (§3.7.1), so confirming a matching SAS also authenticates them.
 - A KCMAC failure ends the call with reason `kcmac_mismatch` (§3.7.1).
@@ -2291,6 +2308,7 @@ trailer = 0x0C || keyIndex
 iv      = BE32(ssrc) || BE32(rtpTs) || BE32((rtpTs - counter) mod 2^32)
 ```
 
+- `key_slot` is the setKey material of the FrameCryptor, never the AES key itself. The AES key is derived from it by the FrameCryptor's internal step: `aesKey = HKDF-SHA256(IKM = key_slot, salt = empty, info = 128 bytes of 0x00, L = 32)`. This holds for the v5 keys of §3.7.2 and for `frameKeyV6` (`docs/PQC_HARDENING_V1.md` in the server repository, B6, D25, KAT S10).
 - `counter` is a **full 32-bit** per-ssrc frame counter (§11.2). The byte layout, the AAD, the trailer and the key
   derivation are otherwise unchanged. A frame with counter 0 is byte-identical to the previous layout.
 - U = 1 for Opus, 10 for a VP8 key frame, 3 for a VP8 delta frame, 0 for AV1. For H.264/H.265 it is the slice NALU
@@ -4247,7 +4265,8 @@ advertise the tag, so no phone waits for an ACK that cannot come.
 - Telemetry: one event per applied or sent state change with `cause` and seq (nothing beyond the call id already
   logged) and a counter of CALL_HOLD sends that were never acknowledged.
 
-Latest: 2026-11-09 (new section 16: the sealed in-call control lane 0x03 documented (HANGUP dc-hangup-v1, NACK_REQUEST audio-nack-v1, OUTER_OFF outer-off-v1) and CALL_HOLD / CALL_HOLD_ACK (kinds 0x04 / 0x05) defined on it, sent on both legs when needed so native SRTP calls are covered under the capability tag call-hold-v1: In attesa on the other side, a local hold tone, silence watchdogs suspended while held, a peer-not-audible hint after 10 s without a hold signal; Android stops refusing system hold; no server change).
+Latest: 2026-11-13 (PQC hardening alignment with docs/PQC_HARDENING_V1.md of the server repository: routing rule of a handshake bundle (first byte `{`, no trimming, §3.1, D28) and duplicate member names are valid JSON (§3.1); `rekeyRound` is in [1, 2^31 − 1] for every call (§3.1, §3.7 transcript table, §3.8.6, D24); a handshake bundle is decoded with a strict RFC 8259 JSON parser and any non-JSON text is `handshake_malformed` (§3.1, §3.8.6, D27); §11.1 states the FrameCryptor derivation `aesKey = HKDF-SHA256(IKM = key_slot, salt = empty, info = 128 bytes of 0x00, L = 32)` (D25, S10).)
+Previous: 2026-11-09 (new section 16: the sealed in-call control lane 0x03 documented (HANGUP dc-hangup-v1, NACK_REQUEST audio-nack-v1, OUTER_OFF outer-off-v1) and CALL_HOLD / CALL_HOLD_ACK (kinds 0x04 / 0x05) defined on it, sent on both legs when needed so native SRTP calls are covered under the capability tag call-hold-v1: In attesa on the other side, a local hold tone, silence watchdogs suspended while held, a peer-not-audible hint after 10 s without a hold signal; Android stops refusing system hold; no server change).
 Previous: 2026-10-28 (new §15 notification envelope: a device key registered with PUT /account/notify-key (local alert-token record required), a sealed sender
 blob `qn` of fixed padded length next to the generic message alert (no collapse id on the envelope form), known-answer vectors in internal/push/testdata).
 Previous: 2026-10-23 (third review round of §14: the outcome of a write is put on the step that seals the frame in the
