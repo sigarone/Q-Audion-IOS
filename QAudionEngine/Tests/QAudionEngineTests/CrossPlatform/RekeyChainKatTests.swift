@@ -128,7 +128,9 @@ final class RekeyChainKatTests: XCTestCase {
             }
             XCTAssertNotEqual(verdict, "malformed", name)
             let retained = Set(try XCTUnwrap(v["retainedChainKeys"] as? [NSNumber], name).map { $0.int32Value })
-            let applies = (v["callNegotiatedRekeyChainV1"] as? Bool ?? false) && (try str(v, "messageKind")) == "rekeyOffer"
+            let messageKind = try str(v, "messageKind")
+            let negotiated = v["callNegotiatedRekeyChainV1"] as? Bool ?? false
+            let applies = negotiated && messageKind == "rekeyOffer"
             let decision = RekeyChain.decideChainBase(
                 members: members, epoch: Int32(try int(v, "E")), hasRecord: v["chainRecordExists"] as? Bool ?? false,
                 holdsCk: { retained.contains($0) }, applies: applies)
@@ -265,7 +267,8 @@ final class RekeyChainKatTests: XCTestCase {
         XCTAssertEqual(list.count, 2)
         for v in list {
             let earbud = (try str(v, "keyMaterial")) != "sessionKey_E"
-            XCTAssertEqual(FrameKeyV6Policy.keyMaterialIsSessionKeyE(earbudPaired: earbud), v["advertise"] as? Bool, try str(v, "name"))
+            let name = try str(v, "name")
+            XCTAssertEqual(FrameKeyV6Policy.keyMaterialIsSessionKeyE(earbudPaired: earbud), v["advertise"] as? Bool, name)
         }
     }
 
@@ -301,7 +304,9 @@ final class RekeyChainKatTests: XCTestCase {
             line.rekey = s("rekey")
             line.round = s("round")
             line.rreason = s("rreason")
-            XCTAssertEqual(line.format(), try str(vector, "line"), try str(vector, "name"))
+            let expected = try str(vector, "line")
+            let name = try str(vector, "name")
+            XCTAssertEqual(line.format(), expected, name)
         }
     }
 }

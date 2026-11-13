@@ -36,6 +36,21 @@ public final class ChainKeyBuffer: @unchecked Sendable {
         withBytes { Data($0) }
     }
 
+    /// A second buffer with the same bytes (its own allocation), or nil after the wipe. No `Data` copy is made.
+    func duplicate() -> ChainKeyBuffer? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let p = storage else { return nil }
+        return ChainKeyBuffer(duplicatingBytesOf: p, count: count)
+    }
+
+    private init(duplicatingBytesOf source: UnsafeMutableRawPointer, count n: Int) {
+        count = n
+        let p = UnsafeMutableRawPointer.allocate(byteCount: max(n, 1), alignment: 1)
+        if n > 0 { p.copyMemory(from: UnsafeRawPointer(source), byteCount: n) }
+        storage = p
+    }
+
     public var isWipedForTesting: Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -150,12 +165,22 @@ public enum RekeyChain {
     public static func decideChainBase(
         members: [StrictBundleJSON.Member], epoch: Int32, hasRecord: Bool, holdsCk: (Int32) -> Bool, applies: Bool
     ) -> Decision {
-        guard applies else { return .ignored }
+        decideChainBase(tokens: chainBaseTokens(of: members), epoch: epoch, hasRecord: hasRecord, holdsCk: holdsCk, applies: applies)
+    }
+
+    /// The raw tokens of the members named `chainBase` (names compared after unescaping), in document order.
+    public static func chainBaseTokens(of members: [StrictBundleJSON.Member]) -> [[UInt8]] {
         let name = Array("chainBase".utf16)
-        let found = members.filter { !$0.badName && $0.nameUnits == name }
-        if found.isEmpty { return .refuse(.missing) }
-        if found.count > 1 { return .refuse(.duplicate) }
-        let token = Array(found[0].valueBytes)
+        return members.filter { !$0.badName && $0.nameUnits == name }.map { Array($0.valueBytes) }
+    }
+
+    public static func decideChainBase(
+        tokens: [[UInt8]], epoch: Int32, hasRecord: Bool, holdsCk: (Int32) -> Bool, applies: Bool
+    ) -> Decision {
+        guard applies else { return .ignored }
+        if tokens.isEmpty { return .refuse(.missing) }
+        if tokens.count > 1 { return .refuse(.duplicate) }
+        let token = tokens[0]
         guard !token.isEmpty, token.count <= 10, token.allSatisfy({ $0 >= 0x30 && $0 <= 0x39 }),
               !(token.count > 1 && token[0] == 0x30) else { return .refuse(.malformed) }
         var value: Int64 = 0

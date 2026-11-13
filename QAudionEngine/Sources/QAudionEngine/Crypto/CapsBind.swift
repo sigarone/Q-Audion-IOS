@@ -17,14 +17,19 @@ public struct BundleCapsBind: Equatable, Sendable {
     /// The names in the raw `capabilities` object whose value is the literal `true` (after unescaping; a bad name and a name that
     /// does not match the tag pattern are left out). `"true"` and `1` do not count.
     public let tags: Set<String>
+    /// The raw tokens of the top-level members named `chainBase` (names compared after unescaping), read from the grammar-checked
+    /// member list; empty when the text is not a valid object.
+    public let chainBaseTokens: [[UInt8]]
 
-    public init(hasTag: Bool, duplicate: Bool, capsx: Data, extx: Data, withdrawn: [String], tags: Set<String> = []) {
+    public init(hasTag: Bool, duplicate: Bool, capsx: Data, extx: Data, withdrawn: [String], tags: Set<String> = [],
+                chainBaseTokens: [[UInt8]] = []) {
         self.hasTag = hasTag
         self.duplicate = duplicate
         self.capsx = capsx
         self.extx = extx
         self.withdrawn = withdrawn
         self.tags = tags
+        self.chainBaseTokens = chainBaseTokens
     }
 }
 
@@ -374,8 +379,11 @@ public enum CapsBind {
         let flags = tagAndDuplicates(members)
         let parsed = (try? JSONSerialization.jsonObject(with: Data(bytes))) as? [String: Any]
         let ext = extx(ofBundleObject: parsed)
+        var chainTokens: [[UInt8]] = []
+        if case .valid(let top) = StrictBundleJSON.validate(json) { chainTokens = RekeyChain.chainBaseTokens(of: top) }
         return BundleCapsBind(hasTag: flags.hasTag, duplicate: flags.duplicate, capsx: capsx(of: members),
-                              extx: ext.extx, withdrawn: ext.withdrawn, tags: trueTags(members))
+                              extx: ext.extx, withdrawn: ext.withdrawn, tags: trueTags(members),
+                              chainBaseTokens: chainTokens)
     }
 
     /// Analyse a typed bundle by encoding it exactly as it goes on the wire.

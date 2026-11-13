@@ -63,8 +63,18 @@ public final class FrameKeyLatch: @unchecked Sendable {
     private let lock = NSLock()
     private var latched: FrameKeyDecision?
     private var latchedGen: UInt64 = 0
+    private var lastWithheld = 0
 
     public init() {}
+
+    /// True when `word` differs from the last reason noted: a withheld key is logged once per change, not once per attempt.
+    public func noteWithheld(_ word: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard word != lastWithheld else { return false }
+        lastWithheld = word
+        return true
+    }
 
     /// What the controller should use for a decision just read from the call.
     public func resolve(_ fresh: FrameKeyDecision) -> FrameKeyDecision {
