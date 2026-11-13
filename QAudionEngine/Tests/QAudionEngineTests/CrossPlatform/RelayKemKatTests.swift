@@ -168,8 +168,9 @@ final class RelayKemKatTests: XCTestCase {
         let vectors = try XCTUnwrap(try relaySection(try load())["x25519Zero"] as? [[String: Any]])
         XCTAssertEqual(vectors.count, 3)
         for vector in vectors {
+            let name = try str(vector, "name")
             XCTAssertNil(RelayKem.x25519Shared(scalar: hex(try str(vector, "ownScalar")), peerPublic: hex(try str(vector, "peerPublicKey"))),
-                         try str(vector, "name"))
+                         name)
         }
         // an honest peer is not a zero output
         let own = Curve25519.KeyAgreement.PrivateKey()
