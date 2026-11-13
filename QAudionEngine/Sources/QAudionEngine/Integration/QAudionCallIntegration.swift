@@ -1379,13 +1379,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     public var capsBindFlag: (() -> Bool?)?
     /// Local switch for advertising `capsBindV1` (pins already stored keep working). On by default.
     public nonisolated(unsafe) static var capsBindV1Enabled = true
-    /// Local switches for advertising the two tags that ride on `capsBindV1`. Off by default.
-    public nonisolated(unsafe) static var rekeyChainV1Enabled = false
-    public nonisolated(unsafe) static var frameKeyV6Enabled = false
-    public nonisolated(unsafe) static var innerSealV2Enabled = false
-    /// Local switches for the outer relay layer keyed by its own exchange, and for its rotation. Off by default.
-    public nonisolated(unsafe) static var relayKemV1Enabled = false
-    public nonisolated(unsafe) static var relayRotV1Enabled = false
+    /// Local switches for advertising the tags that ride on `capsBindV1`. On by default; a tag takes effect on a call only when both bundles carry it.
+    public nonisolated(unsafe) static var rekeyChainV1Enabled = true
+    public nonisolated(unsafe) static var frameKeyV6Enabled = true
+    public nonisolated(unsafe) static var innerSealV2Enabled = true
+    /// Local switches for the outer relay layer keyed by its own exchange, and for its rotation. On by default.
+    public nonisolated(unsafe) static var relayKemV1Enabled = true
+    public nonisolated(unsafe) static var relayRotV1Enabled = true
     /// The key state of the call in flight, created where the round-1 session is installed and closed when the call ends. Guarded by
     /// `lock`. See `LiveCallCrypto` for the rules.
     private var live: LiveCallCrypto?
