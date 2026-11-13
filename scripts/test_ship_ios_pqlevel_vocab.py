@@ -65,6 +65,13 @@ OKAY = [
     REAL.replace("level=PQ2", "level=PQ2S"),
     REAL.replace("level=PQ2", "level=CL"),
     REAL.replace("caps=-", "caps=capsBindV1,innerSealV2"),
+    REAL.replace("caps=-", "caps=capsBindV1,innerSealV2,relayKemV1,relayRotV1"),
+    REAL.replace("relay=same dcmux=same", "relay=indrot dcmux=indrot").replace("rvideo=-", "rvideo=two"),
+    REAL.replace("relay=same dcmux=same", "relay=ind dcmux=ind").replace("rvideo=-", "rvideo=one"),
+    REAL.replace("reason=-", "reason=relay_kem"),
+    REAL.replace("reason=-", "reason=slot_collision"),
+    REAL.replace("reason=-", "reason=send_revert"),
+    REAL.replace("reason=-", "reason=x25519_zero"),
     REAL.replace("round=-", "round=2147483646"),
     REAL.replace("rekey=- round=-", "rekey=refused round=3 rreason=chain_base"),
     REAL.replace("rekey=- round=-", "rekey=refused round=2147483646 rreason=chain_base"),
@@ -93,10 +100,8 @@ for vec in kat["level"]["logLine"]["vectors"]:
     if red(line) != line:
         failures.append("known-answer line not shipped verbatim: %r -> %r" % (line, red(line)))
 
-# The rekey lines of the shared file that this build can emit (the other reasons of that section are not part of this grammar).
+# Every rekey line of the shared file: the whole section is part of this grammar.
 for vec in kat["level"]["logLine"]["rekeyVectors"]:
-    if vec.get("name") not in ("chain-base-refusal", "chain-base-refusal-then-x25519-zero", "indrot-without-rreason"):
-        continue
     line = re.sub(r"call=\S+", "call=0a1b2c3d", vec["line"], count=1)
     checks += 1
     if red(line) != line:

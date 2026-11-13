@@ -19,6 +19,16 @@ closed range:
     live inner refuse round=<n> why=<1..4>
     live inner drop why=<1..7> n=<n>
     live inner exhausted
+    live outer install round=<n> slots=<n> staged=<n>
+    live outer switch round=<n> prev=<n> trial=<0|1>
+    live outer revert from=<n> to=<n>
+    live outer hold why=<1..3> round=<n>
+    live outer erase round=<n> why=<1..3>
+    live outer drop why=<1..11> n=<n>
+    live outer off why=<1..4>
+    live outer seal fail why=<1..4>
+    live video layers mode=<0..3>
+    live video cache drop layer=<1|2> kind=<1|2> n=<n>
     capsbind ext=<0|1> own=<0|1> peer=<0|1> round=<n> chain=<0|1> fk=<0|1>
 
 The generic gate gives bare words a budget of zero, so each shape is accepted by a whole-line rule. This test pins that the rule
@@ -87,6 +97,25 @@ OKAY = [
     "live inner drop why=1 n=1",
     "live inner drop why=7 n=500",
     "live inner exhausted",
+    "live outer install round=0 slots=1 staged=0",
+    "live outer install round=2147483646 slots=16 staged=15",
+    "live outer switch round=1 prev=0 trial=1",
+    "live outer switch round=2147483646 prev=2147483645 trial=0",
+    "live outer revert from=1 to=0",
+    "live outer hold why=1 round=1",
+    "live outer hold why=3 round=2147483646",
+    "live outer erase round=0 why=1",
+    "live outer erase round=3 why=3",
+    "live outer drop why=1 n=1",
+    "live outer drop why=11 n=500",
+    "live outer off why=1",
+    "live outer off why=4",
+    "live outer seal fail why=1",
+    "live outer seal fail why=4",
+    "live video layers mode=0",
+    "live video layers mode=3",
+    "live video cache drop layer=1 kind=2 n=3",
+    "live video cache drop layer=2 kind=1 n=12345",
     "capsbind ext=1 own=1 peer=1 round=1 chain=1 fk=0",
     "capsbind ext=0 own=0 peer=0 round=2147483646 chain=0 fk=0",
 ]

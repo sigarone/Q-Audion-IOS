@@ -25,6 +25,10 @@ final class VideoNackFragmentCache: @unchecked Sendable {
         let totalFrags: Int
         let isKeyFrame: Bool
         let sentAtMs: Int64
+        /// The outer round, and the envelope byte of the inner round, the fragment was sealed under (-1: that layer is not in
+        /// use). A fragment of an earlier round is never resent.
+        let outerEpoch: Int32
+        let innerEpoch: Int32
     }
 
     private let lock = NSLock()
@@ -57,14 +61,16 @@ final class VideoNackFragmentCache: @unchecked Sendable {
 
     /// Cache one sealed fragment's wire bytes. Call BEFORE sending, same
     /// as Android, so a NACK that races in immediately after always finds it.
-    func store(frameId: Int, fragIdx: Int, wire: Data, totalFrags: Int, isKeyFrame: Bool, nowMs: Int64) {
+    func store(frameId: Int, fragIdx: Int, wire: Data, totalFrags: Int, isKeyFrame: Bool, nowMs: Int64,
+               outerEpoch: Int32 = -1, innerEpoch: Int32 = -1) {
         lock.lock()
         defer { lock.unlock() }
         let k = Self.key(frameId: frameId, fragIdx: fragIdx)
         if entries[k] == nil {
             insertionOrder.append(k)
         }
-        entries[k] = Entry(wire: wire, totalFrags: totalFrags, isKeyFrame: isKeyFrame, sentAtMs: nowMs)
+        entries[k] = Entry(wire: wire, totalFrags: totalFrags, isKeyFrame: isKeyFrame, sentAtMs: nowMs,
+                           outerEpoch: outerEpoch, innerEpoch: innerEpoch)
         evictStaleLocked(nowMs: nowMs)
     }
 
