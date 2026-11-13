@@ -181,8 +181,11 @@ final class OuterLayerKatTests: XCTestCase {
             XCTAssertEqual(sealed(out), hex(try str(vector, "wire")), name)
             XCTAssertEqual(receiver.open(.audio, hex(try str(vector, "wire"))), .opened(payload: frame, epoch: 0), name)
         }
+        // a fresh receiver: the counter of the negative frame is one the first receiver already committed
         let negative = try XCTUnwrap(control["negative"] as? [String: Any])
-        guard case .dropped(let why, _) = receiver.open(.audio, hex(try str(negative, "wire"))) else { return XCTFail("a control frame sealed with the video key") }
+        let freshReceiver = makeSet(.acceptor, rot: false)
+        XCTAssertEqual(freshReceiver.installRound0(try round1Keys(root)).result, .ok)
+        guard case .dropped(let why, _) = freshReceiver.open(.audio, hex(try str(negative, "wire"))) else { return XCTFail("a control frame sealed with the video key") }
         XCTAssertEqual(failureWord(why), try str(negative, "reason"))
     }
 
