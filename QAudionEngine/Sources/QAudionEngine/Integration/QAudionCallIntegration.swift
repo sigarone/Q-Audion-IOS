@@ -6280,7 +6280,7 @@ extension QAudionCallIntegration {
     }
 
     /// The lines of the outer layer for a staged round (numbers only).
-    private func logOuterStage(_ report: LiveCallCrypto.StageReport, epoch: Int32, object: LiveCallCrypto) {
+    func logOuterStage(_ report: LiveCallCrypto.StageReport, epoch: Int32, object: LiveCallCrypto) {
         if report.outerInstalled, let snapshot = object.outerSnapshot() {
             let slots = min(snapshot.epochs.count, 99)
             let staged = min(snapshot.epochs.count - snapshot.verified.count, 99)
@@ -6293,7 +6293,7 @@ extension QAudionCallIntegration {
 
     /// Why the outer relay layer is not in effect for round 1 although this build carries it: 1 the peer's member is absent, 2 it is
     /// invalid, 3 the peer does not carry the tag, 4 (logged by the offerer) an all-zero X25519 output.
-    private func logRelayOff(own: BundleCapsBind, peer: BundleCapsBind, zero: Bool = false) {
+    func logRelayOff(own: BundleCapsBind, peer: BundleCapsBind, zero: Bool = false) {
         guard own.tags.contains("relayKemV1"), !RelayDecision.inEffect(own: own, peer: peer).kem else { return }
         var why = 1
         if zero {
