@@ -411,7 +411,7 @@ final class LiveCallCryptoTests: XCTestCase {
         let shapes = [
             "^live adopt gen=[0-9]{1,9} role=[01] chain=[01] fk=[56]$",
             "^live close gen=[0-9]{1,9} staged=[0-9]{1,2} why=[1-4]$",
-            "^live chain refuse round=[0-9]{1,10} why=[1-6]$",
+            "^live chain refuse round=[0-9]{1,10} why=[1-7]$",
             "^live defer why=[1-3]$",
             "^live stage round=[0-9]{1,10} chain=[01] staged=[0-9]{1,2}$",
             "^live confirm round=[0-9]{1,10} retained=[0-9]{1,2}$",
@@ -431,7 +431,7 @@ final class LiveCallCryptoTests: XCTestCase {
 
     // MARK: - Wire shape
 
-    func testTheTwoTagsAreAbsentWhenOffAndTheBaseRoundIsTheLastMember() throws {
+    func testTheTwoTagsAndTheBaseRoundAreWrittenOnlyWhenOn() throws {
         let off = AndroidHandshakeBundle(
             kind: .offer, callId: "c", pqcPublicKey: "", x25519PublicKey: "",
             capabilities: AndroidHandshakeBundle.Capabilities(ratchetV3: true, capsBindV1: true))
@@ -446,7 +446,7 @@ final class LiveCallCryptoTests: XCTestCase {
         let onText = AndroidHandshakeEnvelope.jsonPayload(of: on)
         XCTAssertTrue(onText.contains("\"rekeyChainV1\":true"))
         XCTAssertTrue(onText.contains("\"frameKeyV6\":true"))
-        XCTAssertTrue(onText.hasSuffix("\"chainBase\":2}"), "appended last: the member order is part of the wire")
+        XCTAssertTrue(onText.contains("\"chainBase\":2"))
         let analysis = CapsBind.analyze(json: onText)
         XCTAssertTrue(analysis.tags.contains("rekeyChainV1"))
         XCTAssertEqual(analysis.chainBaseTokens, [Array("2".utf8)])

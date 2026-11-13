@@ -7,7 +7,7 @@ closed range:
 
     live adopt gen=<n> role=<0|1> chain=<0|1> fk=<5|6>
     live close gen=<n> staged=<n> why=<1..4>
-    live chain refuse round=<n> why=<1..6>
+    live chain refuse round=<n> why=<1..7>
     live defer why=<1..3>
     live stage round=<n> chain=<0|1> staged=<n>
     live confirm round=<n> retained=<n>
@@ -64,6 +64,7 @@ OKAY = [
     "live close gen=7 staged=16 why=4",
     "live chain refuse round=3 why=5",
     "live chain refuse round=2147483646 why=6",
+    "live chain refuse round=2 why=7",
     "live defer why=1",
     "live defer why=3",
     "live stage round=2 chain=1 staged=2",
@@ -119,7 +120,7 @@ FORGED += [
     "live close gen=7 staged=123 why=1",
     "live close gen=7 staged=3 why=5",
     "live close gen=7 staged=3 why=0",
-    "live chain refuse round=3 why=7",
+    "live chain refuse round=3 why=8",
     "live chain refuse round=3 why=0",
     "live chain refuse round=12345678901 why=1",
     "live chain refuse round=3 why=1 reason=chain_base",

@@ -1360,7 +1360,7 @@ _RE_LIVE_FULL = re.compile(
     r"\A(?:"
     r"live adopt gen=[0-9]{1,9} role=[01] chain=[01] fk=[56]"
     r"|live close gen=[0-9]{1,9} staged=[0-9]{1,2} why=[1-4]"
-    r"|live chain refuse round=[0-9]{1,10} why=[1-6]"
+    r"|live chain refuse round=[0-9]{1,10} why=[1-7]"
     r"|live defer why=[1-3]"
     r"|live stage round=[0-9]{1,10} chain=[01] staged=[0-9]{1,2}"
     r"|live confirm round=[0-9]{1,10} retained=[0-9]{1,2}"

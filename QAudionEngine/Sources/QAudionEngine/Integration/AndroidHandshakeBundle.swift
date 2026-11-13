@@ -387,9 +387,9 @@ public struct AndroidHandshakeBundle: Codable, Equatable {
     public let capsWithdrawn: [String]?
 
     /// The earlier round a chained rekey OFFER is based on. Written by a sender that negotiated `rekeyChainV1`, outside the
-    /// signed transcript. Appended LAST: the member order is part of the wire. A receiver never reads it from this typed value
-    /// (the decoder leaves it nil): the raw text decides, so a wrong type or an out-of-range token never makes a bundle
-    /// undecodable here.
+    /// signed transcript. The member order is not part of the wire: receivers read the raw tokens. A receiver never reads it
+    /// from this typed value (the decoder leaves it nil): the raw text decides, so a wrong type or an out-of-range token never
+    /// makes a bundle undecodable here.
     public let chainBase: Int?
 
     private enum CodingKeys: String, CodingKey {

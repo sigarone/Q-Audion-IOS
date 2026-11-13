@@ -32,6 +32,8 @@ final class RekeyChainKatTests: XCTestCase {
 
     private func vectors(_ root: [String: Any], _ section: String, _ name: String) throws -> [[String: Any]] {
         let top = try XCTUnwrap(root[section] as? [String: Any], section)
+        // Most sections are `{rule, vectors: [...]}`; the frameKeyV6 keys, frames and negatives are plain arrays.
+        if let plain = top[name] as? [[String: Any]] { return plain }
         let sub = try XCTUnwrap(top[name] as? [String: Any], name)
         return try XCTUnwrap(sub["vectors"] as? [[String: Any]], name)
     }

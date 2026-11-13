@@ -2398,7 +2398,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 }
                 guard let gateEpoch = Self.keyEpoch(forRekeyRound: round) else { return }
                 guard chained.matches(callId) else {
-                    CapsBindLog.line("live chain refuse round=\(gateEpoch) why=6")
+                    // why=7: the OFFER is for another call id (1-6 are the `Refusal` values of the gate).
+                    CapsBindLog.line("live chain refuse round=\(gateEpoch) why=7")
                     return
                 }
                 switch liveGate(chained, epoch: gateEpoch, offerSigOk: offerSigOk, tokens: peerCaps.chainBaseTokens) {

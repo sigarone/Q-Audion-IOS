@@ -327,7 +327,11 @@ public final class LiveCallCrypto: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         if closed { return .closed }
-        guard let blocker = blockerLocked(nowMs: nowMs) else { return .go }
+        guard let blocker = blockerLocked(nowMs: nowMs) else {
+            // The gate is open: a spacing deferral still pending is released here, so its timer does not start a second round.
+            if deferred == .spacing { deferred = nil }
+            return .go
+        }
         let isNew = deferred == nil
         if isNew { deferred = blocker.kind }
         let timer: Int? = (isNew && blocker.kind == .spacing) ? blocker.untilMs : nil
