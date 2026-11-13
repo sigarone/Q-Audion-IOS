@@ -1,7 +1,7 @@
 import Foundation
 
-/// MEDIA-5 (W-INNERAUDIOAAD) — the receive-side anti-replay window of the inner sealed-audio wire,
-/// keyed on the frame's wire sequence number.
+/// The receive-side anti-replay window of the inner sealed-audio wire, keyed on the frame's counter (spec B2): one window of
+/// 1024 counters per call, never reset by a rekey, a hold or a leg change.
 ///
 /// A circular ring of 1024 slots. Slot `seq % 1024` stores the sequence number accepted into it
 /// (or nothing), so a sequence number is a duplicate exactly when its own slot holds it. Nothing
@@ -20,7 +20,7 @@ import Foundation
 /// cannot drag `highest` forward (which would make every genuine frame "too old").
 ///
 /// Not thread-safe by itself: the owner serialises `check` + AEAD open + `commit` under one lock
-/// (`QAudionEngine.lock`), which is what makes the pair atomic.
+/// (`InnerSealV2Session.lock`), which is what makes the pair atomic.
 struct InnerAudioReplayWindow {
 
     enum Verdict: Equatable {
@@ -68,8 +68,7 @@ struct InnerAudioReplayWindow {
         return .fresh
     }
 
-    /// Forget everything. A fresh session/epoch restarts the sender's counter at 0, so the
-    /// window restarts with it.
+    /// Forget everything. Only a new call starts a new window; a call never resets its own.
     mutating func reset() {
         highest = nil
         for i in slots.indices { slots[i] = nil }

@@ -29,14 +29,20 @@ public final class NackRetransmitRing {
     public static let defaultCapacity = 32
 
     private let capacity: Int
+    /// Three threads meet here: the TX queue records, the main queue looks up, a MainActor task clears. One lock makes every
+    /// operation atomic, so a lookup never sees bytes of one entry with the counter or the epoch byte of another.
+    private let lock = NSLock()
     private var slots: [Data?]
     private var slotSeq: [Int64]
+    /// The envelope byte (`E mod 256`) of the round a per-round inner seal frame was sealed under; nil for a legacy frame.
+    private var slotEpoch: [UInt8?]
 
     public init(capacity: Int = NackRetransmitRing.defaultCapacity) {
         precondition(capacity > 0, "capacity must be positive")
         self.capacity = capacity
         self.slots = Array(repeating: nil, count: capacity)
         self.slotSeq = Array(repeating: -1, count: capacity)
+        self.slotEpoch = Array(repeating: nil, count: capacity)
     }
 
     private func index(for seq: Int64) -> Int {
@@ -47,31 +53,56 @@ public final class NackRetransmitRing {
     /// Record the exact wire bytes just transmitted for `seq`. Overwrites
     /// (and zero-fills) whatever previously occupied that slot.
     public func record(seq: Int64, envelope: Data) {
+        record(seq: seq, envelope: envelope, epochByte: nil)
+    }
+
+    /// The same, for a frame of the per-round inner seal: the entry carries the envelope byte of the round it was sealed under.
+    public func record(seq: Int64, envelope: Data, epochByte: UInt8?) {
+        lock.lock()
+        defer { lock.unlock() }
         let idx = index(for: seq)
         zeroFill(slot: idx)
         slots[idx] = envelope
         slotSeq[idx] = seq
+        slotEpoch[idx] = epochByte
     }
 
     /// Look up previously-sent wire bytes by sequence number. `nil` means
     /// "no longer repairable" (never recorded, or evicted) — always a
-    /// best-effort miss, never an error.
+    /// best-effort miss, never an error. Only an entry recorded WITHOUT an
+    /// epoch byte is returned: a frame of the per-round inner seal is never served as a legacy one.
     public func lookup(seq: Int64) -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
         let idx = index(for: seq)
-        return slotSeq[idx] == seq ? slots[idx] : nil
+        guard slotSeq[idx] == seq, slotEpoch[idx] == nil else { return nil }
+        return slots[idx]
     }
 
-    /// Zero-fill and forget every entry. Call on every re-key.
+    /// Look up a frame of the per-round inner seal: returned only when it was sealed under the round the send pointer is on now
+    /// (`sendEpochByte`). A frame of an earlier round is a miss.
+    public func lookup(seq: Int64, sendEpochByte: UInt8) -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        let idx = index(for: seq)
+        guard slotSeq[idx] == seq, slotEpoch[idx] == sendEpochByte else { return nil }
+        return slots[idx]
+    }
+
+    /// Zero-fill and forget every entry. Called when the send pointer moves to a later round, and at teardown.
     public func clear() {
+        lock.lock()
+        defer { lock.unlock() }
         for i in 0..<capacity {
             zeroFill(slot: i)
             slots[i] = nil
             slotSeq[i] = -1
+            slotEpoch[i] = nil
         }
     }
 
     /// Zero the bytes held by one slot IN PLACE. (Zeroing a local copy of the `Data` would trigger copy-on-write and leave the
-    /// slot's own buffer untouched.)
+    /// slot's own buffer untouched.) Caller holds `lock`.
     private func zeroFill(slot i: Int) {
         guard let count = slots[i]?.count, count > 0 else { return }
         slots[i]?.resetBytes(in: 0..<count)
