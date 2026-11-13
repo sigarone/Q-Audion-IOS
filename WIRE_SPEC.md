@@ -339,6 +339,23 @@ the transcript of §3.7, never over the JSON bytes.
   `call_incoming`) follows the pending-OFFER rule of §3.7.4.
 - Every JSON decode failure of a bundle that was routed as a handshake bundle is malformed as well: the call ends with
   `handshake_malformed` and a hangup on every platform, never with a plain failure that skips the hangup.
+- Routed as a handshake bundle (D28). `opaque_message` is an untyped transport: the envelope `<callId>|<payload>`
+  carries no type. A payload is routed as a handshake bundle if and only if its first byte after the `<callId>|`
+  separator is `{` (0x7B). The test is made on the bytes (UTF-8 code units, or Unicode scalars), never on grapheme
+  clusters, and nothing is trimmed first: a `{` followed by a combining mark is still routed. A payload that does not
+  start with `{`, including one with any text before the first `{` (a U+FEFF byte order mark, U+00A0, U+2028, any
+  whitespace), is not routed as a handshake bundle: it is dropped silently, it does not end the call and it is not
+  `handshake_malformed`. Once a payload is routed, the strict RFC 8259 decode above applies to all of it, and U+FEFF,
+  U+00A0 or U+2028 anywhere inside the object (after the first `{`), or any text after the final `}`, make the bundle
+  malformed. A client MUST NOT add a further routing condition (a last-character test, a required substring such as the
+  compact `"kind":"OFFER"`, a different trim): such a test would drop a bundle that must end the call.
+- Duplicate member names are valid JSON (RFC 8259 permits them), so a strict parser MUST NOT end the call on a
+  duplicate for that reason alone. Duplicates are handled per member, as `docs/PQC_HARDENING_V1.md` in the server
+  repository defines: a duplicate member name inside `capabilities` is `handshake_malformed` only for a round whose
+  CAPSX is active (the receiver's own bundle and the peer's raw object both carry `capsBindV1`), and is decoded as
+  today otherwise (§2.3 of that document); a second `chainBase` member in a rekey OFFER makes that value malformed, so the round is
+  refused and the call goes on (B13, D8, D27); a duplicate member inside `relayKem`, or a duplicated top-level
+  `relayKem`, makes `relayKem` count as absent. No other duplicate rule exists, and no duplicate ends a call by itself.
 
 ### 3.2 QUAD binary frame — handshake dialect RETIRED
 
@@ -1557,7 +1574,7 @@ still DTLS end to end, so it is fully covered.
 - A bundle without `sigV6`, without `dtlsFingerprint` or without a valid `rekeyRound` ([1, 2^31 − 1] = [1, 2147483647], for every call, D24) is malformed (every
   client emits all three) and ends the call with reason `handshake_malformed`. So does a bundle with a missing,
   misplaced, non-canonical or wrong-length `sasCommit`, a first OFFER whose `rekeyRound` is not 1, and any JSON
-  decode failure of a bundle routed as a handshake bundle (§3.1, §3.7.4). A handshake bundle MUST be decoded with a strict RFC 8259 JSON parser: any text that is not valid JSON (including a leading zero, a `+` sign, non-JSON whitespace such as U+00A0, U+FEFF or U+2028, or any text after the final `}`) is a JSON decode failure and ends the call with `handshake_malformed` (`docs/PQC_HARDENING_V1.md` in the server repository, D27); a lenient parser is non-conformant.
+  decode failure of a bundle routed as a handshake bundle (§3.1, §3.7.4; a payload is routed if and only if its first byte after the `<callId>|` separator is `{`, §3.1, D28). A handshake bundle MUST be decoded with a strict RFC 8259 JSON parser: any text that is not valid JSON (including a leading zero, a `+` sign, non-JSON whitespace such as U+00A0, U+FEFF or U+2028, or any text after the final `}`) is a JSON decode failure and ends the call with `handshake_malformed` (`docs/PQC_HARDENING_V1.md` in the server repository, D27); a lenient parser is non-conformant.
 - An *invalid* signature or an unknown identity key aborts the handshake and holds media pending SAS, as before. The
   SAS covers both fingerprints (§3.7.1), so confirming a matching SAS also authenticates them.
 - A KCMAC failure ends the call with reason `kcmac_mismatch` (§3.7.1).
@@ -4248,7 +4265,7 @@ advertise the tag, so no phone waits for an ACK that cannot come.
 - Telemetry: one event per applied or sent state change with `cause` and seq (nothing beyond the call id already
   logged) and a counter of CALL_HOLD sends that were never acknowledged.
 
-Latest: 2026-11-13 (PQC hardening alignment with docs/PQC_HARDENING_V1.md of the server repository: `rekeyRound` is in [1, 2^31 − 1] for every call (§3.1, §3.7 transcript table, §3.8.6, D24); a handshake bundle is decoded with a strict RFC 8259 JSON parser and any non-JSON text is `handshake_malformed` (§3.1, §3.8.6, D27); §11.1 states the FrameCryptor derivation `aesKey = HKDF-SHA256(IKM = key_slot, salt = empty, info = 128 bytes of 0x00, L = 32)` (D25, S10).)
+Latest: 2026-11-13 (PQC hardening alignment with docs/PQC_HARDENING_V1.md of the server repository: routing rule of a handshake bundle (first byte `{`, no trimming, §3.1, D28) and duplicate member names are valid JSON (§3.1); `rekeyRound` is in [1, 2^31 − 1] for every call (§3.1, §3.7 transcript table, §3.8.6, D24); a handshake bundle is decoded with a strict RFC 8259 JSON parser and any non-JSON text is `handshake_malformed` (§3.1, §3.8.6, D27); §11.1 states the FrameCryptor derivation `aesKey = HKDF-SHA256(IKM = key_slot, salt = empty, info = 128 bytes of 0x00, L = 32)` (D25, S10).)
 Previous: 2026-11-09 (new section 16: the sealed in-call control lane 0x03 documented (HANGUP dc-hangup-v1, NACK_REQUEST audio-nack-v1, OUTER_OFF outer-off-v1) and CALL_HOLD / CALL_HOLD_ACK (kinds 0x04 / 0x05) defined on it, sent on both legs when needed so native SRTP calls are covered under the capability tag call-hold-v1: In attesa on the other side, a local hold tone, silence watchdogs suspended while held, a peer-not-audible hint after 10 s without a hold signal; Android stops refusing system hold; no server change).
 Previous: 2026-10-28 (new §15 notification envelope: a device key registered with PUT /account/notify-key (local alert-token record required), a sealed sender
 blob `qn` of fixed padded length next to the generic message alert (no collapse id on the envelope form), known-answer vectors in internal/push/testdata).
