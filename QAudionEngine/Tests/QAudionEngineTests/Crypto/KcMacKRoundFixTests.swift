@@ -251,7 +251,7 @@ final class KcMacKRoundFixTests: XCTestCase {
         XCTAssertLessThan(staleAt.lowerBound, verifyAt.lowerBound, "before verification, binding and any identity side effect")
         let after = String(handler[staleAt.lowerBound...].prefix(400))
         XCTAssertTrue(after.contains("dropped\") return }"), "dropped, nothing else happens")
-        XCTAssertTrue(code(integration).contains("PendingReKeyAttempt(id: attemptId, round: Int(thisRound), localKeys: localKeys)"))
+        XCTAssertTrue(code(integration).contains("PendingReKeyAttempt(id: attemptId, round: Int(thisRound), localKeys: attemptKeys)"))
     }
 
     /// The ACCEPT is recorded at the hand-over, before the write, in the direct path and in the release path.
