@@ -394,6 +394,9 @@ jobs:
           # code, so the old 25 min watchdog sat right at the slow end and killed one finished-but-slow run while it
           # wrote its result bundle. Now 35 min. The code coverage instrumentation (-profile-generate in the whole
           # module compile) is off: nothing here reads coverage, and it slows both the compile and the test run.
+          # 2026-11-14: -retry-tests-on-failure -test-iterations 2 reruns ONLY a failed test case once (seconds, not the
+          # suite). A real failure fails twice and still fails the job; a timing-sensitive test that passes on the rerun
+          # is marked flaky in the result bundle. Three different timing tests failed on three runs of unrelated PRs.
           ATTEMPT=1
           MAX_ATTEMPTS=2
           EXIT_CODE=1
@@ -404,6 +407,8 @@ jobs:
               -configuration Release \
               -jobs 2 \
               -enableCodeCoverage NO \
+              -retry-tests-on-failure \
+              -test-iterations 2 \
               SWIFT_ENABLE_TESTABILITY=YES \
               COMPILER_INDEX_STORE_ENABLE=NO \
               SWIFT_ENABLE_EXPLICIT_MODULES=NO \
