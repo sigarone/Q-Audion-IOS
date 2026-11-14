@@ -10,7 +10,7 @@ import XCTest
 /// mapping was `category(of: -1) == 2` (high risk), pinned below as the reason the views must not use it.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 final class ConfidenceToneTests: XCTestCase {
 
     func testNoReadingIsNeitherGreenNorAmberNorRed() {

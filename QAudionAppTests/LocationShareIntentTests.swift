@@ -5,7 +5,7 @@ import XCTest
 /// Siri heard, and when the intent runs or answers with a sentence and does nothing. Pure: the router's inputs are replaced.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 @MainActor
 final class LocationShareIntentTests: XCTestCase {
 

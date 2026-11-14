@@ -1,7 +1,7 @@
 # Manual, on-demand mechanical formatting cleanup for QAudionEngine.
 #
 # Runs SwiftLint's --fix (autocorrect) over the same scope as
-# engine-tests.yml's swiftlint-report job, but ONLY for rules SwiftLint can
+# ios-ci.yml's swiftlint-report job, but ONLY for rules SwiftLint can
 # safely auto-correct (comma/colon spacing, statement_position,
 # trailing_whitespace, vertical_parameter_alignment, closure_parameter_position
 # and similar whitespace/punctuation-only rules) — --fix is a no-op for

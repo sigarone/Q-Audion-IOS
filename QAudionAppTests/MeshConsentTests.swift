@@ -17,7 +17,7 @@ import QAudionEngine
 /// The positive path (accept, then CoreBluetooth comes up) needs a radio and is not run here.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 @MainActor
 final class MeshConsentTests: XCTestCase {
 

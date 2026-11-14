@@ -186,7 +186,7 @@ public final class BCryptoRestClient {
         sessionConfig.timeoutIntervalForRequest = 15
         // Applied UNCONDITIONALLY (not inside the #if DEBUG below): CI runs
         // `xcodebuild test` with `-configuration Release` (forced there for
-        // an unrelated OOM fix — see engine-tests.yml's own comment on that
+        // an unrelated OOM fix — see ios-ci.yml's own comment on that
         // flag), so a DEBUG-gated stub install is silently inert in exactly
         // the environment these tests run in, and every WireFormatTests call
         // site hit the real network against https://test.local instead of

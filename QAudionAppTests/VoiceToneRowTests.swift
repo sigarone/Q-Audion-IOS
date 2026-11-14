@@ -15,7 +15,7 @@ import QAudionEngine
 ///  - the abbreviation and the word a screen reader says in place of a dash exist in all six languages.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing`
-/// list of `.github/workflows/ios-app-tests.yml`.
+/// list of `.github/workflows/ios-ci.yml`.
 final class VoiceToneRowTests: XCTestCase {
 
     // MARK: - From a display value to the screens

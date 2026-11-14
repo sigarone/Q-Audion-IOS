@@ -8,7 +8,7 @@ import QAudionEngine
 /// be reached by the phone window and by the CarPlay scene.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 final class CarPlayListModelTests: XCTestCase {
 
     private let t0 = Date(timeIntervalSince1970: 2_000_000)

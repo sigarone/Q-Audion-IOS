@@ -5,7 +5,7 @@ import XCTest
 /// (so captures come out black), the view tree is untouched, and the lock is released with the last owner.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 @MainActor
 final class ScreenshotLockServiceTests: XCTestCase {
 

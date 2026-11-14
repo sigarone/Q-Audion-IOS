@@ -31,7 +31,7 @@
 #      extension and its privacy manifest ARE in the IPA; invert it for a
 #      permanent switch.
 #   4. Keep QAudionVPN.entitlements in step with QAudion.entitlements (the
-#      ios-app-tests.yml VPN lane compares them).
+#      ios-ci.yml VPN lane compares them).
 
 include:
   - project.yml

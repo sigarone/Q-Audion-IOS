@@ -8,7 +8,7 @@ import CoreGraphics
 ///
 /// The views read these rules and nothing else decides a layout, so the rules are pinned here as pure functions. Wired
 /// into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 final class AdaptiveLayoutPolicyTests: XCTestCase {
 
     // MARK: - Shell

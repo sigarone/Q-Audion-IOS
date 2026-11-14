@@ -10,7 +10,7 @@ import QAudionEngine
 /// purpose: they are not validated for phone-quality speech.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in
-/// the `-only-testing` list of `.github/workflows/ios-app-tests.yml`.
+/// the `-only-testing` list of `.github/workflows/ios-ci.yml`.
 final class VoiceGuardModelTests: XCTestCase {
 
     // MARK: - Tone row

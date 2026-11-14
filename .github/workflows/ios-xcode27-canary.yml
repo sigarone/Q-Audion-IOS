@@ -9,7 +9,7 @@
 #
 # Jobs
 #   sdk27-engine-tests   QAudionEngine tests on an iOS 27 simulator (same command as
-#                        engine-tests.yml, Release configuration). Manual and weekly runs only.
+#                        ios-ci.yml job ios-simulator-tests, Release configuration). Manual and weekly runs only.
 #   sdk27-app-ui-smoke   Debug build of QAudionApp for an iOS 27 simulator, then the Maestro
 #                        smoke flow (maestro/smoke-launch.yaml) on iPhone 17 and, report
 #                        only, on iPhone Duo. Only the flow that does not register an account.
@@ -92,7 +92,7 @@ jobs:
           xcrun simctl list devices available
           python3 -I scripts/ci/resolve_simulator.py "iPhone 17" --min-ios 27
 
-      # Read only: the entry is written by ios-app-tests.yml on main.
+      # Read only: the entry is written by ios-ci.yml (job app-build-and-tests) on main.
       - name: Restore SPM packages
         uses: actions/cache/restore@v5
         with:
@@ -211,7 +211,7 @@ jobs:
           xcodegen generate
           xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
 
-      # Ad-hoc local signing, as in ios-app-tests.yml: the entitlements have to be embedded
+      # Ad-hoc local signing, as in ios-ci.yml: the entitlements have to be embedded
       # or the app stops at the Siri authorization request.
       - name: Build QAudionApp for the iOS 27 simulator
         working-directory: QAudionApp

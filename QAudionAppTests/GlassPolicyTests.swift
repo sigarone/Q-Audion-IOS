@@ -6,7 +6,7 @@ import XCTest
 /// depends on what is behind it to be legible.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 final class GlassPolicyTests: XCTestCase {
 
     func testGlassNeedsASystemWithGlassAndNoAccessibilityRequest() {

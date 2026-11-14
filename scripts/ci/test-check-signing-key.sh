@@ -73,8 +73,9 @@ for bin in "$@"; do
   expect_refuse "$bin" "$D/truncated.pem" "truncated PEM"
 
   # One changed character in the middle of the key body: either the structure no longer
-  # parses or the key is no longer consistent. Both must be refused.
-  awk 'NR == 12 { $0 = (substr($0, 1, 9) == "AAAAAAAAA" ? "B" : "A") substr($0, 2) } { print }' "$D/trad.pem" > "$D/changed.pem"
+  # parses or the key is no longer consistent. Both must be refused. Line 12 gets "A" as
+  # its first character, or "B" when it starts with "A" already, so the byte always changes.
+  awk 'NR == 12 { $0 = (substr($0, 1, 1) == "A" ? "B" : "A") substr($0, 2) } { print }' "$D/trad.pem" > "$D/changed.pem"
   if cmp -s "$D/trad.pem" "$D/changed.pem"; then
     echo "FAIL: could not change the test key"
     fails=$((fails + 1))

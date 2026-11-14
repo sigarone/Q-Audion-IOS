@@ -7,7 +7,7 @@ import QAudionEngine
 /// system; the remote switch ships off. Pure: no database, no keychain, no network.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 @MainActor
 final class LocationAppTests: XCTestCase {
 

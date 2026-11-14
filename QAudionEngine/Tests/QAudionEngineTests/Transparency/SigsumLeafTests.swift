@@ -10,7 +10,7 @@ import CryptoKit
 ///
 /// ⚠️ Requires `swift test` (CryptoKit). Authored on win32, which cannot run
 /// CryptoKit locally — NOT executed in this session; the GitHub Actions
-/// macOS runner is the gate (see `ios-preflight`/`engine-tests.yml`), same
+/// macOS runner is the gate (see `ios-preflight`/`ios-ci.yml`), same
 /// as every other Crypto test in this target.
 final class SigsumLeafTests: XCTestCase {
 

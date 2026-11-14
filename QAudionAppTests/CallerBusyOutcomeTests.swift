@@ -6,7 +6,7 @@ import QAudionEngine
 /// unreachable: the outgoing screen message, the call-history label, and the end reason in the telemetry.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing`
-/// list of `.github/workflows/ios-app-tests.yml`.
+/// list of `.github/workflows/ios-ci.yml`.
 final class CallerBusyOutcomeTests: XCTestCase {
 
     func test_everyOutcomeHasAMessageForTheOutgoingScreen() {

@@ -18,7 +18,7 @@ import Foundation
 /// NOTE ON WHERE THIS ACTUALLY RUNS: `AudioProcessingPipeline` (like
 /// `AudioCapture`) sits behind `#if canImport(AVFoundation)`, and this whole
 /// SPM package fails to COMPILE on the sibling macOS `swift test` CI job
-/// (WebRTC ships no macOS slice — see `engine-tests.yml`'s own comment, that
+/// (WebRTC ships no macOS slice — see `ios-ci.yml`'s own comment, that
 /// job's exit code is masked intentionally). This file's tests therefore
 /// only actually execute on the `ios-simulator-tests` CI job, which is real
 /// AVFoundation on a real iOS Simulator — not a stub.

@@ -15,7 +15,7 @@ import ObjectiveC
 /// called by SiriKit; that is how a resolver written against the wrong result type can sit in the code unnoticed.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 final class IntentHandlerTests: XCTestCase {
 
     // MARK: - fakes and fixtures

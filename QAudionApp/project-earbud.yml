@@ -31,7 +31,7 @@
 #     That is an owner decision: the earbud stack is for hardware lab builds only and is
 #     kept out of store builds.
 #
-# ios-app-tests.yml compiles this variant on every pull request (job
+# ios-ci.yml compiles this variant on every pull request (job
 # earbud-variant-build) so the code does not rot while the default build leaves it out.
 
 include:

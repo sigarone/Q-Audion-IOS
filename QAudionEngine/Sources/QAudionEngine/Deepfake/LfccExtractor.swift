@@ -13,7 +13,7 @@ public final class LfccExtractor {
     // enrollment/verification never worked (100% reproducible, confirmed on
     // a real device: 3 full enrollment passes, always stuck at "processing"
     // — CI never caught it because QAudionEngineTests/SpeakerVerifierTests
-    // is skip-listed in engine-tests.yml). 960 matches the real per-call
+    // is skip-listed in ios-ci.yml). 960 matches the real per-call
     // frame size, so a single frame now always yields exactly 1 analysis
     // window (hopSize=480 divides it evenly), and SpeakerVerifier's
     // existing extract-per-frame design (which it inherited from the same

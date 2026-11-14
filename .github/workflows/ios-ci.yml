@@ -1,0 +1,1711 @@
+# iOS CI -- the workflow that runs on a pull request and on a push to main.
+#
+# It replaces engine-tests.yml, ios-app-tests.yml, ios-ci-gates.yml and shipper-tests.yml, which each started a run of
+# their own on the same change. One run now carries all of it, and the job `plan` decides what a change needs:
+#
+#   plan                          decides, from the paths of the change, which of the jobs below run
+#                                 (scripts/ci/ios-ci-plan.sh, and ios-variant-changes.sh for the variant builds)
+#   ios-simulator-tests           macOS: the QAudionEngine package tests on an iOS Simulator          (flag engine)
+#   app-build-and-tests           macOS: the app build, the gates on the built app, the app tests    (flag app)
+#   share/vpn/earbud-variant-build, release-config-build
+#                                 macOS: the variant builds                                           (flag per variant)
+#   gates                         Linux: the self-tests of the CI scripts, the source gates and the log filter tests
+#                                 (flag scripts, or flag app: the source gates read the app sources)
+#   signing-key-macos             macOS, seconds: the signing key check on the runner image's OpenSSL  (flag signing)
+#   swiftlint-qaudionapp-print-check   Linux: the print() ban in QAudionApp (always)
+#   swiftlint-report              Linux, report only, on push to main and on a manual run
+#   secret-scan-report            Linux, report only (gitleaks over the whole history, about 20 s), on every run: the
+#                                 repository is public, so a committed secret is reported before the merge
+#   result                        Linux: fails when a job that ran failed; one check for the whole run
+#
+# What a change starts:
+#   documentation only            plan, the print() ban, secret-scan-report and result run; no macOS job, no gates
+#   app source, extensions        app-build-and-tests, ios-simulator-tests (the engine tests read QAudionApp sources),
+#                                 gates, and the variant builds whose files changed
+#   QAudionAppTests only          app-build-and-tests and gates, not the engine tests
+#   engine source or tests        ios-simulator-tests, app-build-and-tests, gates, the variants the files name
+#   vectors, WIRE_SPEC.md         ios-simulator-tests only (the engine tests read them)
+#   scripts/ci, the log filter    gates (and the macOS job that runs the script, when it is one of those)
+#   another workflow              gates
+#   this file, the plan scripts, the label `full-ci`, a manual dispatch    everything
+#
+# Why two macOS test jobs and not one: QAudionEngine is compiled twice, in two configurations that do not share a
+# compile. Its own tests run in Release (the scrypt vectors with N=131072 take about a second in Release and minutes
+# in Debug, see Scrypt.swift and BackupCipherTests), the app build uses it as a Debug dependency. The two
+# jobs run side by side; one job would run them one after the other for the same compile work.
+#
+# Required checks of main: `ios-simulator-tests` and `swiftlint-qaudionapp-print-check` keep the names they had in
+# engine-tests.yml. A job skipped by its own `if:` counts as passed for a required check, which is how a change that
+# does not need a job is let through; a failure of `plan` runs every job instead (the jobs read "plan did not
+# succeed" as "needed", never as "skip"). The check `iOS CI result` is the single check of the whole run.
+#
+# Push to main (the commit the tag gate of ios-testflight.yml looks at): the plan is made from the paths of the push.
+# A push that changes code starts both macOS test jobs and every variant, except what the pull request already ran:
+# the job `reuse` (scripts/ci/ci-run-reuse.sh) skips a job that passed in this pull request's run of this workflow when
+# the squash commit has the very tree of the pull request head, which already held the parent of the commit. The
+# summary says which run each result was taken from; the gate of ios-testflight.yml repeats the check on the tagged
+# commit for every job a run skipped. A push of documentation or scripts starts no macOS job; to tag such a commit,
+# dispatch this workflow on it first (gh workflow run ios-ci.yml --ref <tag>): a dispatch runs everything.
+#
+# Runs on public-repo runners (free); no signing secrets, no network to any real backend: the tests are pure.
+
+name: iOS CI
+
+# The reuse on main finds the run of a pull request by this title: "PR #<number>", from the event and not from text
+# of the author (scripts/ci/ci-run-reuse.sh).
+run-name: "${{ github.event_name == 'pull_request' && format('PR #{0}', github.event.pull_request.number) || format('{0} {1}', github.event_name, github.ref_name) }}"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # By hand on a commit that has no run of its own (the TestFlight gate asks for one on the commit it ships). Runs everything.
+  workflow_dispatch:
+
+# Least privilege for the default GITHUB_TOKEN (CodeQL actions/missing-workflow-permissions):
+# every job here only checks the repository out and reads it. Caches and artifacts
+# use the runner's own token, not GITHUB_TOKEN, so no other scope is needed.
+permissions:
+  contents: read
+
+# A newer push to a pull request replaces the run in progress (the superseded run is for a head that is no longer the
+# one to merge). A push to main has a group of its own per commit, so a newer merge never replaces the run still pending
+# for an older commit (the TestFlight gate needs the run of the exact commit it ships), and a run on main is never
+# cancelled, so the step that writes the SPM cache on main always completes.
+concurrency:
+  group: ios-ci-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Same selector as ios-testflight.yml's "Select Xcode" step (scripts/ci/select-xcode.sh): the Xcode major that ships to
+  # TestFlight. ios-xcode27-canary.yml still compiles the app (CarPlay scene included) with Xcode 26, report only.
+  XCODE_VERSION: '27'
+  XCODE_PROJECT: QAudionApp.xcodeproj
+
+jobs:
+  # Decides which jobs this run needs. The flags are outputs; every job below reads "plan did not succeed" as "needed",
+  # so a failure of this job (checkout, file list unreadable or truncated, a decision script that fails) runs everything.
+  #
+  # Pull request: the files of the pull request (the API; a renamed file under both names) and the labels now (not those
+  # of the event payload, so a re-run after adding `full-ci` sees it). The decision scripts are the ones of the BASE of
+  # the pull request, never the pull request's own (a pull request that changes them must not decide with its own
+  # version; a change to them is everything, see ios-ci-plan.sh).
+  # Push to main: the files between the previous head of main and this commit.
+  # Manual dispatch: everything.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      app: ${{ steps.decide.outputs.app }}
+      engine: ${{ steps.decide.outputs.engine }}
+      scripts: ${{ steps.decide.outputs.scripts }}
+      signing: ${{ steps.decide.outputs.signing }}
+      share: ${{ steps.decide.outputs.share }}
+      vpn: ${{ steps.decide.outputs.vpn }}
+      earbud: ${{ steps.decide.outputs.earbud }}
+      release: ${{ steps.decide.outputs.release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Decide what the change needs
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -u
+          emit() { # emit APP ENGINE SCRIPTS SIGNING SHARE VPN EARBUD RELEASE
+            printf 'app=%s\nengine=%s\nscripts=%s\nsigning=%s\nshare=%s\nvpn=%s\nearbud=%s\nrelease=%s\n' "$@" >> "$GITHUB_OUTPUT"
+          }
+          all() {
+            emit true true true true true true true true
+            echo "$1: everything runs."
+            exit 0
+          }
+          case "$EVENT" in
+            pull_request)
+              if ! LABELS=$(gh api "repos/${REPO}/issues/${PR}/labels" --paginate --jq '.[].name'); then
+                echo "::warning::could not read the labels of the pull request: running everything"
+                all "Labels unavailable"
+              fi
+              if printf '%s\n' "$LABELS" | grep -qx 'full-ci'; then
+                all "Label full-ci"
+              fi
+              if ! FILES=$(gh api "repos/${REPO}/pulls/${PR}/files?per_page=100" --paginate --jq '.[] | .filename, (.previous_filename // empty)'); then
+                echo "::warning::could not list the files of the pull request: running everything"
+                all "File list unavailable"
+              fi
+              ;;
+            push)
+              case "$BEFORE" in ''|*[!0-9a-f]*|0000000000000000000000000000000000000000) all "No previous head of main in this push" ;; esac
+              if ! FILES=$(gh api "repos/${REPO}/compare/${BEFORE}...${SHA}?per_page=100" --paginate --jq '.files[]? | .filename, (.previous_filename // empty)'); then
+                echo "::warning::could not list the files of the push: running everything"
+                all "File list unavailable"
+              fi
+              ;;
+            *) all "Event ${EVENT}" ;;
+          esac
+          COUNT=$(printf '%s\n' "$FILES" | grep -c . || true)
+          # The API lists at most 3000 files; an empty or full list is not trusted.
+          if [ "$COUNT" -eq 0 ] || [ "$COUNT" -ge 3000 ]; then
+            echo "::warning::file list of ${COUNT} entries is empty or possibly truncated: running everything"
+            all "File list untrusted"
+          fi
+
+          # The decision scripts: on a pull request those of the base (neither available: everything), on a push those
+          # of the commit, which is already on main.
+          PLAN="scripts/ci/ios-ci-plan.sh"
+          if [ "$EVENT" = "pull_request" ]; then
+            if ! git fetch --no-tags --depth=1 origin "$BASE_SHA" >/dev/null 2>&1; then
+              echo "::warning::base commit not fetched: running everything"
+              all "Base unavailable"
+            fi
+            PLAN="${RUNNER_TEMP}/ios-ci-plan.base.sh"
+            if ! git show "${BASE_SHA}:scripts/ci/ios-ci-plan.sh" > "$PLAN" 2>/dev/null; then
+              echo "::warning::scripts/ci/ios-ci-plan.sh is not on the base branch: running everything"
+              all "Plan script not on base"
+            fi
+          fi
+          if ! OUT=$(printf '%s\n' "$FILES" | EVENT="$EVENT" sh "$PLAN"); then
+            echo "::warning::plan script failed: running everything"
+            all "Plan script failed"
+          fi
+          printf '%s\n' "$OUT"
+          flag() { printf '%s\n' "$OUT" | sed -n "s/^$1=//p"; }
+          APP=$(flag app); ENGINE=$(flag engine); SCRIPTS=$(flag scripts); SIGNING=$(flag signing)
+          for v in "$APP" "$ENGINE" "$SCRIPTS" "$SIGNING"; do
+            case "$v" in true|false) ;; *) echo "::warning::plan script gave an unreadable answer: running everything"; all "Plan unreadable" ;; esac
+          done
+
+          # The variant builds need the app flag. A pull request builds only the variants whose files changed; a push
+          # to main builds all of them (the tag gate wants every one).
+          SHARE=false; VPN=false; EARBUD=false; RELEASE=false
+          if [ "$APP" = "true" ]; then
+            if [ "$EVENT" = "pull_request" ]; then
+              VARIANTS="${RUNNER_TEMP}/ios-variant-changes.base.sh"
+              if ! git show "${BASE_SHA}:scripts/ci/ios-variant-changes.sh" > "$VARIANTS" 2>/dev/null; then
+                echo "::warning::scripts/ci/ios-variant-changes.sh is not on the base branch: running all variants"
+                SHARE=true; VPN=true; EARBUD=true; RELEASE=true
+              elif ! VOUT=$(printf '%s\n' "$FILES" | BASE_REV="$BASE_SHA" sh "$VARIANTS"); then
+                echo "::warning::variant decision script failed: running all variants"
+                SHARE=true; VPN=true; EARBUD=true; RELEASE=true
+              else
+                printf '%s\n' "$VOUT"
+                vflag() { printf '%s\n' "$VOUT" | sed -n "s/^$1=//p"; }
+                SHARE=$(vflag share); VPN=$(vflag vpn); EARBUD=$(vflag earbud); RELEASE=$(vflag release)
+              fi
+            else
+              SHARE=true; VPN=true; EARBUD=true; RELEASE=true
+            fi
+          fi
+          for v in "$SHARE" "$VPN" "$EARBUD" "$RELEASE"; do
+            case "$v" in true|false) ;; *) echo "::warning::variant script gave an unreadable answer: running all variants"; SHARE=true; VPN=true; EARBUD=true; RELEASE=true ;; esac
+          done
+          emit "$APP" "$ENGINE" "$SCRIPTS" "$SIGNING" "$SHARE" "$VPN" "$EARBUD" "$RELEASE"
+          echo "Decision (${COUNT} paths): app=$APP engine=$ENGINE scripts=$SCRIPTS signing=$SIGNING share=$SHARE vpn=$VPN earbud=$EARBUD release=$RELEASE"
+
+  # On push to main: the jobs that already passed on the pull request this commit squash-merges are not run again.
+  # scripts/ci/ci-run-reuse.sh reuses a job only when the head of that pull request (same repository) has the very tree
+  # of this commit, already contained the parent of this commit, and this pull request's run of this workflow on that
+  # head passed the job. Anything else, or an error, reuses nothing: the jobs below read an empty output as "run".
+  # The summary says which run the result was taken from; the TestFlight gate (ios-testflight.yml) checks it again.
+  # QAudionEngine/Package.swift keys the SPM cache that ios-simulator-tests saves on main, and that file together with
+  # QAudionApp/project.yml keys the one that app-build-and-tests saves, so a commit that changes the file of a cache runs
+  # the job that writes it.
+  reuse:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      sim: ${{ steps.decide.outputs.sim }}
+      app: ${{ steps.decide.outputs.app }}
+      share: ${{ steps.decide.outputs.share }}
+      vpn: ${{ steps.decide.outputs.vpn }}
+      earbud: ${{ steps.decide.outputs.earbud }}
+      release: ${{ steps.decide.outputs.release }}
+    steps:
+      - name: Checkout (CI scripts only)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+
+      - name: Reuse the results of the pull request
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -u
+          OUT_SIM=$(KEEP_PATHS="QAudionEngine/Package.swift" sh scripts/ci/ci-run-reuse.sh ios-ci.yml ios-simulator-tests) || OUT_SIM=""
+          OUT_APP=$(KEEP_PATHS="QAudionEngine/Package.swift QAudionApp/project.yml" sh scripts/ci/ci-run-reuse.sh ios-ci.yml app-build-and-tests share-variant-build vpn-variant-build earbud-variant-build release-config-build) || OUT_APP=""
+          for pair in sim:ios-simulator-tests app:app-build-and-tests share:share-variant-build vpn:vpn-variant-build earbud:earbud-variant-build release:release-config-build; do
+            if printf '%s\n%s\n' "$OUT_SIM" "$OUT_APP" | cut -f1 | grep -qxF "${pair#*:}"; then V=true; else V=false; fi
+            echo "${pair%%:*}=${V}" >> "$GITHUB_OUTPUT"
+            echo "${pair#*:}: reused=${V}"
+          done
+
+  # The QAudionEngine package tests. Required check of main under this name (a skipped job counts as passed).
+  # iOS Simulator job — runs xcodebuild test targeting arm64 simulator.
+  # This uses the ios-arm64-simulator slice of QaudionCryptoCore.xcframework
+  # (v0.1.2) so RatchetNative.available = true and RatchetNativeRoundTripTests
+  # run fully (not skipped). WebRTC's iOS-simulator slice is present, so this
+  # job does NOT share the macOS-slice-missing issue.
+  ios-simulator-tests:
+    needs: [plan, reuse]
+    if: ${{ !cancelled() && needs.reuse.outputs.sim != 'true' && (needs.plan.result != 'success' || needs.plan.outputs.engine == 'true') }}
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      # Newest installed Xcode 27 RELEASE (a beta or release candidate is never chosen); the exact
+      # path, build and SDK list are printed. The explicit-module cache below is keyed on the
+      # exact toolchain build number (output `build`), not just the ${XCODE_VERSION} major pin,
+      # because a .pcm built by one Xcode build is not guaranteed compatible with another (same
+      # major, different point release/build on a runner-image bump), and a stale/incompatible
+      # module cache produces confusing compiler errors that look nothing like the OOM this cache
+      # is meant to fix.
+      - name: Select Xcode
+        id: select-xcode
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
+
+      - name: Cache SPM (iOS Simulator)
+        id: cache-spm-ios
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+            QAudionEngine/.build
+          # Bumped to v2 2026-07-28 (then a LiveKit 2.13->2.15 bump; LiveKit is
+          # no longer a dependency since group calls v2, the rationale below
+          # still applies to any fork-URL swap) and dropped the
+          # restore-keys prefix fallback on purpose: SPM's local checkout
+          # cache is keyed by package IDENTITY (repo name), not URL. The old
+          # v1- prefix fallback restored a stale checkout for the
+          # "webrtc-xcframework" identity from a PRIOR resolution whose
+          # manifest pointed at livekit's upstream URL, and SPM kept
+          # `git fetch`-ing that same checkout's already-configured (wrong)
+          # remote even after this Package.swift's transitive redirect
+          # changed to sigarone's AES-256 fork — confirmed live (run
+          # 30344495020: resolved "LiveKitWebRTC: .../livekit/
+          # webrtc-xcframework.git @ 144.7559.10" instead of the sigarone
+          # fork; sigarone/webrtc-xcframework was never even considered as a
+          # candidate). A prefix-fallback hit on an exact-key MISS is exactly
+          # the scenario that can resurrect this: any future fork-URL swap
+          # under an unchanged package identity would silently reintroduce
+          # it. Exact-key-only means a genuine Package.swift change always
+          # gets a fully fresh resolve — slower on that one run, never stale.
+          key: ios-sim-spm-v2-${{ hashFiles('QAudionEngine/Package.swift') }}
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      # Cache the Swift explicit-module cache across runs. Two distinct
+      # DerivedData subdirectories hold generated .pcm files and both are
+      # cached: ModuleCache.noindex (system frameworks -- SwiftUI, Vision,
+      # CoreML, AVFoundation, ...) and Build/Intermediates.noindex/
+      # SwiftExplicitPrecompiledModules (this package's own binaryTargets --
+      # WebRTC; historically also LiveKitWebRTC and LKObjCHelpers, which
+      # were dropped when group calls v2 removed LiveKit). The latter is not
+      # optional: in every failing run's log (recorded while LiveKit was
+      # still a dependency), the LAST module line before output went silent
+      # (the OOM kill point) was always one of exactly those three --
+      # WebRTC (+ the since-removed LiveKitWebRTC/LKObjCHelpers) are the
+      # heaviest ObjC++ module builds this target does, so leaving that
+      # directory uncached would still force a cold rebuild of precisely the
+      # framework most implicated in the crash.
+      #
+      # Root cause (2026-08-26): this job runs on macos-latest,
+      # which is 3 vCPU / 7 GB RAM (confirmed against GitHub's own runner
+      # spec table, not assumed) -- and until this cache existed, EVERY push
+      # cold-rebuilt the explicit-module graph for the entire system-
+      # framework set this target touches (SwiftUI, Vision, CoreML,
+      # AVFoundation, WebRTC (+ LiveKitWebRTC at the time), ~30 frameworks total,
+      # confirmed by grepping a failing run's log for
+      # SwiftExplicitDependencyGeneratePcm) from scratch, with xcodebuild's
+      # default (unthrottled) build concurrency. That cold burst is the
+      # dominant memory cost of this job. Bisecting CI history (`gh run
+      # list`) found the job green through commit 534e804c and failing on
+      # every run from 00e38574 onward (+2262 lines / 22 files, incl. 4 new
+      # XCTest files) -- the added compile-graph size tipped peak RSS over
+      # the 7 GB ceiling. Every failing run's log shows the SAME signature:
+      # output stops mid-module-list with NO xcodebuild error text and NO
+      # "::error::...watchdog" line (that only prints on OUR 15-min kill,
+      # line ~257 below) at a VARYING point (5m36s to 15min+) -- consistent
+      # with an external SIGKILL from the kernel OOM killer, not a hang or a
+      # real compile/test failure. Caching the module cache removes the cold
+      # full-framework-graph rebuild on every run, which should keep steady-
+      # state peak RSS well under the ceiling; -jobs 2 below is a second,
+      # independent safety margin in case a cache-miss run (Xcode bump,
+      # first run after this change) still spikes.
+      #
+      # Keyed on the exact Xcode BUILD number (not just the ${XCODE_VERSION}
+      # major pin) because a .pcm from one Xcode build is not guaranteed
+      # compatible with another -- restoring a stale/incompatible module
+      # cache would produce confusing compiler errors, not the OOM this is
+      # meant to fix. restore-keys falls back to any cache for the same
+      # Xcode build even if Package.swift changed, since most of the cache's
+      # value is the ~30 SYSTEM framework .pcm files, which don't depend on
+      # our own package's dependency graph at all.
+      - name: Cache explicit-module cache (iOS Simulator)
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            /tmp/dd-ios-sim/ModuleCache.noindex
+            /tmp/dd-ios-sim/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules
+          key: ios-sim-modulecache-v1-${{ runner.os }}-${{ steps.select-xcode.outputs.build }}-${{ hashFiles('QAudionEngine/Package.swift') }}
+          restore-keys: |
+            ios-sim-modulecache-v1-${{ runner.os }}-${{ steps.select-xcode.outputs.build }}-
+
+      - name: Resolve dependencies
+        if: steps.cache-spm-ios.outputs.cache-hit != 'true'
+        run: |
+          cd QAudionEngine
+          swift package resolve
+
+      # The newest iOS runtime does not carry every device, so the simulator is picked by UDID
+      # (the highest iOS 26+ runtime that has it) instead of OS=latest.
+      - name: Pick the simulator
+        id: sim
+        run: python3 -I scripts/ci/resolve_simulator.py "iPhone 17" --min-ios 26
+
+      - name: Run Tests (iOS Simulator)
+        env:
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          cd QAudionEngine
+          # 2026-07-08: this job was hanging and getting force-cancelled by
+          # GitHub's 60min job timeout on EVERY push for 3+ days (confirmed
+          # across 10+ unrelated commits) — root-caused to a genuine thread-
+          # pool-starvation deadlock inside TusUploadClientTests' Task.sleep-
+          # based retry test, specific to the Simulator runner (never
+          # reproduces on the sibling macOS "test" job). An in-process Swift
+          # `withThrowingTaskGroup` timeout was tried first and did NOT help
+          # (confirmed: still hit the 60min ceiling) — a true thread deadlock
+          # starves the async timeout task's own continuation too, since it
+          # needs a free cooperative-pool thread just like the hung code
+          # does. Only a process-external watchdog can actually interrupt
+          # this. Portable pure-bash (no dependency on `timeout`/`gtimeout`
+          # binary presence on the runner) — kill xcodebuild outright after
+          # 25 min instead of silently burning the full 60min job ceiling on
+          # every single push.
+          # -configuration Release: without it, `xcodebuild test` defaults to
+          # Debug (-Onone, no optimizer) -- confirmed 2026-07-08 by pushing a
+          # from-scratch rewrite of Scrypt.swift's hot loops (Data subscript ->
+          # [UInt8] + withUnsafe(Mutable)BufferPointer, eliminating Data's
+          # bridging/COW overhead) that made almost no difference in this job
+          # (258s vs the prior 294s for the same N=131072 derivation -- ~12%,
+          # not the 10-100x a real algorithmic fix should show). The dominant
+          # cost is the missing optimizer, not the data-structure choice; the
+          # Scrypt.swift rewrite is still a legitimate improvement, just not
+          # sufficient alone.
+          #
+          # SWIFT_ENABLE_TESTABILITY=YES: SPM only auto-adds `-enable-testing`
+          # to a library target's Debug build. Forcing -configuration Release
+          # above (this run, 2026-07-08) never got exercised until the Go
+          # version pin above was fixed the same day -- so this was a second,
+          # previously-masked break: `@testable import QAudionEngine` in the
+          # test target failed with "module 'QAudionEngine' was not compiled
+          # for testing" the first time this job ever actually reached this
+          # step under Release. Overriding the build setting directly here
+          # (rather than in Package.swift's unsafeFlags, which would make
+          # this package ineligible as a remote SPM dependency for any other
+          # consumer) keeps this a CI-only concession.
+          #
+          # 2026-07-10: test_markViewOnceOpened_incomingRow_armsExpiryAndOpensIt
+          # was skipped here (commit 89a221a) on the theory that it was a
+          # Simulator-only GRDB write/read quirk, since the sibling macOS
+          # "test" job "kept passing". That premise was never actually true:
+          # the macOS job's `swift build`/`swift test` steps are piped through
+          # `| tail -100`, which masks their exit code, and on macOS the whole
+          # package fails to COMPILE (WebRTC has no macOS slice --
+          # RTCVideoEncoderH265/RTCVideoDecoderH265 missing, plus an
+          # iOS-only `.keyboardType` SwiftUI call) before it ever reaches
+          # XCTest -- confirmed by grepping that CI job's log for `Test
+          # Suite`: zero matches, ever. So the macOS job was never real
+          # counter-evidence; this job (iOS Simulator) is the ONLY place the
+          # test (and the code it exercises) actually runs.
+          # Real root cause: QAudionEngine/Sources/QAudionEngine/Persistence/
+          # DatabaseMappers.swift's hand-written `Message.encode(to:)` /
+          # `Message.init(row:)` never mapped the `isViewOnce`/
+          # `viewOnceOpened` columns (added by the `v4-view-once-screenshot-
+          # perm` migration) to/from GRDB's PersistenceContainer/Row. Every
+          # write silently dropped both columns and every read hard-defaulted
+          # them to the initializer's `nil`, regardless of what was actually
+          # in `messages.viewOnceOpened` -- a deterministic mapping bug, not
+          # a timing race (production impact: ChatDetailScreen re-reads a
+          # persisted view-once row and always treats it as a normal message,
+          # since `msg.isViewOnce` reads back nil after any DB round-trip).
+          # Fixed by adding both columns to encode(to:)/init(row:) -- un-
+          # skipping this test now that the underlying bug is fixed.
+          #
+          # 2026-07-22: HandshakeTranscriptKatTests was permanently skipped
+          # here with no root cause ever found -- confirmed via a real run
+          # of THIS job (PR #34, commit 5a8b0b0) that
+          # testHandshakeSigKatMatchesCrossPlatformContract failed on the
+          # signature byte-equality assertion for both OFFER and ACCEPT
+          # vectors while the transcript SHA-256/length assertions passed.
+          # Root cause: not a bug. Apple's own doc for
+          # `Curve25519.Signing.PrivateKey.signature(for:)` states CryptoKit
+          # "employs randomization to generate a different signature on
+          # every call, even for the same data and key, to guard against
+          # side-channel attacks" -- confirmed independently by re-deriving
+          # the golden signatures with an OpenSSL/`cryptography`-backed
+          # Python reference from the exact seed + transcript bytes (dumped
+          # via Android's HandshakeTranscript.offer()/accept(), the same
+          # functions Android's own KAT test consumes): they match the
+          # golden byte-for-byte, so BouncyCastle/OpenSSL are deterministic
+          # and the golden vector is correct -- CryptoKit alone isn't. Test
+          # fixed to assert the actual cross-platform contract instead
+          # (iOS verifies the golden, and iOS's own signature verifies
+          # under its own key) rather than byte-equality CryptoKit was
+          # never going to satisfy. Un-skipping now that it asserts the
+          # right thing.
+          # -jobs 2 / COMPILER_INDEX_STORE_ENABLE=NO (2026-08-26): safety
+          # margin on top of the ModuleCache.noindex cache added above --
+          # macos-latest is 3 vCPU / 7 GB RAM. Capping build concurrency
+          # reduces peak concurrent swift-frontend/clang worker RSS at the
+          # cost of wall-clock time; disabling the index store (never
+          # consumed here -- no Xcode UI navigates this CI-only
+          # DerivedData) removes a purely-additive memory/disk cost.
+          #
+          # CONFIRMED NOT SUFFICIENT ALONE (2026-08-26, run 32939729408):
+          # the very first run after adding the cache above still died at
+          # the exact same point as before -jobs 2 existed -- mid explicit-
+          # module precompile, immediately after WebRTC/LiveKitWebRTC/
+          # LKObjCHelpers (LiveKit-era modules, since removed) -- just
+          # slower getting there (9m43s vs the prior
+          # 5m36s). Expected: that run's cache was necessarily a cold MISS
+          # (first run with this key), and -jobs 2 lowers peak RSS without
+          # lowering the SINGLE heaviest module's own compile footprint
+          # enough to fit under 7 GB from a fully cold start. Worse: a job
+          # that OOMs before the cache-SAVE step (which runs in job
+          # cleanup) never populates the cache for the NEXT run either --
+          # so a cold run stays stuck cold forever without the retry below.
+          #
+          # SWIFT_ENABLE_EXPLICIT_MODULES=NO (2026-08-26, THIRD attempt):
+          # the retry loop below (added for the SECOND attempt, run
+          # 32940815497) did NOT help either -- its own "::group::attempt
+          # 1/2" line opened and never closed, meaning the whole script's
+          # process tree died mid-attempt-1, not just the xcodebuild child.
+          # That rules out "OOM kills xcodebuild, shell survives to retry"
+          # as the only failure mode here -- some kills take the whole job
+          # step down at once (consistent with GitHub's own low-memory
+          # runner abort, not just the kernel OOM-killer picking a single
+          # victim PID), which no in-script retry can survive by
+          # construction. Real lever instead: explicit module builds
+          # (Xcode 16+ default, what SwiftExplicitDependencyGeneratePcm --
+          # the exact step every failing run dies inside -- IS) precompile
+          # every imported framework into a standalone .pcm up front, all
+          # at once, before any of our own source compiles; the OLDER
+          # implicit-module mechanism resolves modules lazily per
+          # translation unit via clang's traditional module cache, with a
+          # materially smaller peak burst (real, documented Xcode build
+          # setting -- confirmed via Apple's own explicit-modules doc and a
+          # live report of the exact same setting/symptom on Bitrise's
+          # forum, not guessed). Trades some incremental-build speed for a
+          # much lower peak RSS; on a CI job that runs cold every time
+          # anyway, that trade is free.
+          #
+          # RETRY: kept as a second, independent, low-cost safety margin --
+          # up to 2 attempts of the SAME xcodebuild invocation in the SAME
+          # job. Still correct reasoning for the failure mode it DOES cover
+          # (a plain SIGKILL of just the xcodebuild PID, which the FIRST
+          # failing run after the module-cache fix showed: DerivedData
+          # survives on local disk, so a same-job retry only needs to
+          # finish precompiling whatever attempt 1 didn't reach). Harmless
+          # no-op on the whole-tree-killed failure mode above -- nothing
+          # survives to retry there either way, so this loop costs nothing
+          # extra beyond one skipped iteration. -resultBundlePath must be
+          # unique per attempt (xcodebuild refuses to write into an
+          # already-existing bundle).
+          # 2026-11-06: timings of the last 13 runs (build + test, one attempt) ranged from 13 to 25 min on the same
+          # code, so the old 25 min watchdog sat right at the slow end and killed one finished-but-slow run while it
+          # wrote its result bundle. Now 35 min. The code coverage instrumentation (-profile-generate in the whole
+          # module compile) is off: nothing here reads coverage, and it slows both the compile and the test run.
+          # 2026-11-14: -retry-tests-on-failure -test-iterations 2 reruns ONLY a failed test case once (seconds, not the
+          # suite). A real failure fails twice and still fails the job; a timing-sensitive test that passes on the rerun
+          # is marked flaky in the result bundle. Three different timing tests failed on three runs of unrelated PRs.
+          ATTEMPT=1
+          MAX_ATTEMPTS=2
+          EXIT_CODE=1
+          while [ "$ATTEMPT" -le "$MAX_ATTEMPTS" ] && [ "$EXIT_CODE" -ne 0 ]; do
+            echo "::group::xcodebuild test — attempt ${ATTEMPT}/${MAX_ATTEMPTS}"
+            xcodebuild test \
+              -scheme "QAudionEngine" \
+              -configuration Release \
+              -jobs 2 \
+              -enableCodeCoverage NO \
+              -retry-tests-on-failure \
+              -test-iterations 2 \
+              SWIFT_ENABLE_TESTABILITY=YES \
+              COMPILER_INDEX_STORE_ENABLE=NO \
+              SWIFT_ENABLE_EXPLICIT_MODULES=NO \
+              -destination "platform=iOS Simulator,id=$SIM_UDID" \
+              -derivedDataPath /tmp/dd-ios-sim \
+              -resultBundlePath "/tmp/ios-sim-results-attempt${ATTEMPT}.xcresult" &
+            XCODEBUILD_PID=$!
+            ( sleep 2100; echo "::error::xcodebuild test exceeded 35min watchdog — killing (was hanging the full 60min job timeout before this fix)"; kill -9 "$XCODEBUILD_PID" 2>/dev/null ) &
+            WATCHDOG_PID=$!
+            wait "$XCODEBUILD_PID"
+            EXIT_CODE=$?
+            kill "$WATCHDOG_PID" 2>/dev/null || true
+            echo "::endgroup::"
+            if [ "$EXIT_CODE" -ne 0 ] && [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; then
+              echo "::warning::xcodebuild test attempt ${ATTEMPT} failed (exit ${EXIT_CODE}) — retrying once against the now-partially-warm local DerivedData (see comment above)"
+            fi
+            ATTEMPT=$((ATTEMPT + 1))
+          done
+          exit "$EXIT_CODE"
+
+      # 2026-10-03 — diagnostic, failure only. The raw log of the step above stops at the QAudionEngine
+      # compile (xcodebuild's output after it never reaches the Actions log), so a red run said only
+      # "exit code 65" and nothing about WHICH test or build step failed. The result bundle is on the
+      # runner: print its build errors and its failed tests. Never fails the job (`|| true`).
+      - name: Show xcodebuild build errors and failed tests (xcresult)
+        if: failure()
+        run: |
+          for bundle in /tmp/ios-sim-results-attempt*.xcresult; do
+            [ -d "$bundle" ] || continue
+            echo "::group::$bundle build results"
+            xcrun xcresulttool get build-results --path "$bundle" --compact 2>&1 | head -c 30000 || true
+            echo
+            echo "::endgroup::"
+            echo "::group::$bundle test summary"
+            xcrun xcresulttool get test-results summary --path "$bundle" --compact 2>&1 | head -c 30000 || true
+            echo
+            echo "::endgroup::"
+          done
+
+      # 2026-10-03 — diagnostic, every run. The xcodebuild log does not name the test cases that ran, so a skipped
+      # or never-discovered suite looks exactly like a green one. This prints the executed cases by name (with the
+      # suites of the caller-busy work echoed separately) and uploads the full list. Never fails the job.
+      - name: List the executed test cases (xcresult)
+        if: always()
+        run: |
+          for bundle in /tmp/ios-sim-results-attempt*.xcresult; do
+            [ -d "$bundle" ] || continue
+            n=$(basename "$bundle" .xcresult)
+            echo "::group::$bundle test cases"
+            python3 scripts/ci/xcresult_test_list.py "$bundle" "/tmp/engine-test-cases-$n.txt" \
+              CallerBusyWiringTests OutgoingCallKitStartPolicyTests OutgoingCallKitFallbackTests \
+              CallTeardownLatchTests CallKitLateActivationTests PeerNameScopeTests \
+              CallerBusyPeerSilenceTests CallerBusyTeardownTests BusyToneTests \
+              CallerBusyHoldTests MissedCallsBadgeStateTests MissedCallAlertPolicyTests BadgeAndBusyHoldWiringTests \
+              GhostCallPolicyTests CallKitCallerNameTests \
+              FileV2KatTests FileV2DescriptorKatTests FileV2DescriptorTests FileV2ProfileTests FileV2LibraryTests \
+              FileV2ServerTranscriptTests FakeFileV2ServerTests FileV2DispositionTests FileV2ParallelismTests \
+              FileV2RetryAfterTests FileV2ServerTypesTests               FileV2ChatBodyTests FileV2LocalNameTests FileV2PartPlanTests FileV2HTTPWireTests               FileV2DocumentTransferTests FileV2UnfinishedCleanupTests ConversationStoreFileV2Tests               FileV2MediaPolicyTests FileV2MediaTransferTests \
+              ImageMetadataStripperTests || true
+            echo "::endgroup::"
+          done
+      - name: Upload the executed test case list
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: engine-test-cases-${{ github.run_number }}
+          path: /tmp/engine-test-cases-*.txt
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # The app build, the gates on the built app and the app tests.
+  app-build-and-tests:
+    needs: [plan, reuse]
+    if: ${{ !cancelled() && needs.reuse.outputs.app != 'true' && (needs.plan.result != 'success' || needs.plan.outputs.app == 'true') }}
+    runs-on: xcode-27
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      # Same selector as ios-testflight.yml / ios-ui-smoke.yml (newest installed Xcode 27 release).
+      - name: Select Xcode
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
+
+      # The newest iOS runtime does not carry every device, so the simulator is picked by UDID
+      # (the highest iOS 26+ runtime that has it) instead of OS=latest.
+      - name: Pick the simulator
+        id: sim
+        run: python3 -I scripts/ci/resolve_simulator.py "iPhone 17" --min-ios 26
+
+      - name: Restore SPM packages
+        id: cache-spm
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+      - name: Generate Xcode project (default spec, no VPN support)
+        working-directory: QAudionApp
+        run: |
+          xcodegen generate
+          xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
+
+      # Ad-hoc local signing, not CODE_SIGNING_ALLOWED=NO: see the note above
+      # the same step in ios-ui-smoke.yml (entitlements must be embedded or
+      # the app crashes on Siri authorization at launch).
+      - name: Build QAudionApp for Simulator (compile check)
+        working-directory: QAudionApp
+        env:
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
+            -derivedDataPath /tmp/dd-ios-app \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            2>&1 | tee build-sim.log \
+          || (echo ""; echo "=== BUILD FAILED -- last 300 lines of build-sim.log ==="; tail -300 build-sim.log; exit 1)
+
+      # The warnings of the build are listed in the job summary, and the job fails when the
+      # project's own sources (app, extensions, engine) hold more than the counted baseline in
+      # scripts/ci/warning-baseline.txt (zero).
+      - name: Compiler warnings of the build
+        if: always()
+        env:
+          DIAG_OUT: ${{ runner.temp }}/diagnostics-app-build.txt
+        run: sh scripts/ci/xcode-diagnostics-summary.sh "App build (Debug, simulator)" QAudionApp/build-sim.log
+
+      - name: Warning baseline
+        run: sh scripts/ci/check-warning-baseline.sh QAudionApp/build-sim.log
+
+      # Only main writes the entry, and only when the exact key was not found;
+      # pull requests read it and never save. The package cache is filled by
+      # the build above, so this sits right after it and does not wait for the
+      # tests.
+      - name: Save SPM packages (main only)
+        if: github.ref == 'refs/heads/main' && steps.cache-spm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+
+      # The gate's own self-test, then the gate on the app just built from the
+      # default spec (Simulator Debug, ad-hoc signed so the entitlements are
+      # embedded): no packet-tunnel extension, no Network Extension / vpn.api
+      # entitlement, no NetworkExtension.framework load command, no WireGuard.
+      - name: No VPN support in the default build
+        run: |
+          set -e
+          sh scripts/ci/test-assert-no-vpn.sh
+          APP="/tmp/dd-ios-app/Build/Products/Debug-iphonesimulator/QAudionApp.app"
+          test -d "$APP"
+          ls "$APP/PlugIns"
+          sh scripts/ci/assert-no-vpn.sh "$APP"
+
+      # The Live Activity widget extension is part of the default build: embedded, a widget extension, with its privacy manifest
+      # and a live-activities flag in the app.
+      - name: The Live Activity extension is embedded
+        run: |
+          set -e
+          APP="/tmp/dd-ios-app/Build/Products/Debug-iphonesimulator/QAudionApp.app"
+          EXT="$APP/PlugIns/QAudionLiveActivity.appex"
+          test -d "$EXT"
+          plutil -lint "$EXT/Info.plist"
+          test "$(plutil -extract NSExtension.NSExtensionPointIdentifier raw -o - "$EXT/Info.plist")" = "com.apple.widgetkit-extension"
+          test "$(plutil -extract CFBundleIdentifier raw -o - "$EXT/Info.plist")" = "com.qaudion.app.live-activity"
+          test -f "$EXT/PrivacyInfo.xcprivacy"
+          test "$(plutil -extract NSSupportsLiveActivities raw -o - "$APP/Info.plist")" = "true"
+          echo "live activity extension embedded"
+
+      # The earbud hardware stack is a compile-time switch (QAUDION_EARBUD) and the default
+      # spec does not compile it: the sources first (python, no build needed), the gate's own
+      # self-test, then the gate on the app just built. A Debug build keeps the object file
+      # paths of every compiled source in its debug map, including the empty ones of the
+      # compiled-out files, which is why the gate matches the mangled class names.
+      - name: No earbud hardware stack in the default build
+        run: |
+          set -e
+          python3 -I scripts/ci/check_earbud_gating.py
+          sh scripts/ci/test-assert-no-earbud.sh
+          APP="/tmp/dd-ios-app/Build/Products/Debug-iphonesimulator/QAudionApp.app"
+          test -d "$APP"
+          sh scripts/ci/assert-no-earbud.sh "$APP"
+
+      # CarPlay is part of every build: the sources first (python, no build needed), then the app just built. Its
+      # Info.plist declares the CarPlay scene (role CPTemplateApplicationSceneSessionRoleApplication with the scene
+      # delegate, multiple scenes on), the scene class is in the binary, CarPlay.framework is linked, and the app is
+      # signed with the CarPlay Communication entitlement.
+      - name: CarPlay scene in the default build
+        run: |
+          set -e
+          python3 -I scripts/ci/check_carplay_gating.py
+          python3 -I scripts/ci/test_check_carplay_gating.py
+          APP="/tmp/dd-ios-app/Build/Products/Debug-iphonesimulator/QAudionApp.app"
+          test -d "$APP"
+          ROLE="UIApplicationSceneManifest.UISceneConfigurations.CPTemplateApplicationSceneSessionRoleApplication"
+          plutil -p "$APP/Info.plist" | grep -A12 UIApplicationSceneManifest || true
+          test "$(plutil -extract "$ROLE.0.UISceneDelegateClassName" raw -o - "$APP/Info.plist")" = "QAudionApp.CarPlaySceneDelegate"
+          test "$(plutil -extract "$ROLE.0.UISceneConfigurationName" raw -o - "$APP/Info.plist")" = "QAudionCarPlay"
+          test "$(plutil -extract UIApplicationSceneManifest.UIApplicationSupportsMultipleScenes raw -o - "$APP/Info.plist")" = "true"
+          if [ -z "$(grep -rlaF '20CarPlaySceneDelegate' "$APP" | head -1)" ]; then
+            echo "::error::the build does not contain the CarPlay scene delegate"
+            exit 1
+          fi
+          # CarPlay.framework is a weak load command and not a strong one (the app may run as an iPad app on a Mac).
+          LOADS=""
+          for BIN in "$APP/QAudionApp.debug.dylib" "$APP/QAudionApp"; do
+            if [ -f "$BIN" ]; then
+              LOADS="$LOADS $(otool -l "$BIN" | awk '/cmd LC_/ {cmd=$2} /name .*CarPlay\.framework\/CarPlay/ {print cmd}' | tr '\n' ' ')"
+            fi
+          done
+          echo "CarPlay load commands:${LOADS:- none}"
+          case " $LOADS " in
+            *" LC_LOAD_WEAK_DYLIB "*) ;;
+            *) echo "::error::the build does not link CarPlay.framework weakly"; exit 1 ;;
+          esac
+          case " $LOADS " in
+            *" LC_LOAD_DYLIB "*) echo "::error::CarPlay.framework is linked strongly"; exit 1 ;;
+          esac
+          # The Simulator build is ad-hoc signed: the entitlements are in the signature and in the binary.
+          KEY=com.apple.developer.carplay-communication
+          SIGNED=$(codesign -d --entitlements :- "$APP" 2>/dev/null | grep -c "$KEY" || true)
+          EMBEDDED=$(grep -rlaF "$KEY" "$APP" | head -1)
+          if [ "$SIGNED" = "0" ] && [ -z "$EMBEDDED" ]; then
+            echo "::error::the build is not signed with the CarPlay Communication entitlement"
+            exit 1
+          fi
+
+      - name: Generate Xcode project (with the app-test target)
+        working-directory: QAudionApp
+        run: |
+          xcodegen generate --spec project-apptests.yml
+          xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -30
+
+      # -only-testing repeats the file list in project-apptests.yml on
+      # purpose: a class that is added there but forgotten here (or the other
+      # way round) should fail loudly instead of silently not running.
+      - name: Run app-target unit tests
+        env:
+          SIM_UDID: ${{ steps.sim.outputs.udid }}
+        # A run that stalls here (the 2026-10-04 stdout-tee feedback loop did, for the whole job cap) is cut after
+        # 25 minutes instead of 60: a healthy run takes about a minute.
+        timeout-minutes: 25
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionAppTests \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
+            -derivedDataPath /tmp/dd-ios-app \
+            -parallel-testing-enabled NO \
+            -only-testing:QAudionAppTests/AbuseReportCategoryTests \
+            -only-testing:QAudionAppTests/AdaptiveLayoutPolicyTests \
+            -only-testing:QAudionAppTests/AgeDeclarationTests \
+            -only-testing:QAudionAppTests/AppLockServiceTests \
+            -only-testing:QAudionAppTests/AppUpdateLinkTests \
+            -only-testing:QAudionAppTests/AppStateFilesServerUrlTests \
+            -only-testing:QAudionAppTests/AvatarAnnouncePolicyTests \
+            -only-testing:QAudionAppTests/AvatarSentLedgerTests \
+            -only-testing:QAudionAppTests/AvatarAnnounceCoordinatorTests \
+            -only-testing:QAudionAppTests/AvatarContentHashTests \
+            -only-testing:QAudionAppTests/AvatarImageGeometryTests \
+            -only-testing:QAudionAppTests/AvatarImageIntegrityTests \
+            -only-testing:QAudionAppTests/AvatarInboundApplierTests \
+            -only-testing:QAudionAppTests/AvatarReceivedLedgerTests \
+            -only-testing:QAudionAppTests/AvatarImageResizerTests \
+            -only-testing:QAudionAppTests/AvatarSendCopyTests \
+            -only-testing:QAudionAppTests/AvatarThumbnailTests \
+            -only-testing:QAudionAppTests/BlockedContactsStoreTests \
+            -only-testing:QAudionAppTests/BugReportConsentTests \
+            -only-testing:QAudionAppTests/BugReportFreezeTests \
+            -only-testing:QAudionAppTests/BugReporterRetryQueueTests \
+            -only-testing:QAudionAppTests/CatalogHygieneTests \
+            -only-testing:QAudionAppTests/PeerDiagResponderTests \
+            -only-testing:QAudionAppTests/ChatVoiceNoteSenderMaxUsesTests \
+            -only-testing:QAudionAppTests/CallCloseReasonRedactionTests \
+            -only-testing:QAudionAppTests/CrashDiagnosticsRedactionTests \
+            -only-testing:QAudionAppTests/CallMetricsRedactionTests \
+            -only-testing:QAudionAppTests/CallMinimizePolicyTests \
+            -only-testing:QAudionAppTests/SasCardPlacementTests \
+            -only-testing:QAudionAppTests/CallControlDockTests \
+            -only-testing:QAudionAppTests/CallDiagnosticsModelTests \
+            -only-testing:QAudionAppTests/CallPipLayoutTests \
+            -only-testing:QAudionAppTests/InstallIdStoreTests \
+            -only-testing:QAudionAppTests/CredentialTextParserTests \
+            -only-testing:QAudionAppTests/StoreComplianceFlagsTests \
+            -only-testing:QAudionAppTests/CallerBusyOutcomeTests \
+            -only-testing:QAudionAppTests/CallStartSupportTests \
+            -only-testing:QAudionAppTests/CarPlayBridgeTests \
+            -only-testing:QAudionAppTests/CarPlayListModelTests \
+            -only-testing:QAudionAppTests/CarPlayLinkTests \
+            -only-testing:QAudionAppTests/ScreenshotLockServiceTests \
+            -only-testing:QAudionAppTests/ConfidenceToneTests \
+            -only-testing:QAudionAppTests/VersionInfoTests \
+            -only-testing:QAudionAppTests/DesignSystemAccessibilityTests \
+            -only-testing:QAudionAppTests/DeviceSymbolTests \
+            -only-testing:QAudionAppTests/EarbudCompileConditionTests \
+            -only-testing:QAudionAppTests/FeatureFlagKillSwitchTests \
+            -only-testing:QAudionAppTests/FeatureFlagsTests \
+            -only-testing:QAudionAppTests/FileV2ImageCleanerTests \
+            -only-testing:QAudionAppTests/GlassPolicyTests \
+            -only-testing:QAudionAppTests/IntentHandlerTests \
+            -only-testing:QAudionAppTests/KmsSweepStatusTests \
+            -only-testing:QAudionAppTests/LegalLinksTests \
+            -only-testing:QAudionAppTests/LocationAppTests \
+            -only-testing:QAudionAppTests/LiveActivityPolicyTests \
+            -only-testing:QAudionAppTests/LocationShareCenterEndTests \
+            -only-testing:QAudionAppTests/LocationShareCenterTests \
+            -only-testing:QAudionAppTests/LocationShareIntentTests \
+            -only-testing:QAudionAppTests/LogRedactorLocationTests \
+            -only-testing:QAudionAppTests/MeshAudioRouteTests \
+            -only-testing:QAudionAppTests/MeshConsentPresentationTests \
+            -only-testing:QAudionAppTests/MeshConsentTests \
+            -only-testing:QAudionAppTests/MeshReachTests \
+            -only-testing:QAudionAppTests/MessageSoundSettingsTests \
+            -only-testing:QAudionAppTests/NotificationContentBuilderTests \
+            -only-testing:QAudionAppTests/MissedCallsBadgeTests \
+            -only-testing:QAudionAppTests/NoticeServiceTests \
+            -only-testing:QAudionAppTests/RemoteMessageAlertPolicyTests \
+            -only-testing:QAudionAppTests/RemoteMessageAlertCleanerTests \
+            -only-testing:QAudionAppTests/PhonebookImportGateTests \
+            -only-testing:QAudionAppTests/PersistentCallRecordStoreTests \
+            -only-testing:QAudionAppTests/ProximityPairingTelemetryRedactionTests \
+            -only-testing:QAudionAppTests/QuickActionTests \
+            -only-testing:QAudionAppTests/RegistrationUnavailableMappingTests \
+            -only-testing:QAudionAppTests/RecoveryEnrollmentStatusTests \
+            -only-testing:QAudionAppTests/ReKeyAvatarRingTests \
+            -only-testing:QAudionAppTests/RuntimeLogSinkTeeTests \
+            -only-testing:QAudionAppTests/ShareQueueTests \
+            -only-testing:QAudionAppTests/SiriIntentPolicyTests \
+            -only-testing:QAudionAppTests/TrustEvaluationModelTests \
+            -only-testing:QAudionAppTests/VoiceDisplayFormatTests \
+            -only-testing:QAudionAppTests/VoiceGuardModelTests \
+            -only-testing:QAudionAppTests/VoiceToneRowTests \
+            -only-testing:QAudionAppTests/VoiceWordTests \
+            -only-testing:QAudionAppTests/VpnSessionCoordinatorTests \
+            -resultBundlePath /tmp/app-tests.xcresult \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            2>&1 | tee app-tests.log \
+          || (echo ""; echo "=== TESTS FAILED -- last 300 lines of app-tests.log ==="; tail -300 app-tests.log; exit 1)
+
+      # The host app tees stdout/stderr, which swallows XCTest's per-case
+      # lines from the step above, so read the result bundle instead and
+      # refuse a "green" run that executed nothing.
+      - name: Check app-target test results
+        run: |
+          set -e
+          xcrun xcresulttool get test-results summary --path /tmp/app-tests.xcresult | tee /tmp/app-tests-summary.json
+          PASSED=$(grep -oE '"passedTests"[^0-9]*[0-9]+' /tmp/app-tests-summary.json | grep -oE '[0-9]+$' | head -1)
+          FAILED=$(grep -oE '"failedTests"[^0-9]*[0-9]+' /tmp/app-tests-summary.json | grep -oE '[0-9]+$' | head -1)
+          echo "passed=${PASSED:-?} failed=${FAILED:-?}"
+          if [ -z "$PASSED" ] || [ "$PASSED" -eq 0 ] || [ "${FAILED:-0}" -ne 0 ]; then
+            echo "::error::app-target tests did not run cleanly (passed=${PASSED:-?} failed=${FAILED:-?})"
+            exit 1
+          fi
+
+      # 2026-10-03 — diagnostic: the executed app-target cases by name (the summary above only counts them).
+      - name: List the executed app-target test cases (xcresult)
+        if: always()
+        run: |
+          python3 ../scripts/ci/xcresult_test_list.py /tmp/app-tests.xcresult /tmp/app-test-cases.txt \
+            CallerBusyOutcomeTests MissedCallsBadgeTests PersistentCallRecordStoreTests ConfidenceToneTests || true
+        working-directory: QAudionApp
+
+      - name: Upload logs
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-app-tests-logs-${{ github.run_number }}
+          path: |
+            QAudionApp/build-sim.log
+            QAudionApp/app-tests.log
+            /tmp/app-test-cases.txt
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # The build with the share extension (QAudionApp/project-share.yml: QAUDION_SHARE, QAudionShare extension), compiled
+  # for the simulator without signing so the extension does not rot while the default build leaves it out.
+  share-variant-build:
+    needs: [plan, reuse]
+    if: ${{ !cancelled() && needs.reuse.outputs.share != 'true' && (needs.plan.result != 'success' || needs.plan.outputs.share == 'true') }}
+    runs-on: xcode-27
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Select Xcode
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
+
+      - name: Restore SPM packages
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+      - name: Generate Xcode project (share spec)
+        working-directory: QAudionApp
+        run: |
+          xcodegen generate --spec project-share.yml
+          xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
+
+      - name: Build the app with the share extension
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath /tmp/dd-ios-share \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$RUNNER_TEMP/share-build.log" | tail -40
+
+      - name: The extension is embedded in the app
+        run: |
+          APP=/tmp/dd-ios-share/Build/Products/Debug-iphoneos/QAudionApp.app
+          test -n "$APP" && test -d "$APP/PlugIns/QAudionShare.appex"
+          plutil -lint "$APP/PlugIns/QAudionShare.appex/Info.plist"
+          test "$(plutil -extract NSExtension.NSExtensionPointIdentifier raw -o - "$APP/PlugIns/QAudionShare.appex/Info.plist")" = "com.apple.share-services"
+          echo "share extension embedded"
+
+  # The variant WITH VPN support. Device destination, unsigned: libwg-go.a (built
+  # by the QAudionPacketTunnel script phase, needs Go) has no Simulator slice.
+  vpn-variant-build:
+    needs: [plan, reuse]
+    if: ${{ !cancelled() && needs.reuse.outputs.vpn != 'true' && (needs.plan.result != 'success' || needs.plan.outputs.vpn == 'true') }}
+    runs-on: xcode-27
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Select Xcode
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
+
+      # Read only: the entry is written by the other job, on main.
+      - name: Restore SPM packages
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: '1.22'
+          cache: false
+
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+      # QAudionVPN.entitlements must stay equal to QAudion.entitlements plus the
+      # Network Extension key and the App Group shared with the extension.
+      - name: Entitlements variants agree
+        run: |
+          python3 - <<'PY'
+          import plistlib
+          default = plistlib.load(open("QAudionApp/QAudion.entitlements", "rb"))
+          vpn = plistlib.load(open("QAudionApp/QAudionVPN.entitlements", "rb"))
+          ne = "com.apple.developer.networking.networkextension"
+          groups = "com.apple.security.application-groups"
+          vpn_group = "group.com.bcrypto.qaudion.vpn"
+          assert ne not in default, "default entitlements must not carry the Network Extension key"
+          assert vpn_group not in default.get(groups, []), "default entitlements must not carry the VPN App Group"
+          assert ne in vpn and vpn_group in vpn[groups], "VPN entitlements lack the Network Extension key or App Group"
+          rest = {k: v for k, v in vpn.items() if k != ne}
+          rest[groups] = [g for g in rest[groups] if g != vpn_group]
+          assert rest == default, "entitlements differ beyond the VPN additions: %r vs %r" % (rest, default)
+          share = plistlib.load(open("QAudionApp/QAudionShareApp.entitlements", "rb"))
+          share_group = "group.com.bcrypto.qaudion.share"
+          assert share_group not in default.get(groups, []), "default entitlements must not carry the share App Group"
+          assert share_group not in vpn.get(groups, []), "VPN entitlements must not carry the share App Group"
+          assert share_group in share.get(groups, []), "share entitlements lack the share App Group"
+          share_rest = dict(share)
+          share_rest[groups] = [g for g in share_rest[groups] if g != share_group]
+          assert share_rest == default, "share entitlements differ beyond the share group: %r vs %r" % (share_rest, default)
+          print("entitlement variants agree")
+          PY
+
+      - name: Generate Xcode project (VPN spec)
+        working-directory: QAudionApp
+        run: |
+          xcodegen generate --spec project-vpn.yml
+          xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
+
+      - name: Build QAudionApp with VPN support (device, unsigned)
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath /tmp/dd-ios-vpn \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build-vpn.log \
+          || (echo ""; echo "=== BUILD FAILED -- last 300 lines of build-vpn.log ==="; tail -300 build-vpn.log; exit 1)
+
+      # The extension is embedded and the VPN code is really compiled in.
+      - name: Check the VPN variant contents
+        run: |
+          set -e
+          APP="/tmp/dd-ios-vpn/Build/Products/Debug-iphoneos/QAudionApp.app"
+          test -d "$APP/PlugIns/QAudionPacketTunnel.appex"
+          ls "$APP/PlugIns"
+          test -n "$(grep -rlaF 'wg_private_key_b64' "$APP" | head -1)"
+
+      - name: Upload logs
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-vpn-variant-logs-${{ github.run_number }}
+          path: QAudionApp/build-vpn.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # The variant WITH the earbud hardware stack (QAUDION_EARBUD). It needs no extension, no
+  # framework and no Go, so a device destination without signing is enough. Built twice: plain
+  # (what ios-testflight.yml dispatched with earbud=true produces) and together with
+  # QAUDION_DEV_TOOLS, which adds the earbud diagnostics screen that drives the same code.
+  earbud-variant-build:
+    needs: [plan, reuse]
+    if: ${{ !cancelled() && needs.reuse.outputs.earbud != 'true' && (needs.plan.result != 'success' || needs.plan.outputs.earbud == 'true') }}
+    runs-on: xcode-27
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Select Xcode
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
+
+      # Read only: the entry is written by the first job, on main.
+      - name: Restore SPM packages
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+      # Sources and specs: the default spec never mentions the flag, the earbud specs set it, the
+      # combined spec is the union of the VPN and earbud flags.
+      - name: Earbud gating (sources and specs)
+        run: python3 -I scripts/ci/check_earbud_gating.py
+
+      # XcodeGen cannot stack two specs given on the command line, so the VPN + earbud
+      # combination has a spec of its own (project-vpn-earbud.yml, which includes
+      # project-vpn.yml). Check that the include really merges the flags the way the file says:
+      # each spec must resolve to exactly its own set, on the generated project.
+      - name: Specs resolve to the intended compilation conditions
+        working-directory: QAudionApp
+        run: |
+          set -e
+          # The compilation conditions are read from the generated project itself (the
+          # OTHER_SWIFT_FLAGS lines of project.pbxproj): no package resolution needed.
+          flags_of() {
+            xcodegen generate --spec "$1" >/dev/null
+            grep -E 'OTHER_SWIFT_FLAGS' "$XCODE_PROJECT/project.pbxproj" | sort -u | tr -s ' 	' ' ' || true
+          }
+          DEFAULT=$(flags_of project.yml)
+          EARBUD=$(flags_of project-earbud.yml)
+          VPN=$(flags_of project-vpn.yml)
+          BOTH=$(flags_of project-vpn-earbud.yml)
+          echo "default:    $DEFAULT"
+          echo "earbud:     $EARBUD"
+          echo "vpn:        $VPN"
+          echo "vpn+earbud: $BOTH"
+          case "$DEFAULT" in *QAUDION_EARBUD*|*QAUDION_VPN*) echo "::error::the default spec sets a feature flag"; exit 1;; esac
+          case "$EARBUD" in *-DQAUDION_EARBUD*) ;; *) echo "::error::project-earbud.yml does not set -DQAUDION_EARBUD"; exit 1;; esac
+          case "$EARBUD" in *QAUDION_VPN*) echo "::error::project-earbud.yml turns the VPN on"; exit 1;; esac
+          case "$VPN" in *-DQAUDION_VPN*) ;; *) echo "::error::project-vpn.yml does not set -DQAUDION_VPN"; exit 1;; esac
+          case "$VPN" in *QAUDION_EARBUD*) echo "::error::project-vpn.yml turns the earbud stack on"; exit 1;; esac
+          case "$BOTH" in *-DQAUDION_VPN*-DQAUDION_EARBUD*|*-DQAUDION_EARBUD*-DQAUDION_VPN*) ;; *) echo "::error::project-vpn-earbud.yml does not set both flags"; exit 1;; esac
+
+      - name: Generate Xcode project (earbud spec)
+        working-directory: QAudionApp
+        run: |
+          xcodegen generate --spec project-earbud.yml
+          xcodebuild -project "$XCODE_PROJECT" -list 2>&1 | head -20
+
+      - name: Build QAudionApp with the earbud stack (device, unsigned)
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath /tmp/dd-ios-earbud \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build-earbud.log \
+          || (echo ""; echo "=== BUILD FAILED -- last 300 lines of build-earbud.log ==="; tail -300 build-earbud.log; exit 1)
+
+      # The stack is really compiled in (class and service UUID found); this is also the positive
+      # control for the signatures that assert-no-earbud.sh looks for in the default build.
+      - name: Check the earbud variant contents
+        run: |
+          set -e
+          APP="/tmp/dd-ios-earbud/Build/Products/Debug-iphoneos/QAudionApp.app"
+          test -d "$APP"
+          sh scripts/ci/assert-no-earbud.sh --require-present "$APP"
+
+      # With the dev tools too, the earbud diagnostics screen (EarbudDiagScreen, which is compiled
+      # only with both conditions) builds and is in the binary. The command line replaces the
+      # target's compilation conditions, which in project.yml are just $(inherited).
+      - name: Build QAudionApp with the earbud stack and the dev tools (device, unsigned)
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath /tmp/dd-ios-earbud-dev \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) QAUDION_DEV_TOOLS' \
+            2>&1 | tee build-earbud-dev.log \
+          || (echo ""; echo "=== BUILD FAILED -- last 300 lines of build-earbud-dev.log ==="; tail -300 build-earbud-dev.log; exit 1)
+
+      - name: Check the earbud + dev tools variant contents
+        run: |
+          set -e
+          APP="/tmp/dd-ios-earbud-dev/Build/Products/Debug-iphoneos/QAudionApp.app"
+          test -d "$APP"
+          sh scripts/ci/assert-no-earbud.sh --require-present "$APP"
+          test -n "$(grep -rlaF '19EarbudDiagViewModel' "$APP" | head -1)"
+
+      - name: Upload logs
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-earbud-variant-logs-${{ github.run_number }}
+          path: |
+            QAudionApp/build-earbud.log
+            QAudionApp/build-earbud-dev.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # The Release configuration of the default build, the one the TestFlight archive uses
+  # (optimised, whole-module): it reports warnings that a Debug build does not. Device
+  # destination, unsigned. Held to the same counted baseline as the Debug build.
+  release-config-build:
+    needs: [plan, reuse]
+    if: ${{ !cancelled() && needs.reuse.outputs.release != 'true' && (needs.plan.result != 'success' || needs.plan.outputs.release == 'true') }}
+    runs-on: xcode-27
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Select Xcode
+        run: bash scripts/ci/select-xcode.sh "$XCODE_VERSION"
+
+      # Read only: the entry is written by the other job, on main.
+      - name: Restore SPM packages
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-spm-${{ hashFiles('QAudionEngine/Package.swift', 'QAudionApp/project.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Install xcodegen
+        run: |
+          if command -v xcodegen >/dev/null 2>&1; then
+            echo "xcodegen already installed: $(xcodegen --version)"
+          else
+            brew install xcodegen
+          fi
+
+      - name: Generate Xcode project (default spec)
+        working-directory: QAudionApp
+        run: xcodegen generate
+
+      - name: Build QAudionApp, Release (device, unsigned)
+        working-directory: QAudionApp
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project "$XCODE_PROJECT" \
+            -scheme QAudionApp \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath /tmp/dd-ios-release \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build-release.log \
+          || (echo ""; echo "=== BUILD FAILED -- last 300 lines of build-release.log ==="; tail -300 build-release.log; exit 1)
+
+      - name: Compiler warnings of the Release build
+        if: always()
+        env:
+          DIAG_OUT: ${{ runner.temp }}/diagnostics-release-build.txt
+        run: sh scripts/ci/xcode-diagnostics-summary.sh "App build (Release, device)" QAudionApp/build-release.log
+
+      - name: Warning baseline
+        run: sh scripts/ci/check-warning-baseline.sh QAudionApp/build-release.log
+
+  # The same signing key check on a macOS image, where the openssl a workflow gets by name is
+  # the one ios-testflight.yml runs. The images carry more than one OpenSSL build (3 now, 4 as
+  # the default from November 2026); the default one has to pass, the others are reported.
+  signing-key-macos:
+    name: Signing key check (macOS OpenSSL)
+    needs: plan
+    if: ${{ !cancelled() && github.event_name != 'push' && (needs.plan.result != 'success' || needs.plan.outputs.signing == 'true') }}
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: OpenSSL builds on this image
+        run: |
+          which -a openssl || true
+          openssl version
+          for b in /opt/homebrew/opt/openssl@*/bin/openssl /usr/bin/openssl; do
+            [ -x "$b" ] && echo "$b: $("$b" version)"
+          done
+          exit 0
+
+      - name: Signing key check, default openssl
+        run: sh scripts/ci/test-check-signing-key.sh
+
+      - name: Signing key check, every OpenSSL build (report only)
+        continue-on-error: true
+        run: |
+          set --
+          for b in /opt/homebrew/opt/openssl@*/bin/openssl /usr/bin/openssl; do
+            [ -x "$b" ] && set -- "$@" "$b"
+          done
+          sh scripts/ci/test-check-signing-key.sh "$@"
+
+      - name: openssl calls of the signing tools (report only)
+        continue-on-error: true
+        run: |
+          set --
+          for b in openssl /opt/homebrew/opt/openssl@*/bin/openssl; do
+            command -v "$b" > /dev/null && set -- "$@" "$b"
+          done
+          sh scripts/ci/test-openssl-signing-calls.sh "$@"
+
+  # The Linux job: the self-tests of the CI scripts and of the release gates, the source gates that read the app sources,
+  # and the tests of the log filter. Seconds, no macOS minutes. It runs on a pull request and on a dispatch, not on a push
+  # to main (every change reaches main through a pull request that ran it).
+  #
+  # What it covers, none of which needs a Mac:
+  #   * the earbud hardware stack is a compile-time switch (QAUDION_EARBUD, see QAudionApp/project-earbud.yml).
+  #     scripts/ci/check_earbud_gating.py proves on the SOURCES that with the flag off no symbol of the stack is left in
+  #     code the compiler would see, and that the default spec, the earbud specs and ios-testflight.yml's EARBUD_BUILD
+  #     wiring are as expected; its tests include mutations of the real sources. scripts/ci/test-assert-no-earbud.sh is
+  #     the self-test of the BINARY gate (the real gate runs on the built app in app-build-and-tests and on the shipped
+  #     IPA in ios-testflight.yml).
+  #   * the CarPlay scene is part of every build. scripts/ci/check_carplay_gating.py proves on the SOURCES that
+  #     project.yml links CarPlay.framework, that the app's Info.plist declares the scene, that both app entitlements
+  #     files carry the CarPlay Communication key (and no other file does), that ios-testflight.yml regenerates the App
+  #     Store profile against every entitlement, and that no car-screen text points at the phone; its tests include
+  #     mutations of the real files. The built app is checked on macOS by app-build-and-tests.
+  #   * every Siri intent the Intents extension declares (IntentsSupported in QAudionIntents/Info.plist) has example
+  #     phrases that name the app in every QAudionApp/<lang>.lproj/AppIntentVocabulary.plist, the vocabulary of the
+  #     development language included. scripts/ci/check_siri_intent_phrases.py reads the property lists.
+  #   * user-facing Italian text goes through the String Catalog: scripts/ci/check_hardcoded_italian.py reads the Swift
+  #     sources and fails on an Italian string literal outside String(localized:) and the SwiftUI initializers that take
+  #     a LocalizedStringKey, on a catalog key a literal names but the catalog lacks, and on an allowlist line
+  #     (scripts/ci/hardcoded_italian_allowlist.txt) that matches nothing any more.
+  #   * the audio wire policy on the RTP sender (a fixed 32 kbps / packet time pin, applied when the sender is created
+  #     and after every negotiation, no adaptive packet time anywhere) is exercised on the simulator by the engine tests;
+  #     scripts/ci/check_audio_wire_shape.py proves on the sources that it is still wired.
+  #   * dSYMs are uploaded encrypted (the repository is public): scripts/ci/install-age.sh installs the pinned age release
+  #     after checking its SHA-256 (the test downloads it for real and also feeds it a tampered tarball),
+  #     scripts/ci/encrypt-dsyms.sh and the recipient committed in ios-testflight.yml are tested with throwaway keys, and
+  #     scripts/test_symbolicate_decrypt.py tests the decrypting side of scripts/symbolicate.py.
+  #   * the app-level rules of the iOS 27 SDK (scripts/ci/check_sdk27_requirements.py): the app stays scene based with a
+  #     launch screen, no Liquid Glass or full-screen opt-out key in any Info.plist, no use of the deprecated window lists.
+  #   * the Xcode selector used by every macOS job (scripts/ci/select-xcode.sh) is run against fake /Applications trees
+  #     shaped like the runner images, and the simulator picker (scripts/ci/resolve_simulator.py) on simulator lists
+  #     shaped like the Xcode 27 image.
+  #   * the check of the distribution signing key (scripts/ci/check-signing-key.sh, used by ios-testflight.yml) runs
+  #     against throwaway keys with the OpenSSL of this image (the job signing-key-macos repeats it on a macOS image).
+  #     Only throwaway keys are used, never a key of the repository.
+  #   * the reuse of pull request results on push to main (scripts/ci/ci-run-reuse.sh, used by the job `reuse` and by the
+  #     gate of ios-testflight.yml) runs against a stand-in `gh`: a job is reused only for the same tree, an up-to-date
+  #     head from this repository, a green run of this pull request, and an API error, a fork, a failed or unfinished run,
+  #     the run of another pull request or a different tree reuse nothing; the decision of the job `plan`
+  #     (scripts/ci/ios-ci-plan.sh) and the wiring between this workflow and the gate (scripts/ci/check_ci_wiring.py)
+  #     are tested the same way.
+  #   * the log filter (scripts/ship-ios-logs.py and, for the server side, scripts/ship-server-logs.py): every
+  #     scripts/test_ship_ios_*.py, every scripts/test_ship_server_*.py and the fuzz scripts/test_ship_redactor_fuzz.py.
+  #     The filter lets through only the lines of a known vocabulary and drops the rest without any error, so a change
+  #     can make valid lines vanish (or let too many through) without any other check noticing: these tests are the only
+  #     check. Some of them read Swift sources (the vocabulary of the log lines), which is why those files set the flag
+  #     `scripts`. Python only, the tests load the filter with a fake `paramiko` module when the library is missing.
+  #
+  # Needs network access to github.com for the age release only. No secrets.
+  gates:
+    name: iOS CI gates (self-tests)
+    needs: plan
+    if: ${{ !cancelled() && github.event_name != 'push' && (needs.plan.result != 'success' || needs.plan.outputs.scripts == 'true' || needs.plan.outputs.app == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # The steps that need the network, or that only a change of a script or of the log filter can break, run when the
+      # flag `scripts` is set; the source gates and the quick self-tests run whenever the job runs.
+      SCRIPTS_CHANGED: ${{ needs.plan.result != 'success' || needs.plan.outputs.scripts == 'true' }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          # The job does not write to the repository: no stored credentials.
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Earbud stack, source gate and its tests
+        run: |
+          python3 -I scripts/ci/check_earbud_gating.py
+          python3 -I scripts/ci/test_check_earbud_gating.py
+
+      - name: Audio sender pin, source gate and its tests
+        run: |
+          python3 -I scripts/ci/check_audio_wire_shape.py
+          python3 -I scripts/ci/test_check_audio_wire_shape.py
+
+      - name: CarPlay scene, source gate and its tests
+        run: |
+          python3 -I scripts/ci/check_carplay_gating.py
+          python3 -I scripts/ci/test_check_carplay_gating.py
+
+      - name: Siri example phrases, source gate and its tests
+        run: |
+          python3 -I scripts/ci/check_siri_intent_phrases.py
+          python3 -I scripts/ci/test_check_siri_intent_phrases.py
+
+      - name: Release notes, wording gate and its tests
+        run: |
+          python3 -I scripts/ci/check_release_notes.py
+          python3 -I scripts/ci/test_check_release_notes.py
+
+      - name: Hard-coded Italian text, source gate and its tests
+        run: |
+          python3 -I scripts/ci/check_hardcoded_italian.py
+          python3 -I scripts/ci/test_check_hardcoded_italian.py
+
+      - name: Earbud stack, binary gate self-test
+        run: sh scripts/ci/test-assert-no-earbud.sh
+
+      - name: Notification entitlements and keychain groups, source gate and its tests
+        run: |
+          python3 -I scripts/ci/test_check_notify_entitlements.py
+          python3 -I scripts/ci/check_notify_entitlements.py .
+
+      - name: iOS 27 SDK app-level rules
+        run: |
+          python3 -I scripts/ci/test_check_sdk27_requirements.py
+          python3 -I scripts/ci/check_sdk27_requirements.py .
+
+      - name: Xcode selector, self-test
+        run: sh scripts/ci/test-select-xcode.sh
+
+      - name: Simulator picker, tests
+        run: python3 -I scripts/ci/test_resolve_simulator.py
+
+      - name: Warning baseline check, self-test
+        run: sh scripts/ci/test-check-warning-baseline.sh
+
+      - name: Signing key check, self-test
+        run: sh scripts/ci/test-check-signing-key.sh
+
+      - name: Reuse of pull request results on main, self-test
+        run: sh scripts/ci/test-ci-run-reuse.sh
+
+      - name: Plan of this workflow, self-test
+        run: sh scripts/ci/test-ios-ci-plan.sh
+
+      - name: Wiring between this workflow and the TestFlight gate
+        run: |
+          python3 -I scripts/ci/test_check_ci_wiring.py
+          python3 -I scripts/ci/check_ci_wiring.py .
+
+      - name: Pinned age release installs and is verified by SHA-256
+        if: ${{ env.SCRIPTS_CHANGED == 'true' }}
+        run: sh scripts/ci/test-install-age.sh
+
+      - name: Install age (same script as the release workflow)
+        if: ${{ env.SCRIPTS_CHANGED == 'true' }}
+        run: |
+          # No pipe: `sh install-age.sh | tail -1` would hide an install failure (the pipe's status
+          # is tail's, and set -e does not see the first command). pipefail stays on as a guard.
+          set -eo pipefail
+          DIR="$RUNNER_TEMP/age-bin"
+          sh scripts/ci/install-age.sh "$DIR"
+          test -x "$DIR/age"
+          echo "$DIR" >> "$GITHUB_PATH"
+
+      - name: dSYM encryption and the committed recipient
+        if: ${{ env.SCRIPTS_CHANGED == 'true' }}
+        run: sh scripts/ci/test-encrypt-dsyms.sh
+
+      - name: symbolicate.py decrypts the dSYM artifact
+        if: ${{ env.SCRIPTS_CHANGED == 'true' }}
+        run: python3 -I scripts/test_symbolicate_decrypt.py
+
+      - name: Log filter tests
+        if: ${{ env.SCRIPTS_CHANGED == 'true' }}
+        run: |
+          # Runs all of them even when one fails, then exits with an error if any exited with a code other than 0.
+          status=0
+          n=0
+          for t in scripts/test_ship_ios_*.py scripts/test_ship_server_*.py scripts/test_ship_redactor_fuzz.py; do
+            if [ ! -f "$t" ]; then
+              echo "::error::test not found: $t"
+              status=1
+              continue
+            fi
+            n=$((n + 1))
+            echo "=== $t"
+            if ! python3 -I "$t"; then
+              echo "::error file=$t::the test exited with a code other than 0"
+              status=1
+            fi
+          done
+          # The fuzz on the server filter (same file, option --server).
+          n=$((n + 1))
+          echo "=== scripts/test_ship_redactor_fuzz.py --server"
+          if ! python3 -I scripts/test_ship_redactor_fuzz.py 4000 7 --server; then
+            echo "::error file=scripts/test_ship_redactor_fuzz.py::the fuzz --server exited with a code other than 0"
+            status=1
+          fi
+          # The port of redactStructured (LogRedactor.swift), with the coordinates rule.
+          n=$((n + 1))
+          echo "=== scripts/test_redact_structured_parity.py"
+          if ! python3 -I scripts/test_redact_structured_parity.py; then
+            echo "::error file=scripts/test_redact_structured_parity.py::the test exited with a code other than 0"
+            status=1
+          fi
+          echo "tests run: $n"
+          exit $status
+
+      - name: openssl calls of the signing tools (report only)
+        if: ${{ env.SCRIPTS_CHANGED == 'true' }}
+        continue-on-error: true
+        run: sh scripts/ci/test-openssl-signing-calls.sh
+
+  # SwiftLint over QAudionApp: the one rule that is active there, a ban on new bare print() calls (2026-08-21, MASVS-CODE
+  # I8), with .swiftlint-qaudionapp.yml (only_rules: [] + one custom rule) instead of widening the main .swiftlint.yml,
+  # so this does NOT run any of the default/opt-in rules against QAudionApp (the SwiftUI app with the documented Xcode
+  # 26.4 type-checker-timeout traps: a flood of violations from one rule alone was seen, 2258 of 3380). Required check of
+  # main under this name; non-blocking (continue-on-error), a visibility signal for new violations, not a merge gate.
+  # Runs the official realm/swiftlint Docker image directly (no third-party Action) on ubuntu-latest: no Xcode or macOS
+  # runner needed for pure linting.
+  swiftlint-qaudionapp-print-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: SwiftLint (QAudionApp, print()-ban rule only)
+        continue-on-error: true
+        uses: docker://ghcr.io/realm/swiftlint@sha256:b8f3cf76353336c048f133aa5b02f5c35c6984b9e6451e906fb8f8c9f92bb30b # latest as of 2026-10-17 (image built 2026-09-28, no version tag; newer than 0.65.1)
+        with:
+          args: lint --config .swiftlint-qaudionapp.yml --path QAudionApp
+
+  # ----------------------------------------------------------------
+  # Report-only checks (added 2026-07-28): SwiftLint runs on push to main and on a manual run (it reports on the tree
+  # that is on main, not on every pull request); the secret scan runs on every event, pull requests included. Every step
+  # sets `continue-on-error: true`, so a finding here can NEVER fail the workflow or block a merge. They exist to surface
+  # signal that was not visible before, not to gate CI.
+  # ----------------------------------------------------------------
+
+  # SwiftLint over QAudionEngine only (scope + exclusions come from the existing .swiftlint.yml at repo root; CLiboqs and
+  # COpus are excluded there since they are C, not Swift). Deliberately does NOT run the full rule set against QAudionApp
+  # (see the job above). Official realm/swiftlint Docker image on ubuntu-latest.
+  swiftlint-report:
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      # 2026-07-28 — was `--reporter github-actions-logging`, which surfaces each violation as a GitHub annotation. That
+      # silently caps at ~20 annotations shown/queryable via the Checks API (the raw log said "Found 3380 violations,
+      # 1580 serious in 472 files" the same run), so the annotation view showed 0.6% of the real picture. `--output`
+      # writes the FULL, uncapped result as JSON instead, which the next two steps turn into a complete signal: a real
+      # total in the job summary and the full list as a downloadable artifact.
+      - name: SwiftLint (full JSON report)
+        id: swiftlint
+        continue-on-error: true
+        uses: docker://ghcr.io/realm/swiftlint@sha256:b8f3cf76353336c048f133aa5b02f5c35c6984b9e6451e906fb8f8c9f92bb30b # latest as of 2026-10-17 (image built 2026-09-28, no version tag; newer than 0.65.1)
+        with:
+          args: lint --config .swiftlint.yml --reporter json --output swiftlint-report.json
+      - name: Summarize SwiftLint results (uncapped)
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ ! -s swiftlint-report.json ]; then
+            echo "### SwiftLint" >> "$GITHUB_STEP_SUMMARY"
+            echo "No report produced (lint step may have crashed — see the step above)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          TOTAL=$(jq 'length' swiftlint-report.json)
+          SERIOUS=$(jq '[.[] | select(.severity == "Error")] | length' swiftlint-report.json)
+          WARNINGS=$(jq '[.[] | select(.severity == "Warning")] | length' swiftlint-report.json)
+          {
+            echo "### SwiftLint — full report ($TOTAL violations, GitHub annotations cap at ~20 so this summary is the real count)"
+            echo ""
+            echo "**$TOTAL total** — $SERIOUS serious (error), $WARNINGS warning"
+            echo ""
+            echo "<details><summary>Top rules by count</summary>"
+            echo ""
+            echo '```'
+            jq -r '.[].rule_id' swiftlint-report.json | sort | uniq -c | sort -rn | head -20
+            echo '```'
+            echo "</details>"
+            echo ""
+            echo "<details><summary>Top files by violation count</summary>"
+            echo ""
+            echo '```'
+            jq -r '.[].file' swiftlint-report.json | xargs -n1 basename | sort | uniq -c | sort -rn | head -20
+            echo '```'
+            echo "</details>"
+            echo ""
+            echo "Full per-violation detail (file/line/rule/message): download the \`swiftlint-full-report\` artifact on this run."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload full SwiftLint report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: swiftlint-full-report
+          path: swiftlint-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Secret scan over the full repo (including history) via the official gitleaks Docker image. Report only: a hit here
+  # (e.g. an already-rotated historical secret) is signal to review, not a merge blocker, and the job is not in the
+  # `needs` of `result`. It runs on every event, pull requests included (about 20 s): the repository is public, so a
+  # secret committed by a pull request has to be reported before the merge and not only after it, on push to main.
+  secret-scan-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: gitleaks (report only)
+        continue-on-error: true
+        uses: docker://zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f # v8.30.1
+        with:
+          args: detect --source . -v --redact
+
+  # One check for the whole run: fails when a job that ran failed or was cancelled. A job skipped by the plan is fine.
+  # Not a required check today (see the header); it is the check to require if the required list is ever shortened.
+  result:
+    name: iOS CI result
+    if: ${{ always() }}
+    needs: [plan, reuse, ios-simulator-tests, app-build-and-tests, share-variant-build, vpn-variant-build, earbud-variant-build, release-config-build, signing-key-macos, gates, swiftlint-qaudionapp-print-check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job that ran has passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          set -u
+          printf '%s' "$NEEDS" | jq -r 'to_entries[] | "\(.key)\t\(.value.result)"' | while IFS="$(printf '\t')" read -r job result; do
+            printf '%-34s %s\n' "$job" "$result"
+          done
+          # A plan that did not succeed ran everything; the jobs below it decide.
+          BAD=$(printf '%s' "$NEEDS" | jq -r 'to_entries[] | select(.key != "plan" and (.value.result == "failure" or .value.result == "cancelled")) | .key')
+          if [ -n "$BAD" ]; then
+            echo "::error::failed or cancelled: $(printf '%s' "$BAD" | tr '\n' ' ')"
+            exit 1
+          fi

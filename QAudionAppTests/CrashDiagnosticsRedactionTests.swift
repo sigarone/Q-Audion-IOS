@@ -7,7 +7,7 @@ import QAudionEngine
 /// shipper `LogRedactor.redactStructured`. Binary UUIDs are written with dots between their groups for that reason.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 final class CrashDiagnosticsRedactionTests: XCTestCase {
 
     private func assertSurvives(_ lines: [String], file: StaticString = #filePath, line: UInt = #line) {

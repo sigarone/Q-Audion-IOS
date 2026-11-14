@@ -22,7 +22,7 @@ import XCTest
 ///
 /// Wired into CI: this file is on the include list of
 /// `QAudionApp/project-apptests.yml` (an app-hosted unit-test bundle limited to
-/// the files listed there) and runs in `.github/workflows/ios-app-tests.yml`.
+/// the files listed there) and runs in `.github/workflows/ios-ci.yml`.
 /// The rest of `QAudionAppTests/` still has no target. Keep this file pure: it
 /// must not need a Keychain or engine static state.
 ///

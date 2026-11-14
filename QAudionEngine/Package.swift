@@ -6,10 +6,10 @@ let package = Package(
     platforms: [
         .iOS(.v16),
         // macOS floor raised 13 -> 14 so `swift build` / `swift test` on the macOS CI runner
-        // (engine-tests.yml) actually RESOLVES: the onnxruntime-spm product requires macOS 14,
+        // (ios-ci.yml) actually RESOLVES: the onnxruntime-spm product requires macOS 14,
         // and SwiftPM refuses to resolve when the library floor (13) is below a dependency's (14).
         // iOS floor is unchanged (.v16); the iOS app ships from xcodebuild, not `swift build`, so
-        // this only affects the macOS Swift-package test build. (Without this, engine-tests.yml
+        // this only affects the macOS Swift-package test build. (Without this, ios-ci.yml
         // fails at resolution but the `swift build 2>&1 | tail -100` pipe masked the exit code,
         // so it reported a false green — see Phase-3 PR notes.)
         .macOS(.v14)
@@ -41,7 +41,7 @@ let package = Package(
         // at-rest encryption when the device is locked.
         // GRDB 7.x requires swift-tools-version 6.1.0 (Xcode 16.3+). Was pinned to
         // 6.x while CI ran Xcode 16.2; bumped 2026-07-28 now that every CI workflow
-        // builds with Xcode 26.6 (see engine-tests.yml/kat-cross-platform.yml/
+        // builds with Xcode 26.6 (see ios-ci.yml/kat-cross-platform.yml/
         // ios-testflight.yml). QAudionEngine's own swift-tools-version (5.9, top of
         // this file) is unaffected — a package can depend on a higher-swift-tools-
         // version package as long as the actual toolchain resolves it.

@@ -10,7 +10,7 @@
 # Status: DISABLED AGAIN (workflow_dispatch only), 2026-07-30, same day it
 # was re-enabled. WireV1CrossPlatformKatTests.swift is real and DOES pass
 # (all 6 assertions: HKDF, X25519 derive+ECDH, AEAD-nonce, ML-KEM-1024
-# keygen+decap) — confirmed green via engine-tests.yml's ios-simulator-tests
+# keygen+decap) — confirmed green via ios-ci.yml's ios-simulator-tests
 # job, which already runs the whole QAudionEngineTests target including
 # this class. What doesn't work is running it HERE, standalone, via bare
 # `swift test`: this package depends on a binary WebRTC xcframework (at the
@@ -21,11 +21,11 @@
 # the equivalent `WebRTC` failure, not re-verified) before a single test
 # ran. Making this job work would mean switching to `xcodebuild test
 # -scheme QAudionEngine -destination 'platform=iOS Simulator...'`, i.e. booting a simulator —
-# at which point it costs exactly what engine-tests.yml already costs, for
+# at which point it costs exactly what ios-ci.yml already costs, for
 # zero additional coverage (that job runs this same test class). Vectors
 # stay vendored under Tests/QAudionEngineTests/Crypto/Resources/wire_v1.0.0/
 # (bcrypto-server is private, CI can't curl it, and SPM needs the files to
-# exist on disk regardless) so engine-tests.yml's run of this class keeps
+# exist on disk regardless) so ios-ci.yml's run of this class keeps
 # working. Re-enable this workflow only if it's rewritten to not need
 # the WebRTC binary at all (e.g. a build configuration that excludes it), not
 # by just re-adding the triggers.

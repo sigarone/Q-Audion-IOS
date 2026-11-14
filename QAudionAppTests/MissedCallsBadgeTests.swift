@@ -9,7 +9,7 @@ import QAudionEngine
 /// (`MissedCallsBadgeState`) are tested in the engine; this pins the connection to the history rows.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 final class MissedCallsBadgeTests: XCTestCase {
 
     // MARK: - fixtures

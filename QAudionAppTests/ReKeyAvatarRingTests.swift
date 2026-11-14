@@ -6,7 +6,7 @@ import XCTest
 /// "no timer" case and the text are pinned here without any UI.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the
-/// `-only-testing` list of `.github/workflows/ios-app-tests.yml`.
+/// `-only-testing` list of `.github/workflows/ios-ci.yml`.
 final class ReKeyAvatarRingTests: XCTestCase {
 
     // MARK: - Arc share

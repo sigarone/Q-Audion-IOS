@@ -13,7 +13,7 @@ import QAudionEngine
 /// (the pause can only suspend an antenna that is on, never switch one on).
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 final class MeshAudioRouteTests: XCTestCase {
 
     private let bluetooth: [AVAudioSession.Port] = [.bluetoothHFP, .bluetoothA2DP, .bluetoothLE]

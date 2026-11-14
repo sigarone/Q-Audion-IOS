@@ -7,7 +7,7 @@
 #
 # Generate with:  cd QAudionApp && xcodegen generate --spec project-vpn-earbud.yml
 #
-# The flags below must stay the union of the two specs; ios-app-tests.yml checks it.
+# The flags below must stay the union of the two specs; ios-ci.yml checks it.
 
 include:
   - project-vpn.yml

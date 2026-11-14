@@ -12,7 +12,7 @@ import XCTest
 ///  - a gap of 2 s or more clears everything, so the count of dropped samples has to be exact (samples, not
 ///    bytes).
 ///
-/// Wired into CI: `engine-tests.yml` runs the whole `QAudionEngineTests` target.
+/// Wired into CI: `ios-ci.yml` runs the whole `QAudionEngineTests` target.
 final class RxRingDiscontinuityTests: XCTestCase {
 
     /// The capacity of `QAudionCallIntegration.rxRingCapacity`. If it changes, the test no longer overflows

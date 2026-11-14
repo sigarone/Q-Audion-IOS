@@ -9,7 +9,7 @@ import XCTest
 /// the v4 surface compiles + links against the real C ABI, and — because the engine-tests CI links
 /// only the FAIL-CLOSED stub (``RatchetNative/available`` == false) — every v4 method still fail-
 /// closes there, so the CI live messaging path stays the v3.1 engine, bit-for-bit. This is what
-/// makes `engine-tests.yml` a real verifier of Stage B.
+/// makes `ios-ci.yml` a real verifier of Stage B.
 final class RatchetNativeV4Tests: XCTestCase {
 
     private let root = Data(repeating: 0x10, count: 32)
