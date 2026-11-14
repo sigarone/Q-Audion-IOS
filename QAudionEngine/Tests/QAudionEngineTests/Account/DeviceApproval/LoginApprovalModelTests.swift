@@ -28,10 +28,14 @@ private final class FakeApprovalApi: DeviceApprovalApi, @unchecked Sendable {
     }
 
     private func gate() async {
-        let holding = lock.withLock { _hold }
-        guard holding else { return }
-        await withCheckedContinuation { continuation in
-            lock.withLock { _waiting.append(continuation) }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            // Reading the hold and parking happen under one lock: a `release()` cannot fall between them.
+            let parked = lock.withLock { () -> Bool in
+                guard _hold else { return false }
+                _waiting.append(continuation)
+                return true
+            }
+            if !parked { continuation.resume() }
         }
     }
 
@@ -70,6 +74,19 @@ final class LoginApprovalModelTests: XCTestCase {
         let model = LoginApprovalModel(api: api)
         await model.refresh()
         return model
+    }
+
+    /// Waits for the model to start a request; a model that never does fails the test instead of hanging the run.
+    private func waitUntilBusy(_ model: LoginApprovalModel, file: StaticString = #filePath, line: UInt = #line) async -> Bool {
+        let deadline = Date().addingTimeInterval(5)
+        while !model.isBusy {
+            guard Date() < deadline else {
+                XCTFail("the model never became busy", file: file, line: line)
+                return false
+            }
+            try? await Task.sleep(nanoseconds: 2_000_000)
+        }
+        return true
     }
 
     func test_emptyList_showsNothing() async {
@@ -161,7 +178,7 @@ final class LoginApprovalModelTests: XCTestCase {
         api.hold(true)
         let model = await make(api, entries: [request("p-1")])
         let first = Task { await model.approve(id: "p-1", choice: "47") }
-        while !model.isBusy { await Task.yield() }
+        guard await waitUntilBusy(model) else { api.hold(false); api.release(); return }
         await model.approve(id: "p-1", choice: "12")
         await model.deny(id: "p-1")
         api.hold(false)
@@ -213,7 +230,7 @@ final class LoginApprovalModelTests: XCTestCase {
         api.hold(true)
         let model = await make(api, entries: [request("p-1")])
         let action = Task { await model.approve(id: "p-1", choice: "47") }
-        while !model.isBusy { await Task.yield() }
+        guard await waitUntilBusy(model) else { api.hold(false); api.release(); return }
         model.reset()
         api.hold(false)
         api.release()
