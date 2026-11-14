@@ -249,8 +249,8 @@ final class CallControlDockTests: XCTestCase {
         XCTAssertFalse(audio.contains("diagnosticsRow"))
         XCTAssertTrue(audio.contains("showSecuritySheet = true"))
         XCTAssertTrue(audio.contains("chart.bar.fill"))
-        // The report button sits on the left edge, level with the peer name (away from the ear), not in the top bar and not in
-        // the dock, and the call header has no presence text.
+        // The report button is an overlay on the left edge of the peer name row: the top bar takes no report parameter, the
+        // dock has no report item, and the call header has no presence text.
         XCTAssertTrue(audio.contains(".overlay(alignment: .leading) {"))
         XCTAssertTrue(audio.contains("reportProblemButton(onReportProblem)"))
         XCTAssertFalse(audio.contains("callTopBar(onReportProblem"))

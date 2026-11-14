@@ -633,8 +633,8 @@ struct InCallScreen: View {
             // SCREEN_SHARE:start. Wrapped in the outermost ZStack so
             // the position is fixed independent of scrollContent /
             // bottomActionRow layout.
-            // The reduce control, top left (44 pt circle, 16 pt in, 8 pt down). The report button is not up here: it is in the
-            // column, on the left edge level with the peer name (see `scrollContent`), out of the ear's reach.
+            // The reduce control, top left (44 pt circle, 16 pt in, 8 pt down). The report button is in the column, on the left
+            // edge level with the peer name (see `scrollContent`).
             if onReportProblem != nil {
                 callTopBar
             }
@@ -703,8 +703,7 @@ struct InCallScreen: View {
     /// its centre and wraps before it would run under the button.
     private static let reportButtonSlot: CGFloat = 60
 
-    /// The report-a-problem button: a 44 pt circle on the left edge of the column, level with the peer name. It used to sit at
-    /// the top of the screen, where the ear touched it during a call and sent false reports.
+    /// The report-a-problem button: a 44 pt circle on the left edge of the column, level with the peer name.
     private func reportProblemButton(_ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: "ladybug")

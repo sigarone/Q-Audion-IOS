@@ -391,15 +391,16 @@ struct VideoCallView: View {
     private var topBarContent: some View {
         HStack {
             // Report a problem or a call error: marks the moment in the call telemetry, then opens the report sheet. On the
-            // left edge, level with the name, away from the ear.
+            // left edge, level with the name. The circle is 32 pt; the touch area is 44 pt and takes no layout space.
             Button(action: reportProblem) {
                 Image(systemName: "ladybug")
                     .font(.system(size: 15))
                     .foregroundColor(.white)
                     .frame(width: 32, height: 32)
                     .qaudionGlassSurface(in: Circle(), interactive: true, fallback: Color.white.opacity(0.12))
-                    .frame(width: 44, height: 44)
+                    .padding(6)
                     .contentShape(Rectangle())
+                    .padding(-6)
             }
             .accessibilityLabel(CallControlText.reportA11y)
 

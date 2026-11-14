@@ -74,7 +74,7 @@ struct GroupCallView: View {
                 HStack {
                     // Report a problem or a call error: opens the report sheet, hosted by this
                     // screen (see `.background(BugReportOverlay(host: .groupCall))` below). On the left
-                    // edge, level with the title, away from the ear.
+                    // edge, level with the title. The circle is 30 pt; the touch area is 44 pt and takes no layout space.
                     Button {
                         BugReporter.shared.requestReport(source: .inGroupCall)
                     } label: {
@@ -84,8 +84,9 @@ struct GroupCallView: View {
                             .frame(width: 30, height: 30)
                             .background(Color.white.opacity(0.12))
                             .clipShape(Circle())
-                            .frame(width: 44, height: 44)
+                            .padding(7)
                             .contentShape(Rectangle())
+                            .padding(-7)
                     }
                     .accessibilityLabel(String(localized: "Segnala un problema"))
                     VStack(alignment: .leading, spacing: 2) {
