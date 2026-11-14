@@ -4360,15 +4360,24 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             callId: callId, peerUserId: peerId, peer: peer, verifiedSignerKey: verifiedKey,
             book: capsBindBook, armedForHold: armed, pq: verification) else { return }
         if let ctx = call.pq {
+            pqLayer.noteRound1Judged(callId: callId)
             pqLayer.setAnchor(callId: callId, PqCallLayer.Anchor(
                 auth: ctx.auth, keyId: ctx.auth == "H" ? pq?.keyId : nil, result: ctx.result))
         }
-        guard call.pin == .anomaly else { return }
+        guard call.pin == .anomaly else {
+            capsBindState.dropDeferredWarning(callId: callId)
+            return
+        }
         if call.hold {
             markHeld(callId: callId)
             onHandshakeIdentityUnverified?(callId, "pin_anomaly")
         }
-        onCapsPinAnomaly?(callId, peerId, call.warns.isEmpty ? [.capsBindV1Missing] : call.warns)
+        // The visible warning follows the round's key confirmation (`noteRound1KeyConfirmed`): a round that fails it ends the call and
+        // shows none. It is shown at once only when it cannot be kept until then.
+        let reasons = call.warns.isEmpty ? [PqWarnReason.capsBindV1Missing] : call.warns
+        if !capsBindState.deferWarning(callId: callId, peerUserId: peerId, reasons: reasons) {
+            onCapsPinAnomaly?(callId, peerId, reasons)
+        }
     }
 
     /// The second signature of a received bundle (design section 5.5, steps 1 to 3), or nil when it is not judged: no runtime, or no
@@ -4422,14 +4431,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 if !decision.log.isEmpty { CapsBindLog.line(decision.log) }
                 return false
             }
-            reason = decision.reason ?? .absent
+            reason = PqWarnReason.shown(decision.reason ?? .absent, for: pq?.result ?? .unavailable)
             logLine = decision.log
         } else {
-            // No anchor. When round 1 of this call was judged by the second-signature layer (its pin state says so), or an anchor
-            // had to be dropped for lack of room, the round cannot be checked: it is refused (fail closed), never used unsigned.
-            guard capsBindState.pinCall(callId: callId)?.pq != nil || pqLayer.anchorsOverflowed else { return false }
+            // No anchor. When round 1 of this call was judged by the second-signature layer (the layer's own mark of the call), or an
+            // anchor had to be dropped for lack of room, the round cannot be checked: it is refused (fail closed), never used unsigned.
+            guard pqLayer.round1Judged(callId: callId) || pqLayer.anchorsOverflowed else { return false }
             let result = pq?.result ?? .unavailable
-            reason = result == .invalid ? .invalid : .absent
+            reason = PqWarnReason.shown(result == .invalid ? .invalid : .absent, for: result)
             logLine = "pq_sig=\(result.rawValue) round=\(round) pin=anomaly hold=0 rekey=refused"
         }
         pqLayer.noteRefusal(callId: callId, round: round, reason: reason)
@@ -4447,7 +4456,12 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// is written here); false: the caller applies the call-settings rule.
     @discardableResult
     public func noteRound1KeyConfirmed(callId: String, ext: Bool) -> Bool {
-        capsBindState.round1KeyConfirmed(callId: callId, ext: ext, book: capsBindBook)
+        let owned = capsBindState.round1KeyConfirmed(callId: callId, ext: ext, book: capsBindBook)
+        // the warning judged for this round, kept until its key confirmation verified
+        if let warning = capsBindState.takeDeferredWarning(callId: callId) {
+            onCapsPinAnomaly?(callId, warning.peerUserId, warning.reasons)
+        }
+        return owned
     }
 
     /// The words of the protection line that belong to the second signature: `auth=`, `pqstate=`, `pq_sig=`, `rekey=`, `round=`

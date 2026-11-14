@@ -16266,8 +16266,9 @@ final class AppState: ObservableObject {
         // receives a `call_incoming` for the callee's device — ⇒ legacy single-key +
         // set-membership floor (the callee's key ∈ its published set), NEVER a fatal
         // mismatch. The device that sent this ACCEPT is `envelopeSenderDeviceId`
-        // (stamped by the server on the message); the engine uses it only to find
-        // the second signature key.
+        // (stamped by the server on the message); the engine uses it to find the
+        // second signature key and, in round 1, to record which device the caller's
+        // commitment binds to (`sasCommit.callerOnAccept`).
         //
         // W-ACCEPTDEVSTALE — deliberately NOT `senderDeviceIdByPeer[senderId]`
         // here: that stash is peer-keyed and never cleared, so if this same

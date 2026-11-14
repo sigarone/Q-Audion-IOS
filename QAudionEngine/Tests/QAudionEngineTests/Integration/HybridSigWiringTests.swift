@@ -439,6 +439,45 @@ final class HybridSigWiringTests: XCTestCase {
         XCTAssertNil(receiver.capsBindState.pinCall(callId: callId(2)))
     }
 
+    /// The warning of a judged round is shown when the round's key confirmation verifies, once; a round that never verifies shows none.
+    func testThePinWarningFollowsTheKeyConfirmationOfTheRound() async throws {
+        try installPeerKey()
+        let sender = Sender(seed: edSeed)
+        let (receiver, _) = makeReceiver()
+        let shown = warnings(of: receiver)
+        try await receiveRound1(receiver, try signedOffer(sender, call: callId(1), round: 1))
+        receiver.onCallEnded()
+
+        // the round fails its key confirmation: judged, never shown
+        let failed = try await receiveRound1(receiver, stripped(try signedOffer(sender, call: callId(2), round: 1), keepCapsBind: false),
+                                             keyConfirmed: false)
+        XCTAssertEqual(failed.call?.pin, .anomaly)
+        XCTAssertTrue(shown.all.isEmpty)
+        receiver.onCallEnded()
+        XCTAssertTrue(shown.all.isEmpty)
+
+        // the key confirmation verifies: the warning follows, once
+        try await receiveRound1(receiver, stripped(try signedOffer(sender, call: callId(3), round: 1), keepCapsBind: false),
+                                keyConfirmed: false)
+        XCTAssertTrue(shown.all.isEmpty)
+        receiver.noteRound1KeyConfirmed(callId: callId(3), ext: false)
+        receiver.noteRound1KeyConfirmed(callId: callId(3), ext: false)
+        XCTAssertEqual(shown.all, [[.absent, .capsBindV1Missing]])
+    }
+
+    /// A signature that could not be checked (no key to check it under) is told apart from one the device did not offer.
+    func testASignatureThatCouldNotBeCheckedIsNotShownAsNotOffered() async throws {
+        try installPeerKey()
+        let sender = Sender(seed: edSeed)
+        let (receiver, _) = makeReceiver()
+        try await receiveRound1(receiver, try signedOffer(sender, call: callId(1), round: 1))
+        receiver.onCallEnded()
+        PeerMldsaStore.clear()
+        let c2 = try await receiveRound1(receiver, try signedOffer(sender, call: callId(2), round: 1))
+        XCTAssertEqual(c2.pq?.result, .unavailable)
+        XCTAssertEqual(c2.call?.warns, [.unverifiable])
+    }
+
     // MARK: - Invalid signer
 
     func testTheInvalidSignerShowsTheWarningOnEveryCallAndRecoversWhenItSignsAgain() async throws {
@@ -1041,6 +1080,21 @@ final class HybridSigWiringTests: XCTestCase {
         XCTAssertEqual(receiver.pqLayer.refusal(callId: call)?.round, 3)
         // a call this layer never judged is not touched
         XCTAssertFalse(receiver.pqRekeyRefuses(callId: callId(9), peerId: peerUser, pq: nil, round: 3, isOfferer: false))
+    }
+
+    /// The decision to refuse rests on the layer's own state: a call whose pin decision left the table of 16 and whose anchor is
+    /// gone is still refused.
+    func testTheRekeyRefusalDoesNotDependOnThePinDecisionTable() async throws {
+        try installPeerKey()
+        let sender = Sender(seed: edSeed)
+        let (receiver, _) = makeReceiver()
+        let call = callId(1)
+        try await authenticatedCall(receiver, sender, call: call)
+        for n in 2...17 { try await receiveRound1(receiver, try signedOffer(sender, call: callId(n), round: 1)) }
+        XCTAssertNil(receiver.capsBindState.pinCall(callId: call))
+        receiver.pqLayer.clearAnchor(callId: call)
+        let refused = try await rekeyOffer(receiver, try signedOffer(sender, call: call, round: 3), round: 3, call: call)
+        XCTAssertTrue(refused)
     }
 
     /// The rekey round is verified under the key round 1 verified under, even when the store of peer keys lost it.

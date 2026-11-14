@@ -54,8 +54,25 @@ final class CapsBindCallState: @unchecked Sendable {
     private var pinByCall: [String: PinCall] = [:]
     private var pinOrder: [String] = []
     private var registered: Set<String> = []
+    private var warningSlots: [String: WarningSlot] = [:]
     private var epochValue = 0
     private static let capacity = 16
+    /// The most calls the warning slots hold. A slot is never evicted for another call's: at the bound a new one is refused and the
+    /// warning is shown at once.
+    private static let warningCapacity = 1024
+
+    /// The warning of one call's round 1 and what became of it.
+    struct DeferredWarning: Equatable {
+        let peerUserId: String
+        let reasons: [PqWarnReason]
+    }
+
+    private enum WarningSlot: Equatable {
+        /// Judged and not shown yet: it is shown once the round's key confirmation verified.
+        case deferred(DeferredWarning)
+        /// The round's key confirmation verified: a warning of this call is shown at once.
+        case confirmed
+    }
 
     /// Changes every time `reset()` runs (the call ended). A step that started before and finishes after it sees a different value.
     var epoch: Int {
@@ -95,12 +112,46 @@ final class CapsBindCallState: @unchecked Sendable {
         return pinByCall[callId.lowercased()]
     }
 
+    /// Keeps the warning of round 1 until the round's key confirmation verifies (`takeDeferredWarning`), so a round that fails it
+    /// shows none. A later judgement of the same call replaces it. False when it cannot be kept (the key confirmation already
+    /// verified, or the slots are full): the caller shows it at once.
+    func deferWarning(callId: String, peerUserId: String, reasons: [PqWarnReason]) -> Bool {
+        let key = callId.lowercased()
+        lock.lock()
+        defer { lock.unlock() }
+        if case .confirmed? = warningSlots[key] { return false }
+        if warningSlots[key] == nil, warningSlots.count >= Self.warningCapacity { return false }
+        warningSlots[key] = .deferred(DeferredWarning(peerUserId: peerUserId, reasons: reasons))
+        return true
+    }
+
+    /// A later judgement of the same round 1 found no anomaly: the warning kept for the earlier one goes.
+    func dropDeferredWarning(callId: String) {
+        let key = callId.lowercased()
+        lock.lock()
+        defer { lock.unlock() }
+        if case .deferred? = warningSlots[key] { warningSlots[key] = nil }
+    }
+
+    /// The round-1 key confirmation of the call verified: the warning kept for it, once. From here on a warning of the call is shown
+    /// at once.
+    func takeDeferredWarning(callId: String) -> DeferredWarning? {
+        let key = callId.lowercased()
+        lock.lock()
+        defer { lock.unlock() }
+        let slot = warningSlots[key]
+        if slot != nil || warningSlots.count < Self.warningCapacity { warningSlots[key] = .confirmed }
+        if case .deferred(let warning)? = slot { return warning }
+        return nil
+    }
+
     /// Per-call state only. The pin records of `CapsPinBook` are not touched.
     func reset() {
         lock.lock()
         sentByCall.removeAll()
         pinByCall.removeAll()
         pinOrder.removeAll()
+        warningSlots.removeAll()
         epochValue += 1
         for id in registered { CapsBindCallRegistry.release(callId: id) }
         registered.removeAll()
@@ -150,7 +201,8 @@ final class CapsBindCallState: @unchecked Sendable {
             let policy = HybridSigPolicy.decideRound1(input)
             if policy.pin == "anomaly" { pin = .anomaly }
             hold = false
-            warns = policy.warn
+            // the shared table keeps `absent` for a signature that could not be checked; the user is told the difference
+            warns = policy.warn.map { PqWarnReason.shown($0, for: pq.result) }
             if policy.withdraw == "ignored" { ignored = true }
             if policy.withdraw == "honoured" { honoured = true }
             pqCtx = PqRound1(input: input, auth: policy.auth == "H" ? "H" : "C", result: policy.pqSig, ext: false,
