@@ -10267,6 +10267,48 @@
         }
       }
     },
+    "in_call.pin_warning.pq_unverifiable": {
+      "extractionState": "manual",
+      "comment": "Call screen, safety-code warning: the second signature of the handshake could not be checked.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato possibile controllare la firma post-quantistica di questo dispositivo."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The post-quantum signature of this device could not be checked."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo comprobar la firma poscuántica de este dispositivo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La signature post-quantique de cet appareil n'a pas pu être contrôlée."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Post-Quanten-Signatur dieses Geräts konnte nicht geprüft werden."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível conferir a assinatura pós-quântica deste dispositivo."
+          }
+        }
+      }
+    },
     "in_call.pin_warning.pq_invalid": {
       "extractionState": "manual",
       "comment": "Call screen, safety-code warning: the second signature of the handshake did not verify.",

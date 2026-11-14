@@ -12,9 +12,18 @@ public enum PqSigResult: String, Sendable, Equatable {
 /// Why a call shows the safety-code warning. The signature reason comes first, then the call-settings reason.
 public enum PqWarnReason: String, Sendable, Equatable, CaseIterable {
     case absent
+    /// The bundle carried a signature that could not be checked at all (`PqSigResult.unavailable`). Only ever set by `shown`: the
+    /// shared policy table (`decideRound1`, `decideRekey`) keeps `absent` for it.
+    case unverifiable
     case invalid
     case otherkey
     case capsBindV1Missing = "capsBindV1_missing"
+
+    /// The reason as the user is told it: `absent` after a result of `unavailable` is a signature that could not be checked, not one
+    /// the device did not offer.
+    static func shown(_ reason: PqWarnReason, for result: PqSigResult) -> PqWarnReason {
+        reason == .absent && result == .unavailable ? .unverifiable : reason
+    }
 }
 
 /// The pure decisions of the second handshake signature: what a round-1 bundle does to the pin record of its signer, and whether a

@@ -32,7 +32,7 @@ public struct PqSigRuntime: Sendable {
 }
 
 /// The per-call state of the second handshake signature: what this side did with it in round 1 (a rekey bundle of the call does
-/// the same), the anchor of the call (what round 1 proved about the peer) and the last rekey round this side refused. Bounded without evicting, and
+/// the same), the anchor of the call (what round 1 proved about the peer), whether round 1 was judged here and the last rekey round this side refused. Bounded without evicting, and
 /// cleared with the call. The pin records live in `CapsPinBook` and are never touched here.
 final class PqCallLayer: @unchecked Sendable {
 
@@ -79,6 +79,7 @@ final class PqCallLayer: @unchecked Sendable {
     private let lock = NSLock()
     private var own = Table<OwnMode>()
     private var anchors = Table<Anchor>()
+    private var judged = Table<Bool>()
     private var roundKeys = Table<Pqsig.MlDsaPublicKey>()
     private var refusals = Table<Refusal>()
 
@@ -103,11 +104,26 @@ final class PqCallLayer: @unchecked Sendable {
         return anchors.items[callId.lowercased()]
     }
 
-    /// True once an anchor had to be dropped for lack of room: a call whose anchor is missing then cannot be told from one that lost it.
+    /// True once an anchor or a judged mark had to be dropped for lack of room: a call whose anchor is missing then cannot be told
+    /// from one that lost it.
     var anchorsOverflowed: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return anchors.overflowed
+        return anchors.overflowed || judged.overflowed
+    }
+
+    /// Round 1 of the call was judged by this layer. Kept for the call even when a later judgement of the same round clears the
+    /// anchor; a rekey round of such a call needs its anchor.
+    func noteRound1Judged(callId: String) {
+        lock.lock()
+        judged.set(callId.lowercased(), true)
+        lock.unlock()
+    }
+
+    func round1Judged(callId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return judged.items[callId.lowercased()] == true
     }
 
     func setAnchor(callId: String, _ anchor: Anchor) {
@@ -152,6 +168,7 @@ final class PqCallLayer: @unchecked Sendable {
         lock.lock()
         own = Table<OwnMode>()
         anchors = Table<Anchor>()
+        judged = Table<Bool>()
         roundKeys = Table<Pqsig.MlDsaPublicKey>()
         refusals = Table<Refusal>()
         lock.unlock()

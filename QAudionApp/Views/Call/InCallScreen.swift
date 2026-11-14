@@ -852,6 +852,10 @@ struct InCallScreen: View {
             return String(localized: "in_call.pin_warning.pq_absent",
                           defaultValue: "Firma post-quantistica non offerta da questo dispositivo.",
                           comment: "Call screen, safety-code warning: the contact's device did not send the second signature of the handshake it sent before.")
+        case .unverifiable:
+            return String(localized: "in_call.pin_warning.pq_unverifiable",
+                          defaultValue: "Non è stato possibile controllare la firma post-quantistica di questo dispositivo.",
+                          comment: "Call screen, safety-code warning: the second signature of the handshake could not be checked.")
         case .invalid:
             return String(localized: "in_call.pin_warning.pq_invalid",
                           defaultValue: "La firma post-quantistica di questo dispositivo non è stata verificata.",
