@@ -366,6 +366,7 @@ struct LiveInCallScreen: View {
                 // PSK: the shield, its popup, the "Post-quantistico" cell and
                 // the custody verdict never say "attivo" before that key lands.
                 pqcActive: mlKemKeyActive,
+                pqBadge: appState.callPqBadge,
                 // W339: real SAS from ComputeSasUseCase — derived from
                 // appState.callPqcSessionKey when set by the call setup
                 // path. While the key is nil (current state in most

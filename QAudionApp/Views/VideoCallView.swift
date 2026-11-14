@@ -485,7 +485,7 @@ struct VideoCallView: View {
                 trustChip(icon: "checkmark", label: "SAS ✓", color: .green, filled: true)
             }
             if realSessionKey != nil {
-                trustChip(icon: "lock.shield.fill", label: "PQC", color: .purple, filled: false)
+                trustChip(icon: "lock.shield.fill", label: appState.callPqBadge?.tag ?? "PQC", color: .purple, filled: false)
             }
             trustChip(icon: nil, label: transportChipLabel, color: .white.opacity(0.75), filled: false)
             Spacer()

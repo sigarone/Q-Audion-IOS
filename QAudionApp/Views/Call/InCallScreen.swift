@@ -238,6 +238,8 @@ struct InCallScreen: View {
     /// SRTP-audio inbound-rtp row) — see `CallService.mediaJitterBufferMs`.
     let bufMs: Int?
     let pqcActive: Bool
+    /// Level of the post-quantum protection of the call (tag of the PQ chip); nil keeps the plain "PQC" label.
+    let pqBadge: CallPqBadge?
     let sasWords: [String]
     /// The callee's SAS words do not exist yet: its ACCEPT is out and the caller's REVEAL has not
     /// verified (WIRE_SPEC §3.7.4). The panel shows "waiting for the security code" and no confirmation
@@ -490,6 +492,7 @@ struct InCallScreen: View {
          rttMs: Double? = nil,
          bufMs: Int? = nil,
          pqcActive: Bool = true,
+         pqBadge: CallPqBadge? = nil,
          sasWords: [String] = [],
          sasWaiting: Bool = false,
          sasVerified: Bool = false,
@@ -555,6 +558,7 @@ struct InCallScreen: View {
         self.rttMs = rttMs
         self.bufMs = bufMs
         self.pqcActive = pqcActive
+        self.pqBadge = pqBadge
         self.sasWords = sasWords
         self.sasWaiting = sasWaiting
         self.sasVerified = sasVerified
@@ -1683,7 +1687,7 @@ struct InCallScreen: View {
             // shield on this bar and Android's identical change.
             trustShield(
                 tint: pqcActive ? extras.pqcAccent : scheme.onSurfaceVariant,
-                label: "PQC",
+                label: pqBadge?.tag ?? "PQC",
                 info: .pqc,
                 accessibilityLabel: pqcActive
                     ? String(localized: "incall.shield.pqc_on", defaultValue: "Scambio post-quantistico attivo", comment: "Call screen, VoiceOver label of the post-quantum shield while the exchange is active")
