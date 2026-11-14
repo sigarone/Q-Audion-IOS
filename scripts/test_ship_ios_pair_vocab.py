@@ -162,11 +162,15 @@ for line in [
     "nfc.pair.fail role=reader result=somesecretword",
     "nfc.pair.step role=reader step=hello result=ok sw=9000 tag=0a1b2c3d4e5f6071",
     "nfc.pair.start role=reader name=zorkblat",
+    # Arabic-Indic digits: the numbers of the grammars are ASCII only.
+    "scan outcome=not_pair len=\u0661\u0662\u0669",
+    "ble.scan ev=found rssi=-\u0664\u0663",
+    "nfc.pair.step role=reader step=ek result=ok sw=9000 chunk=\u0662 ms=40",
 ]:
     checks += 1
     got = red(line)
     if got == line:
-        failures.append("an off-shape line shipped verbatim: %r" % line)
+        failures.append("an off-shape line shipped verbatim: %s" % ascii(line))
 
 print("checks: %d, failures: %d" % (checks, len(failures)))
 for f in failures:

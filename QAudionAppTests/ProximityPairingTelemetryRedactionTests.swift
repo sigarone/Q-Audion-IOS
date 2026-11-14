@@ -99,6 +99,13 @@ final class ProximityPairingTelemetryRedactionTests: XCTestCase {
         }
     }
 
+    /// A value after a secret keyword is still redacted when it starts with an NFC result word: `user_id` is a
+    /// result token but, at 7 characters, not one of the allow-listed words, so it is not set aside.
+    func test_secretKeywordValueStartingWithNfcWord_isStillRedacted() {
+        let line = "token=user_id:abcdef1234567890"
+        XCTAssertNotEqual(LogRedactor.redactStructured(line), line)
+    }
+
     /// Every `server_check` value `pairing.proximity.completed` can carry.
     func test_serverCheckOutcomeValues_surviveTheRedactorUnchanged() {
         for outcome in [ProximityServerCheckOutcome.confirmed, .unavailable, .mismatch] {
