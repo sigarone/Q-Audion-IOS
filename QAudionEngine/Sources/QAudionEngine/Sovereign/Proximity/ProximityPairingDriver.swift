@@ -101,7 +101,7 @@ final class ProximityPairingViewDriver: ObservableObject {
 
     // MARK: Tuning
 
-    /// Displayer: how long the QR waits for the system to confirm the advertisement before it is shown anyway.
+    /// Displayer: how long the QR waits for the system to confirm the advertisement before the session fails.
     private static let advertiseWaitLimit: TimeInterval = 4.0
     /// Upper bound on the server check before "Coincide" is offered anyway.
     private static let serverCheckTimeout: TimeInterval = 5.0
@@ -152,7 +152,7 @@ final class ProximityPairingViewDriver: ObservableObject {
     private var cachedIdentity: ProximityLocalIdentity?
     /// Displayer: the screen is being recorded, mirrored or shared.
     private var screenCaptured: Bool = false
-    /// A displayer session was stopped because the app went to the background.
+    /// A displayer session was stopped, or its automatic restart held back, because the app went to the background.
     private var suspendedInBackground: Bool = false
     private var renderedSessionId: Data = Data()
     private var renderedFrameIndex: UInt32?
@@ -171,8 +171,6 @@ final class ProximityPairingViewDriver: ObservableObject {
     private var heldPayload: ProximityQrPayload?
     private var advertiseWaitTimer: ProximityCancellable?
     private var advertiseWaitStartedAt: TimeInterval?
-    /// The wait ended without a confirmation: frames are shown as they come, as before the wait existed.
-    private var advertiseWaitForced: Bool = false
 
     init(localUserId: String,
          scanPayload: ProximityQrPayload?,
@@ -323,7 +321,14 @@ final class ProximityPairingViewDriver: ObservableObject {
         // Nothing here goes on behind another app, a failed screen waiting to restart included: the mesh gets its radio back.
         releaseMesh()
         switch phase {
-        case .completed, .failed:
+        case .completed:
+            return
+        case .failed:
+            // A failed screen waiting to restart by itself does not restart behind another app: the return does.
+            if isDisplayer && autoRestartTimer != nil {
+                cancelAutoRestart()
+                suspendedInBackground = true
+            }
             return
         default:
             break
@@ -345,8 +350,12 @@ final class ProximityPairingViewDriver: ObservableObject {
         guard suspendedInBackground else { return }
         suspendedInBackground = false
         guard isActive, isDisplayer else { return }
-        guard case .preparing = phase else { return }
-        begin()
+        switch phase {
+        case .preparing, .failed:
+            begin()
+        default:
+            return
+        }
     }
 
     /// Ends the live session (ABORT(cancelled) to a locked peer) and shows
@@ -380,7 +389,6 @@ final class ProximityPairingViewDriver: ObservableObject {
         resetServerCheck()
         finished = false
         setPhase(.preparing)
-        advertiseWaitForced = false
         if isDisplayer && screenCaptured {
             releaseMesh()
             setPhase(.failed(ProximityPairingViewDriver.screenCapturedText))
@@ -676,10 +684,11 @@ final class ProximityPairingViewDriver: ObservableObject {
 
     /// Displayer: shows the frame once the system confirmed that the service is advertised, so a scanner that reads the
     /// code at once finds something to connect to. Until then the newest frame waits and the screen shows the preparing
-    /// state; after `advertiseWaitLimit` without a confirmation the frame is shown anyway (the log says so), as before.
-    /// An advertisement that fails is not handled here: the transport reports it and the session fails.
+    /// state; after `advertiseWaitLimit` without a confirmation the session fails as a transport failure (and restarts by
+    /// itself): a code whose advertisement is not confirmed is never shown. An advertisement that fails is not handled
+    /// here: the transport reports it and the session fails.
     private func presentCode(_ payload: ProximityQrPayload) {
-        guard let radio = displayerTransport, !radio.isAdvertisingLive, !advertiseWaitForced else {
+        guard let radio = displayerTransport, !radio.isAdvertisingLive else {
             clearHeldCode()
             showCode(payload)
             return
@@ -706,12 +715,11 @@ final class ProximityPairingViewDriver: ObservableObject {
 
     private func advertiseWaitFired(epoch expected: UInt64) {
         advertiseWaitTimer = nil
-        guard expected == epoch, isActive, let payload = heldPayload else { return }
-        let waited: Int = advertiseWaitedMs()
-        heldPayload = nil
-        advertiseWaitForced = true
-        ProximityPairingLog.emit("ble.qr", [("ev", "forced"), ("ms", String(waited))])
-        showCode(payload)
+        guard expected == epoch, isActive, heldPayload != nil else { return }
+        ProximityPairingLog.emit("ble.qr", [("ev", "adv_timeout"), ("ms", String(advertiseWaitedMs()))])
+        // The existing transport-failure path: the session ends, the error shows, the automatic restart follows.
+        tearDownSession()
+        handleDisplayerState(.failed(.transportFailed("advertising not confirmed")), epoch: expected)
     }
 
     private func clearHeldCode() {
@@ -728,11 +736,10 @@ final class ProximityPairingViewDriver: ObservableObject {
     // MARK: - Bluetooth mesh pause
 
     /// Asks the app to keep its Bluetooth mesh quiet while this screen pairs: the mesh would share the radio and the
-    /// advertisement budget with the pairing (see `ProximityPairingMeshHold`). One hold at a time; a screen that comes up
-    /// while the app is in the background does not take one.
+    /// advertisement budget with the pairing (see `ProximityPairingMeshHold`). One hold at a time. No look at the
+    /// application state: on the way back from the background it still says "background" when the session restarts.
     private func holdMesh() {
         guard releaseMeshHold == nil, let acquire = ProximityPairingMeshHold.acquire else { return }
-        guard UIApplication.shared.applicationState != .background else { return }
         releaseMeshHold = acquire()
     }
 
@@ -811,6 +818,12 @@ final class ProximityPairingViewDriver: ObservableObject {
         autoRestartTimer = nil
         guard expected == epoch, isActive, isDisplayer else { return }
         guard case .failed = phase else { return }
+        // No session behind another app (it would run with the mesh on): the foreground return restarts it.
+        if UIApplication.shared.applicationState == .background {
+            releaseMesh()
+            suspendedInBackground = true
+            return
+        }
         begin()
     }
 
@@ -853,6 +866,17 @@ final class ProximityPairingViewDriver: ObservableObject {
         // The mesh waits for the same grace: the radio is still the pairing's until the last message has left.
         let release: (@MainActor () -> Void)? = releaseMeshHold
         releaseMeshHold = nil
+        // Not behind another app, though: when the app goes to the background during the grace the mesh gets the radio
+        // back at once (the hold gives back only once, so the timer below does nothing more). Independent of the
+        // screen, which may be gone by then.
+        let backgrounded: NSObjectProtocol? = release.map { hold in
+            return NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                                          object: nil, queue: .main) { _ in
+                Task { @MainActor in
+                    hold()
+                }
+            }
+        }
         displayer?.onStateChange = nil
         scanner?.onStateChange = nil
         displayerSession = nil
@@ -866,6 +890,9 @@ final class ProximityPairingViewDriver: ObservableObject {
             scanner?.cancel()
             scannerRadio?.cancel()
             release?()
+            if let observer = backgrounded {
+                NotificationCenter.default.removeObserver(observer)
+            }
         }
     }
 

@@ -190,13 +190,14 @@ final class MeshBtCallPauseTests: XCTestCase {
         XCTAssertEqual(p.evaluate(callActive: false, btRoute: false, pairingActive: false, nowMs: 20_000), resume(.pairingEnded, pausedMs: 19_000))
         XCTAssertFalse(p.isPaused)
 
-        // Opened during a call on a Bluetooth route (already paused): closing it does not resume while the call lasts.
+        // Opened during a call on a Bluetooth route (already paused): closing it does not resume while the call lasts,
+        // and the call, which lets go last, names the resume.
         var q = Pause()
         XCTAssertEqual(q.evaluate(callActive: true, btRoute: true, nowMs: 0), Pause.Decision(action: .pause))
         XCTAssertEqual(q.evaluate(callActive: true, btRoute: true, pairingActive: true, nowMs: 5_000), keep())
         XCTAssertEqual(q.evaluate(callActive: true, btRoute: true, pairingActive: false, nowMs: 9_000), keep())
         XCTAssertTrue(q.isPaused)
-        XCTAssertEqual(q.evaluate(callActive: false, btRoute: true, pairingActive: false, nowMs: 30_000), resume(.pairingEnded, pausedMs: 30_000))
+        XCTAssertEqual(q.evaluate(callActive: false, btRoute: true, pairingActive: false, nowMs: 30_000), resume(.callEnded, pausedMs: 30_000))
 
         // The call ends first while the screen is still open: the pause holds until the screen closes.
         var r = Pause()

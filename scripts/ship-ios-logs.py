@@ -1241,7 +1241,7 @@ _RE_PAIR_SCAN_FULL = re.compile(
 #   ble.peer ev=<subscribed|unsubscribed>
 #   ble.scan ev=<start|found|connect|connected|connect_failed|disconnected|services|chars|subscribed> [rssi=<n>] [code=<n>] [ok=<0|1>]
 #   ble.timeout role=scan stage=<idle|power|scanning|connecting|svc|chars|subscribing|connected|draining>
-#   ble.qr ev=<shown|forced> ms=<n>
+#   ble.qr ev=<shown|adv_timeout> ms=<n>
 #   mesh hold=<acquire|release|expired> n=<n> antenna=<0|1>
 # Accepted by the whole-line match only (see _is_closed_grammar_line), like the mesh events. Pinned by
 # test_ship_ios_pair_vocab.py.
@@ -1254,7 +1254,7 @@ _RE_PAIR_BLE_FULL = re.compile(
     r"|ble\.scan ev=(?:start|found|connect|connected|connect_failed|disconnected|services|chars|subscribed)"
     r"(?: rssi=-?\d{1,4})?(?: code=-?\d{1,9})?(?: ok=[01])?"
     r"|ble\.timeout role=scan stage=(?:idle|power|scanning|connecting|svc|chars|subscribing|connected|draining)"
-    r"|ble\.qr ev=(?:shown|forced) ms=\d{1,7}"
+    r"|ble\.qr ev=(?:shown|adv_timeout) ms=\d{1,7}"
     r"|mesh hold=(?:acquire|release|expired) n=\d{1,2} antenna=[01]"
     r")\Z"
 )

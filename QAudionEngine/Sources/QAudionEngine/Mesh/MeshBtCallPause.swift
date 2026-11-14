@@ -42,7 +42,7 @@ public struct MeshBtCallPause: Equatable {
         case callEnded = "call_ended"
         /// The call goes on, but its audio no longer uses a Bluetooth device.
         case routeChanged = "route_changed"
-        /// The pairing screen closed, and no call on a Bluetooth route holds the pause.
+        /// The pairing screen closed, and it was the last reason to let go of the pause.
         case pairingEnded = "pairing_ended"
     }
 
@@ -72,8 +72,11 @@ public struct MeshBtCallPause: Equatable {
 
     private var pausedSinceMs: Int64 = 0
     private var lastResumeMs: Int64?
-    /// The pairing screen was open at some point of this pause (it names the resume).
-    private var heldByPairing = false
+    /// What held the pause at the previous evaluation (a call on a Bluetooth route, the pairing screen).
+    private var callHeld = false
+    private var pairingHeld = false
+    /// The reason that let go of the pause last: it names the resume.
+    private var endedBy: ResumeReason?
 
     public init() {}
 
@@ -85,8 +88,13 @@ public struct MeshBtCallPause: Equatable {
     ///   - btRoute: the audio route has a Bluetooth input or a Bluetooth output port.
     ///   - pairingActive: the in-person pairing screen is open; it holds the pause on its own, call or no call.
     public mutating func evaluate(callActive: Bool, btRoute: Bool, pairingActive: Bool = false, nowMs: Int64) -> Decision {
-        if pairingActive { heldByPairing = true }
-        if (callActive && btRoute) || pairingActive {
+        let callHold = callActive && btRoute
+        if callHeld && !callHold { endedBy = callActive ? .routeChanged : .callEnded }
+        // Both let go in the same evaluation: the pairing screen names it.
+        if pairingHeld && !pairingActive { endedBy = .pairingEnded }
+        callHeld = callHold
+        pairingHeld = pairingActive
+        if callHold || pairingActive {
             guard !isPaused else { return Decision(action: .keep) }
             isPaused = true
             pausedSinceMs = nowMs
@@ -103,8 +111,8 @@ public struct MeshBtCallPause: Equatable {
         }
         isPaused = false
         lastResumeMs = nowMs
-        let reason: ResumeReason = heldByPairing ? .pairingEnded : (callActive ? .routeChanged : .callEnded)
-        heldByPairing = false
+        let reason: ResumeReason = endedBy ?? (callActive ? .routeChanged : .callEnded)
+        endedBy = nil
         return Decision(action: .resume(reason: reason, pausedMs: max(0, nowMs - pausedSinceMs)))
     }
 

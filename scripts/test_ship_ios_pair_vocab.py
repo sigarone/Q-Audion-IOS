@@ -93,7 +93,7 @@ BLE_LINES = [
     "ble.timeout role=scan stage=connecting",
     "ble.timeout role=scan stage=svc",
     "ble.qr ev=shown ms=240",
-    "ble.qr ev=forced ms=4001",
+    "ble.qr ev=adv_timeout ms=4001",
     "mesh hold=acquire n=1 antenna=1",
     "mesh hold=release n=0 antenna=0",
     "mesh hold=expired n=0 antenna=1",
