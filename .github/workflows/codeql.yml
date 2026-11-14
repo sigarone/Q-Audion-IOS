@@ -1,0 +1,60 @@
+# CodeQL code scanning, advanced setup: on push to main and once a week, not on pull requests.
+#
+# It replaces the CodeQL "default setup" of the repository (Settings > Code security > Code scanning), which analysed
+# every pull request as well. Same languages and same query suite as that setup had: actions, c-cpp, python and the
+# extended suite (security-extended). The default setup and an advanced workflow can not both be on: while the default
+# setup is on, the upload of this workflow is refused. Switch the default setup off when this file is merged:
+# Settings > Code security > Code scanning > CodeQL analysis > the ... menu > Disable CodeQL
+# (or: gh api -X PATCH repos/sigarone/Q-Audion-IOS/code-scanning/default-setup -f state=not-configured).
+#
+# The three languages need no build (build-mode none): actions reads the workflow files, python the scripts, c-cpp the
+# vendored C sources of QAudionEngine (CLiboqs, COpus) without compiling them.
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, off-peak (Wednesday 03:41 UTC).
+    - cron: '41 3 * * 3'
+  workflow_dispatch:
+
+# Least privilege: the analysis writes only its results, as security events.
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, c-cpp, python]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: /language:${{ matrix.language }}

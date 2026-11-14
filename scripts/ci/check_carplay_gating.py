@@ -23,7 +23,7 @@ sign. This script checks, on any machine with Python 3 and in a second, that:
      default values in the CarPlay sources) never tells the driver to use the phone: a CarPlay flow has to be
      possible without touching it.
 
-The built app is checked as well, on macOS, by the step "CarPlay scene in the default build" of ios-app-tests.yml.
+The built app is checked as well, on macOS, by the step "CarPlay scene in the default build" of ios-ci.yml (job app-build-and-tests).
 
 USAGE   python3 -I scripts/ci/check_carplay_gating.py [--root DIR]
 EXIT    0 clean | 1 a check failed | 2 cannot run

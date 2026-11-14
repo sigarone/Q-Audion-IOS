@@ -195,16 +195,14 @@ jobs:
   # tag resolves to now; a dispatch without it, github.sha. Whatever the tag or the input points at
   # elsewhere, it is that commit that is checked, never the branch the run was started from.
   #
-  # What must exist on that exact commit:
-  #   1. a successful run of ios-app-tests.yml from a push to main (or from a manual dispatch of it on that
-  #      commit: a path-filtered push may not have started one) in which app-build-and-tests,
-  #      share-variant-build, vpn-variant-build, earbud-variant-build and release-config-build all succeeded, and
-  #   2. a successful run of engine-tests.yml in which ios-simulator-tests succeeded (a push, or a manual
-  #      dispatch of it on that commit).
+  # What must exist on that exact commit: a successful run of ios-ci.yml from a push to main (or from a manual
+  # dispatch of it on that commit: a push that changes only documentation or scripts starts no macOS job) in which
+  # ios-simulator-tests, app-build-and-tests, share-variant-build, vpn-variant-build, earbud-variant-build and
+  # release-config-build all succeeded.
   # A job that a run skipped counts only when scripts/ci/ci-run-reuse.sh, run here on the commit, finds the same job
   # green in a pull request run: the pull request that was squash merged as this commit has a head in this repository
   # with the same tree, that head already contained the parent of this commit, and its run of the same workflow on
-  # that head succeeded with the job. A flag or an output of the skipping run is not read.
+  # that head (titled for that pull request) succeeded with the job. A flag or an output of the skipping run is not read.
   # A run still in progress is waited for; a run that failed, or none at all, fails the job with the remedy.
   # The dSYM recovery dispatch (download_dsyms=true) is not CI-gated because it never builds, signs or
   # uploads a build: the `build` job is skipped for it and only the separate `dsyms-recovery` job runs.
@@ -264,7 +262,7 @@ jobs:
 
           # 2) The runs. Each check prints why it is not satisfied and returns:
           #    0 satisfied | 1 not satisfied and nothing is pending | 2 not satisfied, a run is still going
-          APP_JOBS="app-build-and-tests share-variant-build vpn-variant-build earbud-variant-build release-config-build"
+          CI_JOBS="ios-simulator-tests app-build-and-tests share-variant-build vpn-variant-build earbud-variant-build release-config-build"
           jobs_ok() { # jobs_ok RUN_ID WORKFLOW_FILE JOB...: every named job concluded success in the latest attempt of the
             # run, or was skipped there and passed on the pull request of this commit (checked again here, see above)
             _id=$1; _w=$2; shift 2
@@ -282,17 +280,15 @@ jobs:
             done
             echo "  run ${_id}: skipped jobs taken from the pull request:${_skipped}"
           }
-          check() { # check WORKFLOW_FILE app|any JOB...
-            _wf=$1; _ev=$2; shift 2
+          check() { # check WORKFLOW_FILE JOB...: a push to main or a manual dispatch run of the workflow on the commit
+            _wf=$1; shift
             _runs=$(gh api "repos/${REPO}/actions/workflows/${_wf}/runs?head_sha=${SHA}&per_page=100" \
               --jq '.workflow_runs[] | "\(.id)\t\(.status)\t\(.conclusion)\t\(.event)\t\(.head_branch)"') || { echo "  cannot list the runs of ${_wf}"; return 1; }
             _pending=0; _seen=0
             _tab=$(printf '\t')
             while IFS="$_tab" read -r _id _status _concl _event _branch; do
               [ -n "$_id" ] || continue
-              if [ "$_ev" = "app" ]; then
-                { [ "$_event" = "push" ] && [ "$_branch" = "main" ]; } || [ "$_event" = "workflow_dispatch" ] || continue
-              fi
+              { [ "$_event" = "push" ] && [ "$_branch" = "main" ]; } || [ "$_event" = "workflow_dispatch" ] || continue
               _seen=$((_seen + 1))
               if [ "$_status" != "completed" ]; then _pending=1; echo "  ${_wf}: run ${_id} (${_event}) is ${_status}"; continue; fi
               if [ "$_concl" != "success" ]; then echo "  ${_wf}: run ${_id} (${_event}) ended ${_concl}"; continue; fi
@@ -307,19 +303,18 @@ jobs:
           while :; do
             N=$((N + 1))
             echo "--- check ${N}"
-            A=0; E=0
-            check ios-app-tests.yml app $APP_JOBS || A=$?
-            check engine-tests.yml any ios-simulator-tests || E=$?
-            if [ "$A" -eq 0 ] && [ "$E" -eq 0 ]; then
+            C=0
+            check ios-ci.yml $CI_JOBS || C=$?
+            if [ "$C" -eq 0 ]; then
               echo "CI is green on ${SHA}."
               exit 0
             fi
             # Something pending (or no run yet, for the first minutes after a push): wait. Otherwise fail.
             WAIT=0
-            if [ "$A" -eq 2 ] || [ "$E" -eq 2 ]; then WAIT=1; fi
+            if [ "$C" -eq 2 ]; then WAIT=1; fi
             if [ "$N" -le 3 ]; then WAIT=1; fi
             if [ "$WAIT" -eq 0 ] || [ "$N" -ge "$MAX_POLLS" ]; then
-              fail "CI is not green on ${SHA}. Needed: ios-app-tests.yml from a push to main (or a manual dispatch on this commit) with ${APP_JOBS// /, } all successful, and engine-tests.yml with ios-simulator-tests successful (a job the run skipped counts only when the same job passed on the pull request with the same files). If a push to main did not start one of them (ios-app-tests.yml has a path filter), dispatch it on this commit: gh workflow run ios-app-tests.yml --ref <tag> and gh workflow run engine-tests.yml --ref <tag>."
+              fail "CI is not green on ${SHA}. Needed: ios-ci.yml from a push to main (or a manual dispatch on this commit) with ${CI_JOBS// /, } all successful (a job the run skipped counts only when the same job passed on the pull request with the same files). If a push to main did not start them (a push that changes only documentation or scripts starts no macOS job), dispatch the workflow on this commit: gh workflow run ios-ci.yml --ref <tag>."
             fi
             sleep "$POLL_SECONDS"
           done

@@ -1,6 +1,6 @@
 # MASVS-CODE remediation (2026-08-21, I8) — separate, narrow SwiftLint pass
 # for QAudionApp. `.swiftlint.yml` (repo root) deliberately never covered
-# this target — see engine-tests.yml's swiftlint-report job comment: "the
+# this target — see ios-ci.yml's swiftlint-report job comment: "the
 # SwiftUI app with the documented Xcode 26.4 type-checker-timeout traps
 # (see CLAUDE.md), and adding lint there is a separate, higher-risk
 # decision for later." That risk is about the Xcode COMPILER's type

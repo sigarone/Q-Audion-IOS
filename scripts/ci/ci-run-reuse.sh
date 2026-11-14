@@ -1,7 +1,7 @@
 #!/bin/sh
 # ci-run-reuse.sh - the jobs of a workflow that already passed, on the pull request that produced a commit of main.
 #
-# USAGE   ci-run-reuse.sh WORKFLOW_FILE JOB...        (for example: ci-run-reuse.sh engine-tests.yml ios-simulator-tests)
+# USAGE   ci-run-reuse.sh WORKFLOW_FILE JOB...        (for example: ci-run-reuse.sh ios-ci.yml ios-simulator-tests)
 # ENV     REPO        owner/name of the repository
 #         SHA         full id of the commit on main
 #         GH_TOKEN    token for gh (actions: read, pull-requests: read, contents: read)
@@ -18,11 +18,16 @@
 #   2. the root tree of the head commit of that pull request is the root tree of the commit (the same files);
 #   3. the head commit contains the parent of the commit, so the merge ref that the pull request run built had that
 #      same tree and not a mix of the head with a different base;
-#   4. of the runs of the workflow with event pull_request on that head commit, of this repository, the newest one
-#      (highest run id) has completed with conclusion success, and the job concluded success in the latest attempt of
-#      that run. When the newest run failed or is still going, nothing is reused, whatever an older run did.
-# ios-app-tests.yml and engine-tests.yml use it on push to main to skip what the pull request already ran; the gate of
-# ios-testflight.yml runs it again on the tagged commit for every job that a run skipped.
+#   4. of the runs of the workflow with event pull_request on that head commit, of this repository, that belong to
+#      this pull request, the newest one (highest run id) has completed with conclusion success, and the job concluded
+#      success in the latest attempt of that run. When the newest run failed or is still going, nothing is reused,
+#      whatever an older run did.
+#      A run belongs to the pull request when its title is "PR #<number>" (ios-ci.yml gives its pull request runs that
+#      run-name, taken from the event, never from text of the author) and, when the run lists pull requests at all
+#      (the API lists only OPEN ones: it is empty for a merged pull request, so it can not be required), the number is
+#      among them. A run of another pull request on the same head commit is ignored.
+# ios-ci.yml uses it on push to main to skip what the pull request already ran; the gate of ios-testflight.yml runs it
+# again on the tagged commit for every job that a run skipped.
 set -u
 LC_ALL=C
 export LC_ALL
@@ -96,19 +101,30 @@ if [ -n "${KEEP_PATHS:-}" ]; then
 fi
 
 # 4) The newest run of the pull request on its head, and the jobs in it. Runs that are not pull request runs of this
-# repository on that head are ignored; of the others the highest run id is the newest, and only that one is read.
+# repository on that head, or that belong to another pull request, are ignored; of the others the highest run id is the
+# newest, and only that one is read.
 RUNS=$(gh api "repos/${REPO}/actions/workflows/${WF}/runs?head_sha=${PRHEAD}&event=pull_request&per_page=100" \
-  --jq '.workflow_runs[] | [.id, .status, (.conclusion // "-"), .event, .head_sha, (.head_repository.full_name // "-")] | @tsv') \
+  --jq '.workflow_runs[] | [.id, .status, (.conclusion // "-"), .event, .head_sha, (.head_repository.full_name // "-"), (.display_title // "-"), (if (.pull_requests | length) == 0 then "-" else ([.pull_requests[].number | tostring] | join(",")) end)] | @tsv') \
   || none "runs of ${WF} on ${PRHEAD} not readable"
 RUNS=$(printf '%s\n' "$RUNS" | sort -t "$TAB" -k1,1nr)
 RUN=""
 RUN_STATUS=""
 RUN_CONCL=""
-while IFS=$TAB read -r _id _status _concl _event _run_head _run_repo; do
+while IFS=$TAB read -r _id _status _concl _event _run_head _run_repo _title _prs; do
   [ -n "$_id" ] || continue
   if [ "$_event" != "pull_request" ] || [ "$_run_head" != "$PRHEAD" ] || [ "$_run_repo" != "$REPO" ]; then
     note "run ${_id} of ${WF} is not a pull request run of ${REPO} on ${PRHEAD} (${_event}/${_run_repo}/${_run_head}): ignored"
     continue
+  fi
+  if [ "$_title" != "PR #${PR}" ]; then
+    note "run ${_id} of ${WF} is titled '${_title}', not 'PR #${PR}': ignored"
+    continue
+  fi
+  if [ "$_prs" != "-" ]; then
+    case ",${_prs}," in
+      *",${PR},"*) ;;
+      *) note "run ${_id} of ${WF} lists pull requests ${_prs}, not #${PR}: ignored"; continue ;;
+    esac
   fi
   RUN=$_id
   RUN_STATUS=$_status
@@ -117,7 +133,7 @@ while IFS=$TAB read -r _id _status _concl _event _run_head _run_repo; do
 done <<EOF
 $RUNS
 EOF
-[ -n "$RUN" ] || none "no pull request run of ${WF} of ${REPO} on ${PRHEAD}"
+[ -n "$RUN" ] || none "no pull request run of ${WF} of ${REPO} on ${PRHEAD} for #${PR}"
 [ "$RUN_STATUS" = "completed" ] || none "the newest run ${RUN} of ${WF} on ${PRHEAD} is ${RUN_STATUS}, not completed"
 [ "$RUN_CONCL" = "success" ] || none "the newest run ${RUN} of ${WF} on ${PRHEAD} concluded ${RUN_CONCL}"
 JOBLIST=$(gh api "repos/${REPO}/actions/runs/${RUN}/jobs?per_page=100&filter=latest" --jq '.jobs[] | [.name, (.conclusion // "-")] | @tsv') \

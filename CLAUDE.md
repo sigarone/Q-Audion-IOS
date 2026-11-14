@@ -22,10 +22,10 @@ You are an AI agent working on **Q-Audion iOS**, a post-quantum encrypted voice-
 | Path | Status | Read it? |
 |---|---|---|
 | `.github/workflows/ios-testflight.yml` | **ACTIVE** — TestFlight build | YES, this is the pipeline |
-| `.github/workflows/engine-tests.yml` | ACTIVE — Swift package tests on every push | reference if engine tests fail |
-| `.github/workflows/kat-cross-platform.yml` | `workflow_dispatch` only since 2026-07-30 — its test (`WireV1CrossPlatformKatTests.swift`) is real and PASSES, but only via `engine-tests.yml`'s xcodebuild+simulator path; bare `swift test` here can't resolve the package's binary `WebRTC` xcframework (the failure was recorded as `no such module 'LiveKitWebRTC'` while LiveKit was still a dependency; group calls v2 removed LiveKit, the equivalent `WebRTC` failure is expected but not re-verified), so this standalone job can't work without duplicating engine-tests.yml's cost | reference `engine-tests.yml` instead for KAT status |
+| `.github/workflows/ios-ci.yml` | **ACTIVE** — the one CI workflow of pull requests and of pushes to main (it replaces engine-tests.yml, ios-app-tests.yml, ios-ci-gates.yml and shipper-tests.yml). Job `plan` (ubuntu, seconds) decides from the changed paths what the change needs (`scripts/ci/ios-ci-plan.sh`, `scripts/ci/ios-variant-changes.sh`; documentation only starts nothing else). macOS: `ios-simulator-tests` (QAudionEngine package tests, Release, required check of main), `app-build-and-tests` (app build, the gates on the built app, the app tests), `share-variant-build`, `vpn-variant-build`, `earbud-variant-build`, `release-config-build`, `signing-key-macos`. Linux: `gates` (self-tests of the release gates and CI scripts, source gates, the log filter tests), `swiftlint-qaudionapp-print-check` (required check of main), report-only `swiftlint-report` and `secret-scan-report` (push to main), `iOS CI result` (one check for the run). On push to main the job `reuse` skips what this pull request's run already passed on the identical tree; the `gate` of `ios-testflight.yml` requires `ios-simulator-tests`, `app-build-and-tests` and the four variant jobs of a run of this workflow on the tagged commit. A manual dispatch runs everything (`gh workflow run ios-ci.yml --ref <tag>`) | YES when CI fails or a gate or `scripts/ci/*` changes |
+| `.github/workflows/kat-cross-platform.yml` | `workflow_dispatch` only since 2026-07-30 — its test (`WireV1CrossPlatformKatTests.swift`) is real and PASSES, but only via `ios-ci.yml`'s xcodebuild+simulator path; bare `swift test` here can't resolve the package's binary `WebRTC` xcframework (the failure was recorded as `no such module 'LiveKitWebRTC'` while LiveKit was still a dependency; group calls v2 removed LiveKit, the equivalent `WebRTC` failure is expected but not re-verified), so this standalone job can't work without duplicating ios-ci.yml's cost | reference `ios-ci.yml` instead for KAT status |
 | `.github/workflows/artifact-cleanup.yml` | ACTIVE — scheduled artifact retention | leave alone |
-| `.github/workflows/ios-ci-gates.yml` | ACTIVE — self-tests of the release gates, on pull requests that touch the app, the engine, `scripts/ci/**` or the release workflow. Job `gates` (ubuntu, seconds): earbud source gate + binary gate self-test, the pinned age install, dSYM encryption, `symbolicate.py` decryption, the Xcode selector (`select-xcode.sh`), the simulator picker (`resolve_simulator.py`), the signing key check (`check-signing-key.sh`), the reuse of pull request results on main (`ci-run-reuse.sh`). Job `signing-key-macos` (macOS, short): the same signing key check with the image's default `openssl`, plus every installed OpenSSL build and the signing tools' `openssl` calls, report only | yes if a gate or `scripts/ci/*` changes |
+| `.github/workflows/codeql.yml` | ACTIVE — CodeQL code scanning, advanced setup (actions, c-cpp, python; query suite extended), on push to main and weekly, not on pull requests. The repository setting "CodeQL default setup" must be OFF: the two can not both be on | leave alone |
 | `.github/workflows/ios-xcode27-canary.yml` | ACTIVE, report only — since the shipping toolchain moved to Xcode 27 its Xcode 26 row (CarPlay app compile) is the backward canary; the same checks on the Xcode 27 runner image (`runs-on: xcode-27`, exact release 27.1, never a release candidate). Manual (`workflow_dispatch`) and weekly (`schedule`) runs start all three jobs: engine tests and the Maestro smoke flow on an iOS 27 simulator, and a compile-only job for the app with the CarPlay scene (SDK 26 and 27, unsigned, never uploaded). A pull request that touches the workflow, `scripts/ci/select-xcode.sh`, `scripts/ci/xcode-diagnostics-summary.sh` or `QAudionApp/CarPlay/**` starts only the compile-only job; the jobs that launch the app and run the engine tests never run from a pull request. Jobs are `continue-on-error`; warnings and errors land in the job summary and a failed job leaves a `::warning::` annotation | yes when moving the shipping toolchain to Xcode 27 |
 | `.github/workflows/ios-ui-smoke.yml` | ACTIVE, manual-only (`workflow_dispatch`) — builds QAudionApp for iOS Simulator (no signing) + runs Maestro UI flows from `maestro/*.yaml` (top level only; flows in `maestro/needs-non-prod-backend/` register real PRODUCTION accounts and are refused by the workflow, 2026-09-30). Added 2026-08-06, GREEN as of run [31079859197](https://github.com/sigarone/Q-Audion-IOS/actions/runs/31079859197) (13m51s) after 3 fix iterations (xcodegen not installed; a device-only quiche.xcframework — since removed with the MASQUE/QUIC transport; the packet-tunnel extension/WireGuardKitGo are device-only too, and since they now live only in `project-vpn.yml` nothing is stripped any more — see the workflow file's own header for the full iteration log) | yes if it fails again — read the uploaded `build-sim-log`/`maestro-debug` artifacts first |
 | `.github/workflows/ios-wda-provision.yml` | ACTIVE, manual-only (`workflow_dispatch`, input `device_udid`) — registers a real test iPhone + builds/signs WebDriverAgentRunner (appium/WebDriverAgent v16.1.5, IOS_APP_DEVELOPMENT signing) for interactive UI debug from Windows via go-ios (see global CLAUDE.md "go-ios + WebDriverAgent"). Added 2026-08-06, UNVERIFIED — first Development-type signing in this repo's CI (everything else here is IOS_APP_STORE), see file header for the certificate-reuse caveat | yes if it fails — read `wda-build-log` artifact; check whether `WDA_CERTIFICATE_PRIVATE_KEY` secret needs setting after a first successful cert creation |
@@ -307,7 +307,7 @@ QAudionEngine/       # Swift package with crypto + audio C libs
   Resources/
     aasist_raw_*.onnx  # Deepfake detection models (run via onnxruntime)
 .github/workflows/
-  engine-tests.yml   # macOS Swift test CI (every push)
+  ios-ci.yml         # PR + main CI: plan, engine tests, app build + tests, variants, gates
   ios-testflight.yml # TestFlight build pipeline (tag v*)
   kat-cross-platform.yml  # KAT cross-platform interop tests
 ```
@@ -355,7 +355,7 @@ engine package, the pure utility code `VpnMlKem` and `CidrExclusion`.
 support (opposite gate). The default build turns the Network Extensions and Personal VPN
 capabilities OFF on the main App ID before it regenerates the App Store profile (the gate
 also reads `embedded.mobileprovision`); a build with VPN support turns both back ON.
-`ios-app-tests.yml` runs the gate on the default Simulator
+`ios-ci.yml` (job `app-build-and-tests`) runs the gate on the default Simulator
 build and compiles the VPN variant (job `vpn-variant-build`).
 
 ### Earbud (hardware) support is a compile-time switch (QAUDION_EARBUD)
@@ -383,11 +383,11 @@ No signing, capability or entitlement changes. To make it permanent, point the t
 
 Proof, in layers, each independent: `scripts/ci/check_earbud_gating.py` (sources: with the flag off no
 symbol of the stack is left in code the compiler sees; also checks the specs and the workflow wiring;
-runs on every release build and in `ios-ci-gates.yml`); `scripts/ci/assert-no-earbud.sh` (binary: no
+runs on every release build and in the job `gates` of `ios-ci.yml`); `scripts/ci/assert-no-earbud.sh` (binary: no
 Mach-O of the built app contains the mangled class names, the earbud UUID or the other signatures; runs
-on the default Simulator build in `ios-app-tests.yml` and on the shipped IPA in `ios-testflight.yml`,
+on the default Simulator build in `ios-ci.yml` and on the shipped IPA in `ios-testflight.yml`,
 where an earbud dispatch runs it with `--require-present` instead); `EarbudCompileConditionTests`
-(the class is absent from the app at run time). `ios-app-tests.yml` job `earbud-variant-build` compiles
+(the class is absent from the app at run time). `ios-ci.yml` job `earbud-variant-build` compiles
 the variant, plain and with the dev tools, so the code does not rot.
 
 ### dSYMs are encrypted (the repository is public)
@@ -404,14 +404,15 @@ The IPA, `build.log` and the failure-only diagnostic logs are not uploaded at al
 
 - **Tag push `v*`** → full TestFlight pipeline (`ios-testflight.yml`).
 - **Workflow_dispatch** with optional `tag` input → ad-hoc rebuild.
-- **Main branch push** → `engine-tests.yml` (macOS Swift unit + cross-platform
-  KAT, same job) only — no iOS build. `kat-cross-platform.yml` doesn't
+- **Pull request** → `ios-ci.yml` only (one run; its job `plan` starts what the change needs). CodeQL (`codeql.yml`) does not run on pull requests.
+- **Main branch push** → `ios-ci.yml` again (both macOS test jobs and every variant for a push that changes code, minus what the pull request already ran, see below) and `codeql.yml`; weekly: `codeql.yml`. `kat-cross-platform.yml` doesn't
   auto-trigger (see the workflow table above for why).
 - **Never** trigger TestFlight builds from branches — always tag.
-- **Push to main** reuses what the pull request already ran: job `reuse` of `ios-app-tests.yml` and `engine-tests.yml`
-  (`scripts/ci/ci-run-reuse.sh`) skips a job that passed in the pull request's run when the squash commit has the same tree as
+- **Push to main** reuses what the pull request already ran: job `reuse` of `ios-ci.yml`
+  (`scripts/ci/ci-run-reuse.sh`) skips a job that passed in the run of this pull request (the run is titled `PR #<number>`) when the squash commit has the same tree as
   the pull request head and the head already held the parent of the commit; the other jobs (the variants the pull request did
   not build) still run. The `gate` job of `ios-testflight.yml` checks the same again on the tagged commit for every skipped job.
+  A push that changes only documentation or scripts starts no macOS job: dispatch `ios-ci.yml` on such a commit before tagging it.
 
 ## Hard-won lessons — DO NOT REPEAT THESE MISTAKES
 
@@ -582,9 +583,9 @@ The app is on TestFlight but has not been exercised end-to-end. Expect to debug:
 5. **Treat Apple emails after upload as canonical**. The publish step reporting "publishing succeeded" only means the upload HTTP call returned 2xx. Apple may still reject on validation minutes later via email. Always check inbox before declaring victory.
 6. **Use `TodoWrite` for multi-step tasks** and follow the superpowers skill guidance when relevant.
 7. **New testable logic (parsing, policy, formatting, decision functions) goes into `QAudionEngine`**, where
-   `engine-tests.yml` runs `QAudionEngineTests` on pushes to main/develop and on PRs. `QAudionAppTests/` has no target in
+   `ios-ci.yml` (job `ios-simulator-tests`) runs `QAudionEngineTests` on pull requests and on pushes to main. `QAudionAppTests/` has no target in
    `QAudionApp/project.yml`; only the files listed in `QAudionApp/project-apptests.yml` are compiled and run (by
-   `.github/workflows/ios-app-tests.yml`, which also compile-checks the whole app on PRs). The rest of that folder was
+   `.github/workflows/ios-ci.yml`, which also compile-checks the whole app on PRs). The rest of that folder was
    written without a compiler and does not run, so keep the app side a thin call into the engine.
 
 ### 13. Swift type-checker timeout traps (Xcode 26.4)

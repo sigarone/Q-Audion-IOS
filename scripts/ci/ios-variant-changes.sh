@@ -1,5 +1,5 @@
 #!/bin/sh
-# ios-variant-changes.sh - which of the four variant builds of ios-app-tests.yml a pull request needs.
+# ios-variant-changes.sh - which of the four variant builds of ios-ci.yml a pull request needs.
 #
 # USAGE   ios-variant-changes.sh < list-of-changed-paths     (one per line, repo-relative; a renamed file is
 #                                                             listed under both its new and its old name)
@@ -10,7 +10,7 @@
 # STDOUT  share=true|false  vpn=...  earbud=...  release=...   (appended to $GITHUB_OUTPUT by the workflow)
 # STDERR  one line per path that made the decision, for the log.
 #
-# WHAT EACH VARIANT COMPILES (read from the jobs of ios-app-tests.yml, not guessed):
+# WHAT EACH VARIANT COMPILES (read from the jobs of ios-ci.yml, not guessed):
 #   share-variant-build   project-share.yml = project.yml + QAUDION_SHARE + the QAudionShare extension
 #                         (../QAudionShare, QAudionApp/Share/ShareQueue.swift); also reads QAudionShareApp.entitlements
 #   vpn-variant-build     project-vpn.yml = project.yml + QAUDION_VPN + QAudionPacketTunnel + WireGuardKit; its
@@ -25,7 +25,7 @@
 #
 # FORCES ALL FOUR: project.yml and every project-*.yml, *.xcconfig, *.entitlements and Info.plist outside the two
 # extension folders, *.xcprivacy, *.xcassets, *.xcstrings and Localizable files, Package.swift / Package.resolved,
-# scripts/ci/**, the workflow ios-app-tests.yml, the `full-ci` label, a Swift file that cannot be read on either
+# scripts/ci/**, the workflow ios-ci.yml, the `full-ci` label, a Swift file that cannot be read on either
 # side, and ANY other path under QAudionApp, QAudionEngine, QAudionShare, QAudionPacketTunnel, QAudionIntents,
 # QAudionLiveActivity or QAudionNotificationService that no rule below names (an unknown path is never skipped).
 # NOTHING: docs/**, maestro/**, .jules/**, the other workflows, and Swift files of the two test folders, which no
@@ -86,7 +86,7 @@ while IFS= read -r f; do
     QAudionApp/QAudionShareApp.entitlements) SHARE=true; VPN=true; NOTE "share+vpn: $f" ;;
     QAudionApp/QAudionVPN.entitlements)      VPN=true; NOTE "vpn: $f" ;;
     # build configuration and resources that every variant takes in: all variants
-    *project-*.yml|*project.yml|.github/workflows/ios-app-tests.yml|scripts/ci/*|*Package.swift|*Package.resolved|*.xcconfig|*.xcassets|*.xcassets/*|*.xcstrings|*Localizable*|*.xcprivacy)
+    *project-*.yml|*project.yml|.github/workflows/ios-ci.yml|scripts/ci/*|*Package.swift|*Package.resolved|*.xcconfig|*.xcassets|*.xcassets/*|*.xcstrings|*Localizable*|*.xcprivacy)
       ALL=true; NOTE "all: $f" ;;
     # the extensions, each in its own variant (their own entitlements and Info.plist included)
     QAudionShare/*|QAudionApp/Share/*)       SHARE=true; NOTE "share: $f" ;;

@@ -1,4 +1,4 @@
-# XcodeGen spec used ONLY by .github/workflows/ios-app-tests.yml.
+# XcodeGen spec used ONLY by .github/workflows/ios-ci.yml.
 #
 # QAudionApp/project.yml (the spec ios-testflight.yml archives from) has no
 # test target, so everything under QAudionAppTests/ has never been compiled or
