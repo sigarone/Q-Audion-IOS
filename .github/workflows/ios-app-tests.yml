@@ -39,8 +39,15 @@
 # of that script, which is always taken from the BASE of the pull request, never from the pull request itself).
 # A change to the build configuration, or the label `full-ci` (read when the run starts: push, or re-run, after
 # adding it), runs all four. On push to
-# main and on a manual dispatch all four always run: a tag of ios-testflight.yml is released only when they
+# main and on a manual dispatch all four are needed: a tag of ios-testflight.yml is released only when they
 # passed on the tagged commit (job `gate` there).
+#
+# Push to main reuses what the pull request already ran (job `reuse`, scripts/ci/ci-run-reuse.sh): when the commit is
+# the squash merge of a pull request of this repository whose head holds the very same files and already contained
+# the parent of the commit, a job that passed in that pull request's run of this workflow is skipped on main, and the
+# summary says which run it was taken from. Every other job still runs, so the variants that the pull request did not
+# build are built on main. The gate of ios-testflight.yml repeats the same check on the tagged commit for each skipped job.
+# A manual dispatch runs every job.
 #
 # Runs on public-repo runners (free); no signing secrets, no network to any
 # real backend: the tests are pure.
@@ -181,7 +188,52 @@ jobs:
           printf '%s\n' "$OUT" >> "$GITHUB_OUTPUT"
           printf '%s\n' "$OUT"
 
+  # On push to main: the jobs that already passed on the pull request this commit squash-merges are not run again.
+  # scripts/ci/ci-run-reuse.sh reuses a job only when the head of that pull request (same repository) has the very
+  # tree of this commit, already contained the parent of this commit, and its run of this workflow on that head passed
+  # the job. Anything else, or an error, reuses nothing: the jobs below read an empty output as "run".
+  # QAudionEngine/Package.swift and QAudionApp/project.yml key the SPM cache that app-build-and-tests saves on main,
+  # so a commit that changes either one runs that job.
+  reuse:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      app: ${{ steps.decide.outputs.app }}
+      share: ${{ steps.decide.outputs.share }}
+      vpn: ${{ steps.decide.outputs.vpn }}
+      earbud: ${{ steps.decide.outputs.earbud }}
+      release: ${{ steps.decide.outputs.release }}
+    steps:
+      - name: Checkout (CI scripts only)
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+
+      - name: Reuse the results of the pull request
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          KEEP_PATHS: QAudionEngine/Package.swift QAudionApp/project.yml
+        run: |
+          set -u
+          OUT=$(sh scripts/ci/ci-run-reuse.sh ios-app-tests.yml app-build-and-tests share-variant-build vpn-variant-build earbud-variant-build release-config-build) || OUT=""
+          for pair in app:app-build-and-tests share:share-variant-build vpn:vpn-variant-build earbud:earbud-variant-build release:release-config-build; do
+            if printf '%s\n' "$OUT" | cut -f1 | grep -qxF "${pair#*:}"; then V=true; else V=false; fi
+            echo "${pair%%:*}=${V}" >> "$GITHUB_OUTPUT"
+            echo "${pair#*:}: reused=${V}"
+          done
+
   app-build-and-tests:
+    needs: reuse
+    if: ${{ !cancelled() && needs.reuse.outputs.app != 'true' }}
     runs-on: xcode-27
     timeout-minutes: 60
 
@@ -525,8 +577,8 @@ jobs:
   # The build with the share extension (QAudionApp/project-share.yml: QAUDION_SHARE, QAudionShare extension), compiled
   # for the simulator without signing so the extension does not rot while the default build leaves it out.
   share-variant-build:
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.result == 'failure' || needs.changes.outputs.share == 'true') }}
+    needs: [changes, reuse]
+    if: ${{ !cancelled() && needs.reuse.outputs.share != 'true' && (needs.changes.result == 'failure' || needs.changes.outputs.share == 'true') }}
     runs-on: xcode-27
     timeout-minutes: 60
 
@@ -588,8 +640,8 @@ jobs:
           echo "share extension embedded"
 
   vpn-variant-build:
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.result == 'failure' || needs.changes.outputs.vpn == 'true') }}
+    needs: [changes, reuse]
+    if: ${{ !cancelled() && needs.reuse.outputs.vpn != 'true' && (needs.changes.result == 'failure' || needs.changes.outputs.vpn == 'true') }}
     runs-on: xcode-27
     timeout-minutes: 60
 
@@ -702,8 +754,8 @@ jobs:
   # (what ios-testflight.yml dispatched with earbud=true produces) and together with
   # QAUDION_DEV_TOOLS, which adds the earbud diagnostics screen that drives the same code.
   earbud-variant-build:
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.result == 'failure' || needs.changes.outputs.earbud == 'true') }}
+    needs: [changes, reuse]
+    if: ${{ !cancelled() && needs.reuse.outputs.earbud != 'true' && (needs.changes.result == 'failure' || needs.changes.outputs.earbud == 'true') }}
     runs-on: xcode-27
     timeout-minutes: 60
 
@@ -844,8 +896,8 @@ jobs:
   # (optimised, whole-module): it reports warnings that a Debug build does not. Device
   # destination, unsigned. Held to the same counted baseline as the Debug build.
   release-config-build:
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.result == 'failure' || needs.changes.outputs.release == 'true') }}
+    needs: [changes, reuse]
+    if: ${{ !cancelled() && needs.reuse.outputs.release != 'true' && (needs.changes.result == 'failure' || needs.changes.outputs.release == 'true') }}
     runs-on: xcode-27
     timeout-minutes: 60
 

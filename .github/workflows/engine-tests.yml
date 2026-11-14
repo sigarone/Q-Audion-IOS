@@ -111,14 +111,52 @@ jobs:
           echo "run=${RUN}" >> "$GITHUB_OUTPUT"
           echo "Decision: run=${RUN} (${COUNT} entries)"
 
+  # On push to main: the tests that already passed on the pull request this commit squash-merges are not run again.
+  # scripts/ci/ci-run-reuse.sh reuses ios-simulator-tests only when the head of that pull request (same repository)
+  # has the very tree of this commit, already contained the parent of this commit, and its run of this workflow on that
+  # head passed the job. Anything else, or an error, reuses nothing: the job below reads an empty output as "run".
+  # The summary says which run the result was taken from; the TestFlight gate (ios-testflight.yml) checks it again.
+  # QAudionEngine/Package.swift keys the SPM cache that ios-simulator-tests saves on main, so a commit that changes it
+  # runs the job.
+  reuse:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      sim: ${{ steps.decide.outputs.sim }}
+    steps:
+      - name: Checkout (CI scripts only)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          sparse-checkout: scripts/ci
+          persist-credentials: false
+
+      - name: Reuse the results of the pull request
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          KEEP_PATHS: QAudionEngine/Package.swift
+        run: |
+          set -u
+          OUT=$(sh scripts/ci/ci-run-reuse.sh engine-tests.yml ios-simulator-tests) || OUT=""
+          if printf '%s\n' "$OUT" | cut -f1 | grep -qxF ios-simulator-tests; then V=true; else V=false; fi
+          echo "sim=${V}" >> "$GITHUB_OUTPUT"
+          echo "ios-simulator-tests: reused=${V}"
+
   # iOS Simulator job — runs xcodebuild test targeting arm64 simulator.
   # This uses the ios-arm64-simulator slice of QaudionCryptoCore.xcframework
   # (v0.1.2) so RatchetNative.available = true and RatchetNativeRoundTripTests
   # run fully (not skipped). WebRTC's iOS-simulator slice is present, so this
   # job does NOT share the macOS-slice-missing issue.
   ios-simulator-tests:
-    needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true') }}
+    needs: [changes, reuse]
+    if: ${{ !cancelled() && needs.reuse.outputs.sim != 'true' && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true') }}
     runs-on: xcode-27
     timeout-minutes: 60
     steps:

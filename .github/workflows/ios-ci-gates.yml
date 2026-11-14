@@ -52,6 +52,10 @@
 #     with every OpenSSL build that image carries. The openssl command lines of the signing tools
 #     (provisioning profile read, certificate container unwrap) are exercised report-only too.
 #     Only throwaway keys are used, never a key of the repository.
+#   * the reuse of pull request results on push to main (scripts/ci/ci-run-reuse.sh, used by ios-app-tests.yml,
+#     engine-tests.yml and the gate of ios-testflight.yml) runs against a stand-in `gh`: a job is reused only for
+#     the same tree, an up-to-date head from this repository and a green pull request run, and an API error,
+#     a fork, a failed or unfinished run or a different tree reuse nothing.
 #
 # Needs network access to github.com for the age release only. No secrets.
 
@@ -171,6 +175,9 @@ jobs:
 
       - name: Signing key check, self-test
         run: sh scripts/ci/test-check-signing-key.sh
+
+      - name: Reuse of pull request results on main, self-test
+        run: sh scripts/ci/test-ci-run-reuse.sh
 
       - name: openssl calls of the signing tools (report only)
         continue-on-error: true
