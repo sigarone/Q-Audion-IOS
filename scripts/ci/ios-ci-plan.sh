@@ -105,6 +105,8 @@ while IFS= read -r f; do
       SCRIPTS=true; NOTE "scripts (log filter vocabulary): $f" ;;
     QAudionEngine/Tests/QAudionEngineTests/Resources/kat/location-kat.json|QAudionEngine/Tests/QAudionEngineTests/Diagnostics/DtlsWaitLineTests.swift|QAudionEngine/Tests/QAudionEngineTests/Diagnostics/AudioWireLinesTests.swift)
       SCRIPTS=true; NOTE "scripts (log filter vocabulary): $f" ;;
+    QAudionEngine/Tests/QAudionEngineTests/GroupCall/GroupPromotionDiagnosticsTests.swift|QAudionEngine/Tests/QAudionEngineTests/Resources/kat/pqc-hardening-v1-kat.json)
+      SCRIPTS=true; NOTE "scripts (log filter vocabulary): $f" ;;
   esac
 
   # signing: the check of the distribution signing key and the workflow that runs it.

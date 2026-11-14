@@ -13,11 +13,13 @@
 #                                 (flag scripts, or flag app: the source gates read the app sources)
 #   signing-key-macos             macOS, seconds: the signing key check on the runner image's OpenSSL  (flag signing)
 #   swiftlint-qaudionapp-print-check   Linux: the print() ban in QAudionApp (always)
-#   swiftlint-report, secret-scan-report   Linux, report only, on push to main and on a manual run
+#   swiftlint-report              Linux, report only, on push to main and on a manual run
+#   secret-scan-report            Linux, report only (gitleaks over the whole history, about 20 s), on every run: the
+#                                 repository is public, so a committed secret is reported before the merge
 #   result                        Linux: fails when a job that ran failed; one check for the whole run
 #
 # What a change starts:
-#   documentation only            plan only: no job below runs
+#   documentation only            plan, the print() ban, secret-scan-report and result run; no macOS job, no gates
 #   app source, extensions        app-build-and-tests, ios-simulator-tests (the engine tests read QAudionApp sources),
 #                                 gates, and the variant builds whose files changed
 #   QAudionAppTests only          app-build-and-tests and gates, not the engine tests
@@ -1595,9 +1597,10 @@ jobs:
           args: lint --config .swiftlint-qaudionapp.yml --path QAudionApp
 
   # ----------------------------------------------------------------
-  # Report-only checks (added 2026-07-28), on push to main and on a manual run: they report on the tree that is on main
-  # and are not repeated on every pull request. Every step sets `continue-on-error: true`, so a finding here can NEVER
-  # fail the workflow or block a merge. They exist to surface signal that was not visible before, not to gate CI.
+  # Report-only checks (added 2026-07-28): SwiftLint runs on push to main and on a manual run (it reports on the tree
+  # that is on main, not on every pull request); the secret scan runs on every event, pull requests included. Every step
+  # sets `continue-on-error: true`, so a finding here can NEVER fail the workflow or block a merge. They exist to surface
+  # signal that was not visible before, not to gate CI.
   # ----------------------------------------------------------------
 
   # SwiftLint over QAudionEngine only (scope + exclusions come from the existing .swiftlint.yml at repo root; CLiboqs and
@@ -1666,10 +1669,10 @@ jobs:
           retention-days: 14
 
   # Secret scan over the full repo (including history) via the official gitleaks Docker image. Report only: a hit here
-  # (e.g. an already-rotated historical secret) is signal to review, not a merge blocker. Needs the whole history, so it
-  # runs where that is read once, on push to main, and not on every pull request.
+  # (e.g. an already-rotated historical secret) is signal to review, not a merge blocker, and the job is not in the
+  # `needs` of `result`. It runs on every event, pull requests included (about 20 s): the repository is public, so a
+  # secret committed by a pull request has to be reported before the merge and not only after it, on push to main.
   secret-scan-report:
-    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
