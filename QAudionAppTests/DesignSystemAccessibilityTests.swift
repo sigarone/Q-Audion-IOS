@@ -187,6 +187,14 @@ final class DesignSystemAccessibilityTests: XCTestCase {
         }
     }
 
+    /// The pill under the name of the outgoing screen names the post-quantum exchange only once the ML-KEM key exists.
+    func testTheOutgoingPillNamesPqcOnlyOnceTheMlKemKeyExists() {
+        XCTAssertEqual(OutgoingCallScreen.exchangePillText(hasSessionKey: true), "PQC ACTIVE")
+        let beforeTheKey = OutgoingCallScreen.exchangePillText(hasSessionKey: false)
+        XCTAssertFalse(beforeTheKey.uppercased().contains("PQC"), "pill text before the key: \(beforeTheKey)")
+        XCTAssertFalse(beforeTheKey.isEmpty)
+    }
+
     /// The compact security badge never says "Sicuro" without a score: a call starts at level "green" with the -1 "no
     /// score yet" sentinel, and then the word says there is not enough data. With a real reading (0 included) the
     /// three words follow the level.

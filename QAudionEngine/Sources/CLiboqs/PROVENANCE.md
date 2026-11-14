@@ -123,8 +123,10 @@ assumed to already exist).
 
 `src/mldsa/` is [`pq-code-package/mldsa-native`](https://github.com/pq-code-package/mldsa-native) tag
 `v2.0.0`, commit `834a90d5e846ffa1e1611bd24e160bb2e9b86d35` (Apache-2.0 OR ISC OR MIT; the upstream `LICENSE` is
-kept next to the sources). `src/mldsa/MANIFEST.sha256` lists the SHA-256 of every file as it is in that tag
-(`cd src/mldsa && sha256sum -c MANIFEST.sha256` verifies them, apart from `mldsa_native_config.h`, see below).
+kept next to the sources). `src/mldsa/MANIFEST.sha256` lists the SHA-256 of every file of the directory: the
+upstream files as they are in that tag, and the two local files `mldsa_native_config.h` and
+`mldsa_fips202_glue.h` (see below) as committed here
+(`cd src/mldsa && sha256sum -c MANIFEST.sha256` verifies all of them).
 
 What is taken: the contents of upstream `mldsa/` (the single-compilation-unit build `mldsa_native.c`, its public
 header and `src/*.c|*.h|zetas.inc`, portable C only) plus the upstream `LICENSE`. What is left out: the

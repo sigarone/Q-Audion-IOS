@@ -16,7 +16,8 @@ import SwiftUI
 ///   - "Chiamata audio" / "Videochiamata" subtitle: the kind of call, nothing
 ///     about its security, because no channel exists yet. Not shown once the
 ///     call ended (the kind of call is no longer known there).
-///   - `MetaPill`s (PQC NEGOTIATING; the "VOICE TRUST · ENROLLED" and
+///   - `MetaPill`s (NEGOTIATING, which becomes PQC ACTIVE only once the real
+///     ML-KEM session key exists; the "VOICE TRUST · ENROLLED" and
 ///     latency pills of the original port are gone: fixed values with no
 ///     reading behind them)
 ///   - **Handshake log** — 3 rows that tick from circle → check, each on
@@ -213,7 +214,8 @@ struct OutgoingCallScreen: View {
                             .padding(.bottom, 20)
 
                         HStack(spacing: 8) {
-                            MetaPill("PQC NEGOTIATING", accent: extras.pqcAccent)
+                            MetaPill(Self.exchangePillText(hasSessionKey: sessionFingerprint != nil),
+                                     accent: sessionFingerprint != nil ? extras.pqcAccent : scheme.onSurfaceVariant)
                             // No "VOICE TRUST · ENROLLED" pill: it was shown on every
                             // outgoing call with no voice reading behind it. Same for the
                             // latency pill: the value it showed was a fixed number.
@@ -299,6 +301,12 @@ struct OutgoingCallScreen: View {
     /// starts with, and that key is not derived by the handshake.
     static func sessionKeyRowDone(state: State, hasFingerprint: Bool) -> Bool {
         (state == .connected || state == .rekeying) && hasFingerprint
+    }
+
+    /// The pill under the name. It names the post-quantum exchange only once the real ML-KEM session key exists (the
+    /// same reading the shield of the connected call stands on); until then it says only that the exchange is under way.
+    static func exchangePillText(hasSessionKey: Bool) -> String {
+        hasSessionKey ? "PQC ACTIVE" : "NEGOTIATING"
     }
 
     private var handshakeLog: some View {
