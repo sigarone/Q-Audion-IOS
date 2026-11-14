@@ -26,10 +26,9 @@ import QAudionEngine
 ///     fabricated value.
 ///   - Overview section replaces the 1:1 "Handshake"/"Cifra e chiave"
 ///     pair with the group-call v2 model, a constant of the wire contract:
-///       * transport: DTLS 1.3 with the hybrid X25519MLKEM768 key
-///         exchange, SRTP AEAD_AES_256_GCM — checked by the client once the
-///         connection is up (a media path that does not match is refused
-///         and the call ends);
+///       * transport: DTLS 1.3, SRTP AEAD_AES_256_GCM — checked by the
+///         client once the connection is up (a media path that does not
+///         match is refused and the call ends);
 ///       * content E2EE, per sender and per epoch: a fresh random 32-byte
 ///         key, AES-256-GCM through the native FrameCryptor;
 ///       * key delivery: over the pairwise sealed control channel between
@@ -156,17 +155,17 @@ struct GroupSecuritySheet: View {
             // positional arg) is a plain String, not LocalizedStringKey
             // (see its signature below), so these literal row-name
             // labels don't auto-localize. `value:` arguments are left
-            // untouched: "AES-256-GCM"/"DTLS 1.3 + X25519MLKEM768"/
+            // untouched: "AES-256-GCM"/"DTLS 1.3"/
             // "AEAD_AES_256_GCM" are never-translate protocol tokens (so
             // is the "SRTP" label), and EPOCA/PARTECIPANTI's values are
             // live call state (\(epoch)/\(participants.count)), not fixed
             // copy.
             infoRow(String(localized: "group_security.overview.media_cipher_label", defaultValue: "CIFRA MEDIA", comment: "Group call security sheet — overview row label for the media encryption cipher"), "AES-256-GCM (E2EE)")
-            infoRow(String(localized: "group_security.overview.handshake_label", defaultValue: "HANDSHAKE", comment: "Group call security sheet — overview row label for the key-exchange handshake"), "DTLS 1.3 + X25519MLKEM768")
+            infoRow(String(localized: "group_security.overview.handshake_label", defaultValue: "HANDSHAKE", comment: "Group call security sheet — overview row label for the key-exchange handshake"), "DTLS 1.3")
             infoRow("SRTP", "AEAD_AES_256_GCM")
             infoRow(String(localized: "group_security.overview.epoch_label", defaultValue: "EPOCA", comment: "Group call security sheet — overview row label for the current sender-key epoch number"), "\(epoch)")
             infoRow(String(localized: "group_security.overview.participants_label", defaultValue: "PARTECIPANTI", comment: "Group call security sheet — overview row label for the participant count"), "\(participants.count)")
-            Text(String(localized: "group_security.overview.note", defaultValue: "Il trasporto è protetto da DTLS 1.3 con scambio di chiavi ibrido post-quantistico (X25519MLKEM768) e SRTP AEAD_AES_256_GCM, verificato dal tuo dispositivo dopo la connessione. Il contenuto è cifrato end-to-end da ogni mittente, per epoca, con una chiave casuale di 32 byte (AES-256-GCM). Le chiavi viaggiano solo sul canale di controllo sigillato tra i singoli partecipanti: il server media non le vede mai.", comment: "Group call security sheet — overview note describing the group call v2 encryption model (transport, per-sender content E2EE, key delivery)"))
+            Text(String(localized: "group_security.overview.note", defaultValue: "Il trasporto è protetto da DTLS 1.3 e SRTP AEAD_AES_256_GCM, verificato dal tuo dispositivo dopo la connessione. Il contenuto è cifrato end-to-end da ogni mittente, per epoca, con una chiave casuale di 32 byte (AES-256-GCM). Le chiavi viaggiano solo sul canale di controllo sigillato tra i singoli partecipanti: il server media non le vede mai.", comment: "Group call security sheet — overview note describing the group call v2 encryption model (transport, per-sender content E2EE, key delivery)"))
                 .qaudionStyle(type.bodySmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
                 .fixedSize(horizontal: false, vertical: true)

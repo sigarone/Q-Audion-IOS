@@ -750,14 +750,15 @@ struct GroupCallView: View {
     /// header comment for the full 1:1 pattern). Always visible, never
     /// covers the participant grid; tapping the shield opens
     /// `GroupSecuritySheet`. Chips shown are group-call constants (every
-    /// group call runs over DTLS 1.3 with the hybrid X25519MLKEM768 and
-    /// carries AES-256-GCM content E2EE — see `GroupSecuritySheet.
-    /// overviewBody`) rather than per-call conditionals like the
+    /// group call runs over DTLS 1.3, which the client checks after the
+    /// connection is up, and carries AES-256-GCM content E2EE, see
+    /// `GroupSecuritySheet.overviewBody`) rather than per-call conditionals like the
     /// 1:1 bar's `sasVerified`/`pqcActive` (group calls have no in-call
-    /// SAS ceremony of their own).
+    /// SAS ceremony of their own). A post-quantum chip is shown only when the
+    /// measured level of the hop to the media server is available.
     private var groupTrustBar: some View {
         HStack(spacing: 7) {
-            groupTrustChip(icon: "lock.shield.fill", label: "PQC", color: extras.pqcAccent)
+            groupTrustChip(icon: "lock.shield.fill", label: "DTLS 1.3", color: scheme.onSurfaceVariant)
             groupTrustChip(icon: nil, label: "AES-256", color: scheme.onSurfaceVariant)
             Spacer(minLength: 0)
             Button {

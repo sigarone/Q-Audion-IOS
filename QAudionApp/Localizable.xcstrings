@@ -15187,37 +15187,37 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Il trasporto è protetto da DTLS 1.3 con scambio di chiavi ibrido post-quantistico (X25519MLKEM768) e SRTP AEAD_AES_256_GCM, verificato dal tuo dispositivo dopo la connessione. Il contenuto è cifrato end-to-end da ogni mittente, per epoca, con una chiave casuale di 32 byte (AES-256-GCM). Le chiavi viaggiano solo sul canale di controllo sigillato tra i singoli partecipanti: il server media non le vede mai."
+            "value": "Il trasporto è protetto da DTLS 1.3 e SRTP AEAD_AES_256_GCM, verificato dal tuo dispositivo dopo la connessione. Il contenuto è cifrato end-to-end da ogni mittente, per epoca, con una chiave casuale di 32 byte (AES-256-GCM). Le chiavi viaggiano solo sul canale di controllo sigillato tra i singoli partecipanti: il server media non le vede mai."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The transport is protected by DTLS 1.3 with a hybrid post-quantum key exchange (X25519MLKEM768) and SRTP AEAD_AES_256_GCM, verified by your device after connecting. The content is end-to-end encrypted by each sender, per epoch, with a fresh random 32-byte key (AES-256-GCM). Keys only travel over the sealed control channel between individual participants: the media server never sees them."
+            "value": "The transport is protected by DTLS 1.3 and SRTP AEAD_AES_256_GCM, verified by your device after connecting. The content is end-to-end encrypted by each sender, per epoch, with a fresh random 32-byte key (AES-256-GCM). Keys only travel over the sealed control channel between individual participants: the media server never sees them."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Der Transport ist durch DTLS 1.3 mit einem hybriden Post-Quanten-Schlüsselaustausch (X25519MLKEM768) und SRTP AEAD_AES_256_GCM geschützt, nach dem Verbindungsaufbau von Ihrem Gerät geprüft. Die Inhalte werden von jedem Absender pro Epoche Ende-zu-Ende verschlüsselt, mit einem zufälligen 32-Byte-Schlüssel (AES-256-GCM). Die Schlüssel werden nur über den versiegelten Steuerkanal zwischen den einzelnen Teilnehmern übertragen: Der Medienserver sieht sie nie."
+            "value": "Der Transport ist durch DTLS 1.3 und SRTP AEAD_AES_256_GCM geschützt, nach dem Verbindungsaufbau von Ihrem Gerät geprüft. Die Inhalte werden von jedem Absender pro Epoche Ende-zu-Ende verschlüsselt, mit einem zufälligen 32-Byte-Schlüssel (AES-256-GCM). Die Schlüssel werden nur über den versiegelten Steuerkanal zwischen den einzelnen Teilnehmern übertragen: Der Medienserver sieht sie nie."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El transporte está protegido por DTLS 1.3 con intercambio de claves híbrido poscuántico (X25519MLKEM768) y SRTP AEAD_AES_256_GCM, verificado por tu dispositivo tras la conexión. Cada remitente cifra el contenido de extremo a extremo, por época, con una clave aleatoria de 32 bytes (AES-256-GCM). Las claves solo viajan por el canal de control sellado entre los participantes individuales: el servidor multimedia nunca las ve."
+            "value": "El transporte está protegido por DTLS 1.3 y SRTP AEAD_AES_256_GCM, verificado por tu dispositivo tras la conexión. Cada remitente cifra el contenido de extremo a extremo, por época, con una clave aleatoria de 32 bytes (AES-256-GCM). Las claves solo viajan por el canal de control sellado entre los participantes individuales: el servidor multimedia nunca las ve."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le transport est protégé par DTLS 1.3 avec un échange de clés hybride post-quantique (X25519MLKEM768) et SRTP AEAD_AES_256_GCM, vérifié par ton appareil après la connexion. Le contenu est chiffré de bout en bout par chaque expéditeur, par époque, avec une clé aléatoire de 32 octets (AES-256-GCM). Les clés ne circulent que sur le canal de contrôle scellé entre les participants : le serveur média ne les voit jamais."
+            "value": "Le transport est protégé par DTLS 1.3 et SRTP AEAD_AES_256_GCM, vérifié par ton appareil après la connexion. Le contenu est chiffré de bout en bout par chaque expéditeur, par époque, avec une clé aléatoire de 32 octets (AES-256-GCM). Les clés ne circulent que sur le canal de contrôle scellé entre les participants : le serveur média ne les voit jamais."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O transporte é protegido por DTLS 1.3 com troca de chaves híbrida pós-quântica (X25519MLKEM768) e SRTP AEAD_AES_256_GCM, verificado pelo seu dispositivo após a conexão. O conteúdo é criptografado de ponta a ponta por cada remetente, por época, com uma chave aleatória de 32 bytes (AES-256-GCM). As chaves trafegam apenas pelo canal de controle selado entre os participantes individuais: o servidor de mídia nunca as vê."
+            "value": "O transporte é protegido por DTLS 1.3 e SRTP AEAD_AES_256_GCM, verificado pelo seu dispositivo após a conexão. O conteúdo é criptografado de ponta a ponta por cada remetente, por época, com uma chave aleatória de 32 bytes (AES-256-GCM). As chaves trafegam apenas pelo canal de controle selado entre os participantes individuais: o servidor de mídia nunca as vê."
           }
         }
       }
