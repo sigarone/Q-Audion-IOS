@@ -271,11 +271,14 @@ enum LogRedactor {
     // In-person pairing -- plus the closed words of its telemetry `cause` (Android's vocabulary) and of a rejected
     // scan's `reason`. Only the underscore-joined ones can reach the 20-character bar: `bluetooth_unavailable` on
     // its own, or `reason=not_pair_prefix` in a log line, where the `=` joins the key into the same run. A single
-    // word is far below it and needs no entry.
+    // word is far below it and needs no entry. The NFC pairing's result tokens follow the same rule: `result=` adds
+    // 7 characters in an `nfc.pair.fail` line, so the ones of 13 or more characters (`result=peer_identity_changed`,
+    // `result=user_rejected`) reach the 20-character bar and are listed; the shorter ones are not.
     private static let proximityTokens: [String] = {
         let causes: [String] = ProximityPairingTelemetryEvent.FailureCause.allCases.map { $0.rawValue }
         let reasons: [String] = ProximityQrRejection.allCases.map { $0.rawValue }
-        return (causes + reasons).filter { $0.contains("_") }
+        let nfcResults: [String] = NfcPairingV2Token.allCases.map { $0.rawValue }.filter { $0.count >= 13 }
+        return (causes + reasons + nfcResults).filter { $0.contains("_") }
     }()
 
     private static let closeReasonRegex: NSRegularExpression = {

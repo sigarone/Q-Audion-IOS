@@ -99,6 +99,26 @@ BLE_LINES = [
     "mesh hold=expired n=0 antenna=1",
 ]
 LINES += BLE_LINES
+
+# The NFC ceremony (NfcPairingLog): closed grammar, including the result tokens that are 12+ characters long.
+NFC_LINES = [
+    "nfc.pair.start role=reader",
+    "nfc.pair.step role=reader step=select result=ok sw=9000 ms=12",
+    "nfc.pair.step role=reader step=hello result=ok sw=9000 rtt_ms=34",
+    "nfc.pair.step role=reader step=ek result=ok sw=9000 chunk=2 ms=40",
+    "nfc.pair.step role=reader step=finalize result=ok sw=9000 ms=8 tag=0a1b2c3d",
+    "nfc.pair.fail role=reader result=field_lost",
+    "nfc.pair.fail role=reader result=peer_identity_changed step=confirm tag=0a1b2c3d",
+    "nfc.pair.fail role=reader result=identity_invalid step=reveal tag=0a1b2c3d",
+    "nfc.pair.fail role=reader result=user_rejected step=confirm sw=6985 tag=0a1b2c3d",
+    "nfc.pair.fail role=reader result=card_error step=ct sw=6a82",
+    "nfc.pair.sas_shown role=reader peerKnown=1 pinned=0 tag=0a1b2c3d",
+    "nfc.pair.user role=reader result=confirm tag=0a1b2c3d",
+    "nfc.pair.peer role=reader result=pending tag=0a1b2c3d",
+    "nfc.pair.commit role=reader stored=1 pending=0 replaced=0 tag=0a1b2c3d",
+    "nfc.pair.finalize role=reader via=confirm deleted=0 tag=0a1b2c3d",
+]
+LINES += NFC_LINES
 for reason in REASONS:
     LINES.append("scan outcome=invalid reason=%s len=129" % reason)
     LINES.append("scan outcome=invalid reason=%s len=0" % reason)
@@ -119,6 +139,10 @@ for tag in ("call", "net", "chat"):
     got = red("ble.scan ev=found rssi=-67", tag)
     if got == "ble.scan ev=found rssi=-67":
         failures.append("the pair Bluetooth grammar leaked under tag %r" % tag)
+    checks += 1
+    got = red("nfc.pair.fail role=reader result=peer_identity_changed", tag)
+    if got == "nfc.pair.fail role=reader result=peer_identity_changed":
+        failures.append("the pair NFC grammar leaked under tag %r" % tag)
 
 # The shape gate: the vocabulary is only for the whole line, nothing before, nothing after.
 for line in [
@@ -135,11 +159,18 @@ for line in [
     "ble.timeout role=scan stage=nowhere",
     "ble.adv step=start ok=1 code=0 extra=1",
     "mesh hold=acquire n=1",
+    "nfc.pair.fail role=reader result=somesecretword",
+    "nfc.pair.step role=reader step=hello result=ok sw=9000 tag=0a1b2c3d4e5f6071",
+    "nfc.pair.start role=reader name=zorkblat",
+    # Arabic-Indic digits: the numbers of the grammars are ASCII only.
+    "scan outcome=not_pair len=\u0661\u0662\u0669",
+    "ble.scan ev=found rssi=-\u0664\u0663",
+    "nfc.pair.step role=reader step=ek result=ok sw=9000 chunk=\u0662 ms=40",
 ]:
     checks += 1
     got = red(line)
     if got == line:
-        failures.append("an off-shape line shipped verbatim: %r" % line)
+        failures.append("an off-shape line shipped verbatim: %s" % ascii(line))
 
 print("checks: %d, failures: %d" % (checks, len(failures)))
 for f in failures:
