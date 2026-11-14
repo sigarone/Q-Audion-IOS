@@ -72,6 +72,23 @@ struct GroupCallView: View {
             VStack(spacing: 0) {
                 // Header
                 HStack {
+                    // Report a problem or a call error: opens the report sheet, hosted by this
+                    // screen (see `.background(BugReportOverlay(host: .groupCall))` below). On the left
+                    // edge, level with the title. The circle is 30 pt; the touch area is 44 pt and takes no layout space.
+                    Button {
+                        BugReporter.shared.requestReport(source: .inGroupCall)
+                    } label: {
+                        Image(systemName: "ladybug")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 30, height: 30)
+                            .background(Color.white.opacity(0.12))
+                            .clipShape(Circle())
+                            .padding(7)
+                            .contentShape(Rectangle())
+                            .padding(-7)
+                    }
+                    .accessibilityLabel(String(localized: "Segnala un problema"))
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Chiamata di gruppo")
                             .font(.headline).foregroundColor(.white)
@@ -98,20 +115,6 @@ struct GroupCallView: View {
                             .font(.caption).monospacedDigit()
                             .foregroundColor(Color(red: 0, green: 0.9, blue: 0.47))
                     }
-                    // Report a problem or a call error: opens the report sheet, hosted by this
-                    // screen (see `.background(BugReportOverlay(host: .groupCall))` below).
-                    Button {
-                        BugReporter.shared.requestReport(source: .inGroupCall)
-                    } label: {
-                        Image(systemName: "ladybug")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(width: 30, height: 30)
-                            .background(Color.white.opacity(0.12))
-                            .clipShape(Circle())
-                    }
-                    .padding(.leading, 10)
-                    .accessibilityLabel(String(localized: "Segnala un problema"))
                     // Item 5 (2026-07-16 wire contract) — pure client-side
                     // layout toggle, no wire message at all (the engine's
                     // active-speaker detection, wired through

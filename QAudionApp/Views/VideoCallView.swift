@@ -390,6 +390,20 @@ struct VideoCallView: View {
 
     private var topBarContent: some View {
         HStack {
+            // Report a problem or a call error: marks the moment in the call telemetry, then opens the report sheet. On the
+            // left edge, level with the name. The circle is 32 pt; the touch area is 44 pt and takes no layout space.
+            Button(action: reportProblem) {
+                Image(systemName: "ladybug")
+                    .font(.system(size: 15))
+                    .foregroundColor(.white)
+                    .frame(width: 32, height: 32)
+                    .qaudionGlassSurface(in: Circle(), interactive: true, fallback: Color.white.opacity(0.12))
+                    .padding(6)
+                    .contentShape(Rectangle())
+                    .padding(-6)
+            }
+            .accessibilityLabel(CallControlText.reportA11y)
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(resolvedPeerDisplayName)
                     .font(.headline)
@@ -429,17 +443,6 @@ struct VideoCallView: View {
                     ? String(localized: "sas.accessibility.verified", defaultValue: "Identità verificata (SAS)", comment: "Accessibility label — SAS identity verification completed")
                     : String(localized: "sas.accessibility.pending", defaultValue: "Verifica identità (SAS) in sospeso", comment: "Accessibility label — SAS identity verification still pending"))
             }
-
-            // Report a problem or a call error: marks the moment in the call telemetry, then opens the report sheet.
-            Button(action: reportProblem) {
-                Image(systemName: "ladybug")
-                    .font(.system(size: 15))
-                    .foregroundColor(.white)
-                    .frame(width: 32, height: 32)
-                    .qaudionGlassSurface(in: Circle(), interactive: true, fallback: Color.white.opacity(0.12))
-            }
-            .padding(.trailing, 4)
-            .accessibilityLabel(CallControlText.reportA11y)
 
             // W502: diagnostics toggle button.
             Button {

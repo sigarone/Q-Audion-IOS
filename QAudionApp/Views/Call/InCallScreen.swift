@@ -633,9 +633,10 @@ struct InCallScreen: View {
             // SCREEN_SHARE:start. Wrapped in the outermost ZStack so
             // the position is fixed independent of scrollContent /
             // bottomActionRow layout.
-            // Report-a-problem button, top left like the Android call screen (44 pt circle, 16 pt in, 8 pt down).
-            if let onReportProblem {
-                callTopBar(onReportProblem: onReportProblem)
+            // The reduce control, top left (44 pt circle, 16 pt in, 8 pt down). The report button is in the column, on the left
+            // edge level with the peer name (see `scrollContent`).
+            if onReportProblem != nil {
+                callTopBar
             }
             if peerScreenSharing {
                 VStack {
@@ -686,25 +687,33 @@ struct InCallScreen: View {
         )
     }
 
-    private func callTopBar(onReportProblem: @escaping () -> Void) -> some View {
+    private var callTopBar: some View {
         HStack(spacing: 8) {
             if let onMinimize {
                 MinimizeCallButton(action: onMinimize)
             }
-            Button(action: onReportProblem) {
-                Image(systemName: "ladybug")
-                    .qaudionScaledFont(size: 20, weight: .regular, maxSize: .xLarge)
-                    .foregroundStyle(scheme.onSurface)
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(scheme.surface.opacity(0.85)))
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(CallControlText.reportA11y)
             Spacer(minLength: 0)
         }
         .padding(.leading, 16)
         .padding(.top, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// Room kept on each side of the peer name for the report button: the 16 pt gutter and the 44 pt circle. The name keeps
+    /// its centre and wraps before it would run under the button.
+    private static let reportButtonSlot: CGFloat = 60
+
+    /// The report-a-problem button: a 44 pt circle on the left edge of the column, level with the peer name.
+    private func reportProblemButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "ladybug")
+                .qaudionScaledFont(size: 20, weight: .regular, maxSize: .xLarge)
+                .foregroundStyle(scheme.onSurface)
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(scheme.surface.opacity(0.85)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(CallControlText.reportA11y)
     }
 
     /// W534 — pill badge surfaced when `peerScreenSharing == true`.
@@ -1065,6 +1074,15 @@ struct InCallScreen: View {
                     .italic()
                     .foregroundStyle(scheme.onBackground)
                     .multilineTextAlignment(.center)
+                    .padding(.horizontal, onReportProblem == nil ? 0 : Self.reportButtonSlot)
+                    .frame(maxWidth: .infinity)
+                    // The report button: left edge, level with the name. An overlay, so nothing around it moves.
+                    .overlay(alignment: .leading) {
+                        if let onReportProblem {
+                            reportProblemButton(onReportProblem)
+                                .padding(.leading, 16)
+                        }
+                    }
 
                 peerCallStateBadge
                     .padding(.top, 6)
