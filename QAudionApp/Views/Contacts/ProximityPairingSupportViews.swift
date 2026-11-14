@@ -109,6 +109,11 @@ enum ProximityScanMessages {
 /// outcome and reason tokens and the length of the text leave the scanner:
 /// never the text, an id or a key.
 enum ProximityScanReport {
+    /// A valid pairing code: it goes straight to the Bluetooth exchange (no telemetry event: nothing was rejected).
+    static func pairing(textLength: Int) {
+        RTLog.info("pair", "scan outcome=pairing len=\(textLength)")
+    }
+
     static func notPairing(textLength: Int) {
         RTLog.info("pair", "scan outcome=not_pair len=\(textLength)")
         ProximityPairingTelemetry.emitScanRejected(reason: .notPairPrefix)

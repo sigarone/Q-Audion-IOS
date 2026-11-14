@@ -176,4 +176,38 @@ final class MeshBtCallPauseTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - The in-person pairing screen: a second reason for the same pause
+
+    func testThePairingScreenPausesAndResumesAloneAndTogetherWithACallOnABluetoothRoute() {
+        XCTAssertEqual(Pause.pairingReason, "pairing")
+        XCTAssertEqual(Pause.ResumeReason.pairingEnded.rawValue, "pairing_ended")
+
+        // On its own, with no call and no Bluetooth route: pauses at once, resumes when the screen closes.
+        var p = Pause()
+        XCTAssertEqual(p.evaluate(callActive: false, btRoute: false, pairingActive: true, nowMs: 1_000), Pause.Decision(action: .pause))
+        XCTAssertEqual(p.evaluate(callActive: false, btRoute: false, pairingActive: true, nowMs: 9_000), keep())
+        XCTAssertEqual(p.evaluate(callActive: false, btRoute: false, pairingActive: false, nowMs: 20_000), resume(.pairingEnded, pausedMs: 19_000))
+        XCTAssertFalse(p.isPaused)
+
+        // Opened during a call on a Bluetooth route (already paused): closing it does not resume while the call lasts.
+        var q = Pause()
+        XCTAssertEqual(q.evaluate(callActive: true, btRoute: true, nowMs: 0), Pause.Decision(action: .pause))
+        XCTAssertEqual(q.evaluate(callActive: true, btRoute: true, pairingActive: true, nowMs: 5_000), keep())
+        XCTAssertEqual(q.evaluate(callActive: true, btRoute: true, pairingActive: false, nowMs: 9_000), keep())
+        XCTAssertTrue(q.isPaused)
+        XCTAssertEqual(q.evaluate(callActive: false, btRoute: true, pairingActive: false, nowMs: 30_000), resume(.pairingEnded, pausedMs: 30_000))
+
+        // The call ends first while the screen is still open: the pause holds until the screen closes.
+        var r = Pause()
+        _ = r.evaluate(callActive: true, btRoute: true, pairingActive: true, nowMs: 0)
+        XCTAssertEqual(r.evaluate(callActive: false, btRoute: false, pairingActive: true, nowMs: 4_000), keep())
+        XCTAssertTrue(r.isPaused)
+        XCTAssertEqual(r.evaluate(callActive: false, btRoute: false, pairingActive: false, nowMs: 8_000), resume(.pairingEnded, pausedMs: 8_000))
+
+        // Without the screen nothing changed: the same call alone still resumes as a call.
+        var s = Pause()
+        _ = s.evaluate(callActive: true, btRoute: true, nowMs: 0)
+        XCTAssertEqual(s.evaluate(callActive: false, btRoute: false, nowMs: 100), resume(.callEnded, pausedMs: 100))
+    }
 }

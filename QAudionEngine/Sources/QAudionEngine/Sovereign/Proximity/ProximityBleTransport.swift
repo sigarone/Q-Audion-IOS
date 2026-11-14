@@ -53,6 +53,25 @@ private func proximityBleUnavailableReason(_ state: CBManagerState) -> String? {
     }
 }
 
+/// The closed token of a manager state, for the log line.
+private func proximityBleStateToken(_ state: CBManagerState) -> String {
+    switch state {
+    case .unknown: return "unknown"
+    case .resetting: return "resetting"
+    case .unsupported: return "unsupported"
+    case .unauthorized: return "unauthorized"
+    case .poweredOff: return "powered_off"
+    case .poweredOn: return "powered_on"
+    @unknown default: return "other"
+    }
+}
+
+/// The code of an error as a number (0 for none), for the log line: nothing else of the error leaves.
+private func proximityBleErrorCode(_ error: Error?) -> String {
+    guard let error = error else { return "0" }
+    return String((error as NSError).code)
+}
+
 // MARK: - Permission
 
 /// Gets the one-time system Bluetooth prompt out of the way BEFORE a code is
@@ -121,6 +140,12 @@ public final class ProximityBleDisplayerTransport: NSObject, ProximityDisplayerT
 
     public var onIncomingLink: ((ProximityPairingLink) -> Void)?
     public var onUnavailable: ((ProximityPairingError) -> Void)?
+    /// The system confirmed that the current service is being advertised (`didStartAdvertising` without an error). Main
+    /// thread. The screen holds the QR code back until then, so a scanner that reads it finds something to connect to.
+    public var onAdvertisingStarted: (() -> Void)?
+    /// True from that confirmation until the next `startAdvertising`, `stopAdvertising`, `shutdown` or a Bluetooth state
+    /// that invalidates the service.
+    public private(set) var isAdvertisingLive: Bool = false
 
     private enum ServiceState {
         case unpublished
@@ -166,6 +191,8 @@ public final class ProximityBleDisplayerTransport: NSObject, ProximityDisplayerT
     public func startAdvertising(serviceId: Data) {
         // Replace semantics: the previous service (and every link bound to it) goes away.
         requestGeneration &+= 1
+        isAdvertisingLive = false
+        ProximityPairingLog.emit("ble.begin", [("role", "disp"), ("sid", ProximityPairingLog.sessionPrefix(serviceId))])
         failAllLinksDeferred(.transportFailed("service replaced"))
         if let m = manager, m.state == .poweredOn {
             m.stopAdvertising()
@@ -201,6 +228,7 @@ public final class ProximityBleDisplayerTransport: NSObject, ProximityDisplayerT
     /// Stops advertising but keeps the GATT service, so an established link keeps working.
     public func stopAdvertising() {
         wantsAdvertising = false
+        isAdvertisingLive = false
         if let m = manager, m.state == .poweredOn {
             m.stopAdvertising()
         }
@@ -210,6 +238,8 @@ public final class ProximityBleDisplayerTransport: NSObject, ProximityDisplayerT
         silenceGeneration &+= 1
         requestGeneration &+= 1
         wantsAdvertising = false
+        isAdvertisingLive = false
+        onAdvertisingStarted = nil
         activeServiceUUID = nil
         serviceState = .unpublished
         toScannerCharacteristic = nil
@@ -272,6 +302,7 @@ public final class ProximityBleDisplayerTransport: NSObject, ProximityDisplayerT
     public func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
         guard peripheral === manager else { return }
         let state: CBManagerState = peripheral.state
+        ProximityPairingLog.emit("ble.state", [("role", "disp"), ("state", proximityBleStateToken(state))])
         if state == .poweredOn {
             if let uuid = activeServiceUUID, serviceState == .unpublished {
                 publishService(on: peripheral, uuid: uuid)
@@ -282,6 +313,7 @@ public final class ProximityBleDisplayerTransport: NSObject, ProximityDisplayerT
 
         // Any other state invalidates the published service and every connection.
         serviceState = .unpublished
+        isAdvertisingLive = false
         toScannerCharacteristic = nil
         let current: Int = silenceGeneration
         failAllLinksNow(.transportFailed("bluetooth state changed"))
@@ -295,6 +327,8 @@ public final class ProximityBleDisplayerTransport: NSObject, ProximityDisplayerT
     public func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
         guard peripheral === manager, serviceState == .adding,
               let uuid = activeServiceUUID, service.uuid == uuid else { return }
+        ProximityPairingLog.emit("ble.adv", [("step", "add"), ("ok", error == nil ? "1" : "0"),
+                                             ("code", proximityBleErrorCode(error))])
         if error != nil {
             serviceState = .unpublished
             toScannerCharacteristic = nil
@@ -310,9 +344,14 @@ public final class ProximityBleDisplayerTransport: NSObject, ProximityDisplayerT
 
     public func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
         guard peripheral === manager, activeServiceUUID != nil, wantsAdvertising else { return }
+        ProximityPairingLog.emit("ble.adv", [("step", "start"), ("ok", error == nil ? "1" : "0"),
+                                             ("code", proximityBleErrorCode(error))])
         if error != nil {
             onUnavailable?(.transportFailed("advertising could not start"))
+            return
         }
+        isAdvertisingLive = true
+        onAdvertisingStarted?()
     }
 
     public func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral,
@@ -321,6 +360,7 @@ public final class ProximityBleDisplayerTransport: NSObject, ProximityDisplayerT
               characteristic.uuid == ProximityBleUUIDs.toScannerCharacteristic else { return }
         let key: UUID = central.identifier
         if let existing = links[key], !existing.isClosed { return }
+        ProximityPairingLog.emit("ble.peer", [("ev", "subscribed")])
         let link = ProximityBleDisplayerLink(central: central, transport: self)
         links[key] = link
         peripheral.setDesiredConnectionLatency(.low, for: central)
@@ -332,6 +372,7 @@ public final class ProximityBleDisplayerTransport: NSObject, ProximityDisplayerT
         guard peripheral === manager,
               characteristic.uuid == ProximityBleUUIDs.toScannerCharacteristic,
               let link = links.removeValue(forKey: central.identifier) else { return }
+        ProximityPairingLog.emit("ble.peer", [("ev", "unsubscribed")])
         failLinkNow(link, .transportFailed("unsubscribed"))
     }
 
@@ -586,6 +627,21 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
         /// `writeValue` routinely drops the write and the other phone only
         /// learns "connection lost" instead of why the pairing ended.
         case draining
+
+        /// The closed token of the phase, for the log line (the stage a timeout found the scanner in).
+        var logToken: String {
+            switch self {
+            case .idle: return "idle"
+            case .waitingForPower: return "power"
+            case .scanning: return "scanning"
+            case .connecting: return "connecting"
+            case .discoveringServices: return "svc"
+            case .discoveringCharacteristics: return "chars"
+            case .subscribing: return "subscribing"
+            case .connected: return "connected"
+            case .draining: return "draining"
+            }
+        }
     }
 
     /// Upper bound on how long `draining` keeps the connection.
@@ -644,11 +700,13 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
         }
         serviceUUID = uuid
         phase = .waitingForPower
+        ProximityPairingLog.emit("ble.begin", [("role", "scan"), ("sid", ProximityPairingLog.sessionPrefix(serviceId))])
 
         let delay: Double = (timeout.isFinite && timeout > 0) ? min(timeout, 3600) : ProximityPairing.scannerConnectTimeout
         let attemptId: Int = attempt
         let item = DispatchWorkItem { [weak self] in
             guard let strongSelf = self, strongSelf.attempt == attemptId else { return }
+            ProximityPairingLog.emit("ble.timeout", [("role", "scan"), ("stage", strongSelf.phase.logToken)])
             strongSelf.failPending(.timeout("bluetooth discovery/connect"))
         }
         timeoutItem = item
@@ -720,6 +778,7 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         guard central === manager else { return }
         let state: CBManagerState = central.state
+        ProximityPairingLog.emit("ble.state", [("role", "scan"), ("state", proximityBleStateToken(state))])
         if state == .poweredOn {
             if phase == .waitingForPower { beginScan() }
             return
@@ -743,28 +802,33 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
     public func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                                advertisementData: [String: Any], rssi RSSI: NSNumber) {
         guard central === manager, phase == .scanning else { return }
+        ProximityPairingLog.emit("ble.scan", [("ev", "found"), ("rssi", String(RSSI.intValue))])
         central.stopScan()
         self.remotePeripheral = peripheral
         peripheral.delegate = self
         phase = .connecting
+        ProximityPairingLog.emit("ble.scan", [("ev", "connect")])
         central.connect(peripheral, options: nil)
     }
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         guard central === manager, peripheral === self.remotePeripheral, phase == .connecting,
               let uuid = serviceUUID else { return }
+        ProximityPairingLog.emit("ble.scan", [("ev", "connected")])
         phase = .discoveringServices
         peripheral.discoverServices([uuid])
     }
 
     public func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         guard central === manager, peripheral === self.remotePeripheral else { return }
+        ProximityPairingLog.emit("ble.scan", [("ev", "connect_failed"), ("code", proximityBleErrorCode(error))])
         fail(.transportFailed("connection failed"))
     }
 
     public func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral,
                                error: Error?) {
         guard central === manager, peripheral === self.remotePeripheral else { return }
+        ProximityPairingLog.emit("ble.scan", [("ev", "disconnected"), ("code", proximityBleErrorCode(error))])
         fail(.transportFailed("disconnected"))
     }
 
@@ -772,6 +836,9 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
 
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard peripheral === self.remotePeripheral, phase == .discoveringServices, let uuid = serviceUUID else { return }
+        let offered: Int = (peripheral.services ?? []).filter { $0.uuid == uuid }.count
+        ProximityPairingLog.emit("ble.scan", [("ev", "services"), ("code", proximityBleErrorCode(error)),
+                                              ("ok", (error == nil && offered == 1) ? "1" : "0")])
         if error != nil {
             failPending(.transportFailed("service discovery failed"))
             return
@@ -790,13 +857,15 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
                            error: Error?) {
         guard peripheral === self.remotePeripheral, phase == .discoveringCharacteristics,
               let uuid = serviceUUID, service.uuid == uuid else { return }
+        let all: [CBCharacteristic] = service.characteristics ?? []
+        let writes: [CBCharacteristic] = all.filter { $0.uuid == ProximityBleUUIDs.toDisplayerCharacteristic }
+        let notifies: [CBCharacteristic] = all.filter { $0.uuid == ProximityBleUUIDs.toScannerCharacteristic }
+        ProximityPairingLog.emit("ble.scan", [("ev", "chars"), ("code", proximityBleErrorCode(error)),
+                                              ("ok", (error == nil && writes.count == 1 && notifies.count == 1) ? "1" : "0")])
         if error != nil {
             failPending(.transportFailed("characteristic discovery failed"))
             return
         }
-        let all: [CBCharacteristic] = service.characteristics ?? []
-        let writes: [CBCharacteristic] = all.filter { $0.uuid == ProximityBleUUIDs.toDisplayerCharacteristic }
-        let notifies: [CBCharacteristic] = all.filter { $0.uuid == ProximityBleUUIDs.toScannerCharacteristic }
         guard writes.count == 1, notifies.count == 1,
               let toDisplayer = writes.first, let toScanner = notifies.first else {
             failPending(.transportFailed("pairing characteristics not found"))
@@ -816,6 +885,8 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
                            error: Error?) {
         guard peripheral === self.remotePeripheral, phase == .subscribing,
               characteristic.uuid == ProximityBleUUIDs.toScannerCharacteristic else { return }
+        ProximityPairingLog.emit("ble.scan", [("ev", "subscribed"), ("code", proximityBleErrorCode(error)),
+                                              ("ok", (error == nil && characteristic.isNotifying) ? "1" : "0")])
         guard error == nil, characteristic.isNotifying else {
             failPending(.transportFailed("subscription failed"))
             return
@@ -889,6 +960,7 @@ public final class ProximityBleScannerTransport: NSObject, ProximityScannerTrans
     private func beginScan() {
         guard let m = manager, let uuid = serviceUUID else { return }
         phase = .scanning
+        ProximityPairingLog.emit("ble.scan", [("ev", "start")])
         let options: [String: Any] = [CBCentralManagerScanOptionAllowDuplicatesKey: false]
         m.scanForPeripherals(withServices: [uuid], options: options)
     }

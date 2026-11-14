@@ -133,6 +133,10 @@ final class BleMeshTransport: NSObject, MeshTransport {
     /// The audio route has a Bluetooth input or output; given by `MeshRuntime`, which reads it on the main thread.
     /// Never read here: `bleQueue` must not wait on the audio system.
     private var btRoute = false
+    /// The in-person pairing screen (QR code plus Bluetooth) is open; given by `MeshRuntime`, kept across stop() / start()
+    /// like the call facts (the owner gives it again before every start). While it is true discovery is paused, every mesh
+    /// link is closed and the GATT service stays uninstalled: the pairing has the radio to itself.
+    private var pairingActive = false
     /// Spec 2.1: when discovery is suspended. Reset whenever the antenna is turned off.
     private var callPause = MeshBtCallPause()
     /// Asks the owner to read the call and route facts again and send them through `setCallFacts`.
@@ -460,6 +464,20 @@ final class BleMeshTransport: NSObject, MeshTransport {
         callFactsRequest?()
     }
 
+    /// The pairing screen opened or closed. Safe before `start()` and after `stop()`: the value is kept and decides the
+    /// next start. Opening it pauses discovery (the pause also holds for a call on a Bluetooth route, and ends only when
+    /// both are gone) and closes the links; closing it lets the pause end, and the roles the mode runs start again.
+    /// Not part of `MeshTransport`: only `MeshRuntime` calls it.
+    func setPairingActive(_ value: Bool) {
+        bleQueue.async { [weak self] in
+            guard let self, self.pairingActive != value else { return }
+            self.pairingActive = value
+            guard self.active else { return }
+            self.evaluateCallPause()
+            if value { self.dropLinksForPairing() }
+        }
+    }
+
     /// Feeds the two facts to `MeshBtCallPause` and applies its decision. Does nothing while the antenna is off:
     /// a pause can end only while the antenna is on, so it can never switch on an antenna that is off for consent,
     /// the kill switch or the user's choice.
@@ -467,7 +485,7 @@ final class BleMeshTransport: NSObject, MeshTransport {
         guard active else { return }
         pauseRecheck?.cancel()
         pauseRecheck = nil
-        let decision = callPause.evaluate(callActive: callActive, btRoute: btRoute, nowMs: uptimeMs())
+        let decision = callPause.evaluate(callActive: callActive, btRoute: btRoute, pairingActive: pairingActive, nowMs: uptimeMs())
         switch decision.action {
         case .keep:
             break
@@ -490,7 +508,7 @@ final class BleMeshTransport: NSObject, MeshTransport {
     /// Stops scanning and advertising and gives up the attempts that have not connected yet. Established links, their
     /// ANNOUNCE loop and their traffic are left alone.
     private func applyPause() {
-        log(.radioPause, [("reason", MeshBtCallPause.pauseReason)])
+        log(.radioPause, [("reason", pairingActive ? MeshBtCallPause.pairingReason : MeshBtCallPause.pauseReason)])
         central?.stopScan()
         peripheralManager?.stopAdvertising()
         // A connection that is still being opened is a new outgoing link: cancel it (not a failure, so no backoff).
@@ -507,6 +525,24 @@ final class BleMeshTransport: NSObject, MeshTransport {
         maybeStartScanning()
         maybeStartAdvertisingAndServer()
         notifyDelegateRadioState(currentRadioState())
+    }
+
+    /// Pairing only: closes every link and takes the GATT service down, so neither a mesh link nor the mesh service is left
+    /// next to the pairing's own. A link we opened is cancelled; a central that opened to us cannot be disconnected by the
+    /// app, but with the service gone its link carries nothing. Reason `stop`, so none of them counts as a failed attempt.
+    /// `applyResume` installs the service again.
+    private func dropLinksForPairing() {
+        for link in allLinks() {
+            tearDown(link, reason: "stop", cancelConnection: true)
+        }
+        restoredLinks.removeAll()
+        restoredSubscribers.removeAll()
+        if peripheralManager?.state == .poweredOn {
+            peripheralManager?.removeAllServices()
+        }
+        notifyCharacteristic = nil
+        serviceInstalled = false
+        recomputeAndNotifyPeers()
     }
 
     // MARK: - Link bookkeeping
@@ -622,7 +658,8 @@ final class BleMeshTransport: NSObject, MeshTransport {
     // MARK: - Peripheral role (advertise + GATT server)
 
     private func maybeStartAdvertisingAndServer() {
-        guard active, let peripheralManager, peripheralManager.state == .poweredOn else { return }
+        // No GATT service while the pairing screen is open (`dropLinksForPairing` took it down); `applyResume` installs it.
+        guard active, !pairingActive, let peripheralManager, peripheralManager.state == .poweredOn else { return }
         if notifyCharacteristic == nil || !serviceInstalled {
             let characteristic = CBMutableCharacteristic(
                 type: Self.characteristicUUID,

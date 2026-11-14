@@ -101,6 +101,7 @@ struct ProximityPairingScanScreen: View {
     private func handleScanned(_ raw: String) {
         switch ProximityScanOutcome.classify(raw) {
         case .pairing(let payload):
+            ProximityScanReport.pairing(textLength: raw.utf16.count)
             phase = .pairing(payload)
         case .notPairing:
             ProximityScanReport.notPairing(textLength: raw.utf16.count)

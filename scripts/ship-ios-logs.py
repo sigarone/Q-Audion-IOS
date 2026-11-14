@@ -1210,6 +1210,7 @@ def _is_block_format_body(tag, norm_body):
 # ProximityScanReport in QAudionApp/Views/Contacts/ProximityPairingSupportViews.swift):
 #   scan outcome=not_pair len=<n>
 #   scan outcome=invalid reason=<not_pair_prefix|length|alphabet|encoding|non_canonical|version|layout> len=<n>
+#   scan outcome=pairing len=<n>                      (2026-11-14: a code that was accepted)
 # It is the only evidence, in a log pull, of which check a pairing code failed. The tag was not in TAG_SCOPE_PREFIXES,
 # and the words scan / pair / invalid / alphabet / encoding / canonical / layout were not vocabulary, so the line was
 # dropped whole. Only the closed outcome and reason tokens and the length of the text are on the line, never the text.
@@ -1219,15 +1220,43 @@ def _is_block_format_body(tag, norm_body):
 # the shapes above, nothing before it, nothing after it. Pinned by test_ship_ios_pair_vocab.py.
 # ---------------------------------------------------------------------------
 PAIR_FORMAT_VOCAB = frozenset("""
-    scan pair invalid alphabet encoding canonical non layout length
+    scan pair pairing invalid alphabet encoding canonical non layout length
 """.split())
 
 _PAIR_TAG_PREFIXES = ("pair",)
 
 _RE_PAIR_SCAN_FULL = re.compile(
-    r"^scan outcome=(?:not_pair"
+    r"^scan outcome=(?:not_pair|pairing"
     r"|invalid reason=(?:not_pair_prefix|length|alphabet|encoding|non_canonical|version|layout))"
     r" len=\d{1,5}$"
+)
+
+# PAIR BLUETOOTH (2026-11-14) -- the lines the in-person pairing's Bluetooth transport writes (tag "pair", written by
+# ProximityPairingLog in QAudionEngine/Sources/QAudionEngine/Sovereign/Proximity/ProximityPairingHooks.swift from
+# ProximityBleTransport.swift and ProximityPairingDriver.swift) and the hold the pairing screen takes on the Bluetooth
+# mesh (MeshRuntime.holdForPairing). Only closed tokens, numbers and the first 8 hex of the session id:
+#   ble.begin role=<disp|scan> sid=<8 hex>
+#   ble.state role=<disp|scan> state=<unknown|resetting|unsupported|unauthorized|powered_off|powered_on|other>
+#   ble.adv step=<add|start> ok=<0|1> code=<n>
+#   ble.peer ev=<subscribed|unsubscribed>
+#   ble.scan ev=<start|found|connect|connected|connect_failed|disconnected|services|chars|subscribed> [rssi=<n>] [code=<n>] [ok=<0|1>]
+#   ble.timeout role=scan stage=<idle|power|scanning|connecting|svc|chars|subscribing|connected|draining>
+#   ble.qr ev=<shown|forced> ms=<n>
+#   mesh hold=<acquire|release|expired> n=<n> antenna=<0|1>
+# Accepted by the whole-line match only (see _is_closed_grammar_line), like the mesh events. Pinned by
+# test_ship_ios_pair_vocab.py.
+_RE_PAIR_BLE_FULL = re.compile(
+    r"\A(?:"
+    r"ble\.begin role=(?:disp|scan) sid=[0-9a-f]{8}"
+    r"|ble\.state role=(?:disp|scan) state=(?:unknown|resetting|unsupported|unauthorized|powered_off|powered_on|other)"
+    r"|ble\.adv step=(?:add|start) ok=[01] code=-?\d{1,9}"
+    r"|ble\.peer ev=(?:subscribed|unsubscribed)"
+    r"|ble\.scan ev=(?:start|found|connect|connected|connect_failed|disconnected|services|chars|subscribed)"
+    r"(?: rssi=-?\d{1,4})?(?: code=-?\d{1,9})?(?: ok=[01])?"
+    r"|ble\.timeout role=scan stage=(?:idle|power|scanning|connecting|svc|chars|subscribing|connected|draining)"
+    r"|ble\.qr ev=(?:shown|forced) ms=\d{1,7}"
+    r"|mesh hold=(?:acquire|release|expired) n=\d{1,2} antenna=[01]"
+    r")\Z"
 )
 
 
@@ -1258,7 +1287,7 @@ def _is_pair_format_body(tag, norm_body):
 # identifiers on a line are a 6-hex node hash (nh), an 8-hex payload hash (ph) and a per-process link handle (c1, p2):
 #   identity ok=1 nh=<6 hex> src=key | identity ok=0 src=locked|missing
 #   radio state=<off|starting|on|error> mode=<full|direct|visible> reason=<token>
-#   radio.pause reason=bt_call_route                  radio.resume reason=<call_ended|route_changed> pausedMs=<n>
+#   radio.pause reason=<bt_call_route|pairing>        radio.resume reason=<call_ended|route_changed|pairing_ended> pausedMs=<n>
 #   connect.backoff link=<handle> failures=<n> waitMs=<n>
 #   link.up link=<handle> role=<c|p> n=<n>            link.ready link=.. mtu=0 l=<n> sub=<0|1>
 #   link.down link=.. reason=<token> heldMs=<n>        link.refused reason=<cap|blocked> role=<c|p>
@@ -1295,8 +1324,8 @@ _RE_MESH_FULL = re.compile(
     r"identity ok=1 nh=[0-9a-f]{6} src=key"
     r"|identity ok=0 src=(?:locked|missing)"
     r"|radio state=(?:off|starting|on|error) mode=(?:full|direct|visible) reason=" + _MESH_RADIO_REASONS +
-    r"|radio\.pause reason=bt_call_route"
-    r"|radio\.resume reason=(?:call_ended|route_changed) pausedMs=\d{1,9}"
+    r"|radio\.pause reason=(?:bt_call_route|pairing)"
+    r"|radio\.resume reason=(?:call_ended|route_changed|pairing_ended) pausedMs=\d{1,9}"
     r"|connect\.backoff " + _MESH_LINK + r" failures=\d{1,4} waitMs=\d{1,6}"
     r"|link\.up " + _MESH_LINK + r" role=[cp] n=\d{1,3}"
     r"|link\.ready " + _MESH_LINK + r" mtu=0 l=\d{1,5} sub=[01]"
@@ -1396,6 +1425,9 @@ def _is_closed_grammar_line(tag, norm_body):
     t = str(tag).lower()
     if t.startswith(_MESH_TAG_PREFIXES):
         return bool(_RE_MESH_FULL.match(norm_body))
+    if t.startswith(_PAIR_TAG_PREFIXES):
+        # The Bluetooth lines of the in-person pairing; the "scan outcome=" lines go the scoped-vocabulary way.
+        return bool(_RE_PAIR_BLE_FULL.match(norm_body))
     if t.startswith(_HANDSHAKE_TAG_PREFIXES):
         return bool(_RE_HANDSHAKE_FULL.match(norm_body) or _RE_PQLEVEL_FULL.match(norm_body)
                     or _RE_LIVE_FULL.match(norm_body))

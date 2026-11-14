@@ -16,6 +16,10 @@ import Foundation
 /// is decided elsewhere and is not an input here: the owner only evaluates while its antenna is on and calls
 /// ``reset()`` when it turns the antenna off, so this type can never bring discovery back on its own.
 ///
+/// A second reason holds the same pause: the in-person pairing screen (QR code plus Bluetooth) is open. While it is,
+/// the device pauses whatever the call and the route are, and the owner also closes the mesh links, so the pairing
+/// does not share the radio with them. The pause ends when neither reason holds any more.
+///
 /// Time is plain milliseconds from any monotonic clock.
 public struct MeshBtCallPause: Equatable {
 
@@ -29,12 +33,17 @@ public struct MeshBtCallPause: Equatable {
     /// The `reason` of the `radio.pause` event.
     public static let pauseReason = "bt_call_route"
 
+    /// The `reason` of the `radio.pause` event while the pairing screen is open.
+    public static let pairingReason = "pairing"
+
     /// The `reason` of the `radio.resume` event.
     public enum ResumeReason: String, Equatable, Sendable {
         /// No call is active any more.
         case callEnded = "call_ended"
         /// The call goes on, but its audio no longer uses a Bluetooth device.
         case routeChanged = "route_changed"
+        /// The pairing screen closed, and no call on a Bluetooth route holds the pause.
+        case pairingEnded = "pairing_ended"
     }
 
     public enum Action: Equatable {
@@ -63,6 +72,8 @@ public struct MeshBtCallPause: Equatable {
 
     private var pausedSinceMs: Int64 = 0
     private var lastResumeMs: Int64?
+    /// The pairing screen was open at some point of this pause (it names the resume).
+    private var heldByPairing = false
 
     public init() {}
 
@@ -72,8 +83,10 @@ public struct MeshBtCallPause: Equatable {
     /// - Parameters:
     ///   - callActive: a connected call exists on the device (``MeshCallDefinition``).
     ///   - btRoute: the audio route has a Bluetooth input or a Bluetooth output port.
-    public mutating func evaluate(callActive: Bool, btRoute: Bool, nowMs: Int64) -> Decision {
-        if callActive && btRoute {
+    ///   - pairingActive: the in-person pairing screen is open; it holds the pause on its own, call or no call.
+    public mutating func evaluate(callActive: Bool, btRoute: Bool, pairingActive: Bool = false, nowMs: Int64) -> Decision {
+        if pairingActive { heldByPairing = true }
+        if (callActive && btRoute) || pairingActive {
             guard !isPaused else { return Decision(action: .keep) }
             isPaused = true
             pausedSinceMs = nowMs
@@ -90,7 +103,8 @@ public struct MeshBtCallPause: Equatable {
         }
         isPaused = false
         lastResumeMs = nowMs
-        let reason: ResumeReason = callActive ? .routeChanged : .callEnded
+        let reason: ResumeReason = heldByPairing ? .pairingEnded : (callActive ? .routeChanged : .callEnded)
+        heldByPairing = false
         return Decision(action: .resume(reason: reason, pausedMs: max(0, nowMs - pausedSinceMs)))
     }
 

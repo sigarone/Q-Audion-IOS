@@ -68,7 +68,37 @@ REASONS = swift_reasons()
 if len(REASONS) != 7:
     failures.append("expected 7 ProximityQrRejection tokens in the Swift source, found %r" % (REASONS,))
 
-LINES = ["scan outcome=not_pair len=12", "scan outcome=not_pair len=129"]
+LINES = ["scan outcome=not_pair len=12", "scan outcome=not_pair len=129", "scan outcome=pairing len=129"]
+
+# The Bluetooth transport of the pairing (2026-11-14) and the mesh hold of the pairing screen: closed grammar.
+BLE_LINES = [
+    "ble.begin role=disp sid=0a1b2c3d",
+    "ble.begin role=scan sid=ffffffff",
+    "ble.state role=disp state=powered_on",
+    "ble.state role=scan state=unauthorized",
+    "ble.state role=disp state=other",
+    "ble.adv step=add ok=1 code=0",
+    "ble.adv step=start ok=0 code=-12",
+    "ble.peer ev=subscribed",
+    "ble.peer ev=unsubscribed",
+    "ble.scan ev=start",
+    "ble.scan ev=found rssi=-67",
+    "ble.scan ev=connect",
+    "ble.scan ev=connected",
+    "ble.scan ev=connect_failed code=14",
+    "ble.scan ev=disconnected code=0",
+    "ble.scan ev=services code=0 ok=1",
+    "ble.scan ev=chars code=0 ok=0",
+    "ble.scan ev=subscribed code=0 ok=1",
+    "ble.timeout role=scan stage=connecting",
+    "ble.timeout role=scan stage=svc",
+    "ble.qr ev=shown ms=240",
+    "ble.qr ev=forced ms=4001",
+    "mesh hold=acquire n=1 antenna=1",
+    "mesh hold=release n=0 antenna=0",
+    "mesh hold=expired n=0 antenna=1",
+]
+LINES += BLE_LINES
 for reason in REASONS:
     LINES.append("scan outcome=invalid reason=%s len=129" % reason)
     LINES.append("scan outcome=invalid reason=%s len=0" % reason)
@@ -85,6 +115,10 @@ for tag in ("call", "net", "chat"):
     got = red("scan outcome=invalid reason=length len=129", tag)
     if got == "scan outcome=invalid reason=length len=129":
         failures.append("the pair vocabulary leaked under tag %r" % tag)
+    checks += 1
+    got = red("ble.scan ev=found rssi=-67", tag)
+    if got == "ble.scan ev=found rssi=-67":
+        failures.append("the pair Bluetooth grammar leaked under tag %r" % tag)
 
 # The shape gate: the vocabulary is only for the whole line, nothing before, nothing after.
 for line in [
@@ -94,6 +128,13 @@ for line in [
     "scan outcome=invalid reason=length len=1234567",
     "scan outcome=other len=129",
     "scan outcome=invalid len=129",
+    "ble.begin role=disp sid=0a1b2c3d4e5f6071",           # more than the 8 hex of the session prefix
+    "ble.state role=disp state=somethingelse",
+    "ble.scan ev=found rssi=-67 name=zorkblat",
+    "ble.scan ev=teleport",
+    "ble.timeout role=scan stage=nowhere",
+    "ble.adv step=start ok=1 code=0 extra=1",
+    "mesh hold=acquire n=1",
 ]:
     checks += 1
     got = red(line)
