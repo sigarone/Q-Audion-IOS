@@ -18,8 +18,9 @@
 #   2. the root tree of the head commit of that pull request is the root tree of the commit (the same files);
 #   3. the head commit contains the parent of the commit, so the merge ref that the pull request run built had that
 #      same tree and not a mix of the head with a different base;
-#   4. the workflow has a completed run with event pull_request on that head commit, of this repository, that
-#      concluded success, and the job concluded success in the latest attempt of that run.
+#   4. of the runs of the workflow with event pull_request on that head commit, of this repository, the newest one
+#      (highest run id) has completed with conclusion success, and the job concluded success in the latest attempt of
+#      that run. When the newest run failed or is still going, nothing is reused, whatever an older run did.
 # ios-app-tests.yml and engine-tests.yml use it on push to main to skip what the pull request already ran; the gate of
 # ios-testflight.yml runs it again on the tagged commit for every job that a run skipped.
 set -u
@@ -94,41 +95,49 @@ if [ -n "${KEEP_PATHS:-}" ]; then
   done
 fi
 
-# 4) The green run of the pull request, and the jobs in it.
+# 4) The newest run of the pull request on its head, and the jobs in it. Runs that are not pull request runs of this
+# repository on that head are ignored; of the others the highest run id is the newest, and only that one is read.
 RUNS=$(gh api "repos/${REPO}/actions/workflows/${WF}/runs?head_sha=${PRHEAD}&event=pull_request&per_page=100" \
   --jq '.workflow_runs[] | [.id, .status, (.conclusion // "-"), .event, .head_sha, (.head_repository.full_name // "-")] | @tsv') \
   || none "runs of ${WF} on ${PRHEAD} not readable"
-PENDING=$JOBS
-OUT=""
+RUNS=$(printf '%s\n' "$RUNS" | sort -t "$TAB" -k1,1nr)
+RUN=""
+RUN_STATUS=""
+RUN_CONCL=""
 while IFS=$TAB read -r _id _status _concl _event _run_head _run_repo; do
   [ -n "$_id" ] || continue
-  [ -n "$PENDING" ] || break
-  if [ "$_status" != "completed" ] || [ "$_concl" != "success" ] || [ "$_event" != "pull_request" ] \
-    || [ "$_run_head" != "$PRHEAD" ] || [ "$_run_repo" != "$REPO" ]; then
-    note "run ${_id} of ${WF} is not a green pull request run of ${REPO} on ${PRHEAD} (${_status}/${_concl}/${_event})"
+  if [ "$_event" != "pull_request" ] || [ "$_run_head" != "$PRHEAD" ] || [ "$_run_repo" != "$REPO" ]; then
+    note "run ${_id} of ${WF} is not a pull request run of ${REPO} on ${PRHEAD} (${_event}/${_run_repo}/${_run_head}): ignored"
     continue
   fi
-  JOBLIST=$(gh api "repos/${REPO}/actions/runs/${_id}/jobs?per_page=100&filter=latest" --jq '.jobs[] | [.name, (.conclusion // "-")] | @tsv') \
-    || { note "jobs of run ${_id} not readable"; continue; }
-  LEFT=""
-  GOT=""
-  for _j in $PENDING; do
-    if printf '%s\n' "$JOBLIST" | grep -qxF -- "${_j}${TAB}success"; then
-      OUT="${OUT}${_j}${TAB}${_id}${TAB}${PR}${TAB}${PRHEAD}${NL}"
-      GOT="${GOT} ${_j}"
-    else
-      LEFT="${LEFT} ${_j}"
-    fi
-  done
-  PENDING=$LEFT
-  if [ -n "$GOT" ]; then
-    LINE="reused ${WF} run ${_id} from PR #${PR} head ${PRHEAD} (identical tree):${GOT}"
-    note "$LINE"
-    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then printf '%s\n' "$LINE" >> "$GITHUB_STEP_SUMMARY"; fi
-  fi
+  RUN=$_id
+  RUN_STATUS=$_status
+  RUN_CONCL=$_concl
+  break
 done <<EOF
 $RUNS
 EOF
-[ -z "$PENDING" ] || note "not covered by a green run of #${PR}:${PENDING}"
+[ -n "$RUN" ] || none "no pull request run of ${WF} of ${REPO} on ${PRHEAD}"
+[ "$RUN_STATUS" = "completed" ] || none "the newest run ${RUN} of ${WF} on ${PRHEAD} is ${RUN_STATUS}, not completed"
+[ "$RUN_CONCL" = "success" ] || none "the newest run ${RUN} of ${WF} on ${PRHEAD} concluded ${RUN_CONCL}"
+JOBLIST=$(gh api "repos/${REPO}/actions/runs/${RUN}/jobs?per_page=100&filter=latest" --jq '.jobs[] | [.name, (.conclusion // "-")] | @tsv') \
+  || none "jobs of run ${RUN} not readable"
+OUT=""
+GOT=""
+LEFT=""
+for _j in $JOBS; do
+  if printf '%s\n' "$JOBLIST" | grep -qxF -- "${_j}${TAB}success"; then
+    OUT="${OUT}${_j}${TAB}${RUN}${TAB}${PR}${TAB}${PRHEAD}${NL}"
+    GOT="${GOT} ${_j}"
+  else
+    LEFT="${LEFT} ${_j}"
+  fi
+done
+if [ -n "$GOT" ]; then
+  LINE="reused ${WF} run ${RUN} from PR #${PR} head ${PRHEAD} (identical tree):${GOT}"
+  note "$LINE"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then printf '%s\n' "$LINE" >> "$GITHUB_STEP_SUMMARY"; fi
+fi
+[ -z "$LEFT" ] || note "not green in the newest run ${RUN} of #${PR}:${LEFT}"
 printf '%s' "$OUT"
 exit 0
