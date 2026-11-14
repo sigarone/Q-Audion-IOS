@@ -870,7 +870,9 @@ final class GroupMediaSessionTests: XCTestCase {
     }
 
     func testTwoLostRepliesFailTheStart() async {
-        let h = SessionHarness(timeout: 0.1)
+        // The timeout covers every request of the bring-up (create, attach, join), not only the swallowed
+        // publish: at 0.1 s a slow runner timed out before publish was ever sent (count 0).
+        let h = SessionHarness(timeout: 0.5)
         h.server.swallow = ["publish"]
         do {
             try await h.session.start(publishVideo: true)
