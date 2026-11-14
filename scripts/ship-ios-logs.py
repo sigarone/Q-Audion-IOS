@@ -1259,6 +1259,40 @@ _RE_PAIR_BLE_FULL = re.compile(
     r")\Z"
 )
 
+# PAIR NFC (2026-11-14) -- the lines of the NFC pairing ceremony (tag "pair", written by NfcPairingLog in
+# QAudionEngine/Sources/QAudionEngine/Sovereign/NfcPairingLog.swift; docs/security/NFC_PAIRING_V2.md section 11). Only
+# closed tokens, 0/1 flags, numbers, a status word (4 hex) and the log tag (8 hex):
+#   nfc.pair.start role=<reader|card>
+#   nfc.pair.step role=.. step=<select|ek|hello|ct|auth|reveal|confirm|finalize> result=ok [sw=<4 hex>] [chunk=<n>] [rtt_ms=<n>] [ms=<n>] [tag=<8 hex>]
+#   nfc.pair.fail role=.. result=<token> [step=<step>] [sw=<4 hex>] [tag=<8 hex>]
+#   nfc.pair.sas_shown role=.. peerKnown=<0|1> pinned=<0|1> tag=<8 hex>
+#   nfc.pair.user role=.. result=<confirm|reject|timeout> tag=<8 hex>     nfc.pair.peer role=.. result=<confirm|reject|pending> tag=<8 hex>
+#   nfc.pair.commit role=.. stored=<0|1> pending=<0|1> replaced=<0|1> tag=<8 hex>
+#   nfc.pair.finalize role=.. via=<confirm|finalize|call> deleted=<n> tag=<8 hex>
+# Accepted by the whole-line match only (see _is_closed_grammar_line). Pinned by test_ship_ios_pair_vocab.py.
+_NFC_ROLE = r"role=(?:reader|card)"
+_NFC_STEP = r"(?:select|ek|hello|ct|auth|reveal|confirm|finalize)"
+_NFC_TAG = r"tag=[0-9a-f]{8}"
+_NFC_FAIL_RESULTS = (
+    r"(?:version|not_armed|order|length|user_id|x25519_zero|kem|open_failed|mac|signature|commitment|identity_self"
+    r"|identity_invalid|peer_identity_changed|rtt|timeout|user_rejected|peer_rejected|no_ceremony|store_failed"
+    r"|field_lost|card_error)"
+)
+_RE_PAIR_NFC_FULL = re.compile(
+    r"\Anfc\.pair\.(?:"
+    r"start " + _NFC_ROLE +
+    r"|step " + _NFC_ROLE + r" step=" + _NFC_STEP + r" result=ok(?: sw=[0-9a-f]{4})?(?: chunk=\d{1,4})?"
+    r"(?: rtt_ms=\d{1,7})?(?: ms=\d{1,7})?(?: " + _NFC_TAG + r")?"
+    r"|fail " + _NFC_ROLE + r" result=" + _NFC_FAIL_RESULTS + r"(?: step=" + _NFC_STEP + r")?(?: sw=[0-9a-f]{4})?"
+    r"(?: " + _NFC_TAG + r")?"
+    r"|sas_shown " + _NFC_ROLE + r" peerKnown=[01] pinned=[01] " + _NFC_TAG +
+    r"|user " + _NFC_ROLE + r" result=(?:confirm|reject|timeout) " + _NFC_TAG +
+    r"|peer " + _NFC_ROLE + r" result=(?:confirm|reject|pending) " + _NFC_TAG +
+    r"|commit " + _NFC_ROLE + r" stored=[01] pending=[01] replaced=[01] " + _NFC_TAG +
+    r"|finalize " + _NFC_ROLE + r" via=(?:confirm|finalize|call) deleted=\d{1,4} " + _NFC_TAG +
+    r")\Z"
+)
+
 
 def _is_pair_format_body(tag, norm_body):
     """True if `tag` is the pair RTLog scope (or a prefix variant) AND `norm_body` is, in full, one of the
@@ -1426,8 +1460,8 @@ def _is_closed_grammar_line(tag, norm_body):
     if t.startswith(_MESH_TAG_PREFIXES):
         return bool(_RE_MESH_FULL.match(norm_body))
     if t.startswith(_PAIR_TAG_PREFIXES):
-        # The Bluetooth lines of the in-person pairing; the "scan outcome=" lines go the scoped-vocabulary way.
-        return bool(_RE_PAIR_BLE_FULL.match(norm_body))
+        # The Bluetooth and NFC lines of the in-person pairing; the "scan outcome=" lines go the scoped-vocabulary way.
+        return bool(_RE_PAIR_BLE_FULL.match(norm_body) or _RE_PAIR_NFC_FULL.match(norm_body))
     if t.startswith(_HANDSHAKE_TAG_PREFIXES):
         return bool(_RE_HANDSHAKE_FULL.match(norm_body) or _RE_PQLEVEL_FULL.match(norm_body)
                     or _RE_LIVE_FULL.match(norm_body))

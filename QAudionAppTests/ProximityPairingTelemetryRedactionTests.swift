@@ -73,11 +73,26 @@ final class ProximityPairingTelemetryRedactionTests: XCTestCase {
     }
 
     /// The log lines a rejected scan writes (`ProximityScanReport`): `reason=not_pair_prefix` and
-    /// `reason=non_canonical` are one run of 20+ characters once the `=` is counted.
+    /// `reason=non_canonical` are one run of 20+ characters once the `=` is counted. The same for the Bluetooth
+    /// and NFC lines of the pairing (tag `pair`): `result=peer_identity_changed` is one such run.
     func test_scanLogLines_surviveTheRedactorUnchanged() {
-        var lines: [String] = ["scan outcome=not_pair len=129"]
+        var lines: [String] = [
+            "scan outcome=not_pair len=129",
+            "scan outcome=pairing len=129",
+            "mesh hold=acquire n=1 antenna=0",
+            "ble.begin role=scan sid=cca4e80c",
+            "ble.state role=scan state=powered_on",
+            "ble.scan ev=found rssi=-43",
+            "ble.scan ev=subscribed code=0 ok=1",
+            "ble.timeout role=scan stage=connecting",
+            "nfc.pair.step role=reader step=hello result=ok sw=9000 rtt_ms=34",
+            "nfc.pair.sas_shown role=reader peerKnown=1 pinned=0 tag=0a1b2c3d",
+        ]
         for reason in ProximityQrRejection.allCases {
             lines.append("scan outcome=invalid reason=\(reason.rawValue) len=129")
+        }
+        for token in NfcPairingV2Token.allCases {
+            lines.append("nfc.pair.fail role=reader result=\(token.rawValue) step=confirm tag=0a1b2c3d")
         }
         for line in lines {
             assertSurvives(line, label: "log line")
