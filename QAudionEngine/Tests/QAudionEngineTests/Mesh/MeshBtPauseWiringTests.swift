@@ -119,7 +119,7 @@ final class MeshBtPauseWiringTests: XCTestCase {
     // MARK: - stop() clears the pause and the backoff
 
     func testStopClearsThePauseTheRecheckAndTheBackoff() throws {
-        let stop = try slice(try transport(), from: "private func stopLocked() {", to: "func updateSchedule(")
+        let stop = try slice(try transport(), from: "private func stopLocked(reason: String) {", to: "func updateSchedule(")
         XCTAssertTrue(stop.contains("pauseRecheck?.cancel()"))
         XCTAssertTrue(stop.contains("pauseRecheck = nil"))
         XCTAssertTrue(stop.contains("callPause.reset()"))
@@ -194,8 +194,11 @@ final class MeshBtPauseWiringTests: XCTestCase {
     func testTheDeviceIsObservedOnlyWhileTheAntennaIsOn() throws {
         let text = try runtime()
         let off = try slice(text, from: "guard let mode else {", to: "guard startAllowed")
-        XCTAssertTrue(off.contains("stopObservingCallFacts()"))
-        let stop = try slice(text, from: "private func stopObservingCallFacts() {", to: "var startAllowed: Bool {")
+        XCTAssertTrue(off.contains("stopRadio(reason: \"stop\")"))
+        let radio = try slice(text, from: "private func stopRadio(reason: String) {", to: "var startAllowed: Bool {")
+        XCTAssertTrue(radio.contains("slot.existingTransport?.stop(reason: reason)"))
+        XCTAssertTrue(radio.contains("stopObservingCallFacts()"))
+        let stop = try slice(text, from: "private func stopObservingCallFacts() {", to: "private func stopRadio(reason: String) {")
         XCTAssertTrue(stop.contains("systemCalls?.stop()"))
         XCTAssertTrue(stop.contains("NotificationCenter.default.removeObserver(routeObserver)"))
         // Nothing starts an observer at launch: only the antenna does.
@@ -210,6 +213,27 @@ final class MeshBtPauseWiringTests: XCTestCase {
         let calls = try slice(text, from: "private(set) var ownCallConnected = false", to: "private let readSystemCalls")
         XCTAssertFalse(calls.contains("setAntenna("))
         XCTAssertFalse(calls.contains(".start("))
+    }
+
+    // MARK: - The pairing hold stops the radio
+
+    func testAPairingHoldStopsTheRadioLikeTheOffSwitchAndNothingStartsItUntilTheLastHoldGoes() throws {
+        let text = try runtime()
+        // The hold stops the transport with the code of the OFF switch, under its own reason, and leaves the choice alone.
+        let suspend = try slice(text, from: "private func suspendForPairing() {", to: "private func resumeAfterPairing() {")
+        XCTAssertTrue(suspend.contains("stopRadio(reason: \"pairing\")"))
+        XCTAssertFalse(suspend.contains("requestedMode ="))
+        // The last hold starts it again through the ON switch, in the mode that was asked for.
+        let resume = try slice(text, from: "private func resumeAfterPairing() {", to: "private(set) var ownCallConnected = false")
+        XCTAssertTrue(resume.contains("guard !pairingActive, pairingSuspended else { return }"))
+        XCTAssertTrue(resume.contains("setAntenna(mode: mode)"))
+        // One place builds and starts the transport, and it does not while a hold is open.
+        XCTAssertEqual(text.components(separatedBy: "slot.acquire()").count - 1, 1)
+        XCTAssertEqual(text.components(separatedBy: "transport.start(schedule:").count - 1, 1)
+        let on = try slice(text, from: "guard startAllowed, let allowed", to: "private static func modeToken")
+        try assertOrder(on, "if pairingActive {", before: "startRadio(transport, mode: allowed)")
+        // The transport has no pause of its own for the pairing.
+        XCTAssertFalse(try transport().contains("pairingActive"))
     }
 
     // MARK: - The backoff

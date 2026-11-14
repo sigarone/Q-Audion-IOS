@@ -51,8 +51,13 @@ final class MeshRuntime: ObservableObject {
     @Published private(set) var radioState: MeshRadioState = .idle
     @Published private(set) var peers: [MeshRuntimePeer] = []
     @Published private(set) var activeTargets: [String: MeshTargetSelection] = [:]
+    /// A pairing screen holds the radio: the transport is stopped (or, for an antenna switched on during the hold, not
+    /// started yet) and starts when the last hold goes. The antenna is still on as far as the user is concerned, so
+    /// `antennaOn` and `antennaMode` report the choice (`requestedMode`) while this is true, not the stopped radio.
+    @Published private(set) var pairingSuspended = false
 
     var antennaOn: Bool {
+        if pairingSuspended { return true }
         switch radioState {
         case .idle, .error: return false
         default: return true
@@ -64,7 +69,9 @@ final class MeshRuntime: ObservableObject {
     /// `CBPeripheralManager.isAdvertising`), so it never drifts out of sync with
     /// what the radio is actually doing; scanning + advertising is full mesh or
     /// direct, which differ only in relaying, so `requestedMode` tells them apart.
+    /// While a pairing hold has stopped the radio it is the mode the user chose.
     var antennaMode: MeshAntennaMode? {
+        if pairingSuspended { return requestedMode }
         switch radioState {
         case .scanningAndAdvertising: return requestedMode == .direct ? .direct : .fullMesh
         case .advertisingOnly: return .visibleOnly
@@ -111,12 +118,13 @@ final class MeshRuntime: ObservableObject {
     /// True once the identity is known (a transport can be built).
     var hasIdentity: Bool { slot.nodeId != nil }
 
-    // MARK: - Pairing in person keeps the radio quiet
+    // MARK: - Pairing in person stops the radio
 
     /// The open holds of the pairing screens (QR code plus Bluetooth), each with the watchdog that gives it back if nobody
-    /// does. While there is one the transport pauses and closes its links (`BleMeshTransport.setPairingActive`); the
-    /// antenna's mode and the user's choice are not touched, so the mesh comes back as it was when the last hold goes.
-    /// A call that pauses the radio on a Bluetooth route is a separate reason: the pause ends when neither holds.
+    /// does. While there is one, the transport is stopped the way the antenna's OFF switch stops it (`stopRadio`: its
+    /// managers and links are released), and nothing starts it. When the last hold goes it is started again, in the mode
+    /// the user chose, through the code of the ON switch (`setAntenna`). The antenna's mode and the user's choice are not
+    /// touched (`pairingSuspended`).
     private var pairingHolds: [UUID: Task<Void, Never>] = [:]
     /// No pairing lasts this long: a screen that vanished without giving its hold back cannot leave the mesh off.
     private static let pairingHoldMaxSeconds: UInt64 = 15 * 60
@@ -133,7 +141,7 @@ final class MeshRuntime: ObservableObject {
             self?.releasePairingHold(token, how: "expired")
         }
         logPairingHold("acquire")
-        slot.existingTransport?.setPairingActive(true)
+        suspendForPairing()
         return { [weak self] in self?.releasePairingHold(token, how: "release") }
     }
 
@@ -141,11 +149,32 @@ final class MeshRuntime: ObservableObject {
         guard let watchdog = pairingHolds.removeValue(forKey: token) else { return }
         watchdog.cancel()
         logPairingHold(how)
-        slot.existingTransport?.setPairingActive(pairingActive)
+        resumeAfterPairing()
     }
 
     private func logPairingHold(_ how: String) {
         RTLog.info("pair", "mesh hold=\(how) n=\(pairingHolds.count) antenna=\(requestedMode == nil ? 0 : 1)")
+    }
+
+    /// A hold opened: an antenna that is on is stopped (`radio state=off ... reason=pairing`), and stays stopped for as long
+    /// as any hold lasts. `requestedMode` and the stored on/off decision stay as they are. An antenna that is off has
+    /// nothing to stop.
+    private func suspendForPairing() {
+        guard requestedMode != nil, !pairingSuspended else { return }
+        pairingSuspended = true
+        stopRadio(reason: "pairing")
+        MeshOutboxDrain.shared.stop()
+    }
+
+    /// The last hold is gone: an antenna the hold stopped, or one that was switched on while it lasted, starts now in the
+    /// mode that was asked for, through the same code as the ON switch (the gates of consent, kill switch and identity
+    /// apply again). An antenna the user switched off during the hold has nothing to start.
+    private func resumeAfterPairing() {
+        guard !pairingActive, pairingSuspended else { return }
+        pairingSuspended = false
+        guard let mode = requestedMode else { return }
+        requestedMode = nil
+        setAntenna(mode: mode)
     }
 
     // MARK: - Call and route facts for the Bluetooth pause (spec 2.1)
@@ -268,6 +297,14 @@ final class MeshRuntime: ObservableObject {
             NotificationCenter.default.removeObserver(routeObserver)
             self.routeObserver = nil
         }
+    }
+
+    /// Stops the radio: the transport releases its managers and closes its links (`reason` is the token of the
+    /// `radio state=off` line), and nothing about the calls or the route of the device is observed any more. The code of
+    /// the OFF switch and of the pairing hold; the user's choice (`requestedMode`) is not touched here.
+    private func stopRadio(reason: String) {
+        slot.existingTransport?.stop(reason: reason)
+        stopObservingCallFacts()
     }
 
     /// The radio may start, in some mode, when the feature is available (compiled on and
@@ -420,8 +457,8 @@ final class MeshRuntime: ObservableObject {
     func setAntenna(mode: MeshAntennaMode?) {
         guard let mode else {
             let wasRunning = requestedMode != nil
-            slot.existingTransport?.stop()
-            stopObservingCallFacts()
+            stopRadio(reason: "stop")
+            pairingSuspended = false
             requestedMode = nil
             activeTargets.removeAll()
             if wasRunning { MeshOutboxDrain.shared.stop() }
@@ -431,6 +468,13 @@ final class MeshRuntime: ObservableObject {
         guard let transport = slot.acquire() else {
             // No identity yet: the radio must not start under any other id.
             MeshLog.emit(.radio, [("state", "error"), ("mode", Self.modeToken(allowed)), ("reason", "no_identity")])
+            return
+        }
+        // A pairing screen that is open holds the radio: the choice is recorded and the radio starts when the last hold goes
+        // (`resumeAfterPairing`). Every start path ends here, so nothing starts the transport during a hold.
+        if pairingActive {
+            requestedMode = allowed
+            pairingSuspended = true
             return
         }
         // Switching modes mid-session: BleMeshTransport.start() is a no-op while
@@ -445,8 +489,14 @@ final class MeshRuntime: ObservableObject {
         if requestedMode != nil, requestedMode != allowed {
             transport.stop()
         }
-        transport.delegate = self
         requestedMode = allowed
+        startRadio(transport, mode: allowed)
+    }
+
+    /// Brings the radio up in `mode`: the transport and the observers of the device facts. The code of the ON switch, also
+    /// run when a pairing hold ends.
+    private func startRadio(_ transport: BleMeshTransport, mode: MeshAntennaMode) {
+        transport.delegate = self
         // Before start(): all of it goes through the transport's queue in order, so a radio that comes up during a call
         // on a Bluetooth route starts paused. The facts are read here, on the main thread, and the transport asks for
         // them again (`refreshCallFacts`) when the app wakes up or Bluetooth comes back.
@@ -458,9 +508,7 @@ final class MeshRuntime: ObservableObject {
             }
         }
         transport.setCallFacts(callActive: facts.callActive, btRoute: facts.btRoute)
-        // A pairing screen that is open now keeps this radio paused from its first instant.
-        transport.setPairingActive(pairingActive)
-        transport.start(schedule: MeshRadioSchedule.backgroundIdle, mode: allowed)
+        transport.start(schedule: MeshRadioSchedule.backgroundIdle, mode: mode)
         MeshOutboxDrain.shared.start()
     }
 

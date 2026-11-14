@@ -778,7 +778,7 @@ display names. The only identifiers allowed are:
 | Event | Fields |
 |---|---|
 | `identity` | `ok`, `nh`, `src` (`key`, `locked`, `missing`) |
-| `radio` | `state` (`off`, `starting`, `on`, `error`), `mode` (`full`, `direct`, `visible`), `reason` |
+| `radio` | `state` (`off`, `starting`, `on`, `error`), `mode` (`full`, `direct`, `visible`), `reason` (on iOS `pairing` for the `off` of the in-person pairing screen, which stops the radio and starts it again, `reason=start`, when it closes) |
 | `link.up` | `link`, `role` (`c`, `p`), `n` (links now) |
 | `link.ready` | `link`, `mtu` (Android, 0 if unknown), `l` (value limit L), `sub` |
 | `link.down` | `link`, `reason` (`remote`, `timeout`, `evicted`, `blocked`, `stop`, `dup`, `rebind`), `why` (`verified`, only with `reason=dup`), `heldMs` |
@@ -796,8 +796,8 @@ display names. The only identifiers allowed are:
 | `app.tx` | `ph`, `kind` (`msg`, `rcpt`), `state` (`sent`, `queued`, `failed`), `attempt` |
 | `app.rx` | `ph`, `kind`, `result` (`stored`, `dup`, `unknown_sender`, `refresh_hit`, `undecryptable`, `bad_envelope`, `readdressed`, `service`, `blocked`, `applied`) |
 | `outbox` | `pending`, `retried`, `gaveUp` |
-| `radio.pause` | `reason` (`bt_call_route`; on iOS also `pairing`, while the in-person pairing screen is open) |
-| `radio.resume` | `reason` (`call_ended`, `route_changed`; on iOS also `pairing_ended`), `pausedMs` |
+| `radio.pause` | `reason` (`bt_call_route`) |
+| `radio.resume` | `reason` (`call_ended`, `route_changed`), `pausedMs` |
 | `connect.backoff` | `link`, `failures`, `waitMs` |
 
 `tx` is emitted once per packet transmission attempt, after every frame has a
