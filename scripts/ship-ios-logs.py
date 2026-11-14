@@ -1348,7 +1348,7 @@ _MESH_DROP_REASONS = (
 )
 _MESH_RADIO_REASONS = (
     r"(?:start|stop|powered_on|background|foreground|advertising|advertise_failed|bluetooth_unavailable"
-    r"|gatt_add_failed|no_identity)"
+    r"|gatt_add_failed|no_identity|pairing)"
 )
 _MESH_APP_RESULTS = (
     r"(?:stored|dup|unknown_sender|refresh_hit|undecryptable|bad_envelope|readdressed|service|blocked|applied)"
