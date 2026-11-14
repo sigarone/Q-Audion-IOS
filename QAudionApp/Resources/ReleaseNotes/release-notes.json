@@ -1,5 +1,46 @@
 [
   {
+    "version": "1.0.1291",
+    "notes": {
+      "it": [
+        "Protezione delle chiamate ancora più forte, con indicatore del livello di sicurezza",
+        "Abbinamento dei contatti di persona più affidabile",
+        "Pulsante per segnalare un problema in una posizione più comoda",
+        "Miglioramenti di affidabilità e stabilità"
+      ],
+      "en": [
+        "Even stronger call protection, with a security level indicator",
+        "More reliable in-person contact pairing",
+        "Report a problem button in a more convenient place",
+        "Reliability and stability improvements"
+      ],
+      "de": [
+        "Noch stärkerer Schutz für Anrufe, mit Anzeige der Sicherheitsstufe",
+        "Zuverlässigeres Koppeln von Kontakten vor Ort",
+        "Taste zum Melden eines Problems an einer bequemeren Stelle",
+        "Verbesserungen bei Zuverlässigkeit und Stabilität"
+      ],
+      "es": [
+        "Protección de las llamadas aún más sólida, con indicador del nivel de seguridad",
+        "Emparejamiento de contactos en persona más fiable",
+        "Botón para informar de un problema en un lugar más cómodo",
+        "Mejoras de fiabilidad y estabilidad"
+      ],
+      "fr": [
+        "Protection des appels encore plus forte, avec un indicateur du niveau de sécurité",
+        "Association des contacts en personne plus fiable",
+        "Bouton pour signaler un problème placé plus commodément",
+        "Améliorations de la fiabilité et de la stabilité"
+      ],
+      "pt-BR": [
+        "Proteção das chamadas ainda mais forte, com indicador do nível de segurança",
+        "Pareamento de contatos pessoalmente mais confiável",
+        "Botão para relatar um problema em um lugar mais prático",
+        "Melhorias de confiabilidade e estabilidade"
+      ]
+    }
+  },
+  {
     "version": "1.0.1284",
     "notes": {
       "it": [
