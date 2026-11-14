@@ -9,7 +9,7 @@ import XCTest
 /// before it builds a request.
 ///
 /// NOT yet wired into CI: `QAudionApp/project-apptests.yml` (`includes`) and the
-/// `-only-testing` list of `.github/workflows/ios-app-tests.yml` are the two places
+/// `-only-testing` list of `.github/workflows/ios-ci.yml` are the two places
 /// to add `FeatureFlagsTests.swift` / `FeatureFlagsTests` (both files are outside
 /// the scope of the change that added this test).
 @MainActor

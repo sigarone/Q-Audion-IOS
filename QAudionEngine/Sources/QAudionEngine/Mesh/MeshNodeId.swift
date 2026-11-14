@@ -10,7 +10,7 @@ import CryptoKit
 ///
 /// Every type in this `Mesh/` directory is framework-free: no `CoreBluetooth`,
 /// no `UIKit`, no app-level `AppState` import. That is what makes it
-/// unit-testable on the plain `swift test` CI path (`engine-tests.yml`)
+/// unit-testable on the plain `swift test` CI path (`ios-ci.yml`)
 /// without a device or simulator — BLE itself has no reliable emulator, but
 /// packet framing, fragmentation, relay policy, and topology bookkeeping are
 /// pure data transforms and can be pinned with real `XCTest`s.

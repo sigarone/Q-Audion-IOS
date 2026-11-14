@@ -20,7 +20,7 @@ import CryptoKit
 ///     `diag_summary`, no plaintext log text.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the
-/// `-only-testing` list of `.github/workflows/ios-app-tests.yml`.
+/// `-only-testing` list of `.github/workflows/ios-ci.yml`.
 final class BugReportFreezeTests: XCTestCase {
 
     // MARK: - Fixtures

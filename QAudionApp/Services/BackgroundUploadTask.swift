@@ -58,7 +58,7 @@ enum BackgroundUploadTask {
     ///     target in `QAudionApp/project.yml`, no `xcodebuild test` step
     ///     in `.github/workflows/ios-testflight.yml` (archive/build only).
     ///     Moving this type to `QAudionEngine` (the one target with a
-    ///     working `swift test`, see `engine-tests.yml`) isn't viable
+    ///     working `swift test`, see `ios-ci.yml`) isn't viable
     ///     either: that job runs on a macOS runner, and this type depends
     ///     on `UIApplication`/`UIBackgroundTaskIdentifier`, which are
     ///     iOS-only with no macOS analog (every other `UIKit` use in

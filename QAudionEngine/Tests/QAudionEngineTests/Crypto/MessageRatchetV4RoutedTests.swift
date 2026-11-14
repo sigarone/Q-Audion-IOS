@@ -10,7 +10,7 @@ import XCTest
 /// reality:
 ///
 ///   - The Android tests run on a real arm64 DEVICE with the native `.so` linked,
-///     so they always exercise the crypto. The iOS `engine-tests.yml` runs `swift
+///     so they always exercise the crypto. The iOS `ios-ci.yml` runs `swift
 ///     test` against the FAIL-CLOSED placeholder stub (``RatchetNative/available``
 ///     == false), so the round-trip body is gated behind `XCTSkipUnless(available)`
 ///     — identical to ``RatchetNativeRoundTripTests`` / ``RatchetNativeV4Tests``.

@@ -11,7 +11,7 @@ import XCTest
 /// project-earbud.yml), never on this test target, so the `#if QAUDION_EARBUD` branch below is not compiled
 /// into this bundle. It is kept only so that a future test spec which sets the flag on both targets checks the
 /// opposite direction too. That the earbud variant really contains the stack is proven elsewhere: the
-/// `earbud-variant-build` job in ios-app-tests.yml and `assert-no-earbud.sh --require-present` in
+/// `earbud-variant-build` job in ios-ci.yml and `assert-no-earbud.sh --require-present` in
 /// ios-testflight.yml look for it in the built binary.
 final class EarbudCompileConditionTests: XCTestCase {
 

@@ -13,7 +13,7 @@ import XCTest
 /// device's real defaults and the cases cannot see each other.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and
-/// in the `-only-testing` list of `.github/workflows/ios-app-tests.yml`.
+/// in the `-only-testing` list of `.github/workflows/ios-ci.yml`.
 final class RecoveryEnrollmentStatusTests: XCTestCase {
 
     private func makeDefaults() -> UserDefaults {

@@ -9,7 +9,7 @@ import QAudionEngine
 /// not exercised here.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and
-/// in the `-only-testing` list of `.github/workflows/ios-app-tests.yml`.
+/// in the `-only-testing` list of `.github/workflows/ios-ci.yml`.
 final class NoticeServiceTests: XCTestCase {
 
     private typealias Envelope = NoticeService.NoticeEnvelope

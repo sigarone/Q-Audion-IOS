@@ -8,7 +8,7 @@ import XCTest
 /// rules. These tests pin the rules themselves.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 final class CallMinimizePolicyTests: XCTestCase {
 
     private let connectedStates: [CallState] = [.active, .encrypted]

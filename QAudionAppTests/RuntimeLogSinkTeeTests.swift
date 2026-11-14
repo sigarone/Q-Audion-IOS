@@ -3,7 +3,7 @@ import XCTest
 
 /// The stdout/stderr tee must never re-capture the sink's own writes.
 ///
-/// CI incident 2026-10-04: the app-test host of `ios-app-tests.yml` ran with `OS_ACTIVITY_DT_MODE`, so every `Logger`
+/// CI incident 2026-10-04: the app-test host of `ios-ci.yml` ran with `OS_ACTIVITY_DT_MODE`, so every `Logger`
 /// line of the sink's OSLog mirror was echoed to stderr, which is the tee's pipe. The tee recorded the echo as a new
 /// line, the record mirrored it again, and every pass nested one more `[runtime] [stdout]` level and was cut into more
 /// lines by the 4096-byte reads: the job log reached 3.3 GB and the host was starved long enough to fail a 50 ms

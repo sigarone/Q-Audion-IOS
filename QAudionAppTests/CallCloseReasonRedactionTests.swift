@@ -8,7 +8,7 @@ import QAudionEngine
 /// `end_reason` would ship as `***REDACTED***`.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing`
-/// list of `.github/workflows/ios-app-tests.yml`.
+/// list of `.github/workflows/ios-ci.yml`.
 final class CallCloseReasonRedactionTests: XCTestCase {
 
     func test_everyCloseReasonSurvivesTheEgressRedactor() {

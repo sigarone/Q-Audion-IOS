@@ -8,7 +8,7 @@ import XCTest
 ///   - The account-deletion page is not on the document host, so it stays on the product site, per language.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 final class LegalLinksTests: XCTestCase {
 
     private let languages = ["it", "en", "de", "es", "fr", "pt-BR", "ja", "it-IT", ""]

@@ -8,7 +8,7 @@ import XCTest
 /// back the way it found it.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 @MainActor
 final class CarPlayBridgeTests: XCTestCase {
 

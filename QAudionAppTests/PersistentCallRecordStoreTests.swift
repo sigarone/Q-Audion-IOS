@@ -17,7 +17,7 @@ import QAudionEngine
 /// mean "not on disk yet"; a file is moved aside only for a key that was really created.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing`
-/// list of `.github/workflows/ios-app-tests.yml`.
+/// list of `.github/workflows/ios-ci.yml`.
 final class PersistentCallRecordStoreTests: XCTestCase {
 
     // MARK: - Fakes and helpers

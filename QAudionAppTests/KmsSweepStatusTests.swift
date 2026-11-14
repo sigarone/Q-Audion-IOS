@@ -6,7 +6,7 @@ import XCTest
 /// the outcome and the time of the last sweep.
 ///
 /// Pure: no network and no Keychain. Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in
-/// the `-only-testing` list of `.github/workflows/ios-app-tests.yml`.
+/// the `-only-testing` list of `.github/workflows/ios-ci.yml`.
 @MainActor
 final class KmsSweepStatusTests: XCTestCase {
 

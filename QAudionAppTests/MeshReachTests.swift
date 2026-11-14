@@ -15,7 +15,7 @@ import QAudionEngine
 ///   - one hop only: a stale or two-hop announcement is not evidence.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and
-/// in the `-only-testing` list of `.github/workflows/ios-app-tests.yml`.
+/// in the `-only-testing` list of `.github/workflows/ios-ci.yml`.
 final class MeshReachTests: XCTestCase {
 
     private func peer(_ hex: String, connected: Bool = true, relays: [String] = []) -> MeshRuntimePeer {

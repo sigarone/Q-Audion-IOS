@@ -6,7 +6,7 @@ import XCTest
 /// with the tunnel stopped. Times are a few milliseconds, so every test runs in well under a second.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 @MainActor
 final class VpnSessionCoordinatorTests: XCTestCase {
 

@@ -19,7 +19,7 @@ import XCTest
 /// stay quiet.
 ///
 /// This pins the MECHANISM half (does the vault actually notify) in a
-/// module (`QAudionEngine`) covered by CI (`engine-tests.yml`
+/// module (`QAudionEngine`) covered by CI (`ios-ci.yml`
 /// `ios-simulator-tests`). The CONSUMER half (`KeyManagementCoordinator`
 /// subscribing and calling `loadKeys()`) lives in `QAudionApp`: the
 /// observer is registered without a queue, so the poster never waits for
@@ -32,8 +32,8 @@ import XCTest
 /// an earlier version of this comment cited `CrossPlatformTestVectors
 /// .testSovereignIdentityKeychainPersistence()` as a working precedent for
 /// live Keychain I/O in this environment, but that test is ITSELF
-/// `-skip-testing`'d in `engine-tests.yml` for the same reason, so it never
-/// actually proved anything. `engine-tests.yml` skips this whole suite too,
+/// `-skip-testing`'d in `ios-ci.yml` for the same reason, so it never
+/// actually proved anything. `ios-ci.yml` skips this whole suite too,
 /// matching that established convention rather than fighting the CI
 /// environment. The notification-posting production code
 /// (`SovereignKeyVault.swift`'s two `NotificationCenter.default.post(name:

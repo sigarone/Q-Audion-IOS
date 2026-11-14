@@ -7,7 +7,7 @@ import Foundation
 /// - **Adversarial**: covers empty / 1-byte / MAXLEN / MAXLEN+1 /
 ///   all-0x00 / all-0xFF / random / structurally-mutated inputs.
 /// - **Cheap**: plain XCTest, no libFuzzer / sanitizer build needed,
-///   so it runs in the existing `engine-tests.yml` pipeline.
+///   so it runs in the existing `ios-ci.yml` pipeline.
 ///
 /// The contract every parser under test must satisfy: for ANY input
 /// it returns `nil` / throws cleanly / produces a value — it must

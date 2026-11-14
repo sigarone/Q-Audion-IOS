@@ -5,7 +5,7 @@ import XCTest
 /// previews are allowed, the state mapping and the plan of what to start, update and end.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 final class LiveActivityPolicyTests: XCTestCase {
 
     private let t0 = Date(timeIntervalSince1970: 1_800_000_000)

@@ -8,7 +8,7 @@ import UIKit
 /// registro usa un dominio `UserDefaults` privato.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 final class AvatarAnnouncePolicyTests: XCTestCase {
 
     private typealias Trigger = AvatarAnnounceCoordinator.Trigger

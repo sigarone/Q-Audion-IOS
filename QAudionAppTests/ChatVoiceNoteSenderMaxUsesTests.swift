@@ -12,7 +12,7 @@ import QAudionEngine
 ///
 /// Wired into CI: this file is on the include list of
 /// `QAudionApp/project-apptests.yml` (an app-hosted unit-test bundle limited to
-/// the files listed there) and runs in `.github/workflows/ios-app-tests.yml`.
+/// the files listed there) and runs in `.github/workflows/ios-ci.yml`.
 /// The rest of `QAudionAppTests/` still has no target. The arithmetic under
 /// test also has its own engine KATs (`BCryptoDownloadTokenClientTests`,
 /// `chunkCount(forByteLength:)`), so this file only pins the sender-side

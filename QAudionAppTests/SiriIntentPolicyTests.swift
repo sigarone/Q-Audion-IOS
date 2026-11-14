@@ -9,7 +9,7 @@ import XCTest
 /// compiles it.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
-/// `.github/workflows/ios-app-tests.yml`.
+/// `.github/workflows/ios-ci.yml`.
 final class SiriIntentPolicyTests: XCTestCase {
 
     private func person(_ name: String = "Mario", handle: String? = nil, custom: String? = nil) -> SiriPersonFacts {

@@ -30,7 +30,7 @@
 //  the scene (role CPTemplateApplicationSceneSessionRoleApplication, delegate `CarPlaySceneDelegate`, multiple
 //  scenes on) and `QAudion.entitlements` / `QAudionVPN.entitlements` carry
 //  `com.apple.developer.carplay-communication`. `scripts/ci/check_carplay_gating.py` fails a pull request that
-//  drops any of them, and `ios-app-tests.yml` checks the built app for all of them.
+//  drops any of them, and `ios-ci.yml` checks the built app for all of them.
 //
 
 import CarPlay

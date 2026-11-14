@@ -19,7 +19,7 @@ import QAudionEngine
 /// check, against every value this feature can actually emit.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing`
-/// list of `.github/workflows/ios-app-tests.yml`. The cases call `LogRedactor.redactStructured`
+/// list of `.github/workflows/ios-ci.yml`. The cases call `LogRedactor.redactStructured`
 /// directly: `RuntimeLogSink` is `@MainActor` and only forwards to it.
 @MainActor
 final class ProximityPairingTelemetryRedactionTests: XCTestCase {
