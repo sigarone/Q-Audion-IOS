@@ -111,6 +111,43 @@ final class MeshRuntime: ObservableObject {
     /// True once the identity is known (a transport can be built).
     var hasIdentity: Bool { slot.nodeId != nil }
 
+    // MARK: - Pairing in person keeps the radio quiet
+
+    /// The open holds of the pairing screens (QR code plus Bluetooth), each with the watchdog that gives it back if nobody
+    /// does. While there is one the transport pauses and closes its links (`BleMeshTransport.setPairingActive`); the
+    /// antenna's mode and the user's choice are not touched, so the mesh comes back as it was when the last hold goes.
+    /// A call that pauses the radio on a Bluetooth route is a separate reason: the pause ends when neither holds.
+    private var pairingHolds: [UUID: Task<Void, Never>] = [:]
+    /// No pairing lasts this long: a screen that vanished without giving its hold back cannot leave the mesh off.
+    private static let pairingHoldMaxSeconds: UInt64 = 15 * 60
+
+    /// A pairing screen is open.
+    var pairingActive: Bool { !pairingHolds.isEmpty }
+
+    /// The pairing screen asks for the radio. Returns what gives it back (a second call does nothing).
+    func holdForPairing() -> @MainActor () -> Void {
+        let token = UUID()
+        pairingHolds[token] = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.pairingHoldMaxSeconds * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.releasePairingHold(token, how: "expired")
+        }
+        logPairingHold("acquire")
+        slot.existingTransport?.setPairingActive(true)
+        return { [weak self] in self?.releasePairingHold(token, how: "release") }
+    }
+
+    private func releasePairingHold(_ token: UUID, how: String) {
+        guard let watchdog = pairingHolds.removeValue(forKey: token) else { return }
+        watchdog.cancel()
+        logPairingHold(how)
+        slot.existingTransport?.setPairingActive(pairingActive)
+    }
+
+    private func logPairingHold(_ how: String) {
+        RTLog.info("pair", "mesh hold=\(how) n=\(pairingHolds.count) antenna=\(requestedMode == nil ? 0 : 1)")
+    }
+
     // MARK: - Call and route facts for the Bluetooth pause (spec 2.1)
 
     /// The app's own call, 1:1 or group, is connected (not ringing, not dialling). Set by `AppState`.
@@ -421,6 +458,8 @@ final class MeshRuntime: ObservableObject {
             }
         }
         transport.setCallFacts(callActive: facts.callActive, btRoute: facts.btRoute)
+        // A pairing screen that is open now keeps this radio paused from its first instant.
+        transport.setPairingActive(pairingActive)
         transport.start(schedule: MeshRadioSchedule.backgroundIdle, mode: allowed)
         MeshOutboxDrain.shared.start()
     }

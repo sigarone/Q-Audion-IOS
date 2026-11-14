@@ -87,7 +87,7 @@ FRAME_REASONS += re.findall(r"^\s*case\s+(rejected|timeout)\s*$",
 MALFORMED = re.findall(r'case\s+\w+\s*=\s*"([a-z_]+)"',
                        framing_src.split("public enum MalformedReason")[1].split("}")[0])
 pause_src = read(MESH_DIR, "MeshBtCallPause.swift")
-PAUSE_REASONS = re.findall(r'pauseReason\s*=\s*"([a-z_]+)"', pause_src)
+PAUSE_REASONS = re.findall(r'(?:pauseReason|pairingReason)\s*=\s*"([a-z_]+)"', pause_src)
 RESUME_REASONS = re.findall(r'case\s+\w+\s*=\s*"([a-z_]+)"',
                             pause_src.split("public enum ResumeReason")[1].split("}")[0])
 relay_src = read(MESH_DIR, "MeshRelayGate.swift")
@@ -111,8 +111,8 @@ APP_STATES = sorted(set(re.findall(r'logApp\([^)]*state: "([a-z]+)"', drain_src)
 
 check(len(EVENTS) == 22, "expected 20 events in MeshLog.Event, found %r" % (EVENTS,))
 check({"radio.pause", "radio.resume", "connect.backoff"} <= set(EVENTS), "the pause / backoff events are missing: %r" % (EVENTS,))
-check(PAUSE_REASONS == ["bt_call_route"], "radio.pause reasons: %r" % (PAUSE_REASONS,))
-check(sorted(RESUME_REASONS) == ["call_ended", "route_changed"], "radio.resume reasons: %r" % (RESUME_REASONS,))
+check(PAUSE_REASONS == ["bt_call_route", "pairing"], "radio.pause reasons: %r" % (PAUSE_REASONS,))
+check(sorted(RESUME_REASONS) == ["call_ended", "pairing_ended", "route_changed"], "radio.resume reasons: %r" % (RESUME_REASONS,))
 check(len(FRAME_REASONS) == 6, "MeshFrameFailure tokens: %r" % (FRAME_REASONS,))
 check(len(MALFORMED) == 4, "MalformedReason tokens: %r" % (MALFORMED,))
 check(sorted(SKIPS) == ["dup", "mode", "rate", "ttl"], "relay skip reasons: %r" % (SKIPS,))

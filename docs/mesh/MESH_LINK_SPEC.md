@@ -796,8 +796,8 @@ display names. The only identifiers allowed are:
 | `app.tx` | `ph`, `kind` (`msg`, `rcpt`), `state` (`sent`, `queued`, `failed`), `attempt` |
 | `app.rx` | `ph`, `kind`, `result` (`stored`, `dup`, `unknown_sender`, `refresh_hit`, `undecryptable`, `bad_envelope`, `readdressed`, `service`, `blocked`, `applied`) |
 | `outbox` | `pending`, `retried`, `gaveUp` |
-| `radio.pause` | `reason` (`bt_call_route`) |
-| `radio.resume` | `reason` (`call_ended`, `route_changed`), `pausedMs` |
+| `radio.pause` | `reason` (`bt_call_route`; on iOS also `pairing`, while the in-person pairing screen is open) |
+| `radio.resume` | `reason` (`call_ended`, `route_changed`; on iOS also `pairing_ended`), `pausedMs` |
 | `connect.backoff` | `link`, `failures`, `waitMs` |
 
 `tx` is emitted once per packet transmission attempt, after every frame has a

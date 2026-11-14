@@ -124,6 +124,7 @@ struct QrScannerSheet: View {
         case .notPairing:
             phase = .decoded(QrPayloadRouter.route(raw))
         case .pairing(let payload):
+            if proximityLocalUserId != nil { ProximityScanReport.pairing(textLength: raw.utf16.count) }
             phase = proximityLocalUserId == nil ? .proximityElsewhere : .proximity(payload)
         case .invalid(let reason):
             guard proximityLocalUserId != nil else {

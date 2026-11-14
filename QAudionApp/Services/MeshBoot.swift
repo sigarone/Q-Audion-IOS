@@ -18,11 +18,18 @@ enum MeshBoot {
         })
     }
 
+    /// The in-person pairing screen (engine package) keeps the radio quiet through this hook: it takes a hold while it pairs
+    /// and gives it back on every way out (`MeshRuntime.holdForPairing`).
+    static func installPairingHold() {
+        ProximityPairingMeshHold.acquire = { MeshRuntime.shared.holdForPairing() }
+    }
+
     /// Reads the identity key (never creates one), derives the node id and, if the consent and the antenna choice
     /// allow it, brings the radio up so the system can hand back the connections it kept. A locked Keychain leaves the
     /// radio off; the foreground retry in `AppState` tries again.
     static func bootIdentityAndRadio() {
         installLogSink()
+        installPairingHold()
         // The receive path first: a packet that arrives the moment the radio is up must find its handler.
         AppState.shared.wireMeshInbound()
         let identity = SovereignIdentityManager()

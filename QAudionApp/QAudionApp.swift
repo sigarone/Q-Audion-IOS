@@ -282,6 +282,8 @@ struct QAudionApp: App {
         // log lines come here. Tag "pair" is the pairing scope the log shipper already lets through; the lines carry
         // result tokens, status words, timings and the 8-hex log tag, never keys, codes, tags or identities.
         NfcPairingLog.install(sink: { tag, line in RTLog.info(tag, line) })
+        // The same for the in-person pairing's Bluetooth transport: closed-vocabulary lines under the tag "pair".
+        ProximityPairingLog.install(sink: { tag, line in RTLog.info(tag, line) })
 
         // W-BGK: BGAppRefreshTask must be registered before the app finishes
         // launching (Apple requirement). We forward it via NotificationCenter

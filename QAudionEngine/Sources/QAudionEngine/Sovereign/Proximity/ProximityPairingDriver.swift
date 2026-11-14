@@ -101,6 +101,8 @@ final class ProximityPairingViewDriver: ObservableObject {
 
     // MARK: Tuning
 
+    /// Displayer: how long the QR waits for the system to confirm the advertisement before the session fails.
+    private static let advertiseWaitLimit: TimeInterval = 4.0
     /// Upper bound on the server check before "Coincide" is offered anyway.
     private static let serverCheckTimeout: TimeInterval = 5.0
     /// Displayer: delay before a retryable failure shows a fresh code.
@@ -150,7 +152,7 @@ final class ProximityPairingViewDriver: ObservableObject {
     private var cachedIdentity: ProximityLocalIdentity?
     /// Displayer: the screen is being recorded, mirrored or shared.
     private var screenCaptured: Bool = false
-    /// A displayer session was stopped because the app went to the background.
+    /// A displayer session was stopped, or its automatic restart held back, because the app went to the background.
     private var suspendedInBackground: Bool = false
     private var renderedSessionId: Data = Data()
     private var renderedFrameIndex: UInt32?
@@ -162,6 +164,13 @@ final class ProximityPairingViewDriver: ObservableObject {
     /// `stage` of a `failed`/`cancelled` telemetry event, since neither the
     /// `.failed` session state nor `stop()` itself carries one.
     private var lastStage: ProximityPairingTelemetryEvent.Stage = .preparing
+    /// Gives back the hold on the app's Bluetooth mesh (`ProximityPairingMeshHold`); nil while none is held. Taken when a
+    /// session starts, given back on every way out of the pairing (`releaseMesh()`).
+    private var releaseMeshHold: (@MainActor () -> Void)?
+    /// Displayer: the newest frame the session wants shown while the advertisement is not confirmed yet.
+    private var heldPayload: ProximityQrPayload?
+    private var advertiseWaitTimer: ProximityCancellable?
+    private var advertiseWaitStartedAt: TimeInterval?
 
     init(localUserId: String,
          scanPayload: ProximityQrPayload?,
@@ -226,6 +235,8 @@ final class ProximityPairingViewDriver: ObservableObject {
         tearDownSession()
         clearCode()
         resetServerCheck()
+        // The screen is gone: the mesh gets its radio back whatever the phase was.
+        releaseMesh()
         switch phase {
         case .completed, .failed:
             break
@@ -307,8 +318,17 @@ final class ProximityPairingViewDriver: ObservableObject {
     /// session on return; the scanner's code was single-use.
     func appDidEnterBackground() {
         guard isActive else { return }
+        // Nothing here goes on behind another app, a failed screen waiting to restart included: the mesh gets its radio back.
+        releaseMesh()
         switch phase {
-        case .completed, .failed:
+        case .completed:
+            return
+        case .failed:
+            // A failed screen waiting to restart by itself does not restart behind another app: the return does.
+            if isDisplayer && autoRestartTimer != nil {
+                cancelAutoRestart()
+                suspendedInBackground = true
+            }
             return
         default:
             break
@@ -330,8 +350,12 @@ final class ProximityPairingViewDriver: ObservableObject {
         guard suspendedInBackground else { return }
         suspendedInBackground = false
         guard isActive, isDisplayer else { return }
-        guard case .preparing = phase else { return }
-        begin()
+        switch phase {
+        case .preparing, .failed:
+            begin()
+        default:
+            return
+        }
     }
 
     /// Ends the live session (ABORT(cancelled) to a locked peer) and shows
@@ -341,6 +365,7 @@ final class ProximityPairingViewDriver: ObservableObject {
         cancelAutoRestart()
         tearDownSession()
         clearCode()
+        releaseMesh()
         if let message = text {
             setPhase(.failed(message))
         } else {
@@ -365,6 +390,7 @@ final class ProximityPairingViewDriver: ObservableObject {
         finished = false
         setPhase(.preparing)
         if isDisplayer && screenCaptured {
+            releaseMesh()
             setPhase(.failed(ProximityPairingViewDriver.screenCapturedText))
             return
         }
@@ -382,6 +408,7 @@ final class ProximityPairingViewDriver: ObservableObject {
             cachedIdentity = ProximityPairingStore.loadLocalIdentity(userId: localUserId)
         }
         guard let identity = cachedIdentity else {
+            releaseMesh()
             setPhase(.failed(ProximityPairingError.identityUnavailable.userMessage))
             return
         }
@@ -393,6 +420,7 @@ final class ProximityPairingViewDriver: ObservableObject {
     }
 
     private func beginDisplayer(identity: ProximityLocalIdentity) {
+        holdMesh()
         let transport: ProximityBleDisplayerTransport = ProximityBleDisplayerTransport()
         let policy: (ProximityPeerIdentity) -> ProximityIdentityDecision =
             ProximityPairingStore.defaultIdentityPolicy(local: identity)
@@ -404,12 +432,16 @@ final class ProximityPairingViewDriver: ObservableObject {
         session.onStateChange = { [weak self] (state: ProximityDisplayerSession.State) in
             self?.handleDisplayerState(state, epoch: sessionEpoch)
         }
+        transport.onAdvertisingStarted = { [weak self] in
+            self?.advertisingStarted(epoch: sessionEpoch)
+        }
         displayerTransport = transport
         displayerSession = session
         session.start()
     }
 
     private func beginScanner(payload: ProximityQrPayload, identity: ProximityLocalIdentity) {
+        holdMesh()
         let transport: ProximityBleScannerTransport = ProximityBleScannerTransport()
         let policy: (ProximityPeerIdentity) -> ProximityIdentityDecision =
             ProximityPairingStore.defaultIdentityPolicy(local: identity)
@@ -439,7 +471,7 @@ final class ProximityPairingViewDriver: ObservableObject {
             setPhase(.preparing)
         case .showing(let payload):
             lastStage = .showingCode
-            showCode(payload)
+            presentCode(payload)
         case .exchanging:
             lastStage = .exchanging
             clearCode()
@@ -458,6 +490,9 @@ final class ProximityPairingViewDriver: ObservableObject {
             onTelemetryEvent?(.ending(with: error, stage: lastStage))
             if ProximityPairingViewDriver.restartsOnItsOwn(error) && isActive {
                 scheduleAutoRestart()
+            } else {
+                // Ended for good until the user asks again: the mesh gets its radio back.
+                releaseMesh()
             }
         }
     }
@@ -483,6 +518,8 @@ final class ProximityPairingViewDriver: ObservableObject {
         case .failed(let error):
             setPhase(.failed(error.userMessage))
             onTelemetryEvent?(.ending(with: error, stage: lastStage))
+            // A scanned code is single-use: the way on is the camera again, so the mesh gets its radio back.
+            releaseMesh()
         }
     }
 
@@ -629,12 +666,89 @@ final class ProximityPairingViewDriver: ObservableObject {
         setPhase(.showingCode)
     }
 
+    /// The code must not be visible, and none waits to become visible.
     private func clearCode() {
+        clearImage()
+        heldPayload = nil
+        advertiseWaitTimer?.cancel()
+        advertiseWaitTimer = nil
+    }
+
+    private func clearImage() {
         if qrImage != nil {
             qrImage = nil
         }
         renderedSessionId = Data()
         renderedFrameIndex = nil
+    }
+
+    /// Displayer: shows the frame once the system confirmed that the service is advertised, so a scanner that reads the
+    /// code at once finds something to connect to. Until then the newest frame waits and the screen shows the preparing
+    /// state; after `advertiseWaitLimit` without a confirmation the session fails as a transport failure (and restarts by
+    /// itself): a code whose advertisement is not confirmed is never shown. An advertisement that fails is not handled
+    /// here: the transport reports it and the session fails.
+    private func presentCode(_ payload: ProximityQrPayload) {
+        guard let radio = displayerTransport, !radio.isAdvertisingLive else {
+            clearHeldCode()
+            showCode(payload)
+            return
+        }
+        clearImage()
+        heldPayload = payload
+        setPhase(.preparing)
+        guard advertiseWaitTimer == nil else { return }
+        advertiseWaitStartedAt = scheduler.now()
+        let expected: UInt64 = epoch
+        advertiseWaitTimer = scheduler.schedule(after: ProximityPairingViewDriver.advertiseWaitLimit) { [weak self] in
+            self?.advertiseWaitFired(epoch: expected)
+        }
+    }
+
+    /// The transport's confirmation (main thread).
+    private func advertisingStarted(epoch expected: UInt64) {
+        guard expected == epoch, isActive, let payload = heldPayload else { return }
+        let waited: Int = advertiseWaitedMs()
+        clearHeldCode()
+        ProximityPairingLog.emit("ble.qr", [("ev", "shown"), ("ms", String(waited))])
+        showCode(payload)
+    }
+
+    private func advertiseWaitFired(epoch expected: UInt64) {
+        advertiseWaitTimer = nil
+        guard expected == epoch, isActive, heldPayload != nil else { return }
+        ProximityPairingLog.emit("ble.qr", [("ev", "adv_timeout"), ("ms", String(advertiseWaitedMs()))])
+        // The existing transport-failure path: the session ends, the error shows, the automatic restart follows.
+        tearDownSession()
+        handleDisplayerState(.failed(.transportFailed("advertising not confirmed")), epoch: expected)
+    }
+
+    private func clearHeldCode() {
+        heldPayload = nil
+        advertiseWaitTimer?.cancel()
+        advertiseWaitTimer = nil
+    }
+
+    private func advertiseWaitedMs() -> Int {
+        guard let started = advertiseWaitStartedAt else { return 0 }
+        return max(0, Int((scheduler.now() - started) * 1000))
+    }
+
+    // MARK: - Bluetooth mesh pause
+
+    /// Asks the app to keep its Bluetooth mesh quiet while this screen pairs: the mesh would share the radio and the
+    /// advertisement budget with the pairing (see `ProximityPairingMeshHold`). One hold at a time. No look at the
+    /// application state: on the way back from the background it still says "background" when the session restarts.
+    private func holdMesh() {
+        guard releaseMeshHold == nil, let acquire = ProximityPairingMeshHold.acquire else { return }
+        releaseMeshHold = acquire()
+    }
+
+    /// Gives the hold back (nothing happens when there is none). Called on every way out of the pairing: the screen
+    /// leaving, the app in the background, a session that ended for good, a completed pairing after its link grace.
+    private func releaseMesh() {
+        guard let release = releaseMeshHold else { return }
+        releaseMeshHold = nil
+        release()
     }
 
     /// Never leave a session advertising behind a code nobody can see.
@@ -643,6 +757,7 @@ final class ProximityPairingViewDriver: ObservableObject {
         cancelAutoRestart()
         tearDownSession()
         clearCode()
+        releaseMesh()
         setPhase(.failed(ProximityPairingViewDriver.qrUnavailableText))
         onTelemetryEvent?(.failed(cause: .qrUnavailable, stage: lastStage))
     }
@@ -703,6 +818,12 @@ final class ProximityPairingViewDriver: ObservableObject {
         autoRestartTimer = nil
         guard expected == epoch, isActive, isDisplayer else { return }
         guard case .failed = phase else { return }
+        // No session behind another app (it would run with the mesh on): the foreground return restarts it.
+        if UIApplication.shared.applicationState == .background {
+            releaseMesh()
+            suspendedInBackground = true
+            return
+        }
         begin()
     }
 
@@ -742,6 +863,20 @@ final class ProximityPairingViewDriver: ObservableObject {
         let displayerRadio: ProximityBleDisplayerTransport? = displayerTransport
         let scanner: ProximityScannerSession? = scannerSession
         let scannerRadio: ProximityBleScannerTransport? = scannerTransport
+        // The mesh waits for the same grace: the radio is still the pairing's until the last message has left.
+        let release: (@MainActor () -> Void)? = releaseMeshHold
+        releaseMeshHold = nil
+        // Not behind another app, though: when the app goes to the background during the grace the mesh gets the radio
+        // back at once (the hold gives back only once, so the timer below does nothing more). Independent of the
+        // screen, which may be gone by then.
+        let backgrounded: NSObjectProtocol? = release.map { hold in
+            return NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
+                                                          object: nil, queue: .main) { _ in
+                Task { @MainActor in
+                    hold()
+                }
+            }
+        }
         displayer?.onStateChange = nil
         scanner?.onStateChange = nil
         displayerSession = nil
@@ -754,6 +889,10 @@ final class ProximityPairingViewDriver: ObservableObject {
             displayerRadio?.shutdown()
             scanner?.cancel()
             scannerRadio?.cancel()
+            release?()
+            if let observer = backgrounded {
+                NotificationCenter.default.removeObserver(observer)
+            }
         }
     }
 
