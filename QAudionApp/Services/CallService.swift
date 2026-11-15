@@ -120,12 +120,6 @@ final class CallService: @unchecked Sendable {
     /// `QAudionCallIntegration.onSpeakerChangeVerdict` to AppState.
     var onSpeakerChangeVerdict: ((RemoteSpeakerChangeMonitor.Verdict) -> Void)?
 
-    /// Hand the peer's `SPKCHG` claim to the engine. No-op when no call is
-    /// live, same best-effort contract as every other control pass-through.
-    func peerReportedSpeakerChange(_ changed: Bool) {
-        callIntegration?.peerReportedSpeakerChange(changed)
-    }
-
     /// Tell the engine which media path the call is on ("p2p", "turn",
     /// "relay", or "" for none yet), so the speaker-change reference is
     /// rebuilt after a settled path switch. No-op when no call is live.

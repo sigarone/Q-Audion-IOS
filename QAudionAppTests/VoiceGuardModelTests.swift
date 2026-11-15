@@ -544,10 +544,8 @@ final class VoiceGuardModelTests: XCTestCase {
         return bundle
     }
 
-    /// The far end's report is about OUR user's voice, not the contact's, and
-    /// is not authenticated as coming from its detector: alone, it leaves the
-    /// card exactly as it was, whatever state the local detector is in.
-    func testAPeerReportAloneLeavesTheCardUnchanged() {
+    /// The card line follows the local detector alone, whatever state it is in.
+    func testTheCardLineFollowsTheLocalDetector() {
         func cardLine(_ monitor: RemoteSpeakerChangeMonitor) -> VoiceGuardLine {
             let level = VoiceGuard.level(ofVerdict: monitor.verdict)
             return VoiceGuard.line(for: VoiceGuard.content(banner: nil, learning: nil, hasHistory: false, level: level))
@@ -555,27 +553,19 @@ final class VoiceGuardModelTests: XCTestCase {
 
         // No local verdict yet: still waiting, never "possible change".
         let fresh = RemoteSpeakerChangeMonitor()
-        fresh.onPeerReportedChange(true)
         XCTAssertEqual(fresh.verdict, RemoteSpeakerChangeMonitor.Verdict(level: .unknown))
         XCTAssertEqual(cardLine(fresh), .waiting)
 
-        // Steady locally: still steady (green), the report does not turn it amber.
+        // Steady locally: steady (green).
         let steady = RemoteSpeakerChangeMonitor()
         for _ in 0..<10 { steady.feed(0.8) }
         XCTAssertEqual(cardLine(steady), .steady)
-        steady.onPeerReportedChange(true)
-        XCTAssertEqual(cardLine(steady), .steady)
         XCTAssertEqual(VoiceGuard.tone(ofLine: cardLine(steady)), .success)
-        steady.onPeerReportedChange(false)
-        XCTAssertEqual(cardLine(steady), .steady)
 
-        // A real local suspect stays "possible change", and a peer report does
-        // not add to it or take it away.
+        // A real local suspect reads "possible change".
         let suspect = RemoteSpeakerChangeMonitor()
         for _ in 0..<10 { suspect.feed(0.8) }
         suspect.feed(0.2)
-        XCTAssertEqual(cardLine(suspect), .suspect)
-        suspect.onPeerReportedChange(true)
         XCTAssertEqual(cardLine(suspect), .suspect)
         XCTAssertEqual(suspect.verdict, RemoteSpeakerChangeMonitor.Verdict(level: .suspect))
     }

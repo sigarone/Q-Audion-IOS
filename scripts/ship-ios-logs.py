@@ -812,7 +812,7 @@ APP_VOCAB = frozenset("""
     route routing rows rsn rst rtcp rtp rtt run rw rxdc rxpre sample
     satisfied scaduto scorex sctp sdp selfver send sender sequence server
     session set setactive settings sfu sha signaling sigsend skip skipped
-    source spk spkchg sr srflx srtcp srtp srtpkeyfwd ssrc st stable stata
+    source spk sr srflx srtcp srtp srtpkeyfwd ssrc st stable stata
     stats stun suppressed swap target tcp terminate tf tg thresholds time
     timestamp tls tofupin took total totalfail track transport trig true
     turn txdc txfall type udp un unc uncertain undec unknown unseal

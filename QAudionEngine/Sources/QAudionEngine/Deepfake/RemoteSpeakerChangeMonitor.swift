@@ -19,19 +19,6 @@ import Foundation
 /// you think you are talking to" are different statements, and only the
 /// second needs impostor-calibrated absolute scoring, which this system does
 /// not yet have.
-///
-/// ## The far end's report is not part of the verdict
-///
-/// `onPeerReportedChange` receives the far end's own receive-side verdict.
-/// That verdict is about THIS device's user — the far end's detector hears
-/// our voice, not the contact's — so it says nothing about the person on the
-/// other end, and the message carrying it is not authenticated as coming from
-/// that detector. Folding it into the verdict made the contact's card turn
-/// amber for a change in our own user's voice, and let a relay or a
-/// misbehaving peer move the indicator at will. So it never reaches the
-/// verdict: the level, the colour and every text built on them come from the
-/// local detector alone. The claim is only kept (`peerReportedChange`) so it
-/// can be shown again if it is ever authenticated with the session key.
 public final class RemoteSpeakerChangeMonitor: @unchecked Sendable {
 
     public enum Level: String { case unknown, steady, suspect, changed }
@@ -51,7 +38,6 @@ public final class RemoteSpeakerChangeMonitor: @unchecked Sendable {
 
     private let detector: SpeakerChangeDetector
     private let lock = NSLock()
-    private var peerReportsChange = false
 
     public init(detector: SpeakerChangeDetector = SpeakerChangeDetector()) {
         self.detector = detector
@@ -69,22 +55,6 @@ public final class RemoteSpeakerChangeMonitor: @unchecked Sendable {
         publish(Self.verdict(for: evaluation.state))
     }
 
-    /// Record the far end's own receive-side verdict about this device's
-    /// user. Kept for the record only: it changes neither the verdict nor
-    /// any callback (see the class documentation).
-    public func onPeerReportedChange(_ changed: Bool) {
-        lock.lock()
-        peerReportsChange = changed
-        lock.unlock()
-    }
-
-    /// The last claim the far end made about this device's user. Nothing in
-    /// the call UI reads it.
-    public var peerReportedChange: Bool {
-        lock.lock(); defer { lock.unlock() }
-        return peerReportsChange
-    }
-
     /// Re-anchor on whoever is speaking now, so a second handover — most
     /// often the handset going back — is detectable rather than hidden
     /// behind a latched verdict.
@@ -98,7 +68,6 @@ public final class RemoteSpeakerChangeMonitor: @unchecked Sendable {
     public func reset() {
         lock.lock()
         detector.reset()
-        peerReportsChange = false
         lock.unlock()
         publish(Verdict(level: .unknown))
     }

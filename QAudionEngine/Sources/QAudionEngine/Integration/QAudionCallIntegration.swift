@@ -866,14 +866,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// action follows from it.
     public var onSpeakerChangeVerdict: ((RemoteSpeakerChangeMonitor.Verdict) -> Void)?
 
-    /// Record the far end's own receive-side verdict about this device's
-    /// user, as delivered over the `SPKCHG` control piggy-back. Only
-    /// recorded: it never reaches `onSpeakerChangeVerdict` (see
-    /// `RemoteSpeakerChangeMonitor`).
-    public func peerReportedSpeakerChange(_ changed: Bool) {
-        contactVoiceVerifier.peerReportedSpeakerChange(changed)
-    }
-
     /// Re-anchor the change detector after a media-path switch — see
     /// `ContactVoiceVerifier.acousticPathChanged` for why a path change must
     /// not be reported as a person walking in.

@@ -141,6 +141,16 @@ final class AndroidHandshakeBundleTranscriptBindWireTests: XCTestCase {
         XCTAssertNil(AndroidHandshakeEnvelope.malformedBundleCallId("|{\"kind\":\"OFFER\"}"))
     }
 
+    /// A client that still announces a speaker change sends a tag nothing parses any more: it is not a
+    /// piggy-back and not a bundle, so the receiver only logs that it is not a recognised envelope.
+    func testTheRetiredSpeakerChangeTagIsNotRecognisedAnywhere() {
+        for raw in ["abc-123|SPKCHG:1", "abc-123|SPKCHG:0"] {
+            XCTAssertNil(CallPiggyBack.parse(raw), raw)
+            XCTAssertNil(AndroidHandshakeEnvelope.parse(raw), raw)
+            XCTAssertNil(AndroidHandshakeEnvelope.malformedBundleCallId(raw), raw)
+        }
+    }
+
     func testSasRevealIsRoutedBeforeTheBundleParserAndKeepsTheRawPayload() {
         let raw = "abc-123|SASREVEAL:AAECAwQ="
         XCTAssertEqual(CallPiggyBack.parse(raw), .sasReveal(callId: "abc-123", raw: "AAECAwQ="))
