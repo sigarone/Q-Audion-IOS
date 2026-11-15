@@ -98,7 +98,11 @@ public enum VoiceConfidenceAnnounceCipher {
     /// result exactly like a lost PLP report: a missing round just means
     /// one fewer signal this tick, never an error.
     public static func open(sessionKey: Data, callId: String, payload: String) -> Announce? {
-        guard let raw = Data(base64Encoded: payload),
+        // Older Android builds send the same bytes without the trailing `=`,
+        // and `Data(base64Encoded:)` only takes a length that is a multiple of 4.
+        let remainder = payload.utf8.count % 4
+        let padded = remainder == 0 ? payload : payload + String(repeating: "=", count: 4 - remainder)
+        guard let raw = Data(base64Encoded: padded),
               raw.count == nonceSize + plaintextSize + tagSize
         else { return nil }
         let nonceBytes = raw.prefix(nonceSize)
