@@ -3158,24 +3158,12 @@ final class AppState: ObservableObject {
     /// Main-actor only, like every other field of this object.
     private let voiceReferenceEnvelope = VoiceReferenceEnvelope()
 
-    /// Feature B ("voce verificata") — state of the per-contact call-time
-    /// voice-learning session (`VoiceLearningSession`, fed from the SAME
-    /// decoded RX audio as `voiceAnalysis`/`voiceSpectrum` above via
-    /// `QAudionCallIntegration.processIncomingAudio`). nil when no session
-    /// has ever run this call. W-AUTOLEARN parity (item 5, 2026-07-31
-    /// InCallScreen Android→iOS port): no more manual "Avvia apprendimento
-    /// voce" tap — `maybeAutoStartVoiceLearning` starts this itself, silently,
-    /// the first time `handleCallSessionEstablished` ever fires for a
-    /// contact with no existing `VoiceprintStore` template. `InCallScreen`
-    /// now only ever SHOWS state (a brief progress indicator while
-    /// `.inProgress`, the voice check wave otherwise) —
-    /// see `InCallScreen.voiceLearningControl`. Reset in endCall(), so a
-    /// finished session of one call can never show its confirmation again in
-    /// a later one. On `.completed(contactId:)` this also records the date
-    /// the voice was saved via `ContactsStore.setVoiceSaved` (a date, not a
-    /// verification) — see the observer set up alongside
-    /// `callService.onVoiceLearningStateChanged`.
-    @Published var voiceLearningState: VoiceLearningSession.State?
+    /// State of the voice-learning progress that the voice check card
+    /// (`VoiceGuardCard`) can show: a brief progress indicator and, when it
+    /// ends, a short confirmation. Nothing sets it while the contact voice
+    /// engine is off (`VoiceContactV3.enabled`), so the card shows only its
+    /// verdict lines. Reset in endCall().
+    @Published var voiceLearningState: VoiceLearningState?
 
     /// This device's OWN TX-side owner-continuity self-check state,
     /// published from `callService.onOwnerContinuityStateChanged`.
@@ -3191,7 +3179,7 @@ final class AppState: ObservableObject {
     /// mirroring Android's `lastSentOwnerContinuityLevel`, so a re-fired
     /// `.onOwnerContinuityStateChanged` callback with the SAME level (e.g.
     /// another `.scored` tick that didn't cross a threshold) never re-sends.
-    private var lastSentOwnerContinuityLevel: ContactVoiceContinuityGate.Level?
+    private var lastSentOwnerContinuityLevel: VoiceContinuityLevel?
 
     /// The PEER's self-reported live continuity level, received over the
     /// `OWNER_CONT` opaque-message piggy-back — see
@@ -3200,22 +3188,13 @@ final class AppState: ObservableObject {
     /// transition (most calls never do). Drives `InCallScreen`'s merged
     /// "voce come chiave" shield alongside `callPeerVoiceKeyEnrolled`.
     /// Reset in endCall().
-    @Published var peerOwnerContinuityLevel: ContactVoiceContinuityGate.Level = .unknown
-
-    /// Tier 2 ("voce remota") — RX-side per-contact continuity level,
-    /// published from `callService.onContactVoiceLevelChanged`. `.unknown`
-    /// until the first real score tick for the active contact. Reset in
-    /// endCall(). No screen shows it for now: its thresholds were fitted to
-    /// one call and never tried against a different speaker, so the ear
-    /// shield stays hidden until they are calibrated (`UncalibratedVoiceIndicators`).
-    @Published var contactVoiceLevel: ContactVoiceContinuityGate.Level = .unknown
+    @Published var peerOwnerContinuityLevel: VoiceContinuityLevel = .unknown
 
     /// "Interlocutore cambiato" — is the voice arriving now still the voice
-    /// this call started with. Distinct from `contactVoiceLevel`, which asks
-    /// whether it matches the stored template for this contact: this one
-    /// measures against the call's own opening audio, so it is unaffected by
-    /// codec, room or handset, and it is the signal that actually catches a
-    /// handset being passed to somebody else. Informational only.
+    /// this call started with. It measures against the call's own opening
+    /// audio, so it is unaffected by codec, room or handset, and it is the
+    /// signal that actually catches a handset being passed to somebody else.
+    /// Informational only.
     @Published var speakerChangeVerdict = RemoteSpeakerChangeMonitor.Verdict(level: .unknown)
 
     /// Item 5 (2026-07-31 InCallScreen Android→iOS port) — rolling window
@@ -4846,7 +4825,11 @@ final class AppState: ObservableObject {
         ) { _ in ProtectedDataFlag.shared.set(isAvailable: false) }
         NotificationCenter.default.addObserver(
             forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: nil
-        ) { _ in ProtectedDataFlag.shared.set(isAvailable: true) }
+        ) { _ in
+            ProtectedDataFlag.shared.set(isAvailable: true)
+            // The removal of the earlier contact voice templates waits for an unlocked phone.
+            Task.detached(priority: .utility) { _ = LegacyContactVoiceCleanup.runIfNeeded() }
+        }
         NotificationCenter.default.addObserver(
             forName: UIApplication.protectedDataDidBecomeAvailableNotification,
             object: nil,
@@ -5075,21 +5058,6 @@ final class AppState: ObservableObject {
             }
         }
 
-        // Feature B — publish the learning-session state for
-        // LiveInCallScreen's progress UI, and on `.completed` record WHEN the
-        // voice of this contact was saved (`ContactDetailScreen` words it
-        // "Voce memorizzata il <data>"). Saving a voice is not verifying the
-        // person: this writes a date and nothing else, and never touches the
-        // SAS verification of the contact.
-        callService.onVoiceLearningStateChanged = { [weak self] state in
-            Task { @MainActor in
-                self?.voiceLearningState = state
-                if case .completed(let contactId) = state {
-                    ContactsStore().setVoiceSaved(userId: contactId)
-                }
-            }
-        }
-
         // Tier 1/Tier 2 — fire on their own private queues (see each
         // callback's own doc), so hop to MainActor before publishing, same
         // pattern as every other cross-thread call-engine signal above.
@@ -5098,11 +5066,6 @@ final class AppState: ObservableObject {
                 guard let self else { return }
                 self.ownerContinuityState = state
                 self.maybeAnnounceOwnerContinuity(state)
-            }
-        }
-        callService.onContactVoiceLevelChanged = { [weak self] level in
-            Task { @MainActor in
-                self?.contactVoiceLevel = level
             }
         }
         callService.onSpeakerChangeVerdict = { [weak self] verdict in
@@ -16487,7 +16450,7 @@ final class AppState: ObservableObject {
                 print("[AppState] OWNER_CONT dropped — sender \(senderId.prefix(8))… is not the call peer")
                 return
             }
-            let mapped: ContactVoiceContinuityGate.Level
+            let mapped: VoiceContinuityLevel
             switch level {
             case "verified":  mapped = .verified
             case "uncertain": mapped = .uncertain
@@ -23334,7 +23297,7 @@ extension AppState {
     }
 
     // MARK: - Items 2 + 5 (2026-07-31 InCallScreen Android→iOS port) —
-    //         call-connect hook: auto voice-enrollment + VOICE_KEY announce
+    //         call-connect hook: contact voice check + VOICE_KEY announce
 
     /// Fired once this call's REAL PQC session key is established for
     /// `peerId` — wired as `CallSessionKeyBroker`'s `onSessionEstablished`
@@ -23348,51 +23311,20 @@ extension AppState {
     /// below are written to be safe under a duplicate call.
     private func handleCallSessionEstablished(peerId: String) {
         // Tier 2 ("voce remota") — mirrors Android's `onConnected`
-        // (`voicePrintBridge.setActiveContact(peerId.value)`), the same
-        // unified hook Feature B's `maybeAutoStartVoiceLearning` below
-        // already uses. Idempotent (a no-op if `peerId` is already the
+        // (`voicePrintBridge.setActiveContact(peerId.value)`). Idempotent
+        // (a no-op if `peerId` is already the
         // active contact) — also wired defensively at the `CallService`
         // level (`onStateChanged(.active)` for outgoing,
         // `activateIncomingCallAudio(contactId:)` for incoming) in case a
         // future call-setup path doesn't funnel through this closure;
         // calling both is safe, never double-enrolls or double-counts.
         callService.activateContactVoiceVerification(contactId: peerId)
-        maybeAutoStartVoiceLearning(for: peerId)
         startVoiceKeyAnnounceLoop(peerId: peerId)
         // MASVS-CRYPTO remediation (2026-08-20/21) — UNVERIFIED. Mirrors
         // Android's `CallController` calling `reKey.start()` at the same
         // "session established" convergence point. See `ReKeyScheduler`'s
         // kdoc for what this does and does not yet do on iOS.
         reKeyScheduler.start()
-    }
-
-    /// W-AUTOLEARN parity (Android 2026-07-31) — saving the voice of a
-    /// contact no longer waits for a manual tap: the first time this call's
-    /// session key lands for a contact with no existing `VoiceprintStore`
-    /// template, silently start the same ~3s background enrollment against
-    /// the live RX audio `startVoiceLearning()` already uses. No-op on every
-    /// later call once a template exists. Guarded against the double-fire
-    /// `handleCallSessionEstablished` documents: only starts when no
-    /// session is already running or finished for this call, and a session
-    /// that ended `.failed` counts as finished: it is not started again in
-    /// the same call (`voiceLearningState` is cleared when the call ends, so
-    /// the next call may learn again).
-    private func maybeAutoStartVoiceLearning(for peerId: String) {
-        guard callContactId == peerId else { return }
-        switch voiceLearningState {
-        case .inProgress, .completed, .failed:
-            return
-        default:
-            break
-        }
-        // Learn only when the store says it holds nothing for this contact.
-        // A store that cannot be read (for example the Keychain before the
-        // first unlock after a restart) holds something unknown: learning
-        // again would burn the first seconds of every call on it and write
-        // over a profile that may be fine.
-        guard case .absent = VoiceprintStore().lookup(contactId: peerId) else { return }
-        RTLog.info("call", "auto-starting voice learning for new contact=\(peerId.prefix(8))…")
-        startVoiceLearning()
     }
 
     /// W-VOICEKEYRETRY / W-VOICEKEYPERSIST parity (Android 2026-07-30/31) —
@@ -23486,7 +23418,7 @@ extension AppState {
     /// false-alarmed by one bad window.
     @MainActor
     private func maybeAnnounceOwnerContinuity(_ state: OwnerContinuityMonitor.State) {
-        let level: ContactVoiceContinuityGate.Level
+        let level: VoiceContinuityLevel
         switch state {
         case .inactive:
             level = .unknown
@@ -23507,7 +23439,7 @@ extension AppState {
     /// shape exactly (same `getActiveCallId()` guard, same fire-and-forget
     /// error handling, same `OpaqueSelfEchoFilter` self-echo guard).
     @MainActor
-    private func sendOwnerContinuityAnnounce(level: ContactVoiceContinuityGate.Level, peerId: String) async {
+    private func sendOwnerContinuityAnnounce(level: VoiceContinuityLevel, peerId: String) async {
         guard callContactId == peerId else { return }
         guard let provider = liveProvider,
               let impl = provider.callingApi as? BCryptoCallingApiImpl,
@@ -23922,17 +23854,15 @@ extension AppState {
         // builds its own from its own opening seconds.
         voiceReferenceEnvelope.reset()
         voiceReference = nil
-        // Feature B — drop any in-flight/last learning-session state so a
-        // stale "Voce imparata" badge doesn't leak into the next call's UI
-        // before a new session (if any) reports its own state.
+        // Drop the last learning state so a stale confirmation doesn't leak
+        // into the next call's UI.
         voiceLearningState = nil
-        // Tier 1/Tier 2 — same reasoning: a stale "voce storica"/"voce
-        // remota" shield state must not leak into the next call's UI before
-        // that call's own first real tick arrives.
+        // Tier 1 — same reasoning: a stale "voce storica" shield state must
+        // not leak into the next call's UI before that call's own first real
+        // tick arrives.
         ownerContinuityState = .inactive
         lastSentOwnerContinuityLevel = nil
         peerOwnerContinuityLevel = .unknown
-        contactVoiceLevel = .unknown
         speakerChangeVerdict = RemoteSpeakerChangeMonitor.Verdict(level: .unknown)
         // Unified call UI — stop the 1 Hz crypto-engine sampler and zero its
         // readout so the meter hides between calls and the next call starts
@@ -24507,22 +24437,6 @@ extension AppState {
         // and the system UI only knows the 1:1 CallKit entry, so its mute has to reach
         // the group publisher too (a no-op when the group already has that state).
         if groupPromotion != nil { groupCallViewModel?.applyMuteFromSystem(muted) }
-    }
-
-    /// Feature B ("voce verificata") — manual trigger for
-    /// `LiveInCallScreen`'s "Avvia apprendimento voce" button. No-op if
-    /// there is no bound call peer. `voiceLearningState` publishes progress
-    /// via the `onVoiceLearningStateChanged` observer wired in `init()`.
-    func startVoiceLearning() {
-        guard let peer = callContactId else { return }
-        callService.startVoiceLearning(contactId: peer)
-    }
-
-    /// Cancel an in-flight voice-learning session (e.g. the call ended, or
-    /// the user backed out of the flow) without persisting a partial result.
-    func cancelVoiceLearning() {
-        callService.cancelVoiceLearning()
-        voiceLearningState = nil
     }
 
     func setSpeaker(_ enabled: Bool) {

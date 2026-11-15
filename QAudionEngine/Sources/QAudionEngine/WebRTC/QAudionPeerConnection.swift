@@ -345,7 +345,7 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
     /// Sibling of ``nativeVideoCryptor`` — see ``NativeAudioFrameCryptor``.
     public private(set) var nativeAudioCryptor: NativeAudioFrameCryptor?
     /// PCM-TAP PARITY (IOS-C4b) — renderer taps feeding the same
-    /// Guardian/VoiceAnalysis/ContactVoiceVerifier/VoiceLearningSession/
+    /// Guardian/VoiceAnalysis/ContactVoiceVerifier/
     /// OwnerContinuity consumers the sealed-DataChannel decode path already
     /// feeds. See ``NativeAudioPcmTap``'s own doc for why this exists.
     private var audioRxTap: NativeAudioPcmTap?
@@ -1697,7 +1697,7 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
         // fine in both directions — the cryptor was on the right receiver
         // and libwebrtc renders the new track itself — while every
         // consumer fed by the tap (VoiceAnalysisEngine's live waveform,
-        // GuardianMode liveness, ContactVoiceVerifier, VoiceLearningSession)
+        // GuardianMode liveness, ContactVoiceVerifier)
         // saw zero frames for the whole call. Live report 2026-08-29,
         // iOS<->Android: "audio fine both ways, no voice curve, no liveness
         // analysis on iOS". Move the tap onto the current track whenever it

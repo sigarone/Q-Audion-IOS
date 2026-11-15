@@ -11,8 +11,9 @@ import QAudionEngine
 ///   4. Trust pills (PQC / VOICE / ENTERPRISE) + SAS-state chip
 ///   5. 5-action row (Chat / Audio / Video / SAS Verify / Block) — 52pt
 ///      circles with mono caption underneath
-///   6. **TrustVerificationCard** — 3 rows: Identità / Voce / SAS, each
-///      ✓ or ○, with optional CTA
+///   6. **TrustVerificationCard** — 2 rows: Identità / SAS, each
+///      ✓ or ○, with optional CTA (the saved-voice row is hidden until the
+///      record-based row lands)
 ///   7. **MetadataCard** — USERID / INTERNO / PRIMA VISTA / ULTIMA VERIFICA
 ///      / PSK FINGERPRINT, mono labels at fixed 110pt width
 ///   8. **SecurityLog** — events with severity-colored 8pt dot
@@ -407,9 +408,8 @@ struct ContactDetailScreen: View {
     ///
     /// There is no VOICE chip any more. It was drawn for any contact whose
     /// voice had been saved (`voiceVerifiedAt`), which read as "the voice is
-    /// verified" next to the SAS chip; saving a voice verifies nobody. The
-    /// saved voice is stated, with its date, by the voice row of the trust
-    /// card below.
+    /// verified" next to the SAS chip; saving a voice verifies nobody. No
+    /// row states a saved voice until the record-based row lands.
     /// The risk pill and the meter are gone rather than re-sourced — neither
     /// had a number behind it.
     private var trustBadgesRow: some View {
@@ -558,18 +558,7 @@ struct ContactDetailScreen: View {
                            description: trustIdentityRowDescription(identityPublished: identityPublished),
                            done: identityPublished)
             divider
-            // The saved voice. Reads `voiceVerifiedAt`, written ONLY by
-            // `ContactsStore.setVoiceSaved` when a `VoiceLearningSession` for
-            // this contact — fed from the peer's decoded RX audio, started
-            // by the app on the first call — actually reaches `.completed`.
-            // It records WHEN the voice was saved on this phone. It is not a
-            // verification: the row says "Voce memorizzata il <data>", never
-            // "verified", and it is independent of SAS (a contact can be
-            // SAS-verified without a saved voice, and vice versa).
-            trustFactorRow(label: VoiceSavedRow.label(savedAt: voiceVerifiedAt),
-                           description: nil,
-                           done: voiceVerifiedAt != nil)
-            divider
+            // The saved-voice row is hidden until the record-based row lands.
             // C-4 — the SAS row now has a real, tappable CTA. It reuses the
             // SAME `showingSasSheet` flow as the "SAS" quick-action button in
             // `actionRow` above (identical guards in `onVerified`, no new
@@ -742,21 +731,6 @@ struct ContactDetailScreen: View {
     /// this project's "two things that must never share a widget" rule.
     private var presenceAuth: ContactsStore.PresenceAuth? {
         ContactsStore().load().first(where: { $0.userId == item.userId })?.presenceAuth
-    }
-
-    /// Plain synchronous local read (same pattern as `presenceAuth` above, no
-    /// network), the persisted "a `VoiceLearningSession` for this contact
-    /// reached `.completed`" timestamp: when the voice of this contact was
-    /// saved on this phone. nil until that has happened once. The name is the
-    /// stored field's; it is a date of saving, not a verification.
-    ///
-    /// Two consumers: `trustVerificationCard`'s voice row and the security
-    /// log card.
-    private var voiceVerifiedAt: Date? {
-        guard let ms = ContactsStore().load().first(where: { $0.userId == item.userId })?.voiceVerifiedAt else {
-            return nil
-        }
-        return Date(timeIntervalSince1970: Double(ms) / 1000)
     }
 
     /// `nil` while this contact has never reached `AssuranceState
@@ -940,8 +914,8 @@ struct ContactDetailScreen: View {
     /// presented as genuine in a security-focused app. `item` (a plain
     /// `ContactsListViewModel.Item`) only carries a bare `isVerified: Bool`
     /// with no timestamp, but `ContactsStore.StoredContact` (loaded
-    /// separately here) already has REAL `verifiedAtMs`/`verificationMethod`/
-    /// `voiceVerifiedAt` fields that were just never read by this screen.
+    /// separately here) already has REAL `verifiedAtMs`/`verificationMethod`
+    /// fields that were just never read by this screen.
     /// Uses only that real data now; falls back to an honest "not
     /// available" message rather than inventing specifics when a legacy
     /// row is verified but has no stored timestamp.
@@ -959,13 +933,7 @@ struct ContactDetailScreen: View {
                          when: Self.formatEventDate(verifiedMs),
                          summary: String(localized: "contact.detail.event.identity_verified", defaultValue: "Identità verificata (\(Self.verificationMethodLabel(stored?.verificationMethod)))", comment: "Security-log row for a contact: the identity was verified. %@ is the verification method (for example 'In person', 'QR scan', 'NFC', 'Voice')"))
             }
-            if let voiceMs = stored?.voiceVerifiedAt {
-                eventRow(severity: extras.success,
-                         when: Self.formatEventDate(voiceMs),
-                         summary: String(localized: "contact_detail.voice_saved_event",
-                                         defaultValue: "Voce memorizzata",
-                                         comment: "Security-log row for a contact — the voice of the contact was saved on this phone. The date/time is shown separately by the row's own timestamp column. It does not claim the voice was verified."))
-            }
+            // The saved-voice event is hidden until the record-based row lands.
             // W-PAIRFB (audit finding: an in-person QR + Bluetooth pairing
             // left no trace on this contact beyond a transient toast). The
             // wording is gated on the server check, never on the SAS
@@ -988,7 +956,7 @@ struct ContactDetailScreen: View {
                                 comment: "Security-log row for a contact — an in-person QR + Bluetooth pairing's 6-digit code was confirmed on both phones, but the check that confirms the claimed account owns the key could not run against the server, so this is deliberately NOT worded as 'verificato'."))
                 }
             }
-            if stored?.verifiedAtMs == nil && stored?.voiceVerifiedAt == nil && stored?.proximityPairedAtMs == nil {
+            if stored?.verifiedAtMs == nil && stored?.proximityPairedAtMs == nil {
                 if item.isVerified {
                     Text("Contatto verificato. Data e metodo della verifica non disponibili per questo record.")
                         .qaudionStyle(type.bodySmall)

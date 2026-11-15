@@ -8,13 +8,10 @@ import Foundation
 /// `deepfake.SpeakerVerifier` class split) and switches its loaded
 /// template whenever the active call's peer changes.
 ///
-/// Self-healing auto-enrollment: if no stored template exists for a
-/// contact, the first ~3s of real (VAD-gated) RX speech auto-enrolls one —
-/// see `SpeakerVerifier.startAutoEnrollment`/`feedVerificationFrame`. This
-/// is what makes template-format versioning (e.g. an algorithm migration
-/// bumping the store's magic/version header) self-healing instead of
-/// silently disabling "voce remota" for every previously-enrolled contact
-/// until the user manually re-runs `VoiceLearningSession`.
+/// Auto-enrollment: if no stored template exists for a contact, the first
+/// ~3s of real (VAD-gated) RX speech auto-enrolls one for this call only —
+/// see `SpeakerVerifier.startAutoEnrollment`/`feedVerificationFrame`. Nothing
+/// writes a contact template to the store any more, so every call starts here.
 ///
 /// W-GUARDIAN3SIG (2026-09-11) — this class now reproduces Android's full
 /// `DeepfakeMonitor` 3-signal fusion (deepfake classifier + liveness +
@@ -54,9 +51,8 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     /// Cost: every result that needs several consecutive ticks arrives later in proportion, not by one period.
     /// The speaker-change detector counts samples (`SpeakerChangeDetector.defaultConfirmSamples`,
     /// `baselineWindow`: it reports a suspect voice after about 2 samples and a changed one after about 4, and
-    /// learns its reference over 16), and the 3-band level of `ContactVoiceContinuityGate` is a moving average
-    /// over samples too. At 10 s per tick instead of 3 s that is roughly 20 s instead of 6 s for the first,
-    /// 40 s instead of 12 s for the second, and 160 s instead of 48 s to learn the reference. Back in the
+    /// learns its reference over 16). At 10 s per tick instead of 3 s that is roughly 20 s instead of 6 s for the
+    /// first, 40 s instead of 12 s for the second, and 160 s instead of 48 s to learn the reference. Back in the
     /// foreground the period is 3 s again from that moment (`BackgroundAwareTimer` re-arms on the flag's change).
     static let backgroundScoreIntervalSeconds: Double = 10.0
 
@@ -84,19 +80,12 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
 
     private let verifier: SpeakerVerifier
     private let store: VoiceprintStore
-    private let gate = ContactVoiceContinuityGate()
 
-    /// "Interlocutore cambiato" — relative change detection over the SAME
-    /// score stream `gate` consumes. A second consumer, never a second
-    /// embedding pass: the expensive work is the CAM++ inference the timer
-    /// below already triggers, and this adds only arithmetic on its result.
-    ///
-    /// Both signals are worth showing and they answer different questions.
-    /// The gate asks whether the voice matches the stored template for this
-    /// contact, an absolute judgement resting on thresholds never validated
-    /// against a real impostor. This asks only whether the voice changed
-    /// during the call, measured against the call's own audio and therefore
-    /// unaffected by codec, room or handset.
+    /// "Interlocutore cambiato" — relative change detection over the voice
+    /// score stream. It adds only arithmetic on the CAM++ inference the timer
+    /// below already triggers, never a second embedding pass. It asks only
+    /// whether the voice changed during the call, measured against the call's
+    /// own audio and therefore unaffected by codec, room or handset.
     ///
     /// Deliberately fed the raw voiceprint/AS-Norm score only, NEVER the
     /// deepfake+liveness+voiceprint combine below — "did the physical
@@ -136,19 +125,12 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     private var pcm16kRingPos = 0
     private var pcm16kRingCount = 0
 
-    /// Fires on `scoreQueue` (not the caller's thread — same cross-thread
-    /// callback contract as `OwnerContinuityMonitor.onStateChanged`; hop to
-    /// your own thread before touching UI state) whenever the gate's level
-    /// changes as a result of a new score tick.
-    public var onLevelChanged: ((ContactVoiceContinuityGate.Level) -> Void)?
-
     /// MASVS-CRYPTO remediation (2026-08-20/21) — the raw 0..1 continuity
-    /// score, fired alongside [onLevelChanged] on the same `scoreQueue`
-    /// tick. `onLevelChanged` only exposes the 3-band hysteresis level
-    /// (green/yellow/red), which is too coarse for
-    /// `ReKeyScheduler.observeConfidence` — Android's adaptive re-key
-    /// period formula needs the continuous value. Additive: does not
-    /// change any existing consumer's behavior.
+    /// score, fired on `scoreQueue` (not the caller's thread — same
+    /// cross-thread callback contract as `OwnerContinuityMonitor.onStateChanged`;
+    /// hop to your own thread before touching UI state) on every scoring
+    /// tick. `ReKeyScheduler.observeConfidence` — Android's adaptive re-key
+    /// period formula — needs the continuous value.
     ///
     /// W-GUARDIAN3SIG (2026-09-11) — now the calibrated, weighted 3-signal
     /// combine (deepfake + liveness + voiceprint), not the raw voiceprint
@@ -261,7 +243,6 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
         resetRingLocked()
         lock.unlock()
 
-        gate.reset()
         speakerChange.reset()
         guard let contactId else {
             verifier.reset()
@@ -304,9 +285,6 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
         }
         lock.unlock()
     }
-
-    /// Current hysteresis level for the "voce remota" shield.
-    public var level: ContactVoiceContinuityGate.Level { gate.level }
 
     /// Call when the call ends — equivalent to `setActiveContact(nil)`,
     /// named separately for readability at call-teardown sites.
@@ -380,7 +358,7 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     }
 
     /// One scoring pass. The cheap, synchronous part (voiceprint score,
-    /// `gate`/`speakerChange` feed, VAD gate) runs directly on `scoreQueue`
+    /// `speakerChange` feed, VAD gate) runs directly on `scoreQueue`
     /// via the timer, preserving this class's existing "these callbacks
     /// fire on scoreQueue" contract. Only the deepfake classifier call is
     /// `async` (ONNX/CoreML inference) — that part runs in a `Task`, and
@@ -406,7 +384,7 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
         guard dataReadable else { return }
 
         // CPU governor (background only, see `BackgroundCpuGovernor`). A tick held back ends here, before it
-        // touches anything: the voiceprint gate, the speaker-change monitor and the callbacks are not fed, so the
+        // touches anything: the speaker-change monitor and the callbacks are not fed, so the
         // last score stays what it was and no run of results is cut or advanced. `scoreQueue` is serial, so
         // nothing else can set `tickInFlight` between the check above and the line below.
         if let governor {
@@ -425,17 +403,8 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
         // Voiceprint score first — cheap-ish CAM++ pass, and its own nil
         // ("not enough audio yet" / "template not ready") is meaningful on
         // its own, exactly as before this class combined signals.
-        //
-        // `gate` is fed ONLY the raw voiceprint score, never the 3-signal
-        // combine below — per its own kdoc, "voce remota" specifically asks
-        // whether this voice matches the STORED TEMPLATE, a narrower
-        // question than "does this audio look synthetic". Feeding it twice
-        // per tick (raw, then combined) would also double-count into its
-        // internal EMA and desync its hysteresis from its own documented
-        // calibration.
         let vp = verifier.computeVerificationScore()
         let asNorm = verifier.computeAsNormScore()
-        gate.feed(vp)
         speakerChange.feed(asNorm ?? vp)
 
         // Whole-tick VAD gate on the deepfake-classifier window — mirrors

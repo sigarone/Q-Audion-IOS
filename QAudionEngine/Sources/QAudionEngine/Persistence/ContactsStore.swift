@@ -125,12 +125,10 @@ public final class ContactsStore {
         /// (e.g. on every call-connect) be deduped without
         /// re-downloading. `nil` for a contact with no avatar cached yet.
         public private(set) var avatarVersion: Int?
-        /// Feature B (per-contact call-time voice learning). Epoch-ms
-        /// timestamp of the last time a `VoiceLearningSession` for THIS
-        /// contact reached `.completed` (i.e. `SpeakerVerifier
-        /// .finishEnrollment()` succeeded on the peer's decoded RX audio and
-        /// a template was persisted to `VoiceprintStore`). `nil` until that
-        /// has happened at least once.
+        /// Epoch-ms timestamp of the last time a voice of THIS contact was
+        /// saved on this phone. Nothing writes it any more; a value stored by
+        /// an earlier version is kept as it is. `nil` when none was ever
+        /// stored.
         ///
         /// The name is the persisted key and the Android column name, kept as
         /// they are. What it records is that the voice was SAVED on this
@@ -856,44 +854,6 @@ public final class ContactsStore {
         return Self.persisted(userId: userId, version: version, in: self)
     }
 
-    /// Feature B (per-contact voice learning) — the ONE write path for
-    /// `voiceVerifiedAt`. Called when a `VoiceLearningSession` for
-    /// `userId` reaches `.completed`. It records WHEN the voice of this
-    /// contact was saved on this phone and nothing else: it is not a
-    /// verification, it never touches `isVerified` or the verification
-    /// pin, and no screen may present it as one. No-op (returns false) if no
-    /// row exists for `userId` — same contract as `overwriteDisplayName` /
-    /// `setAvatarLocalPath`, this never creates a contact.
-    @discardableResult
-    public func setVoiceSaved(userId: String, at date: Date = Date()) -> Bool {
-        var current = load()
-        guard let idx = current.firstIndex(where: { $0.userId == userId }) else { return false }
-        let existing = current[idx]
-        current[idx] = StoredContact(
-            userId: existing.userId,
-            displayName: existing.displayName,
-            phoneHash: existing.phoneHash,
-            avatarUrl: existing.avatarUrl,
-            lastSeen: existing.lastSeen,
-            isVerified: existing.isVerified,
-            pubkey: existing.pubkey,
-            verifiedFingerprintHex: existing.verifiedFingerprintHex,
-            verifiedAtMs: existing.verifiedAtMs,
-            verificationMethod: existing.verificationMethod,
-            presenceAuth: existing.presenceAuth,
-            presenceFloor: existing.presenceFloor,
-            phoneNumber: existing.phoneNumber,
-            extension: existing.`extension`,
-            avatarVersion: existing.avatarVersion,
-            voiceVerifiedAt: Int64(date.timeIntervalSince1970 * 1000),
-            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey,
-            proximityPairedAtMs: existing.proximityPairedAtMs,
-            proximityServerConfirmed: existing.proximityServerConfirmed
-        )
-        save(current)
-        return true
-    }
-
     /// W-PAIRFB — the ONE write path for `proximityPairedAtMs`/
     /// `proximityServerConfirmed` on an EXISTING row. Used when an in-person
     /// (QR + Bluetooth) pairing completes with a contact the address book
@@ -901,7 +861,7 @@ public final class ContactsStore {
     /// contact's key or verified badge, but recording that the exchange
     /// happened, and when, is pure history and touches neither. No-op
     /// (returns false) if no row exists for `userId` — same contract as
-    /// `overwriteDisplayName`/`setVoiceSaved`, this never creates a
+    /// `overwriteDisplayName`, this never creates a
     /// contact (the pairing flow's OWN "add a brand-new contact" path
     /// passes these two fields directly to its own `StoredContact` build
     /// instead, since there is no existing row to patch).

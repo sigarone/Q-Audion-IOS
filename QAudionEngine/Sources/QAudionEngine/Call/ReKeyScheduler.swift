@@ -69,7 +69,7 @@ public final class ReKeyScheduler: @unchecked Sendable {
 
     /// Fires on a private background queue — hop to your own thread/actor
     /// before touching UI or `@MainActor` state, same cross-thread contract
-    /// as `ContactVoiceVerifier.onLevelChanged`.
+    /// as `ContactVoiceVerifier.onScoreUpdated`.
     public var onStatusChanged: ((Status) -> Void)?
     /// See the UNVERIFIED note above — currently only ever logged, not
     /// acted on, by every wired consumer in this app.

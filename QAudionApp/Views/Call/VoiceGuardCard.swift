@@ -7,10 +7,10 @@ import QAudionEngine
 /// tapping the card opens a small popup that says what is compared and that
 /// it is a hint (`VoiceGuardCopy.infoBody`). The line is `VoiceGuardLine`, in
 /// priority order:
-///  - the brief confirmation (3.5 s) when the voice-learning session ends,
+///  - the brief confirmation (3.5 s) when a voice-learning state ends,
 ///    either "voice saved" or "learning failed";
-///  - the learning progress while the session runs (it starts on its own on a
-///    call with a contact that has no stored voice template yet);
+///  - the learning progress while it runs (`learningState`, which nothing
+///    sets while the contact voice engine is off);
 ///  - the bare waiting line, while there is neither a verdict level nor a
 ///    single Guardian confidence sample;
 ///  - otherwise the verdict line, with the wave under it at the full width of
@@ -42,7 +42,7 @@ struct VoiceGuardCard: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
-    let learningState: VoiceLearningSession.State?
+    let learningState: VoiceLearningState?
     let confidenceHistory: [Float]
     let speakerChange: RemoteSpeakerChangeMonitor.Verdict
     /// The live spectrum of the far end (40 bands, 0...1), or nil before the
@@ -232,13 +232,11 @@ struct VoiceGuardCard: View {
     // shown only on the CHANGE of the learning state into a final one
     // (`onChange` does not fire for the state a card is created with), it is
     // dropped when the card goes away, and `AppState.voiceLearningState` is
-    // nil at the end of every call: a session that finished in an earlier
-    // call can not show its banner again in a later one. A banner that
-    // comes back call after call can only come from a voice that is learned
-    // again every call, and now a save that does not happen is reported as a
-    // failed learning, not as a saved voice (`VoiceLearningSession`).
+    // nil at the end of every call: a state that finished in an earlier
+    // call can not show its banner again in a later one. A save that does
+    // not happen is reported as a failed learning, not as a saved voice.
 
-    private func showBanner(for state: VoiceLearningSession.State?) {
+    private func showBanner(for state: VoiceLearningState?) {
         guard let kind = VoiceGuard.banner(for: state) else { return }
         banner = kind
         bannerTask?.cancel()

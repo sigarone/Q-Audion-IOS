@@ -5,11 +5,9 @@ import Foundation
 /// `analysis/OwnerContinuityMonitor.kt`.
 ///
 /// That answers "does the person SPEAKING INTO MY MICROPHONE right now
-/// still match my own enrolled voice" — the RX-side signal
-/// (`ContactVoiceContinuityGate`) and SAS/PQC crypto cannot catch this
-/// threat class: the phone physically stolen or handed to someone else
-/// mid-call, or a coerced/duress speaker substitution. SAS/PQC prove key
-/// possession, not who is currently holding the device.
+/// still match my own enrolled voice" — a question the RX-side checks and
+/// SAS/PQC crypto do not answer: SAS/PQC prove key possession, not who is
+/// currently holding the device.
 ///
 /// Fed EXCLUSIVELY from the TX/local-mic capture path (pre-encode, raw
 /// captured PCM) — never RX/remote audio. `feed` enqueues onto this
@@ -33,7 +31,7 @@ import Foundation
 /// NOT be fed here — and the code thresholded the raw cosine directly. That
 /// was wrong in a way that disabled the whole signal. Those two constants
 /// were carried over from Android's `OwnerContinuityMonitor`, which had in
-/// turn carried them from `ContactVoiceContinuityGate`, and that gate is fed
+/// turn carried them from the remote-voice gate of that time, which was fed
 /// `SpeakerVerifier.computeVerificationScore` — a V_score. The number
 /// travelled across three classes and two platforms while its scale was
 /// silently dropped on the way.
@@ -69,7 +67,7 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     /// per-tick CAM++ score is too noisy to threshold directly (confirmed
     /// on-device — reacting to every tick made the badge flicker to
     /// `.mismatch` on ordinary noise dips even during genuine, continuous
-    /// owner speech). Same value as `ContactVoiceContinuityGate.emaAlpha`.
+    /// owner speech).
     private static let emaAlpha: Float = 0.35
 
     /// 3 consecutive ~3s Mismatch windows (~9s sustained) before alerting —
@@ -121,7 +119,7 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     private var _enqueuedChunks = 0
 
     /// Fires on `queue` (NOT the caller's thread) whenever `state` changes —
-    /// a deliberate difference from `GuardianMode`/`VoiceLearningSession`'s
+    /// a deliberate difference from `GuardianMode`'s
     /// callbacks (which fire synchronously on the audio thread): this
     /// monitor's scoring is expensive and must never run on a shared
     /// real-time thread, so its callback necessarily fires from its own
@@ -238,8 +236,8 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
 
         // W-VSCORESCALE — convert to the scale the thresholds actually live
         // on before comparing. `verify` returns a raw cosine; the constants
-        // are V_score values inherited (via Android) from
-        // ContactVoiceContinuityGate, which is fed
+        // are V_score values inherited (via Android) from the remote-voice
+        // gate of that time, which was fed
         // SpeakerVerifier.computeVerificationScore. Thresholding the cosine
         // directly made the effective bar V_score 0.81 and pinned the signal
         // at .uncertain/.mismatch forever. See the class doc for the measured
@@ -259,10 +257,8 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         } else {
             level = .mismatch
         }
-        // Log BOTH numbers, same shape as SpeakerVerifier's own line and
-        // Android's — so no future trace can be read on the wrong scale
-        // again, which is the mistake that produced this bug and then a
-        // wrong diagnosis of it.
+        // The level only, no score: the line says which state a window was
+        // in and nothing about the voice itself.
         //
         // `print` and not RTLog: RTLog lives in the app target
         // (RuntimeLogSink.swift) and this file is in the QAudionEngine
@@ -274,19 +270,14 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         // Field widths obey the 12-character rule (see CallService's note):
         // every `key=value` token must stay under 12 chars or the shipper's
         // RE_BASE64_BLOB eats it. Hence the 3-letter level codes rather than
-        // `level.rawValue` — `lv=uncertain` is exactly 12 and would vanish,
-        // while `lv=verified`/`lv=mismatch` would survive, i.e. the log would
-        // have silently dropped precisely the state we are debugging.
-        // Verified against the shipper's real redact_body for all three.
-        let c = String(format: "%.3f", cosine)
-        let v = String(format: "%.3f", vScore)
+        // `level.rawValue` — `lv=uncertain` is exactly 12 and would vanish.
         let lv: String
         switch level {
         case .verified:  lv = "ver"
         case .uncertain: lv = "unc"
         case .mismatch:  lv = "mis"
         }
-        print("[OwnerCont] cos=" + c + " v=" + v + " lv=" + lv)
+        print("[OwnerCont] lv=" + lv)
         lock.lock()
         _mismatchStreak = (level == .mismatch) ? _mismatchStreak + 1 : 0
         lock.unlock()

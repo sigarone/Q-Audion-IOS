@@ -40,9 +40,9 @@ import Foundation
 /// - `computeVerificationScore()` (new, Tier 2 / Feature B): cosine mapped
 ///   to `[0, 1]` via `(cosine + 1) / 2` ("V-score"), matching Android's
 ///   `deepfake/SpeakerVerifier.kt` `computeVerificationScoreLocked` exactly.
-///   `ContactVoiceContinuityGate`'s thresholds are calibrated against THIS
-///   scale, not raw cosine. Mixing the two up silently miscalibrates
-///   whichever gate receives the wrong one — verified against both real
+///   The thresholds of the consumers of this score are calibrated against
+///   THIS scale, not raw cosine. Mixing the two up silently miscalibrates
+///   whichever consumer receives the wrong one — verified against both real
 ///   Android source files before writing this, not assumed.
 ///
 /// Thread-safety: a single `NSLock` guards ALL mutable state (mirrors
@@ -350,8 +350,8 @@ public final class SpeakerVerifier: @unchecked Sendable {
     /// current sliding window and returns the cosine similarity mapped to
     /// `[0, 1]` ("V-score", see class doc), ALSO caching it. `nil` when not
     /// ready / window not yet full / window too quiet — deliberately
-    /// distinct from a fabricated `0`/`0.5`, so `ContactVoiceContinuityGate`
-    /// can tell "no real score yet" apart from a real low score.
+    /// distinct from a fabricated `0`/`0.5`, so a consumer can tell
+    /// "no real score yet" apart from a real low score.
     ///
     /// CALLERS MUST THROTTLE THIS THEMSELVES to ~1/s — see class doc's
     /// thread-safety note for why that budget is what makes holding `lock`

@@ -89,8 +89,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// Int16 mono 48 kHz chunk of the REMOTE peer's decoded native-SRTP
     /// audio. `CallService` wires this to
     /// `QAudionCallIntegration.feedNativeAudioSrtpRxPcm(_:)`, which reuses
-    /// the exact same Guardian/VoiceAnalysis/ContactVoiceVerifier/
-    /// VoiceLearningSession consumer chain the sealed-DataChannel decode
+    /// the exact same Guardian/VoiceAnalysis/ContactVoiceVerifier
+    /// consumer chain the sealed-DataChannel decode
     /// path already feeds — see `NativeAudioPcmTap`'s doc for why this
     /// exists. May be invoked from WebRTC's own audio callback thread;
     /// consumers must not block (same contract as
@@ -6016,8 +6016,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
         let attached = pc.attachAudioReceiverCryptor(receiver) { [weak self] pcm in
             // PCM-TAP PARITY — see NativeAudioPcmTap's own doc. Feeds the
-            // SAME Guardian/VoiceAnalysis/ContactVoiceVerifier/
-            // VoiceLearningSession consumers the sealed-DataChannel decode
+            // SAME Guardian/VoiceAnalysis/ContactVoiceVerifier
+            // consumers the sealed-DataChannel decode
             // path already feeds; `processIncomingAudio` never runs on an
             // audio-srtp call (the peer sends real RTP, not sealed frames),
             // so without this wiring those consumers would silently see

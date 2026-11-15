@@ -69,7 +69,6 @@ final class BackgroundCpuGovernorWiringTests: XCTestCase {
         // One tick in the foreground: the governor is out of the picture and the tick runs.
         runTick(verifier, delivered: delivered)
         XCTAssertEqual(delivered.value, 1)
-        let levelBefore = verifier.level
         let verdictBefore = verifier.speakerChangeVerdict
         XCTAssertEqual(governor.totals, BackgroundCpuGovernor.Totals(), "the foreground must not be counted")
 
@@ -82,7 +81,6 @@ final class BackgroundCpuGovernorWiringTests: XCTestCase {
         XCTAssertEqual(governor.totals.skipped, skippedBefore + 3, "the governor was asked and held every tick back")
         XCTAssertEqual(delivered.value, 1, "no score for a held tick")
         XCTAssertEqual(breakdowns.value, 1)
-        XCTAssertEqual(verifier.level, levelBefore, "the voiceprint run of results is untouched")
         XCTAssertEqual(verifier.speakerChangeVerdict, verdictBefore)
     }
 

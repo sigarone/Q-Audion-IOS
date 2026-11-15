@@ -32,6 +32,9 @@ protocol VoiceprintBacking: AnyObject {
     func lookup(contactId: String) -> VoiceprintLookup
     /// `true` when the item is gone afterwards (it may not have existed).
     @discardableResult func delete(contactId: String) -> Bool
+    /// Deletes every item whose id is not in `keeping`, and their entries in
+    /// the list of ids. `true` when nothing else is left.
+    @discardableResult func deleteAll(keeping accounts: Set<String>) -> Bool
     func listContacts() -> [String]
 }
 
@@ -44,10 +47,11 @@ extension VoiceprintBacking {
     }
 }
 
-/// Biometric voiceprint template store — Feature A (device-owner Voice-as-Key
-/// enrollment, consumed by `VoiceAuthGate`) and Feature B (per-contact
-/// call-time voice learning, consumed by `VoiceLearningSession`) both persist
-/// through this single store, keyed by `contactId`.
+/// Biometric voiceprint template store — the device owner's Voice-as-Key
+/// template (enrollment in `VoiceEnrollmentContainer`, consumed by
+/// `VoiceAuthGate`) is kept here under `deviceOwnerId`. Earlier versions also
+/// kept per-contact templates here; they are removed once by
+/// `LegacyContactVoiceCleanup` and nothing writes one any more.
 ///
 /// SECURITY: voiceprint templates are raw biometric material.
 ///   - Backed by the iOS Keychain with
@@ -133,6 +137,13 @@ public final class VoiceprintStore {
 
     @discardableResult
     public func delete(contactId: String) -> Bool { backing.delete(contactId: contactId) }
+
+    /// Deletes every stored template except the device owner's, and their
+    /// entries in the list of ids. `true` when nothing else is left.
+    @discardableResult
+    public func deleteAllContactTemplates() -> Bool {
+        backing.deleteAll(keeping: [Self.deviceOwnerId])
+    }
 
     public func listContacts() -> [String] { backing.listContacts() }
 
@@ -273,6 +284,20 @@ private final class KeychainVoiceprintBacking: VoiceprintBacking {
         return deleted
     }
 
+    @discardableResult
+    func deleteAll(keeping accounts: Set<String>) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let found = Self.allAccounts() else { return false }
+        var allGone = true
+        for account in found where account != Self.indexAccount && !accounts.contains(account) {
+            if !Self.deleteBlob(account: account) { allGone = false }
+        }
+        guard let ids = Self.readIndex() else { return false }
+        let remaining = ids.filter { accounts.contains($0) }
+        if remaining != ids, !Self.writeIndex(remaining) { allGone = false }
+        return allGone
+    }
+
     func listContacts() -> [String] {
         lock.lock(); defer { lock.unlock() }
         return Self.readIndex() ?? []
@@ -308,6 +333,22 @@ private final class KeychainVoiceprintBacking: VoiceprintBacking {
         var item: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         return (status, item)
+    }
+
+    /// Every account stored under this service, whether or not the index lists
+    /// it. `nil` when the Keychain could not be read.
+    private static func allAccounts() -> [String]? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        var item: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return [] }
+        guard status == errSecSuccess, let rows = item as? [[String: Any]] else { return nil }
+        return rows.compactMap { $0[kSecAttrAccount as String] as? String }
     }
 
     /// `true` only when the item now holds `blob`. Every status is checked:
@@ -399,6 +440,9 @@ final class InMemoryVoiceprintBacking: VoiceprintBacking {
     /// Test seam: writes and deletes fail and change nothing, like a
     /// Keychain that refuses the write.
     var failWrites = false
+    /// Test seam: runs as a removal of all but some items starts, like a
+    /// phone that locks while it is going on.
+    var onDeleteAll: (() -> Void)?
 
     @discardableResult
     func save(contactId: String, template: [Float]) -> Bool {
@@ -418,6 +462,14 @@ final class InMemoryVoiceprintBacking: VoiceprintBacking {
         lock.lock(); defer { lock.unlock() }
         if failWrites { return false }
         templates.removeValue(forKey: contactId)
+        return true
+    }
+    @discardableResult
+    func deleteAll(keeping accounts: Set<String>) -> Bool {
+        onDeleteAll?()
+        lock.lock(); defer { lock.unlock() }
+        if failWrites { return false }
+        templates = templates.filter { accounts.contains($0.key) }
         return true
     }
     func listContacts() -> [String] {

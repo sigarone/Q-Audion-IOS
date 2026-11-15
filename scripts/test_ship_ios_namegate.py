@@ -138,7 +138,7 @@ KEPT = [
     "peer=3 state=active", "peer=true state=active", "group=false state=active",
     "to=8bc24df8 state=active", "peerReadyAgeMs=4321 state=active", "groupCount=12 state=active",
     # decimals, units and known keys with a 3+ digit number
-    "[OwnerCont] cos=0.099 v=0.549 lv=unc",
+    "[OwnerCont] lv=unc",
     "aprof resolved_ms=60 block_b=256 requested_ms=60",
     "grp_recon n=0", "grp_recon n=250",
     "cryattach media=audio ok=1 ms=6",

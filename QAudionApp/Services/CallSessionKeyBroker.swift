@@ -46,9 +46,9 @@ public final class CallSessionKeyBroker {
     /// end of `registerPqcSessionKey`, i.e. the single point every
     /// handshake-completion path (caller, responder, PSK-metadata variant)
     /// already converges on, mirroring Android's `CallController.onConnected`.
-    /// AppState uses it to kick off auto voice-enrollment
-    /// (`maybeAutoStartVoiceLearning`) and the VOICE_KEY announce loop
-    /// (`startVoiceKeyAnnounceLoop`) — see `AppState.handleCallSessionEstablished`.
+    /// AppState uses it to activate the contact voice check and the VOICE_KEY
+    /// announce loop (`startVoiceKeyAnnounceLoop`) — see
+    /// `AppState.handleCallSessionEstablished`.
     private var onSessionEstablished: ((String) -> Void)?
 
     public init() {}

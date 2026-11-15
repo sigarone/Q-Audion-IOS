@@ -11,16 +11,7 @@ import Foundation
 /// so both platforms make the same decision from the same evidence; the
 /// mechanism may differ between platforms but the invariant may not.
 ///
-/// ## Why this exists next to `ContactVoiceContinuityGate`
-///
-/// That gate low-pass-filters the per-tick score with an exponential moving
-/// average and compares the result against two fixed constants. Both halves
-/// are the wrong instrument for detecting a handover. A moving average is a
-/// filter, not a detector: its reaction time follows from its smoothing
-/// constant and no false-alarm rate can be stated for it. And its constants
-/// are absolute levels fitted, as that class's own documentation records, to
-/// a single real call containing only matching speech — no impostor score
-/// has ever been measured in this system.
+/// ## Reference-relative detection
 ///
 /// This class never uses an absolute level. It estimates the location and
 /// scale of the score UNDER THE CURRENT SPEAKER, online, from the call
@@ -117,7 +108,7 @@ public final class SpeakerChangeDetector {
     /// `nil` is a genuine no-op and must never be coerced into a number: the
     /// scoring path returns nil for a window too quiet to embed, and reading
     /// silence as a bad match would make every pause in the conversation
-    /// look like a handover. Same contract as `ContactVoiceContinuityGate`.
+    /// look like a handover.
     @discardableResult
     public func feed(_ score: Float?) -> Evaluation? {
         guard let score, score.isFinite else { return nil }

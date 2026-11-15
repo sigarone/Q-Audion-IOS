@@ -506,6 +506,10 @@ struct QAudionApp: App {
         }
         // W441: sweep expired messages immediately + every 60s.
         EphemeralMessageJanitor.shared.start()
+        // Once per install: remove the contact voice templates earlier versions kept in the Keychain.
+        Task.detached(priority: .utility) {
+            _ = LegacyContactVoiceCleanup.runIfNeeded()
+        }
     }
 
     /// The whole window-less start-up, for a launch where the CarPlay scene is the only scene. There is no window to
