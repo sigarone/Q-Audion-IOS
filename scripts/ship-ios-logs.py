@@ -785,7 +785,7 @@ APP_VOCAB = frozenset("""
     callkit callservice calltiming camera cancelled capture cbor cc cd
     cellular changed changing channel check client closed code com complete
     component compression conf config conn connecting connection connessione
-    control controller cores corrected cos cpu crc create created cum dash
+    control controller cores corrected cpu crc create created cum dash
     db dc dchangup dcmux decode decoded deferred delta destroyed di diag
     dialandcall dispatch dp drain dtls dtx dup duplicate dupoffer during
     echo ef empty enabled encoded encrypted endcall ended eng entry epoch
@@ -795,7 +795,7 @@ APP_VOCAB = frozenset("""
     headroom hf high hkdf hmac host http https icegate id idle idr idrfrc
     idx if in inactive inbound index ing initiator inp install integration
     intr ipv6 isincall islocked iterations jitter json kbps kcmac kdf kem
-    key keys kfr kind kms knew la learning len level lookup loss lost low lv
+    key keys kfr kind kms knew la len level lookup loss lost low lv
     max maxbps mediadead mesh message metrickit mic mid min mis missedevt
     mobile moderate msg mtu nack nalu nat negative negotiated negotiatedv4
     net netchange network nil no nocontrol noctl noinput noise noop not ns

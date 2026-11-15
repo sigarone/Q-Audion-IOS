@@ -250,7 +250,7 @@ final class DesignSystemAccessibilityTests: XCTestCase {
         XCTAssertFalse(active.isEmpty)
         XCTAssertFalse(inactive.isEmpty)
         XCTAssertNotEqual(active, inactive, "the popup reads the same under an active and a grey shield")
-        let others: [InCallScreen.TrustBadgeInfo] = [.voiceKey, .contactVoice, .speakerChange, .nfc, .psk, .sas, .transport]
+        let others: [InCallScreen.TrustBadgeInfo] = [.voiceKey, .speakerChange, .nfc, .psk, .sas, .transport]
         for info in others {
             XCTAssertEqual(info.body(pqcActive: true), info.body(pqcActive: false), "\(info)")
         }

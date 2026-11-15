@@ -14,7 +14,7 @@ import WebRTC
 /// `QAudionCallIntegration.processIncomingAudio` is the ONLY place that ever
 /// runs on decoded call PCM: it is what feeds `guardianMode`
 /// (DeepfakeMonitor-equivalent anti-spoofing), `contactVoiceVerifier` (Tier 2
-/// "voce remota"), `voiceLearningSession` (Feature B "voce verificata"),
+/// "voce remota"),
 /// `voiceAnalysis` (pitch/formant/confidence — FormantTracker/PitchExtractor/
 /// ConfidenceIndicator via `VoiceAnalysisEngine`), and `spectrumExtractor`
 /// (Guardian ribbon spectrum) — see that method's own doc. A native-SRTP call
@@ -23,8 +23,7 @@ import WebRTC
 /// every one of those consumers silently sees zero frames for the call's
 /// whole life. This is Android's real, shipped, one-day-earlier incident
 /// (`CallCapabilities.kt:337-349`) — confirmed present on iOS by tracing
-/// `VoiceLearningSession`'s own doc ("frames are fed from the exact same tap
-/// point already used by the Guardian anti-spoof pipeline") to
+/// the consumers of the Guardian tap to
 /// `QAudionCallIntegration.analyze(_:)`, which is reached ONLY from
 /// `processIncomingAudio`.
 ///

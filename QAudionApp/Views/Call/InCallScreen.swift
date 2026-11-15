@@ -417,18 +417,11 @@ struct InCallScreen: View {
     let onReportProblem: (() -> Void)?
     /// Reduces the call to the bar on top of the app. Drawn top left, before the report button. nil hides it.
     let onMinimize: (() -> Void)?
-    /// Feature B ("voce verificata") — state of the per-contact call-time
-    /// voice-learning session, fed from the SAME decoded RX audio as
-    /// `voiceBiometrics`/`voiceSpectrum` above. nil ⇒ no session has run
-    /// this call. Item 5 (2026-07-31 port): auto-started silently by
-    /// `AppState` on first-ever connect to a contact — this view never asks
-    /// for a tap, it only SHOWS state (`VoiceGuardCard`: the learning progress
-    /// while `.inProgress`, a brief confirmation when the session ends).
-    let voiceLearningState: VoiceLearningSession.State?
-    /// Manual re-learn entry point — kept for API parity with
-    /// `AppState.startVoiceLearning()`. No control in this view calls it
-    /// any more since item 5 removed the manual CTA — see `VoiceGuardCard`.
-    let onStartVoiceLearning: () -> Void
+    /// The voice-learning state the card can show (`VoiceGuardCard`: the
+    /// learning progress while `.inProgress`, a brief confirmation when it
+    /// ends), published as `AppState.voiceLearningState`. nil ⇒ nothing to
+    /// show, which is every call while the contact voice engine is off.
+    let voiceLearningState: VoiceLearningState?
     /// Item 5 (2026-07-31 InCallScreen Android→iOS port) — rolling window
     /// of RAW per-frame Guardian confidence samples. It draws the wave of
     /// `VoiceGuardCard` as a trend, but only while the wave has no reference
@@ -455,12 +448,7 @@ struct InCallScreen: View {
     /// engine class `OwnerContinuityMonitor`, which drives the OUTBOUND
     /// half of this signal from `AppState`, never a trust-bar shield of its
     /// own — Android doesn't show one either).
-    let peerOwnerContinuityLevel: ContactVoiceContinuityGate.Level
-    /// Tier 2 ("voce remota") — RX-side per-contact continuity level,
-    /// published as `AppState.contactVoiceLevel`. `.unknown` until the
-    /// first real score tick for the active contact — the shield stays
-    /// hidden in that case too.
-    let contactVoiceLevel: ContactVoiceContinuityGate.Level
+    let peerOwnerContinuityLevel: VoiceContinuityLevel
 
     /// "Interlocutore cambiato" — is the voice arriving now still the voice
     /// this call started with, published as `AppState.speakerChangeVerdict`.
@@ -537,11 +525,9 @@ struct InCallScreen: View {
          onToggleDiagnostics: @escaping () -> Void = {},
          onReportProblem: (() -> Void)? = nil,
          onMinimize: (() -> Void)? = nil,
-         voiceLearningState: VoiceLearningSession.State? = nil,
-         onStartVoiceLearning: @escaping () -> Void = {},
+         voiceLearningState: VoiceLearningState? = nil,
          voiceConfidenceHistory: [Float] = [],
-         peerOwnerContinuityLevel: ContactVoiceContinuityGate.Level = .unknown,
-         contactVoiceLevel: ContactVoiceContinuityGate.Level = .unknown,
+         peerOwnerContinuityLevel: VoiceContinuityLevel = .unknown,
          speakerChange: RemoteSpeakerChangeMonitor.Verdict = .init(level: .unknown),
          peerOnHold: Bool = false,
          peerNotAudible: Bool = false) {
@@ -604,10 +590,8 @@ struct InCallScreen: View {
         self.onReportProblem = onReportProblem
         self.onMinimize = onMinimize
         self.voiceLearningState = voiceLearningState
-        self.onStartVoiceLearning = onStartVoiceLearning
         self.voiceConfidenceHistory = voiceConfidenceHistory
         self.peerOwnerContinuityLevel = peerOwnerContinuityLevel
-        self.contactVoiceLevel = contactVoiceLevel
         self.speakerChange = speakerChange
         self.peerOnHold = peerOnHold
         self.peerNotAudible = peerNotAudible
@@ -1593,27 +1577,6 @@ struct InCallScreen: View {
                         : String(localized: "incall.shield.voice_key_enabled", defaultValue: "Il contatto ha attivato la Voce-come-chiave sul proprio dispositivo", comment: "Call screen, VoiceOver label of the voice-as-key shield when the contact turned voice-as-key on")
                 )
             }
-            // Tier 2 ("voce remota") — RX-side per-contact continuity, LOCAL
-            // and continuous (this device hears the audio directly, no wire
-            // signal involved). Hidden until the first real score tick for
-            // the active contact (`.unknown` — no template yet / window not
-            // full) — and, for now, hidden always: its thresholds were never
-            // tried against a different speaker (see
-            // `UncalibratedVoiceIndicators`). Matches Android, where the same
-            // shield is not collected either.
-            if UncalibratedVoiceIndicators.showsContactVoiceShield(level: contactVoiceLevel) {
-                trustShield(
-                    tint: contactVoiceLevel == .mismatch ? extras.riskHigh
-                        : (contactVoiceLevel == .uncertain ? extras.pqcAccent : extras.success),
-                    icon: "ear",
-                    info: .contactVoice,
-                    accessibilityLabel: contactVoiceLevel == .verified
-                        ? String(localized: "incall.shield.contact_voice_verified", defaultValue: "La voce del contatto corrisponde a quella già conosciuta", comment: "Call screen, VoiceOver label of the remote-voice shield when the voice matches the known one")
-                        : (contactVoiceLevel == .mismatch
-                            ? String(localized: "incall.shield.contact_voice_mismatch", defaultValue: "Attenzione: la voce del contatto non corrisponde a quella già conosciuta", comment: "Call screen, VoiceOver label of the remote-voice shield when the voice does not match the known one")
-                            : String(localized: "incall.shield.contact_voice_checking", defaultValue: "Verifica della voce del contatto in corso", comment: "Call screen, VoiceOver label of the remote-voice shield while the check is running"))
-                )
-            }
             // Voice change during this call — shown only once there is
             // something to say. Amber for a possible change, red once it is
             // confirmed. It follows the same local verdict as the voice check
@@ -1816,12 +1779,11 @@ struct InCallScreen: View {
     /// style (e.g. `identityChangeBanner`/the SAS panel above) rather than
     /// a verbatim copy of Android's strings.
     enum TrustBadgeInfo {
-        case voiceKey, contactVoice, speakerChange, nfc, psk, sas, pqc, transport
+        case voiceKey, speakerChange, nfc, psk, sas, pqc, transport
 
         var title: String {
             switch self {
             case .voiceKey:         return String(localized: "incall.trust_title.voice_key", defaultValue: "Voce come chiave", comment: "Call screen, title of the popup that explains a trust-bar shield")
-            case .contactVoice:     return String(localized: "incall.trust_title.contact_voice", defaultValue: "Voce remota", comment: "Call screen, title of the popup that explains a trust-bar shield")
             case .speakerChange:    return VoiceGuardCopy.title
             case .nfc:              return String(localized: "incall.trust_title.nfc", defaultValue: "Chiave di persona in comune", comment: "Call screen, title of the popup that explains a trust-bar shield")
             case .psk:              return String(localized: "incall.trust_title.psk", defaultValue: "Chiave pre-condivisa (PSK)", comment: "Call screen, title of the popup that explains a trust-bar shield")
@@ -1847,10 +1809,6 @@ struct InCallScreen: View {
                 return String(localized: "incall.trust_body.voice_key",
                               defaultValue: "Il contatto ha attivato lo sblocco vocale sul proprio dispositivo. Quando il suo telefono rileva una transizione live (per esempio uno scambio di persona a metà chiamata), il colore di questo scudo cambia per segnalarlo — altrimenti mostra semplicemente il fatto statico che l'ha attivato. Non è una prova crittografica: è un'informazione che il dispositivo del contatto dichiara di sé stesso.",
                               comment: "Call screen, popup text of the voice-as-key shield")
-            case .contactVoice:
-                return String(localized: "incall.trust_body.contact_voice",
-                              defaultValue: "Confronta la voce che stai ascoltando con quella salvata per questo contatto nelle chiamate precedenti. È un indizio, non una prova d'identità.",
-                              comment: "Call screen, popup text of the remote-voice shield")
             case .speakerChange:
                 return VoiceGuardCopy.infoBody
             case .nfc:

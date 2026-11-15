@@ -176,6 +176,31 @@ final class SpeakerVerifierTests: XCTestCase {
         }
     }
 
+    // MARK: - Owner paths
+
+    /// What the owner paths (continuity monitor, enrollment screen, voice
+    /// unlock) use: enrollment, the exported and imported template, verify.
+    func testOwnerEnrollmentTemplateImportAndVerifyStillWork() throws {
+        let verifier = SpeakerVerifier(embedder: DeterministicTestEmbedder())
+        let frame = TestAudioHelpers.makeSinePCM(frequency: 440, sampleCount: AudioConstants.samplesPerFrame)
+        verifier.startEnrollment()
+        for _ in 0..<160 {
+            verifier.processEnrollmentFrame(frame)
+        }
+        XCTAssertTrue(verifier.finishEnrollment())
+        let template = try XCTUnwrap(verifier.exportTemplate())
+        XCTAssertTrue(VoiceprintStore.isUsable(template))
+
+        let restored = SpeakerVerifier(embedder: DeterministicTestEmbedder())
+        restored.importTemplate(template)
+        if case .ready = restored.getState() {} else {
+            XCTFail("Expected ready state after a template import")
+        }
+        let score = restored.verify(pcmFrame: frame)
+        XCTAssertGreaterThan(score, 0)
+        XCTAssertEqual(score, verifier.verify(pcmFrame: frame))
+    }
+
     // MARK: - Helpers
 
     private func enrolledVerifier() -> SpeakerVerifier {

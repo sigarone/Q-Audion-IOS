@@ -126,8 +126,7 @@ private struct ScreenshotDemoCall: View {
             peerVoiceKeyEnrolled: true,
             onHangup: {},
             voiceConfidenceHistory: (0..<60).map { 0.86 + 0.06 * Float(sin(Double($0) / 5.0)) },
-            peerOwnerContinuityLevel: .verified,
-            contactVoiceLevel: .verified
+            peerOwnerContinuityLevel: .verified
         )
         .qAudionTheme(dark: true)
         .onAppear {

@@ -33,14 +33,10 @@ import Foundation
 ///
 /// ## What this does NOT touch
 ///
-/// `SpeakerVerifier.computeVerificationScore()`'s raw V-score — the input to
-/// `ContactVoiceContinuityGate`'s absolute VERIFIED/MISMATCH thresholds — is
-/// untouched. That gate's own thresholds were fitted to a single call with
-/// no impostor trial ever measured against them; folding an unrelated scale
-/// change (AS-Norm output is an unbounded z-score-like quantity, not a
-/// `[0,1]` similarity) into that path would trade one unmeasured threshold
-/// for another. This class exists to feed `SpeakerChangeDetector`
-/// specifically — a RELATIVE detector that already estimates its own scale
+/// `SpeakerVerifier.computeVerificationScore()`'s raw V-score is untouched:
+/// AS-Norm output is an unbounded z-score-like quantity, not a `[0,1]`
+/// similarity, so it is not folded into that path. This class exists to feed
+/// `SpeakerChangeDetector` specifically — a RELATIVE detector that already estimates its own scale
 /// online per call, so handing it a better-separated score stream in
 /// different units costs nothing to recalibrate and only improves the
 /// separation it has to detect.

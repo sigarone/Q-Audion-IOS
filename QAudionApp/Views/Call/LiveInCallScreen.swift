@@ -479,14 +479,10 @@ struct LiveInCallScreen: View {
                 onReportProblem: handleReportProblem,
                 // Reduces the call to the "call in progress" bar (audio call, once connected); drawn top left.
                 onMinimize: minimizeAction,
-                // Feature B ("voce verificata") — W-AUTOLEARN parity (item 5):
-                // fed from AppState.voiceLearningState (itself fed from the
-                // SAME decoded RX audio the Guardian ribbon above already
-                // uses). nil between calls / before auto-enrollment kicks in
-                // (see AppState.maybeAutoStartVoiceLearning) — no more manual
-                // trigger to wire a button to.
+                // The learning state the voice check card can show, from
+                // AppState.voiceLearningState. nil between calls and while
+                // nothing reports one.
                 voiceLearningState: appState.voiceLearningState,
-                onStartVoiceLearning: { appState.startVoiceLearning() },
                 // Item 5 — live raw per-frame Guardian confidence wave,
                 // replaces the old manual-CTA slot for the rest of the call.
                 voiceConfidenceHistory: appState.voiceConfidenceHistory,
@@ -496,12 +492,7 @@ struct LiveInCallScreen: View {
                 // calls / before the first real tick — the shield stays
                 // hidden or falls back to the static `peerVoiceKeyEnrolled`
                 // fact in that case, see InCallScreen's own gating.
-                // `contactVoiceLevel` (this device's own local per-contact
-                // continuity, "Voce remota") is passed along, but its ear
-                // shield is hidden for now: the thresholds are not
-                // calibrated yet (see `UncalibratedVoiceIndicators`).
                 peerOwnerContinuityLevel: appState.peerOwnerContinuityLevel,
-                contactVoiceLevel: appState.contactVoiceLevel,
                 speakerChange: appState.speakerChangeVerdict,
                 peerOnHold: appState.callService.peerOnHold,
                 peerNotAudible: appState.callService.peerNotAudible

@@ -558,10 +558,9 @@ struct ContactDetailScreen: View {
                            description: trustIdentityRowDescription(identityPublished: identityPublished),
                            done: identityPublished)
             divider
-            // The saved voice. Reads `voiceVerifiedAt`, written ONLY by
-            // `ContactsStore.setVoiceSaved` when a `VoiceLearningSession` for
-            // this contact — fed from the peer's decoded RX audio, started
-            // by the app on the first call — actually reaches `.completed`.
+            // The saved voice. Reads `voiceVerifiedAt`, the date a voice of
+            // this contact was saved on this phone (nothing writes it any
+            // more; a value stored by an earlier version stays).
             // It records WHEN the voice was saved on this phone. It is not a
             // verification: the row says "Voce memorizzata il <data>", never
             // "verified", and it is independent of SAS (a contact can be
@@ -745,9 +744,8 @@ struct ContactDetailScreen: View {
     }
 
     /// Plain synchronous local read (same pattern as `presenceAuth` above, no
-    /// network), the persisted "a `VoiceLearningSession` for this contact
-    /// reached `.completed`" timestamp: when the voice of this contact was
-    /// saved on this phone. nil until that has happened once. The name is the
+    /// network), the persisted timestamp of when the voice of this contact
+    /// was saved on this phone. nil when none was stored. The name is the
     /// stored field's; it is a date of saving, not a verification.
     ///
     /// Two consumers: `trustVerificationCard`'s voice row and the security

@@ -237,8 +237,8 @@ public enum CallCapabilities {
     /// switches — closed with real, cited findings, not an open question:
     /// ``NativeAudioPcmTap`` taps the remote SRTP track and feeds the exact
     /// same `enqueueForAnalysis` choke point `processIncomingAudio` already
-    /// fed, so `VoiceAnalysisEngine`/`GuardianMode`/`ContactVoiceVerifier`/
-    /// `VoiceLearningSession` see no gap in coverage (full trace in the
+    /// fed, so `VoiceAnalysisEngine`/`GuardianMode`/`ContactVoiceVerifier`
+    /// see no gap in coverage (full trace in the
     /// IOS-C4b task report). `VoiceUnlockController` was confirmed local-mic
     /// only, unaffected either way.
     ///

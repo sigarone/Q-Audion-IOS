@@ -13,9 +13,8 @@ import QAudionEngine
 /// Captures LIVE local mic audio (the device owner's own voice) via
 /// `AVAudioEngine` — the same tap-and-convert shape as
 /// `VoiceEnrollmentContainer` (which enrolls the template this controller
-/// verifies against). Deliberately NOT the call's RX audio path — that is
-/// `VoiceLearningSession`'s job (Feature B), a different tap point for a
-/// different person's voice entirely.
+/// verifies against). Deliberately NOT the call's RX audio path: this
+/// verifies the owner's own voice, never the other person's.
 ///
 /// SECURITY note on `VoiceAuthGate.verify(pcmFrame:)`: it "fails open"
 /// (`.passed`) when the underlying `SpeakerVerifier` has no enrolled

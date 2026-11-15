@@ -393,6 +393,15 @@ enum VoiceGuardLevel: Equatable {
     case highRisk
 }
 
+/// What the voice card is told about the learning of this contact's voice:
+/// the progress while it runs, and how it ended.
+enum VoiceLearningState: Equatable {
+    case idle
+    case inProgress(progress: Float)
+    case completed(contactId: String)
+    case failed
+}
+
 /// The short confirmation shown when the voice-learning session ends.
 enum VoiceGuardBanner: Equatable {
     case learned
@@ -503,7 +512,7 @@ enum VoiceGuard {
 
     /// The banner a learning-session state asks for, if any. Only the two final
     /// states do; the card shows it once, when the state changes to it.
-    static func banner(for state: VoiceLearningSession.State?) -> VoiceGuardBanner? {
+    static func banner(for state: VoiceLearningState?) -> VoiceGuardBanner? {
         guard let state = state else { return nil }
         switch state {
         case .completed:
@@ -516,7 +525,7 @@ enum VoiceGuard {
     }
 
     static func content(banner: VoiceGuardBanner?,
-                        learning: VoiceLearningSession.State?,
+                        learning: VoiceLearningState?,
                         hasHistory: Bool,
                         level: VoiceGuardLevel?) -> VoiceGuardContent {
         if let banner {
@@ -632,23 +641,6 @@ enum VoiceGuardCopy {
     /// What a screen reader says for the card: the title, then the line.
     static func spoken(for line: VoiceGuardLine) -> String {
         title + ", " + text(for: line)
-    }
-}
-
-/// Voice indicators whose thresholds were never tried against a different
-/// speaker. They are hidden, not removed: they come back when calibrated.
-enum UncalibratedVoiceIndicators {
-    /// The "voce remota" ear shield compares the voice with the profile saved
-    /// from past calls. Its two thresholds were fitted to one call with the
-    /// same person, and the scores measured since sit where chance would put
-    /// them, so a verdict from it would be mostly noise. Off until it has been
-    /// calibrated with several different speakers.
-    static let contactVoiceShieldCalibrated = false
-
-    /// Whether the ear shield is drawn for `level`. Never, while uncalibrated.
-    static func showsContactVoiceShield(level: ContactVoiceContinuityGate.Level) -> Bool {
-        guard contactVoiceShieldCalibrated else { return false }
-        return level != .unknown
     }
 }
 

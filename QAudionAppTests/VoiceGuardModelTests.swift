@@ -570,18 +570,6 @@ final class VoiceGuardModelTests: XCTestCase {
         XCTAssertEqual(suspect.verdict, RemoteSpeakerChangeMonitor.Verdict(level: .suspect))
     }
 
-    // MARK: - Hidden until calibrated
-
-    /// The "voce remota" ear shield stays hidden whatever its level says: its
-    /// thresholds were never tried against a different speaker.
-    func testTheContactVoiceShieldIsHiddenForEveryLevel() {
-        XCTAssertFalse(UncalibratedVoiceIndicators.contactVoiceShieldCalibrated)
-        let levels: [ContactVoiceContinuityGate.Level] = [.unknown, .verified, .uncertain, .mismatch]
-        for level in levels {
-            XCTAssertFalse(UncalibratedVoiceIndicators.showsContactVoiceShield(level: level), "\(level)")
-        }
-    }
-
     // MARK: - Contact screen: the saved voice
 
     /// Noon of that day in the time zone of the device, which is the one the
@@ -673,7 +661,7 @@ final class VoiceGuardModelTests: XCTestCase {
     /// shows just the waiting line, whatever a finished or idle
     /// learning session says.
     func testWaitsForVoiceDataUntilThereIsALevelOrASample() {
-        let states: [VoiceLearningSession.State?] = [nil, .idle, .failed, .completed(contactId: "c1")]
+        let states: [VoiceLearningState?] = [nil, .idle, .failed, .completed(contactId: "c1")]
         for state in states {
             XCTAssertEqual(VoiceGuard.content(banner: nil, learning: state, hasHistory: false, level: nil),
                            .waiting)
