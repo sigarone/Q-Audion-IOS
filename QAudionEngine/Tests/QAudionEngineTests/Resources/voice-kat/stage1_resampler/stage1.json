@@ -1,0 +1,95 @@
+{
+  "tolerance_abs": 1e-05,
+  "schedules_file": "stage1_resampler/schedules.json",
+  "clips": [
+    {
+      "name": "a",
+      "audio_file": "audio/clip_a_48k.wav",
+      "rate": 48000,
+      "n_in": 480000,
+      "n_out": 160001,
+      "n_chunks": 312,
+      "resets_at_input": [440002],
+      "segments": [
+        {"start_in": 0, "n_in": 440002, "out_offset": 0, "n_out": 146668, "n_chunks": 286},
+        {"start_in": 440002, "n_in": 39998, "out_offset": 146668, "n_out": 13333, "n_chunks": 26}
+      ],
+      "f32_sha256": "6536c8534a3a54af1ac9dbf62a09ddab6e8cac93eba23145e88f6ddab2c411ca",
+      "expected_file": "stage1_resampler/clip_a.f32"
+    },
+    {
+      "name": "b",
+      "audio_file": "audio/clip_b_48k_loss.wav",
+      "rate": 48000,
+      "n_in": 480000,
+      "n_out": 160000,
+      "n_chunks": 312,
+      "resets_at_input": [],
+      "segments": [
+        {"start_in": 0, "n_in": 480000, "out_offset": 0, "n_out": 160000, "n_chunks": 312}
+      ],
+      "f32_sha256": "509f8d7683ab3086c70c72d9833c4e7aaa17f62c54b504f12fb64e8c6dc00b34",
+      "expected_file": "stage1_resampler/clip_b.f32"
+    },
+    {
+      "name": "c",
+      "audio_file": "audio/clip_c_24k.wav",
+      "rate": 24000,
+      "n_in": 192000,
+      "n_out": 128000,
+      "n_chunks": 250,
+      "resets_at_input": [],
+      "segments": [
+        {"start_in": 0, "n_in": 192000, "out_offset": 0, "n_out": 128000, "n_chunks": 250}
+      ],
+      "f32_sha256": "759236e9bcf90280cfb0fafb94ffba7ad47fb467d05a04bc48ffc589e02e51b4",
+      "expected_file": "stage1_resampler/clip_c.f32"
+    },
+    {
+      "name": "d",
+      "audio_file": "audio/clip_d_16k.wav",
+      "rate": 16000,
+      "n_in": 384000,
+      "n_out": 384000,
+      "n_chunks": 750,
+      "resets_at_input": [332800],
+      "segments": [
+        {"start_in": 0, "n_in": 332800, "out_offset": 0, "n_out": 332800, "n_chunks": 650},
+        {"start_in": 332800, "n_in": 51200, "out_offset": 332800, "n_out": 51200, "n_chunks": 100}
+      ],
+      "f32_sha256": "d14f7c69b3d82c25236740b13419d1e9d0287736dac303cec4bf43e28f7bbc7e",
+      "expected_file": null,
+      "note": "16 kHz pass-through: expected = float32(int16) / 32768, no file"
+    },
+    {
+      "name": "e",
+      "audio_file": "audio/clip_c_24k.wav",
+      "rate": 24000,
+      "n_in": 192000,
+      "n_out": 128001,
+      "n_chunks": 249,
+      "resets_at_input": [72017],
+      "segments": [
+        {"start_in": 0, "n_in": 72017, "out_offset": 0, "n_out": 48012, "n_chunks": 93},
+        {"start_in": 72017, "n_in": 119983, "out_offset": 48012, "n_out": 79989, "n_chunks": 156}
+      ],
+      "f32_sha256": "deaa3636bf9cd6867771ddfcf444e8ee982c926ea41f2b373b2862e63408618a",
+      "expected_file": "stage1_resampler/clip_e.f32"
+    },
+    {
+      "name": "f",
+      "audio_file": "audio/clip_f_32k.wav",
+      "rate": 32000,
+      "n_in": 144000,
+      "n_out": 72001,
+      "n_chunks": 140,
+      "resets_at_input": [70001],
+      "segments": [
+        {"start_in": 0, "n_in": 70001, "out_offset": 0, "n_out": 35001, "n_chunks": 68},
+        {"start_in": 70001, "n_in": 73999, "out_offset": 35001, "n_out": 37000, "n_chunks": 72}
+      ],
+      "f32_sha256": "3bc2856830d648580ea40795dce371a679ca75c20cac31d453434333c34f95d4",
+      "expected_file": "stage1_resampler/clip_f.f32"
+    }
+  ]
+}

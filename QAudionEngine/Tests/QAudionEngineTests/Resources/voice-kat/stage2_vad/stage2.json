@@ -1,0 +1,119 @@
+{
+  "tolerance": {"p_abs": 0.002, "labels": "exact"},
+  "p_margin_rule": "no p within 5e-3 of 0.50 or 0.35",
+  "clips": [
+    {
+      "name": "a",
+      "n_chunks": 312,
+      "events": [
+        {"kind": "reset", "at_chunk": 286}
+      ],
+      "stream_segments": [
+        {"file": "stage1_resampler/clip_a.f32", "tap": 0, "out_offset": 0, "n_chunks": 286},
+        {"file": "stage1_resampler/clip_a.f32", "tap": 0, "out_offset": 146668, "n_chunks": 26}
+      ],
+      "p_file": "kat/stage2_vad/clip_a.p.f32",
+      "h_file": "stage2_vad/clip_a.h.u8",
+      "label_file": "stage2_vad/clip_a.label.u8",
+      "min_threshold_margin": 0.010043054819107056,
+      "speech_chunks": 241
+    },
+    {
+      "name": "b",
+      "n_chunks": 312,
+      "events": [],
+      "stream_segments": [
+        {"file": "stage1_resampler/clip_b.f32", "tap": 0, "out_offset": 0, "n_chunks": 312}
+      ],
+      "p_file": "kat/stage2_vad/clip_b.p.f32",
+      "h_file": "stage2_vad/clip_b.h.u8",
+      "label_file": "stage2_vad/clip_b.label.u8",
+      "min_threshold_margin": 0.009372740983963013,
+      "speech_chunks": 250
+    },
+    {
+      "name": "c",
+      "n_chunks": 250,
+      "events": [],
+      "stream_segments": [
+        {"file": "stage1_resampler/clip_c.f32", "tap": 0, "out_offset": 0, "n_chunks": 250}
+      ],
+      "p_file": "kat/stage2_vad/clip_c.p.f32",
+      "h_file": "stage2_vad/clip_c.h.u8",
+      "label_file": "stage2_vad/clip_c.label.u8",
+      "min_threshold_margin": 0.015830814838409424,
+      "speech_chunks": 188
+    },
+    {
+      "name": "d",
+      "n_chunks": 750,
+      "events": [
+        {"kind": "route", "at_chunk": 400},
+        {"kind": "hold", "at_chunk": 580},
+        {"kind": "resume", "at_chunk": 600},
+        {"kind": "reset", "at_chunk": 650}
+      ],
+      "stream_segments": [
+        {"file": null, "tap": 0, "out_offset": 0, "n_chunks": 650},
+        {"file": null, "tap": 0, "out_offset": 332800, "n_chunks": 100}
+      ],
+      "p_file": "kat/stage2_vad/clip_d.p.f32",
+      "h_file": "stage2_vad/clip_d.h.u8",
+      "label_file": "stage2_vad/clip_d.label.u8",
+      "min_threshold_margin": 0.013016104698181152,
+      "speech_chunks": 631
+    },
+    {
+      "name": "e",
+      "n_chunks": 249,
+      "events": [
+        {"kind": "reset", "at_chunk": 93}
+      ],
+      "stream_segments": [
+        {"file": "stage1_resampler/clip_e.f32", "tap": 0, "out_offset": 0, "n_chunks": 93},
+        {"file": "stage1_resampler/clip_e.f32", "tap": 0, "out_offset": 48012, "n_chunks": 156}
+      ],
+      "p_file": "kat/stage2_vad/clip_e.p.f32",
+      "h_file": "stage2_vad/clip_e.h.u8",
+      "label_file": "stage2_vad/clip_e.label.u8",
+      "min_threshold_margin": 0.015515774488449097,
+      "speech_chunks": 179
+    },
+    {
+      "name": "f",
+      "n_chunks": 140,
+      "events": [
+        {"kind": "reset", "at_chunk": 68}
+      ],
+      "stream_segments": [
+        {"file": "stage1_resampler/clip_f.f32", "tap": 0, "out_offset": 0, "n_chunks": 68},
+        {"file": "stage1_resampler/clip_f.f32", "tap": 0, "out_offset": 35001, "n_chunks": 72}
+      ],
+      "p_file": "kat/stage2_vad/clip_f.p.f32",
+      "h_file": "stage2_vad/clip_f.h.u8",
+      "label_file": "stage2_vad/clip_f.label.u8",
+      "min_threshold_margin": 0.028781503438949585,
+      "speech_chunks": 71
+    },
+    {
+      "name": "h",
+      "n_chunks": 339,
+      "events": [
+        {"kind": "reset", "at_chunk": 156},
+        {"kind": "reset", "at_chunk": 281}
+      ],
+      "stream_segments": [
+        {"file": "stage1_resampler/clip_a.f32", "tap": 0, "out_offset": 0, "n_chunks": 156},
+        {"file": "stage1_resampler/clip_c.f32", "tap": 1, "out_offset": 0, "n_chunks": 125},
+        {"file": "stage1_resampler/clip_f.f32", "tap": 2, "out_offset": 0, "n_chunks": 58}
+      ],
+      "p_file": "kat/stage2_vad/clip_h.p.f32",
+      "h_file": "stage2_vad/clip_h.h.u8",
+      "label_file": "stage2_vad/clip_h.label.u8",
+      "min_threshold_margin": 0.01743251085281372,
+      "speech_chunks": 177
+    }
+  ],
+  "labeller_file": "stage2_vad/labeller.json",
+  "labeller_cases": 10
+}

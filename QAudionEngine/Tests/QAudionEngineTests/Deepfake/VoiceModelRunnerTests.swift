@@ -3,8 +3,8 @@ import CryptoKit
 @testable import QAudionEngine
 
 /// One real ONNX Runtime inference per voice model, on whatever runtime the test job runs on (the iOS Simulator in CI).
-/// Silero VAD (MIT, see Resources/voice/silero_vad_LICENSE.txt) comes from the test resources; CAM++ is read from the
-/// copy the app bundle already carries (QAudionEngine/Sources/QAudionEngine/Resources), so it is not duplicated.
+/// Silero VAD (MIT, see Resources/voice/silero_vad_LICENSE.txt) and CAM++ are both read from the copies the app bundle
+/// already carries (QAudionEngine/Sources/QAudionEngine/Resources), so neither is duplicated.
 final class VoiceModelRunnerTests: XCTestCase {
 
     private static let sileroSha256 = "7ed98ddbad84ccac4cd0aeb3099049280713df825c610a8ed34543318f1b2c49"
@@ -33,15 +33,6 @@ final class VoiceModelRunnerTests: XCTestCase {
         Int(Date().timeIntervalSince(start) * 1000)
     }
 
-    private func sileroURL() throws -> URL {
-        let candidates = [
-            Bundle.module.url(forResource: "silero_vad_16k_op15", withExtension: "onnx"),
-            Bundle.module.url(forResource: "silero_vad_16k_op15", withExtension: "onnx", subdirectory: "voice"),
-            Bundle.module.url(forResource: "silero_vad_16k_op15", withExtension: "onnx", subdirectory: "Resources/voice")
-        ]
-        return try XCTUnwrap(candidates.compactMap { $0 }.first, "silero_vad_16k_op15.onnx not found in Bundle.module")
-    }
-
     /// The engine's own resource folder, found from this source file (the tests already read repository files by path).
     private func engineResource(_ name: String, file: StaticString = #filePath) throws -> URL {
         var dir = URL(fileURLWithPath: "\(file)")
@@ -55,7 +46,7 @@ final class VoiceModelRunnerTests: XCTestCase {
     }
 
     func testSileroRunsEightChunks() throws {
-        let url = try sileroURL()
+        let url = try engineResource("voice/silero_vad_16k_op15.onnx")
         let bytes = try Data(contentsOf: url)
         XCTAssertEqual(sha256Hex(bytes), Self.sileroSha256)
 

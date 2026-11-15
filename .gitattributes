@@ -63,3 +63,8 @@ QAudionEngine/Tests/QAudionEngineTests/Resources/kat/pqc-hardening-v1-kat.json -
 QAudionEngine/Tests/QAudionEngineTests/Resources/kat/mldsa87-v1.json -text
 # Vendored mldsa-native tree: MANIFEST.sha256 lists the SHA-256 of each upstream file, git must never rewrite line endings.
 QAudionEngine/Sources/CLiboqs/src/mldsa/** -text
+
+# The voice bundle and its reference vectors are byte-for-byte copies; MANIFEST.sha256 lists the SHA-256 of each file and the
+# tests check it: git must never rewrite their line endings.
+QAudionEngine/Sources/QAudionEngine/Resources/voice/** -text
+QAudionEngine/Tests/QAudionEngineTests/Resources/voice-kat/** -text
