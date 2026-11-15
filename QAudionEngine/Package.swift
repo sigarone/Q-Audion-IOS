@@ -291,7 +291,12 @@ let package = Package(
             // OQS_KEM_ml_kem_1024_keypair_derand directly (no generic-handle
             // equivalent exists in liboqs; it's algorithm-specific).
             // GRDB: LocationShareStoreTests builds the schema of the live-share tables on an in-memory database queue.
-            dependencies: ["QAudionEngine", "CLiboqs", .product(name: "GRDB", package: "GRDB.swift")],
+            // onnxruntime: VoiceModelRunnerTests runs the voice models through the ONNX Runtime bindings directly.
+            dependencies: [
+                "QAudionEngine", "CLiboqs",
+                .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "onnxruntime", package: "onnxruntime-spm")
+            ],
             path: "Tests/QAudionEngineTests",
             resources: [
                 // 2026-08-02: was "../Resources/cross_platform_vectors.json".
@@ -425,7 +430,10 @@ let package = Package(
                 // described by generator parameters). A BYTE-FOR-BYTE copy of the file that ships with the
                 // specification and with the Android tests; VoiceDspVectorTests runs every case through the real
                 // engine. Re-copy it, never edit it.
-                .copy("Analysis/Resources/voicedsp-vectors.json")
+                .copy("Analysis/Resources/voicedsp-vectors.json"),
+                // Silero VAD v6.2.3 (MIT) and its licence, for VoiceModelRunnerTests; the test pins the SHA-256 of the model.
+                .copy("Resources/voice/silero_vad_16k_op15.onnx"),
+                .copy("Resources/voice/silero_vad_LICENSE.txt")
             ]
         )
     ]
