@@ -174,15 +174,6 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     /// Current speaker-change verdict for the trust badges.
     public var speakerChangeVerdict: RemoteSpeakerChangeMonitor.Verdict { speakerChange.verdict }
 
-    /// Record the far end's own receive-side verdict about this device's
-    /// user, as delivered over the in-call control channel. It is only
-    /// recorded: it is about our own user's voice and is not authenticated,
-    /// so it never changes `speakerChangeVerdict` (see
-    /// `RemoteSpeakerChangeMonitor`).
-    public func peerReportedSpeakerChange(_ changed: Bool) {
-        speakerChange.onPeerReportedChange(changed)
-    }
-
     /// Discard the change detector's reference and rebuild it on whoever is
     /// speaking now.
     ///

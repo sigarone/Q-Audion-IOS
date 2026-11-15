@@ -3218,19 +3218,6 @@ final class AppState: ObservableObject {
     /// handset being passed to somebody else. Informational only.
     @Published var speakerChangeVerdict = RemoteSpeakerChangeMonitor.Verdict(level: .unknown)
 
-    /// Dedup guard for the `SPKCHG` announce — mirrors
-    /// `lastSentOwnerContinuityLevel`. Only ever carries what THIS device
-    /// observed for itself; a verdict that exists solely because the peer
-    /// said so is never echoed back, since two devices bouncing the same
-    /// unverified claim would look like independent corroboration and would
-    /// not be.
-    /// Last speaker-change value announced to the peer, seeded false rather
-    /// than left nil. W-SPKCHGSPURIOUS (2026-09-01) — a nil seed made the
-    /// first verdict of every call compare unequal and announce "no change"
-    /// to a peer never told otherwise, contradicting the transition-only
-    /// contract. Seeding false states the truth: no change is the known starting state of every call, so the first verdict cannot be mistaken for a transition.
-    private var lastSentSpeakerChange: Bool = false
-
     /// Item 5 (2026-07-31 InCallScreen Android→iOS port) — rolling window
     /// of RAW (un-smoothed) per-analyzed-frame Guardian confidence scores
     /// for the live wave that replaces the old manual voice-learning CTA
@@ -5122,7 +5109,6 @@ final class AppState: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.speakerChangeVerdict = verdict
-                self.maybeAnnounceSpeakerChange(verdict)
             }
         }
         // MASVS-CRYPTO remediation (2026-08-20/21) — feed the raw
@@ -16414,7 +16400,7 @@ final class AppState: ObservableObject {
             // run unconditionally: on the responder leg `currentIsCaller`
             // is false so `reKeyScheduler.observeConfidence` below is
             // simply never reached. Sender guard mirrors every other
-            // per-call-peer opaque above (PLP/VOICE_KEY/OWNER_CONT/SPKCHG).
+            // per-call-peer opaque above (PLP/VOICE_KEY/OWNER_CONT).
             guard callContactId == senderId else {
                 print("[AppState] VCONF dropped — sender \(senderId.prefix(8))… is not the call peer")
                 return
@@ -16510,19 +16496,6 @@ final class AppState: ObservableObject {
             }
             peerOwnerContinuityLevel = mapped
             print("[AppState] OWNER_CONT received callId=\(callId.prefix(8))… level=\(level) from=\(senderId.prefix(8))…")
-        case .speakerChange(let callId, let changed):
-            // The peer's own receive-side verdict about OUR user — about our
-            // own voice, not the contact's, and not authenticated as coming
-            // from their detector. Same sender guard as VOICE_KEY/OWNER_CONT:
-            // only the current call's peer is heard. The engine only records
-            // it: it does not move the voice check card, its colour or any
-            // text (see `RemoteSpeakerChangeMonitor`).
-            guard callContactId == senderId else {
-                print("[AppState] SPKCHG dropped — sender \(senderId.prefix(8))… is not the call peer")
-                return
-            }
-            callService.peerReportedSpeakerChange(changed)
-            print("[AppState] SPKCHG received callId=\(callId.prefix(8))… changed=\(changed) from=\(senderId.prefix(8))…")
         case .vnack(let callId, let frameId, let missing):
             // W-VNACK — peer is missing fragments of a frame WE sent;
             // resend the exact cached sealed bytes for every cache hit. A
@@ -23530,42 +23503,6 @@ extension AppState {
         Task { await sendOwnerContinuityAnnounce(level: level, peerId: peerId) }
     }
 
-    /// Announce a locally observed speaker change to the peer, on
-    /// transitions only — same cadence discipline as
-    /// `maybeAnnounceOwnerContinuity`, so the wire cost is zero on the
-    /// overwhelming majority of calls.
-    ///
-    /// Only what this device observed for itself is announced: the verdict
-    /// is built from the local detector alone (the peer's own report never
-    /// enters it), so nothing the peer said can be echoed back.
-    @MainActor
-    private func maybeAnnounceSpeakerChange(_ verdict: RemoteSpeakerChangeMonitor.Verdict) {
-        let locallyObserved = verdict.level == .changed
-        guard locallyObserved != lastSentSpeakerChange else { return }
-        lastSentSpeakerChange = locallyObserved
-        guard let peerId = callContactId else { return }
-        Task { await sendSpeakerChangeAnnounce(changed: locallyObserved, peerId: peerId) }
-    }
-
-    /// Ship a single SPKCHG announce — mirrors `sendOwnerContinuityAnnounce`'s
-    /// shape exactly (same active-call guard, same fire-and-forget error
-    /// handling, same self-echo guard).
-    @MainActor
-    private func sendSpeakerChangeAnnounce(changed: Bool, peerId: String) async {
-        guard callContactId == peerId else { return }
-        guard let provider = liveProvider,
-              let impl = provider.callingApi as? BCryptoCallingApiImpl,
-              let callId = impl.getActiveCallId(), !callId.isEmpty
-        else { return }
-        let wire = CallPiggyBack.serializeSpeakerChange(callId: callId, changed: changed)
-        OpaqueSelfEchoFilter.shared.markSent(wire)
-        do {
-            try await provider.callingApi.sendOpaqueMessageString(recipientId: peerId, payload: wire)
-        } catch {
-            print("[AppState] SPKCHG announce failed: \(error)")
-        }
-    }
-
     /// Ship a single OWNER_CONT announce — mirrors `announceVoiceKeyEnrollment`'s
     /// shape exactly (same `getActiveCallId()` guard, same fire-and-forget
     /// error handling, same `OpaqueSelfEchoFilter` self-echo guard).
@@ -23997,7 +23934,6 @@ extension AppState {
         peerOwnerContinuityLevel = .unknown
         contactVoiceLevel = .unknown
         speakerChangeVerdict = RemoteSpeakerChangeMonitor.Verdict(level: .unknown)
-        lastSentSpeakerChange = false
         // Unified call UI — stop the 1 Hz crypto-engine sampler and zero its
         // readout so the meter hides between calls and the next call starts
         // from 0 (mirrors the voiceAnalysis reset directly above).
