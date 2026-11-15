@@ -27,4 +27,30 @@ final class LegacyContactVoiceCleanupTests: XCTestCase {
         XCTAssertFalse(LegacyContactVoiceCleanup.runIfNeeded(store: store, defaults: defaults, protectedData: unlocked),
                        "done once")
     }
+
+    /// A lock while the removal runs can leave items out of the Keychain
+    /// listing, so that run is not marked done and the next one starts again.
+    func testALockDuringTheRemovalLeavesItNotDone() throws {
+        let suite = "LegacyContactVoiceCleanupTests.lock"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let protectedData = ProtectedDataFlag()
+
+        let backing = InMemoryVoiceprintBacking()
+        backing.onDeleteAll = { protectedData.set(isAvailable: false) }
+        let store = VoiceprintStore(backing: backing)
+        let template = [Float](repeating: 0.5, count: 512)
+        XCTAssertTrue(store.save(contactId: "contact-a", template: template))
+
+        XCTAssertFalse(LegacyContactVoiceCleanup.runIfNeeded(store: store, defaults: defaults, protectedData: protectedData),
+                       "locked during the run")
+        XCTAssertFalse(defaults.bool(forKey: LegacyContactVoiceCleanup.doneKey), "no mark")
+
+        backing.onDeleteAll = nil
+        protectedData.set(isAvailable: true)
+        XCTAssertTrue(LegacyContactVoiceCleanup.runIfNeeded(store: store, defaults: defaults, protectedData: protectedData),
+                      "runs again once unlocked")
+        XCTAssertTrue(defaults.bool(forKey: LegacyContactVoiceCleanup.doneKey))
+    }
 }

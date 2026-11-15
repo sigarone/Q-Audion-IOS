@@ -12,7 +12,8 @@ import Foundation
 /// reinstall removes the defaults but not the Keychain, so on a reinstall the
 /// mark is absent and the removal runs again, as on the first launch of the
 /// version that has it. The removal waits for an unlocked phone, and the mark
-/// is set only when it ran to the end: a Keychain that cannot be read leaves
+/// is set only when it ran to the end with the phone still unlocked: a
+/// Keychain that cannot be read, or a phone that locked during the run, leaves
 /// it unset, and the next start or unlock tries again.
 public enum LegacyContactVoiceCleanup {
     static let doneKey = "voice.legacyContactCleanup.v1"
@@ -26,6 +27,9 @@ public enum LegacyContactVoiceCleanup {
         if defaults.bool(forKey: doneKey) { return false }
         guard protectedData.isAvailable else { return false }
         guard store.deleteAllContactTemplates() else { return false }
+        // The Keychain listing leaves out the items that are unavailable while the phone is locked, so a run
+        // during which it locked may be incomplete: it is not marked done.
+        guard protectedData.isAvailable else { return false }
         defaults.set(true, forKey: doneKey)
         return true
     }

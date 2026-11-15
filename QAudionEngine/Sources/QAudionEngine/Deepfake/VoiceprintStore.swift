@@ -440,6 +440,9 @@ final class InMemoryVoiceprintBacking: VoiceprintBacking {
     /// Test seam: writes and deletes fail and change nothing, like a
     /// Keychain that refuses the write.
     var failWrites = false
+    /// Test seam: runs as a removal of all but some items starts, like a
+    /// phone that locks while it is going on.
+    var onDeleteAll: (() -> Void)?
 
     @discardableResult
     func save(contactId: String, template: [Float]) -> Bool {
@@ -463,6 +466,7 @@ final class InMemoryVoiceprintBacking: VoiceprintBacking {
     }
     @discardableResult
     func deleteAll(keeping accounts: Set<String>) -> Bool {
+        onDeleteAll?()
         lock.lock(); defer { lock.unlock() }
         if failWrites { return false }
         templates = templates.filter { accounts.contains($0.key) }

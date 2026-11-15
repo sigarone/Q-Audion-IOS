@@ -648,7 +648,8 @@ enum VoiceGuardCopy {
 
 /// How the contact screen words a saved voice. Saving a voice is not
 /// verifying the person, so the row says when the voice was saved and never
-/// "verified".
+/// "verified". The contact screen does not draw the row until the
+/// record-based row lands.
 enum VoiceSavedRow {
     /// "Voce memorizzata il 12 ott 2026" once a voice is saved, otherwise the
     /// plain statement that none is. The date is formatted for the app's
