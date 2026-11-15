@@ -78,6 +78,13 @@ final class VoiceModelRunnerTests: XCTestCase {
             XCTAssertTrue(result.state.allSatisfy { $0.isFinite }, "chunk \(k)")
             probabilities.append(result.probability)
         }
+
+        // Probabilities for this signal: equal to six digits on onnxruntime 1.24.2 (arm64 simulator) and an x86 reference run.
+        let golden: [Float] = [0.04029283, 0.029173732, 0.013520926, 0.004807234, 0.0052649975, 0.0036943853, 0.0026042461, 0.002551645]
+        XCTAssertEqual(probabilities.count, golden.count)
+        for (k, expected) in golden.enumerated() where k < probabilities.count {
+            XCTAssertEqual(probabilities[k], expected, accuracy: 1e-3, "chunk \(k)")
+        }
         print("voice-model-runner silero load_ms=\(loadMs) run_ms=\(milliseconds(since: runStart)) p=\(probabilities)")
     }
 
