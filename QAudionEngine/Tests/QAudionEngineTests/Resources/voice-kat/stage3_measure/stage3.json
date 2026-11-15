@@ -1,0 +1,15 @@
+{
+  "tolerance": {"ranges_and_flags": "exact", "float_rel": 0.0001, "float_abs_floor": 1e-15},
+  "time_unit": "ns on the tap clock",
+  "clips": [
+    {"name": "a", "inputs": "stage3_measure/clip_a.inputs.json", "expected": "stage3_measure/clip_a.expected.json", "n_chunks": 312, "n_windows": 2},
+    {"name": "b", "inputs": "stage3_measure/clip_b.inputs.json", "expected": "stage3_measure/clip_b.expected.json", "n_chunks": 312, "n_windows": 2},
+    {"name": "c", "inputs": "stage3_measure/clip_c.inputs.json", "expected": "stage3_measure/clip_c.expected.json", "n_chunks": 250, "n_windows": 1},
+    {"name": "d", "inputs": "stage3_measure/clip_d.inputs.json", "expected": "stage3_measure/clip_d.expected.json", "n_chunks": 750, "n_windows": 3},
+    {"name": "e", "inputs": "stage3_measure/clip_e.inputs.json", "expected": "stage3_measure/clip_e.expected.json", "n_chunks": 249, "n_windows": 1},
+    {"name": "f", "inputs": "stage3_measure/clip_f.inputs.json", "expected": "stage3_measure/clip_f.expected.json", "n_chunks": 140, "n_windows": 0},
+    {"name": "h", "inputs": "stage3_measure/clip_h.inputs.json", "expected": "stage3_measure/clip_h.expected.json", "n_chunks": 339, "n_windows": 0}
+  ],
+  "stats_vector": "stage3_measure/stats_cases.json",
+  "window_vector": "stage3_measure/windows_vector.json"
+}

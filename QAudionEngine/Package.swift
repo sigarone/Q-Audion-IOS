@@ -281,7 +281,10 @@ let package = Package(
                 // WipeSigningPublicKey.swift; same placeholder/ship-guard
                 // discipline as bcrypto_entitlement_pubkey.pem — see that
                 // file's kdoc.
-                .copy("Resources/wipe_signing_pubkey.pem")
+                .copy("Resources/wipe_signing_pubkey.pem"),
+                // Voice front-end bundle (constants, fbank tables, Silero VAD and its licence, MANIFEST.sha256). The
+                // loader checks the SHA-256 of each file against the pins in VoiceBundle.swift before it uses it.
+                .copy("Resources/voice")
             ]
         ),
         .testTarget(
@@ -431,9 +434,9 @@ let package = Package(
                 // specification and with the Android tests; VoiceDspVectorTests runs every case through the real
                 // engine. Re-copy it, never edit it.
                 .copy("Analysis/Resources/voicedsp-vectors.json"),
-                // Silero VAD v6.2.3 (MIT) and its licence, for VoiceModelRunnerTests; the test pins the SHA-256 of the model.
-                .copy("Resources/voice/silero_vad_16k_op15.onnx"),
-                .copy("Resources/voice/silero_vad_LICENSE.txt")
+                // Reference vectors of the voice front-end (resampler, VAD labels, measurements, windows, fbank) with the
+                // audio they use and a NOTICE; MANIFEST.sha256 of the bundle lists every file and VoiceBundleTests checks it.
+                .copy("Resources/voice-kat")
             ]
         )
     ]

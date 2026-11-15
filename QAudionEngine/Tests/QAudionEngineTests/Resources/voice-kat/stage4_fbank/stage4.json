@@ -1,0 +1,16 @@
+{
+  "tolerance": {"abs": 0.005},
+  "shape": [408, 80],
+  "dtype": "float32 little endian, row-major, after CMN",
+  "windows": [
+    {"clip": "a", "window": 0, "first_chunk": 62, "last_chunk": 189, "file": "stage4_fbank/clip_a_w0.f32"},
+    {"clip": "a", "window": 1, "first_chunk": 126, "last_chunk": 253, "file": "stage4_fbank/clip_a_w1.f32"},
+    {"clip": "b", "window": 0, "first_chunk": 62, "last_chunk": 189, "file": "stage4_fbank/clip_b_w0.f32"},
+    {"clip": "b", "window": 1, "first_chunk": 126, "last_chunk": 253, "file": "stage4_fbank/clip_b_w1.f32"},
+    {"clip": "c", "window": 0, "first_chunk": 62, "last_chunk": 189, "file": "stage4_fbank/clip_c_w0.f32"},
+    {"clip": "d", "window": 0, "first_chunk": 62, "last_chunk": 307, "file": "stage4_fbank/clip_d_w0.f32"},
+    {"clip": "d", "window": 1, "first_chunk": 126, "last_chunk": 382, "file": "stage4_fbank/clip_d_w1.f32"},
+    {"clip": "d", "window": 2, "first_chunk": 400, "last_chunk": 557, "file": "stage4_fbank/clip_d_w2.f32"},
+    {"clip": "e", "window": 0, "first_chunk": 99, "last_chunk": 226, "file": "stage4_fbank/clip_e_w0.f32"}
+  ]
+}
