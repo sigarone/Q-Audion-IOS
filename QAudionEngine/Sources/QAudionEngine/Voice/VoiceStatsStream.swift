@@ -5,10 +5,13 @@ import Foundation
 ///
 /// A chunk's flags are final when every interval that can reach it is settled: its own counters were sampled at
 /// instants fixed by the snapshots that bound it, the tap checks of the snapshot after it have run, and no delivery that
-/// has not arrived yet can still be slotted in before that snapshot (a delivery that is later than `late_ms` behind its
-/// request is unknown in any case).
+/// has not arrived yet can still be slotted in before that snapshot. The last holds because a delivery that would be
+/// ordered in front of a settled snapshot (one whose request is more than `late_ms` behind the clock) is dropped on
+/// arrival: a delivery that late is unusable in any case, and dropping a snapshot is always safe, the next interval
+/// just spans it. A delivery that is later than `late_ms` is otherwise kept, and its own interval is unknown.
 final class VoiceStatsStream {
     private let gates: VoiceConstants.Gates
+    private let lateNs: Int64
     private var tap = VoiceTapTrack()
     private var mutes: [VoiceMute] = []
     private var lastKept: VoiceStatsSnapshot?
@@ -24,14 +27,17 @@ final class VoiceStatsStream {
 
     init(gates: VoiceConstants.Gates) {
         self.gates = gates
+        self.lateNs = Int64(gates.stats.lateMs) * 1_000_000
         self.track = VoiceStatsTrack(snapshots: [], lower: [], tapBad: [], mutes: [], gates: gates)
     }
 
-    /// Number of snapshots kept after dropping duplicates and malformed deliveries.
+    /// Number of snapshots kept after dropping duplicates, malformed deliveries and deliveries that arrive too late
+    /// to be slotted in.
     var keptCount: Int { ordered.count }
 
     /// One delivered report. An exact repeat of the previous kept delivery, or one whose stamps cannot be right
-    /// (arrival before the request, oldest request after the request), is dropped; the rest are ordered by request.
+    /// (arrival before the request, oldest request after the request), is dropped; so is one whose request orders it in
+    /// front of a snapshot that is already settled. The rest are ordered by request.
     func addSnapshot(_ snapshot: VoiceStatsSnapshot) {
         advance(to: snapshot.arriveNs)
         if let previous = lastKept, previous.isSameReport(as: snapshot) {
@@ -40,8 +46,11 @@ final class VoiceStatsStream {
         if snapshot.arriveNs < snapshot.reqNs || snapshot.oldestNs > snapshot.reqNs {
             return
         }
-        lastKept = snapshot
         let at = ordered.firstIndex { $0.reqNs > snapshot.reqNs } ?? ordered.count
+        if at < ordered.count, isSettled(ordered[at]) {
+            return
+        }
+        lastKept = snapshot
         ordered.insert(snapshot, at: at)
         rebuild()
     }
@@ -93,17 +102,23 @@ final class VoiceStatsStream {
         clockNs = t
     }
 
+    /// A snapshot is settled when its request is more than `late_ms` behind the clock: a delivery that would be ordered
+    /// in front of it is dropped, so it never gets a new predecessor.
+    private func isSettled(_ snapshot: VoiceStatsSnapshot) -> Bool {
+        guard let clock = clockNs else { return false }
+        return snapshot.reqNs + lateNs < clock
+    }
+
     /// Every interval that can still change starts at or after this instant. Snapshot m is the last one whose tap checks
-    /// have run, and snapshot s the last one that no unseen delivery can still be slotted in front of (its request is
-    /// more than `late_ms` behind the clock); intervals before the one that snapshot min(m, s) closes are settled.
+    /// have run, and snapshot s the last settled one (no unseen delivery is slotted in front of it); intervals before
+    /// the one that snapshot min(m, s) closes are settled.
     private func settledHorizon() -> Int64? {
-        guard let clock = clockNs else { return nil }
-        let lateNs = Int64(gates.stats.lateMs) * 1_000_000
+        guard clockNs != nil else { return nil }
         var low = 0
         var high = ordered.count
         while low < high {
             let mid = (low + high) / 2
-            if ordered[mid].reqNs + lateNs < clock {
+            if isSettled(ordered[mid]) {
                 low = mid + 1
             } else {
                 high = mid
