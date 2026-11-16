@@ -89,9 +89,47 @@ public final class CamPlusSpeakerEmbedder: @unchecked Sendable {
 
     public init() {}
 
+    /// Frames per block of the exported graph: it is given a multiple of this many fbank frames
+    /// (`modelFrames(from:)`).
+    static let frameBlock = 200
+
+    /// The fbank frames the model is given for a signal whose `KaldiFbankExtractor` output is `frames`: the first
+    /// `200 * floor(T / 200)` of the `T` frames, with the per-bin mean of exactly those frames removed. `nil` for fewer
+    /// than 200 frames (a signal shorter than 2 s).
+    ///
+    /// The exported graph takes frame counts that are multiples of 200 (`ceil(T / 2)` a multiple of 100), so a 3 s
+    /// window (300 frames) is embedded from its first 2 s, a 4 s window (400 frames) whole, and a 9 s recording (906
+    /// frames) from its first 8 s. The extractor has already removed the mean of all its frames; removing the mean of the
+    /// kept ones from that leaves the kept frames minus their own mean, the normalization over what the model sees.
+    /// The input is not modified.
+    static func modelFrames(from frames: [[Float]]) -> [[Float]]? {
+        let keep = (frames.count / frameBlock) * frameBlock
+        guard keep > 0 else { return nil }
+        let numMel = frames[0].count
+        var mean = [Double](repeating: 0, count: numMel)
+        for t in 0..<keep {
+            for m in 0..<numMel { mean[m] += Double(frames[t][m]) }
+        }
+        for m in 0..<numMel { mean[m] /= Double(keep) }
+        var kept = [[Float]]()
+        kept.reserveCapacity(keep)
+        for t in 0..<keep {
+            var row = frames[t]
+            for m in 0..<numMel { row[m] = Float(Double(row[m]) - mean[m]) }
+            kept.append(row)
+        }
+        return kept
+    }
+
     /// Compute an L2-normalized 512-dim CAM++ speaker embedding from PCM
     /// already at `KaldiFbankExtractor.sampleRate` (16kHz) — resample BEFORE
     /// calling this, same contract as the Android `embed(pcm16k:)`.
+    ///
+    /// The model sees the first `200 * floor(frames / 200)` fbank frames of the
+    /// input, with the mean normalization taken over exactly those frames (see
+    /// `modelFrames(from:)`): 2 s is the least that gives an embedding (shorter
+    /// input throws), a 3 s window is embedded from its first 2 s, a 4 s window
+    /// whole.
     ///
     /// Expensive — callers MUST throttle their own call cadence (never
     /// per-audio-frame); see `SpeakerVerifier`'s continuous-verification
@@ -99,13 +137,13 @@ public final class CamPlusSpeakerEmbedder: @unchecked Sendable {
     public func embed(pcm16kMono: [Float]) throws -> [Float] {
         try ensureLoaded()
 
-        let frames = fbank.extract(pcm16kMono)
-        guard !frames.isEmpty else {
-            throw CamPlusError.inferenceFailed("fbank extraction produced zero frames (input too short)")
+        let kept = Self.modelFrames(from: fbank.extract(pcm16kMono))
+        guard kept != nil else {
+            throw CamPlusError.inferenceFailed("fewer than \(Self.frameBlock) fbank frames (input shorter than 2 s)")
         }
 
         #if !targetEnvironment(simulator)
-        guard let session = session else {
+        guard let session = session, let frames = kept else {
             throw CamPlusError.modelNotLoaded
         }
 

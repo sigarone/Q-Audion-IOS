@@ -201,6 +201,29 @@ final class SpeakerVerifierTests: XCTestCase {
         XCTAssertEqual(score, verifier.verify(pcmFrame: frame))
     }
 
+    // MARK: - Windows in audio time
+
+    /// The per-contact windows are lengths of audio, whatever the chunk size the RX path delivers: the verification
+    /// window is 2 s and the automatic enrolment 3 s of speech, with 20 ms frames and with 10 ms chunks alike.
+    func testContactWindowsAreMeasuredInAudioTimeWhateverTheChunkSize() {
+        for chunkMs in [10, 20] {
+            let chunk = TestAudioHelpers.makeSinePCM(frequency: 440, sampleCount: AudioConstants.sampleRate * chunkMs / 1000)
+
+            let ready = enrolledVerifier()
+            for _ in 0..<(2_000 / chunkMs - 1) { ready.feedVerificationFrame(chunk) }
+            XCTAssertNil(ready.computeVerificationScore(), "\(chunkMs) ms chunks: less than 2 s is not a window")
+            ready.feedVerificationFrame(chunk)
+            XCTAssertNotNil(ready.computeVerificationScore(), "\(chunkMs) ms chunks: 2 s is a window")
+
+            let learning = SpeakerVerifier(embedder: DeterministicTestEmbedder())
+            learning.startAutoEnrollment(contactId: "alice")
+            for _ in 0..<(3_000 / chunkMs - 1) { learning.feedVerificationFrame(chunk) }
+            XCTAssertEqual(learning.getState(), .autoEnrolling, "\(chunkMs) ms chunks: less than 3 s of speech")
+            learning.feedVerificationFrame(chunk)
+            XCTAssertEqual(learning.getState(), .ready, "\(chunkMs) ms chunks: 3 s of speech")
+        }
+    }
+
     // MARK: - Helpers
 
     private func enrolledVerifier() -> SpeakerVerifier {

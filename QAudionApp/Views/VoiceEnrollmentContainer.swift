@@ -190,7 +190,7 @@ final class VoiceEnrollmentContainer: ObservableObject {
     }
 
     /// Finish enrollment (requires the accumulated frames across all
-    /// prompts to reach `SpeakerVerifier.enrollmentMinFrames`, ~3 s) and
+    /// prompts to reach the verifier's enrolment minimum, 3 s) and
     /// persist the resulting template to the Keychain-backed
     /// `VoiceprintStore` under the reserved device-owner id. Returns a
     /// display id on success, `nil` on failure (too little audio captured,

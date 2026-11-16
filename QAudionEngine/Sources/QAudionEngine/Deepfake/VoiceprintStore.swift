@@ -166,7 +166,12 @@ public final class VoiceprintStore {
 /// re-prompts enrollment rather than silently mis-scoring.
 enum VoiceprintCodec {
     private static let magic: UInt32 = 0x5150_4156 // "QAVP" packed big-endian-in-source, stored little-endian below
-    private static let formatVersion: UInt32 = 2 // 2 == CAM++ 512-dim (2026-08-01); no version 1 header ever existed — pre-migration blobs are unversioned and rejected by decode()
+    /// 2 == CAM++ 512-dim (2026-08-01); no version 1 header ever existed — pre-migration blobs are unversioned and
+    /// rejected by decode().
+    /// 3 == the embedding the model gives for a multiple of 200 fbank frames (2026-11-16, see
+    /// `CamPlusSpeakerEmbedder.modelFrames(from:)`). Only this version decodes; any other reads as "no template"
+    /// (`VoiceprintLookup.absent`).
+    private static let formatVersion: UInt32 = 3
     private static let headerSize = 12 // magic(4) + version(4) + dim(4)
 
     static func encode(_ template: [Float]) -> Data {

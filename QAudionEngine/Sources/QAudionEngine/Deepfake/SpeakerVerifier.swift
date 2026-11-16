@@ -30,7 +30,9 @@ import Foundation
 ///    (Kaldi/sherpa-onnx-compatible frontend — a DIFFERENT feature type
 ///    from `LfccExtractor`, do not conflate the two)
 /// 4. Run CAM++ ONNX inference via `CamPlusSpeakerEmbedder` -> L2-normalized
-///    512-dim embedding
+///    512-dim embedding. The model is given the first `200 * floor(T / 200)`
+///    fbank frames (`CamPlusSpeakerEmbedder.modelFrames(from:)`): 2 s is the
+///    least that gives an embedding, a 4 s window is used whole.
 ///
 /// **Two verification scores, two different scales — do not conflate:**
 /// - `verify(pcmFrame:)` (original, Tier 1 / Feature A): raw cosine
@@ -69,10 +71,12 @@ public final class SpeakerVerifier: @unchecked Sendable {
     /// Native PCM sample rate this app's call pipeline captures/feeds at.
     public static let nativeSampleRate = LfccExtractor.sampleRate
 
-    /// Frames per verification window for `feedVerificationFrame`/
-    /// `computeVerificationScore` — ~1s at 20ms/frame, matches Android's
-    /// `verificationWindowFrames` default (50).
-    private static let verificationWindowFrames = 50
+    /// Length of the verification window for `feedVerificationFrame`/
+    /// `computeVerificationScore`, in samples at `nativeSampleRate`: 2 s, which
+    /// is 200 fbank frames, the least input `CamPlusSpeakerEmbedder` gives an
+    /// embedding for, and all of it is used. Counted in samples and not in
+    /// frames: the RX path delivers 20 ms frames and 10 ms chunks.
+    static let verificationWindowSamples = 2 * SpeakerVerifier.nativeSampleRate
 
     /// Silence gate for the `.ready`-branch aggregate window AND the
     /// `.autoEnrolling` per-frame gate — same normalized-float RMS
@@ -120,7 +124,7 @@ public final class SpeakerVerifier: @unchecked Sendable {
     /// so a stale cache entry's version can never coincidentally match a
     /// later, different template.
     private var templateVersion = 0
-    private let enrollmentMinFrames = 150  // ~3 seconds at 20ms/frame
+    private let enrollmentMinSamples = 3 * SpeakerVerifier.nativeSampleRate  // 3 seconds
 
     // MARK: - Tier 2 (auto-enrollment + continuous verification) state
 
@@ -202,7 +206,7 @@ public final class SpeakerVerifier: @unchecked Sendable {
 
     public func finishEnrollment() -> Bool {
         lock.lock()
-        guard state == .enrolling, enrollmentFrames.count >= enrollmentMinFrames else {
+        guard state == .enrolling, sampleCount(enrollmentFrames) >= enrollmentMinSamples else {
             lock.unlock()
             return false
         }
@@ -221,27 +225,47 @@ public final class SpeakerVerifier: @unchecked Sendable {
         return true
     }
 
-    /// Verifies one raw PCM frame against the stored template. Returns raw
-    /// cosine similarity in `[-1, 1]`, or `0` if not ready / embedding
-    /// fails — matches this method's pre-existing "0 = not a real score"
-    /// contract (callers that need to distinguish "no template" from "a
-    /// real low score" should check `getState()` first).
+    /// Verifies raw PCM (Int16, mono, `Self.nativeSampleRate`) against the
+    /// stored template. Returns raw cosine similarity in `[-1, 1]`, or `0` if
+    /// not ready / embedding fails — matches this method's pre-existing "0 =
+    /// not a real score" contract (a caller that needs to tell "no score"
+    /// from a real low one uses `cosine(pcmFrame:)`, or checks `getState()`
+    /// first).
+    ///
+    /// The embedder needs at least 2 s of audio (`CamPlusSpeakerEmbedder.embed`)
+    /// and uses all of a 4 s window, so pass a window, never a 20 ms frame.
     ///
     /// Expensive — runs the FULL CAM++ embedding computation on every call.
     /// Callers on a real-time audio path MUST NOT call this per-frame;
     /// throttle to at most ~1/s (`OwnerContinuityMonitor` does this via its
-    /// own ~3s buffering window, never per-frame). For CONTINUOUS
+    /// own 4 s buffering window, never per-frame). For CONTINUOUS
     /// (per-frame) feeding, use `feedVerificationFrame`/
     /// `computeVerificationScore` instead — this method's own inline embed
     /// makes it unsuitable for that cadence.
     public func verify(pcmFrame: Data) -> Float {
+        cosine(pcmFrame: pcmFrame) ?? 0
+    }
+
+    /// The cosine of the audio's embedding against the stored template, or `nil`
+    /// when there is no score: not ready, no audio, or no embedding (the model is
+    /// unavailable or the audio is too short). Same work as `verify(pcmFrame:)`.
+    public func cosine(pcmFrame: Data) -> Float? {
         lock.lock()
-        guard state == .ready, storedTemplate != nil else { lock.unlock(); return 0 }
+        guard state == .ready, storedTemplate != nil else { lock.unlock(); return nil }
         lock.unlock()
 
         let floats = Self.pcmToFloat(pcmFrame)
-        guard !floats.isEmpty else { return 0 }
-        guard let embedding = try? computeEmbedding(from: [floats]) else { return 0 }
+        guard !floats.isEmpty else { return nil }
+        return cosine(pcm16k: Self.resampleTo16k(floats, fromHz: Self.nativeSampleRate))
+    }
+
+    /// `cosine(pcmFrame:)` for audio that is already mono 16 kHz.
+    public func cosine(pcm16k: [Float]) -> Float? {
+        lock.lock()
+        guard state == .ready, storedTemplate != nil else { lock.unlock(); return nil }
+        lock.unlock()
+
+        guard !pcm16k.isEmpty, let embedding = try? embedder.embed(pcm16kMono: pcm16k) else { return nil }
 
         // Re-read the template AFTER the (unlocked, potentially slow) embed
         // call — a concurrent reset()/re-enrollment could have changed or
@@ -249,7 +273,7 @@ public final class SpeakerVerifier: @unchecked Sendable {
         lock.lock()
         let currentTemplate = storedTemplate
         lock.unlock()
-        guard let currentTemplate else { return 0 }
+        guard let currentTemplate else { return nil }
         return cosineSimilarity(currentTemplate, embedding)
     }
 
@@ -327,7 +351,7 @@ public final class SpeakerVerifier: @unchecked Sendable {
         case .autoEnrolling:
             if rms(floats) >= Self.voiceActivityRmsThreshold {
                 enrollmentFrames.append(floats)
-                if enrollmentFrames.count >= enrollmentMinFrames, !autoEnrollCompletionInFlight,
+                if sampleCount(enrollmentFrames) >= enrollmentMinSamples, !autoEnrollCompletionInFlight,
                    let contactId = autoEnrollContactId {
                     autoEnrollCompletionInFlight = true
                     pending = PendingAutoEnrollComplete(contactId: contactId, frames: enrollmentFrames)
@@ -335,8 +359,10 @@ public final class SpeakerVerifier: @unchecked Sendable {
             }
         case .ready:
             verificationBuffer.append(floats)
-            if verificationBuffer.count > Self.verificationWindowFrames {
-                verificationBuffer.removeFirst()
+            // Keep the newest window: the oldest frames go while the rest still make a whole one.
+            var total = sampleCount(verificationBuffer)
+            while verificationBuffer.count > 1, total - verificationBuffer[0].count >= Self.verificationWindowSamples {
+                total -= verificationBuffer.removeFirst().count
             }
         case .idle, .enrolling, .verifying:
             break
@@ -359,7 +385,7 @@ public final class SpeakerVerifier: @unchecked Sendable {
     public func computeVerificationScore() -> Float? {
         lock.lock(); defer { lock.unlock() }
         guard state == .ready, let template = storedTemplate else { return nil }
-        guard verificationBuffer.count >= Self.verificationWindowFrames else { return nil }
+        guard sampleCount(verificationBuffer) >= Self.verificationWindowSamples else { return nil }
         guard aggregateRms(verificationBuffer) >= Self.voiceActivityRmsThreshold else { return nil }
         guard let liveEmbedding = try? computeEmbedding(from: verificationBuffer) else { return nil }
 
@@ -504,6 +530,13 @@ public final class SpeakerVerifier: @unchecked Sendable {
         for i in 0..<dim { dot += a[i] * b[i]; normA += a[i] * a[i]; normB += b[i] * b[i] }
         let denom = sqrt(normA) * sqrt(normB)
         return denom > 0 ? dot / denom : 0
+    }
+
+    /// Samples in a list of frames.
+    private func sampleCount(_ frames: [[Float]]) -> Int {
+        var total = 0
+        for frame in frames { total += frame.count }
+        return total
     }
 
     /// Root-mean-square energy of one normalized `[-1, 1]` PCM frame.
