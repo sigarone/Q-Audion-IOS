@@ -3660,6 +3660,13 @@ final class AppState: ObservableObject {
     /// Currently-active CallKit call UUID (one at a time).
     private(set) var activeCallKitId: UUID?
 
+    /// How the incoming WebSocket call that rings in the app alone is presented, by its call UUID. Read when the
+    /// phone window changes phase (`handOffInAppRingToCallKit`); set to `.callKit` once the call has been handed over.
+    private var wsRingPresentation: (callId: UUID, presentation: WsIncomingPresentation)?
+
+    /// The same for an incoming group call, by its call id.
+    private var groupRingPresentation: (callId: String, presentation: WsIncomingPresentation)?
+
     /// W-GHOSTCALL (2026-09-25) — call UUIDs this app has already ended (filled
     /// in `endCall` and `handleRemoteCallHangup`, before the CallKit report and
     /// before `activeCallKitId` is cleared). Read by the cancel-push handler and
@@ -8386,8 +8393,11 @@ final class AppState: ObservableObject {
                         // native CallKit UI is handling ringing (background WS or
                         // PushKit), stay .idle so the in-app view stays hidden —
                         // the single-dialer guarantee.
-                        if !alreadyRegisteredByPushKit && wsPresentation == .inAppOnly {
+                        let handedOffToCallKit: Bool = self.wsRingPresentation?.callId == callUUID
+                            && self.wsRingPresentation?.presentation == .callKit
+                        if !alreadyRegisteredByPushKit && wsPresentation == .inAppOnly && !handedOffToCallKit {
                             self.callState = .ringing
+                            self.wsRingPresentation = (callId: callUUID, presentation: wsPresentation)
                             // In-app ringtone: CallKit (suppressed for in-app dialer) was
                             // previously the only ring source. Play the system "sms-received"
                             // sound on repeat every 3 s until the call is answered/declined.
@@ -8396,6 +8406,10 @@ final class AppState: ObservableObject {
                             // notification channel, which works even when the audio session is
                             // inactive (i.e. before the user answers).
                             self.startInAppRingtone()
+                            // The app left the foreground while this call was being set up: it goes to CallKit now.
+                            if UIApplication.shared.applicationState == .background {
+                                self.handOffInAppRingToCallKit(scene: .background)
+                            }
                         }
                         // W-NOCALLKIT cold-start: the user already tapped
                         // "Rispondi" on the notification before this call_incoming
@@ -18942,6 +18956,11 @@ final class AppState: ObservableObject {
             // W-GHOSTCALL — record the missed call while the ring flag is still up
             // (the later WS hangup would no longer see a ringing call).
             self.recordMissedOnCancelPush(callId: payload.callId)
+            // The call this device holds is over: recorded like a remote hangup records it, so a ring that is
+            // still in the app is not handed to CallKit.
+            if let heldUuid = self.activeCallKitId, heldUuid == payload.callId {
+                self.recentlyEndedCallIds.recordEnded(heldUuid)
+            }
             // Same local teardown a WS call_cancel / call_hangup would drive.
             self.stopInAppRingtone()
             self.incomingCallRingVisible = false
@@ -21640,6 +21659,44 @@ final class AppState: ObservableObject {
     /// Stop the in-app ringtone. Called on answer, decline, or hangup.
     func stopInAppRingtone() {
         inAppRing.stop()
+    }
+
+    /// The phone window changed phase while an incoming call, 1:1 or group, rings in the app alone. Once the window is
+    /// in the background the call goes to CallKit, which shows it and rings outside the app: the same report a call
+    /// that arrived in the background gets, for the same call UUID, so answer, decline and end run through the CallKit
+    /// delegate as for any other call. The in-app ring stops once CallKit has accepted the report; a refused report
+    /// leaves the call as it was.
+    func handOffInAppRingToCallKit(scene: ScenePhase) {
+        guard !CallsGate.callKitFreeMode, let provider = callKit as? CallKitProvider else { return }
+        handOffOneToOneRing(scene: scene, provider: provider)
+        handOffGroupRing(scene: scene, provider: provider)
+    }
+
+    private func handOffOneToOneRing(scene: ScenePhase, provider: CallKitProvider) {
+        guard let uuid = activeCallKitId,
+              let ring = wsRingPresentation, ring.callId == uuid,
+              answeredCallKitId != uuid,
+              !recentlyEndedCallIds.wasRecentlyEnded(uuid) else { return }
+        guard ring.presentation.handsOffToCallKit(
+            scene: scene, reportedToCallKit: provider.hasReport(for: uuid), ringing: callState == .ringing) else { return }
+        // One report per call: from here the call counts as presented by CallKit, whatever the report's outcome.
+        wsRingPresentation = (callId: uuid, presentation: .callKit)
+        // CallKit's own video flag follows the WebSocket path: forced on, except with CarPlay connected.
+        let carPlay: Bool = CarPlayLink.read().connected
+        SoundPreviewCoordinator.stopAll()
+        provider.reportSuppressedCall(
+            uuid: uuid, callerName: incomingCallerName, hasVideo: carPlay ? isVideoCall : true
+        ) { [weak self] outcome in
+            Task { @MainActor [weak self] in
+                let line: String = "callkit handoff ok=\(outcome.ok ? 1 : 0) code=\(outcome.code)"
+                guard outcome.ok else {
+                    RTLog.warn("call", line)
+                    return
+                }
+                RTLog.info("call", line)
+                if self?.activeCallKitId == uuid { self?.stopInAppRingtone() }
+            }
+        }
     }
 
     /// True while a call is in progress, from the app's call state (never from the audio session's category): a live
@@ -28319,6 +28376,7 @@ extension AppState {
         let foreground = UIApplication.shared.applicationState == .active
         if foreground {
             startInAppRingtone()
+            groupRingPresentation = (callId: invite.callId, presentation: .inAppOnly)
             return
         }
         if CallsGate.callKitFreeMode {
@@ -28340,16 +28398,54 @@ extension AppState {
             }
             return
         }
+        reportGroupInviteToCallKit(invite)
+    }
+
+    /// Reports the invite's group call to CallKit under the uuid derived from its call id, which becomes
+    /// `groupCallKitId`. Returns the task that makes the report; its value is that uuid.
+    @discardableResult
+    @MainActor
+    private func reportGroupInviteToCallKit(_ invite: IncomingGroupCallInvite) -> Task<UUID, Never> {
         let uuid = Self.callKitUUID(forGroupCallId: invite.callId)
         groupCallKitId = uuid
         let name = invite.displayTitle
-        Task { [weak self] in
+        return Task { [weak self] in
             // W-CALLKITVIDEOFORCE — force hasVideo=true (see the PushKit
             // group branch above for the full rationale); `invite.hasVideo`
             // still drives the real group-call UI/behavior elsewhere.
             await MainActor.run { SoundPreviewCoordinator.stopAll() }
             await self?.callKit?.reportIncomingCall(
                 uuid: uuid, callerName: name, hasVideo: true)
+            return uuid
+        }
+    }
+
+    /// The group twin of `handOffOneToOneRing`: the invite rings in the app alone, nothing has put it on CallKit (no
+    /// push latched a CallKit uuid), and it has not been answered, declined, cancelled or timed out. The report is the
+    /// one a group call that arrives in the background gets, so answer, decline and end run through the CallKit
+    /// delegate and `groupCallKitId`. A refused report leaves the in-app ring and the direct accept as they were.
+    @MainActor
+    fileprivate func handOffGroupRing(scene: ScenePhase, provider: CallKitProvider) {
+        guard let ring = groupRingPresentation,
+              let invite = incomingGroupCallInvite, GroupCallIds.ieq(invite.callId, ring.callId),
+              !isGroupCallHandled(invite.callId) else { return }
+        let reported: Bool = groupCallKitId != nil
+            || provider.hasReport(for: Self.callKitUUID(forGroupCallId: invite.callId))
+        guard ring.presentation.handsOffToCallKit(scene: scene, reportedToCallKit: reported, ringing: true) else { return }
+        groupRingPresentation = (callId: invite.callId, presentation: .callKit)
+        let report: Task<UUID, Never> = reportGroupInviteToCallKit(invite)
+        Task { [weak self] in
+            let uuid: UUID = await report.value
+            guard let self, GroupCallIds.ieq(self.incomingGroupCallInvite?.callId, invite.callId) else { return }
+            let accepted: Bool = provider.hasReport(for: uuid)
+            let line: String = "callkit handoff grp=1 ok=\(accepted ? 1 : 0)"
+            if accepted {
+                RTLog.info("call", line)
+                self.stopInAppRingtone()
+            } else {
+                RTLog.warn("call", line)
+                if self.groupCallKitId == uuid { self.groupCallKitId = nil }
+            }
         }
     }
 

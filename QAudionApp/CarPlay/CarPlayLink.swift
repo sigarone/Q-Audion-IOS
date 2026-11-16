@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import SwiftUI
 
 /// Whether the phone is connected to a car, readable from any thread at the moment an incoming call arrives.
 ///
@@ -80,5 +81,14 @@ enum WsIncomingPresentation: Equatable {
     /// background nothing else can show it, and a car shows calls only through CallKit.
     static func decide(foreground: Bool, carPlay: Bool) -> WsIncomingPresentation {
         (foreground && !carPlay) ? .inAppOnly : .callKit
+    }
+
+    /// Whether a call presented this way is reported to CallKit now, as the phone window changes to `scene`. Only a
+    /// call that rings in the app alone qualifies, while it still rings and CallKit has not been told of it, and only
+    /// once the window is in the background: `.inactive` is also what Control Center and the app switcher produce,
+    /// with the call still in front of the user.
+    func handsOffToCallKit(scene: ScenePhase, reportedToCallKit: Bool, ringing: Bool) -> Bool {
+        guard self == .inAppOnly, scene == .background, !reportedToCallKit else { return false }
+        return ringing
     }
 }

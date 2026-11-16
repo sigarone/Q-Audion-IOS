@@ -882,6 +882,7 @@ jobs:
             -only-testing:QAudionAppTests/FileV2ImageCleanerTests \
             -only-testing:QAudionAppTests/GlassPolicyTests \
             -only-testing:QAudionAppTests/IntentHandlerTests \
+            -only-testing:QAudionAppTests/InAppRingHandoffTests \
             -only-testing:QAudionAppTests/KmsSweepStatusTests \
             -only-testing:QAudionAppTests/LegalLinksTests \
             -only-testing:QAudionAppTests/LocationAppTests \
