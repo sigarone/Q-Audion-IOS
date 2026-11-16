@@ -483,9 +483,9 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     }
 
     /// The call `uuid` rang only in the app (`registerSuppressedCall`) and now goes to CallKit: it is reported like
-    /// any incoming call, and an answer from the in-app banner takes the CallKit path from then on. A report CallKit
-    /// refuses arms the manual-answer path again, as for every refused report. `completion` runs on whatever queue
-    /// CallKit answers on.
+    /// any incoming call, and an answer from the in-app banner takes the CallKit path from then on. A refusal arms
+    /// the manual-answer path again, except when CallKit already has the call (error code 2, or another report of the
+    /// uuid in flight or up). `completion` runs on whatever queue CallKit answers on.
     public func reportSuppressedCall(
         uuid: UUID, callerName: String, hasVideo: Bool,
         completion: @escaping (PushKitProvider.ReportOutcome) -> Void

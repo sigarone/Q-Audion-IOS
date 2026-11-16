@@ -8393,7 +8393,9 @@ final class AppState: ObservableObject {
                         // native CallKit UI is handling ringing (background WS or
                         // PushKit), stay .idle so the in-app view stays hidden —
                         // the single-dialer guarantee.
-                        if !alreadyRegisteredByPushKit && wsPresentation == .inAppOnly {
+                        let handedOffToCallKit: Bool = self.wsRingPresentation?.callId == callUUID
+                            && self.wsRingPresentation?.presentation == .callKit
+                        if !alreadyRegisteredByPushKit && wsPresentation == .inAppOnly && !handedOffToCallKit {
                             self.callState = .ringing
                             self.wsRingPresentation = (callId: callUUID, presentation: wsPresentation)
                             // In-app ringtone: CallKit (suppressed for in-app dialer) was
@@ -18954,6 +18956,11 @@ final class AppState: ObservableObject {
             // W-GHOSTCALL — record the missed call while the ring flag is still up
             // (the later WS hangup would no longer see a ringing call).
             self.recordMissedOnCancelPush(callId: payload.callId)
+            // The call this device holds is over: recorded like a remote hangup records it, so a ring that is
+            // still in the app is not handed to CallKit.
+            if let heldUuid = self.activeCallKitId, heldUuid == payload.callId {
+                self.recentlyEndedCallIds.recordEnded(heldUuid)
+            }
             // Same local teardown a WS call_cancel / call_hangup would drive.
             self.stopInAppRingtone()
             self.incomingCallRingVisible = false
