@@ -90,7 +90,7 @@ final class ContactVoiceVerifierProfileAndPathTests: XCTestCase {
         let delivered = VerifierCount()
         verifier.onScoreUpdated = { _ in delivered.bump() }
         verifier.setActiveContact("alice")
-        feedSpeech(verifier, frames: 60)
+        feedSpeech(verifier, frames: SpeakerVerifier.verificationWindowSamples / AudioConstants.samplesPerFrame + 10)
 
         // The detector needs six scores for its reference, then one more to be steady.
         for _ in 0..<8 { runTick(verifier, delivered: delivered) }

@@ -9,16 +9,38 @@ private final class StateRecorder: @unchecked Sendable {
     var states: [OwnerContinuityMonitor.State] { lock.lock(); defer { lock.unlock() }; return _states }
 }
 
+/// Reports a settable number of milliseconds of speech for every window.
+private final class StubSpeechDetector: WindowSpeechDetector, @unchecked Sendable {
+    private let lock = NSLock()
+    private var ms: Int
+    init(ms: Int) { self.ms = ms }
+    func set(_ value: Int) { lock.lock(); ms = value; lock.unlock() }
+    func speechMs(pcm16k: [Float]) -> Int { lock.lock(); defer { lock.unlock() }; return ms }
+}
+
+/// An embedder that never gives an embedding.
+private final class NoEmbedding: SpeakerEmbedding {
+    static let embeddingDimension = DeterministicTestEmbedder.embeddingDimension
+    func embed(pcm16kMono: [Float]) throws -> [Float] { throw CamPlusSpeakerEmbedder.CamPlusError.runtimeUnavailable }
+}
+
 final class OwnerContinuityMonitorTests: XCTestCase {
 
-    private func makeMonitor(registered: Bool) -> (OwnerContinuityMonitor, StateRecorder) {
-        let verifier = SpeakerVerifier(embedder: DeterministicTestEmbedder())
+    /// 20 ms frames in one window of the monitor: 4 s.
+    private let windowFrames = 200
+
+    private func makeMonitor(
+        registered: Bool,
+        embedder: any SpeakerEmbedding = DeterministicTestEmbedder(),
+        speech: StubSpeechDetector = StubSpeechDetector(ms: 4_000)
+    ) -> (OwnerContinuityMonitor, StateRecorder) {
+        let verifier = SpeakerVerifier(embedder: embedder)
         if registered {
             var template = [Float](repeating: 0, count: DeterministicTestEmbedder.embeddingDimension)
             template[0] = 1
             verifier.importTemplate(template)
         }
-        let monitor = OwnerContinuityMonitor(verifier: verifier)
+        let monitor = OwnerContinuityMonitor(verifier: verifier, speechDetector: speech)
         let recorder = StateRecorder()
         monitor.onStateChanged = { recorder.record($0) }
         return (monitor, recorder)
@@ -102,14 +124,51 @@ final class OwnerContinuityMonitorTests: XCTestCase {
         let (monitor, recorder) = makeMonitor(registered: true)
         monitor.start()
         monitor.drainForTesting()
-        // 3 s window at 20 ms per frame = 150 frames.
-        for n in 0..<150 { monitor.feed(pcmFrame: toneFrame(phase: n * 960)) }
+        // The window is 4 s: one frame short of it gives no score, the frame that completes it gives one.
+        for n in 0..<(windowFrames - 1) { monitor.feed(pcmFrame: toneFrame(phase: n * 960)) }
+        monitor.drainForTesting()
+        XCTAssertEqual(scoredCount(recorder), 0, "less than a window is not scored")
+        monitor.feed(pcmFrame: toneFrame(phase: (windowFrames - 1) * 960))
         monitor.drainForTesting()
 
-        XCTAssertEqual(monitor.enqueuedChunkCount, 150)
-        let scored = recorder.states.filter { if case .scored = $0 { return true } else { return false } }
-        XCTAssertEqual(scored.count, 1, "one window of audio gives exactly one score")
+        XCTAssertEqual(monitor.enqueuedChunkCount, windowFrames)
+        XCTAssertEqual(scoredCount(recorder), 1, "one window of audio gives exactly one score")
         if case .scored = monitor.currentState() {} else { XCTFail("expected a scored state") }
+    }
+
+    /// A window without speech is no score: nothing is delivered and the streak is untouched, however many such
+    /// windows pass; the next window with speech scores as usual.
+    func testAWindowWithoutSpeechIsNotScored() {
+        let speech = StubSpeechDetector(ms: 0)
+        let (monitor, recorder) = makeMonitor(registered: true, speech: speech)
+        monitor.start()
+        monitor.drainForTesting()
+        for n in 0..<(3 * windowFrames) { monitor.feed(pcmFrame: toneFrame(phase: n * 960)) }
+        monitor.drainForTesting()
+        XCTAssertEqual(scoredCount(recorder), 0)
+        XCTAssertFalse(monitor.shouldAlert())
+
+        speech.set(OwnerContinuityMonitor.minSpeechMs)
+        for n in 0..<windowFrames { monitor.feed(pcmFrame: toneFrame(phase: n * 960)) }
+        monitor.drainForTesting()
+        XCTAssertEqual(scoredCount(recorder), 1)
+    }
+
+    /// A window the embedder gives no embedding for is no score either, so a model that is unavailable cannot walk the
+    /// smoothed value down to a Mismatch alert.
+    func testAWindowWithNoEmbeddingIsNotScored() {
+        let (monitor, recorder) = makeMonitor(registered: true, embedder: NoEmbedding())
+        monitor.start()
+        monitor.drainForTesting()
+        for n in 0..<(4 * windowFrames) { monitor.feed(pcmFrame: toneFrame(phase: n * 960)) }
+        monitor.drainForTesting()
+        XCTAssertEqual(scoredCount(recorder), 0)
+        XCTAssertFalse(monitor.shouldAlert())
+        XCTAssertEqual(monitor.currentState(), .inactive)
+    }
+
+    private func scoredCount(_ recorder: StateRecorder) -> Int {
+        recorder.states.filter { if case .scored = $0 { return true } else { return false } }.count
     }
 
     func testRestartFromScoredStateAnnouncesInactiveOnce() {

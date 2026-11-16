@@ -103,4 +103,43 @@ final class VoiceModelRunnerTests: XCTestCase {
         XCTAssertGreaterThan(norm, 1e-3)
         print("voice-model-runner campplus load_ms=\(loadMs) run_ms=\(runMs) frames=\(frames.count) dim=\(embedding.count) norm=\(norm)")
     }
+
+    private func cosine(_ a: [Float], _ b: [Float]) -> Float {
+        var dot: Float = 0
+        var normA: Float = 0
+        var normB: Float = 0
+        for i in 0..<min(a.count, b.count) {
+            dot += a[i] * b[i]
+            normA += a[i] * a[i]
+            normB += b[i] * b[i]
+        }
+        return dot / (normA.squareRoot() * normB.squareRoot())
+    }
+
+    /// What the embedder gives the shipped model: a 4 s window (400 frames) whole, and of a 3 s window (300 frames) the
+    /// first 200, with the mean of those 200 removed.
+    func testCamPlusEmbedsTheFramesTheEmbedderKeeps() throws {
+        let url = try engineResource("campplus_sv_voxceleb_16k.onnx")
+        let model = CamPlusModel(runner: try VoiceModelRunner(modelPath: url.path))
+        let extractor = KaldiFbankExtractor()
+
+        let four = extractor.extract(Self.testSignal(count: 4 * KaldiFbankExtractor.sampleRate))
+        XCTAssertEqual(four.count, 400)
+        let keptFour = try XCTUnwrap(CamPlusSpeakerEmbedder.modelFrames(from: four))
+        let embeddingOfKeptFour = try model.embedding(features: keptFour)
+        let embeddingOfFour = try model.embedding(features: four)
+        XCTAssertGreaterThanOrEqual(cosine(embeddingOfKeptFour, embeddingOfFour), 1 - 1e-6)
+
+        let three = extractor.extract(Self.testSignal(count: 3 * KaldiFbankExtractor.sampleRate))
+        XCTAssertEqual(three.count, 300)
+        let keptThree = try XCTUnwrap(CamPlusSpeakerEmbedder.modelFrames(from: three))
+        XCTAssertEqual(keptThree.count, 200)
+        var first = Array(three.prefix(200))
+        var mean = [Float](repeating: 0, count: KaldiFbankExtractor.numMelBins)
+        for row in first { for m in 0..<mean.count { mean[m] += row[m] / 200 } }
+        for t in 0..<first.count { for m in 0..<mean.count { first[t][m] -= mean[m] } }
+        let embeddingOfKeptThree = try model.embedding(features: keptThree)
+        let embeddingOfFirst = try model.embedding(features: first)
+        XCTAssertGreaterThanOrEqual(cosine(embeddingOfKeptThree, embeddingOfFirst), 1 - 1e-6)
+    }
 }

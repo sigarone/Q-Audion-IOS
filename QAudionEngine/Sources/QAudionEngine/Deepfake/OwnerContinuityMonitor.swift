@@ -21,6 +21,12 @@ import Foundation
 /// `SpeakerVerifier` is not `.ready` (no enrolled Voice-as-Key template) —
 /// this must never nag or penalize a user who has not opted in.
 ///
+/// Only windows that hold speech count: a window with less than
+/// `minSpeechMs` of it (a listening owner in a loud place, dead air) is
+/// skipped before anything else, and so is a window the embedder gave no
+/// embedding for — neither is a score, and neither touches the smoothed
+/// value or the mismatch streak. See `speechDetector`.
+///
 /// Score scale — W-VSCORESCALE (2026-08-02). `verifier.verify(pcmFrame:)`
 /// returns a RAW COSINE in `[-1, 1]`, and this class converts it to
 /// `V_score = (cosine + 1) / 2` BEFORE thresholding, because
@@ -50,42 +56,85 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         case scored(score: Float, level: Level)
     }
 
-    /// Cosine-similarity cutoffs — same family as
-    /// `VoicePrintVault.THRESHOLD_CONSUMER`/`THRESHOLD_ENTERPRISE` on
-    /// Android, kept independent so tuning one never silently retunes the
-    /// other. `verifiedThreshold` carried over from Android's 2026-08-01
-    /// real-device finding (confirmed on-device: 0.70 on the raw score
-    /// almost never held for the genuine owner's own voice; 0.62 matched
-    /// what a real trace showed). `uncertainThreshold` is unchanged /
-    /// still provisional — no real cross-speaker (impersonation) CAM++
-    /// data exists yet to justify moving the mismatch floor. Neither has
-    /// been independently re-validated against a real iOS device call.
-    private static let verifiedThreshold: Float = 0.62
-    private static let uncertainThreshold: Float = 0.50
+    /// Cutoffs on the smoothed V_score (`(cosine + 1) / 2`, see the class doc),
+    /// kept independent of `VoiceAuthGate.defaultThreshold` and of Android's
+    /// `VoicePrintVault` bars so tuning one never silently retunes another.
+    ///
+    /// Measured basis (offline, on the embedding the model gives for 4 s windows
+    /// of 400 frames, with a template the way the enrolment builds it: one
+    /// embedding of 9 s of one sitting). LibriSpeech test-clean and MLS Italian,
+    /// 29 owners each, the windows from another sitting, clean and with a
+    /// per-call room reverb (70 %) and MUSAN noise at 5-25 dB, this class's
+    /// smoothing replayed over streams of 12 windows, the impostor another
+    /// speaker of the same sex (figures LibriSpeech / MLS):
+    ///  - the owner, clean: raw cosine p5 0.66 / 0.56, median 0.77 / 0.74; the
+    ///    smoothed V_score never under 0.81 / 0.75, always Verified, no alert in
+    ///    29 streams. Degraded: raw cosine p5 0.23 / 0.24, median 0.59 / 0.57;
+    ///    Verified in 79 % / 81 % of the smoothed windows, an alert in 1 of 29
+    ///    streams for each corpus;
+    ///  - the impostor, clean: raw cosine p95 0.35 / 0.44, p99 0.44 / 0.52; at
+    ///    0.72 / 0.62 Verified in 0.6 % / 3.6 % of the smoothed windows (degraded
+    ///    0.1 % / 1.5 %) and the alert arms within 12 windows in 82 % / 62 % of
+    ///    the streams (degraded 91 % / 78 %), a median of 5-7 windows after he
+    ///    takes over from the owner.
+    /// The alternatives measured on the same streams: a Verified bar of 0.62
+    /// admits the impostor into Verified in 21 % / 44 % of the windows, 0.66 in
+    /// 7 % / 21 %; a Mismatch bar of 0.50 arms the alert in 13 % / 2 % of the
+    /// impostor streams, 0.66 in 94 % / 83 % but also on the owner in 3 and 1 of
+    /// 29 degraded streams. 0.62 keeps the alert on the owner to 1 of 29
+    /// degraded streams because the template is one clean sitting, not learned
+    /// from calls, and the margin is what absorbs a worse microphone path.
+    /// Studio and audiobook speech is a guide, not a phone call, and the signal
+    /// stays the soft, advisory indicator it is.
+    private static let verifiedThreshold: Float = 0.72
+    private static let uncertainThreshold: Float = 0.62
 
     /// EMA smoothing factor — 2026-08-01 fix carried from Android: the raw
     /// per-tick CAM++ score is too noisy to threshold directly (confirmed
     /// on-device — reacting to every tick made the badge flicker to
     /// `.mismatch` on ordinary noise dips even during genuine, continuous
-    /// owner speech).
+    /// owner speech). One step per window, 4 s.
     private static let emaAlpha: Float = 0.35
 
-    /// 3 consecutive ~3s Mismatch windows (~9s sustained) before alerting —
+    /// 3 consecutive 4 s Mismatch windows (~12 s sustained) before alerting —
     /// long enough that a brief mic hand-off/background noise burst can't
     /// false-positive. Matches Android's `MISMATCH_STREAK_FOR_ALERT`.
     private static let mismatchStreakForAlert = 3
 
-    /// ~3s of native-rate audio buffered before each score — matches
-    /// Android's `TARGET_SAMPLES_16K` (48_000 samples @ 16kHz = 3s) in
-    /// WALL-CLOCK terms. Unlike Android (which pre-decimates to 16kHz
-    /// itself before calling `VoicePrintVault.verify`), iOS's
-    /// `SpeakerVerifier.verify(pcmFrame:)` already resamples 48kHz->16kHz
-    /// internally (see its `computeEmbedding`) — buffering RAW native PCM
-    /// here and letting `verify` resample once avoids a redundant
-    /// double-resample.
-    private static let targetWindowSeconds: Double = 3.0
+    /// 4 s of native-rate audio buffered before each score — matches
+    /// Android's `TARGET_SAMPLES_16K` (64_000 samples @ 16kHz = 4s) in
+    /// WALL-CLOCK terms. 4 s at 16 kHz is 64,000 samples, which
+    /// `KaldiFbankExtractor` (snip_edges=false) turns into round(64000 / 160) =
+    /// 400 fbank frames, a multiple of 200: `CamPlusSpeakerEmbedder` gives the
+    /// model every frame of the window. The monitor buffers RAW native PCM,
+    /// resamples a finished window to 16 kHz once, and uses that one window
+    /// for the speech gate and for the score.
+    private static let targetWindowSeconds: Double = 4.0
+
+    /// The least speech, in milliseconds of the 4 s window, that a window must
+    /// hold to be scored: the gate of `speechDetector` (Silero VAD, a 32 ms chunk
+    /// counts at a probability of 0.5). The bars above are measured on windows
+    /// of speech. A window with none is not a sample of anybody's voice: its
+    /// cosine against a template is about 0.04 (p99 0.20, max 0.28 over noise
+    /// windows at RMS 200 to 1000), a V_score under the Mismatch bar, so the gate
+    /// keeps such a window out and an owner who listens in a car, a street or a
+    /// café is not read as a different voice.
+    ///
+    /// Measured offline on 4 s windows, with the Silero model and threshold of
+    /// the voice bundle: of 600 windows of noise without voices (MUSAN noise and
+    /// DNS-challenge Freesound noise at RMS 200 to 1000, pink noise at RMS 25 to
+    /// 1000) none reaches 1,500 ms of speech. Windows of LibriSpeech and MLS
+    /// speech: 4 s of it passes in 100 % of the windows (90 % / 91 % with room
+    /// reverb and noise), 2 s of it plus 2 s of dead air in 96 % / 98 %, 1 s of
+    /// it in 0 %. Music passes in 5-8 % of the windows (singing). Not covered:
+    /// another voice (a TV, the other party leaking into the microphone) holds
+    /// speech and is scored as the different voice it is.
+    static let minSpeechMs = 1_500
 
     private let verifier: SpeakerVerifier
+    /// The speech gate: a window with less than `minSpeechMs` of speech in it is
+    /// skipped, whatever its energy.
+    private let speechDetector: any WindowSpeechDetector
     /// Own dedicated serial queue — mirrors `CallService.txAudioQueue`'s
     /// "own queue, never the shared/main one" discipline, and Android's own
     /// dedicated single-thread dispatcher (`Dispatchers.IO
@@ -97,6 +146,7 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     // MARK: - Queue-confined state (only ever touched from `queue`, no lock needed)
     private var buffer = Data()
     private var targetBytes = 0
+    private var nativeRateHz = SpeakerVerifier.nativeSampleRate
     private var ema: Float?
     private var enrolledCached = false
     /// Last state actually handed to `onStateChanged` since the latest
@@ -128,8 +178,11 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     /// cross-thread callback in this codebase.
     public var onStateChanged: ((State) -> Void)?
 
-    public init(verifier: SpeakerVerifier) {
+    /// - Parameter speechDetector: the speech gate, see `minSpeechMs`. The default is the Silero VAD of the
+    ///   voice bundle, shared by the app.
+    public init(verifier: SpeakerVerifier, speechDetector: any WindowSpeechDetector = SileroWindowSpeechDetector.shared) {
         self.verifier = verifier
+        self.speechDetector = speechDetector
     }
 
     /// (Re)starts the monitor. `nativeSampleRateHz` is the TX capture
@@ -150,6 +203,7 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
             guard let self else { return }
             self.buffer.removeAll(keepingCapacity: true)
             self.targetBytes = Int(Double(nativeSampleRateHz) * Self.targetWindowSeconds) * MemoryLayout<Int16>.size
+            self.nativeRateHz = nativeSampleRateHz
             self.ema = nil
             self.enrolledCached = enrolledNow
             self.lastNotified = nil
@@ -234,8 +288,23 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         let chunk = buffer
         buffer.removeAll(keepingCapacity: true)
 
+        // The finished window at the embedder's rate, once: the speech gate and
+        // the score both use this one. A window that goes over the target by up
+        // to one chunk keeps its extra audio; the embedder uses the first 400
+        // frames.
+        let window = SpeakerVerifier.resampleTo16k(SpeakerVerifier.pcmToFloat(chunk), fromHz: nativeRateHz)
+
+        // The speech gate (see `minSpeechMs`): a window without speech in it is
+        // no sample of anybody's voice, so it reaches neither the score nor the
+        // smoothing nor the streak.
+        guard speechDetector.speechMs(pcm16k: window) >= Self.minSpeechMs else { return }
+
+        // A window the embedder gave no embedding for has no score: skipped
+        // like the windows above, EMA and streak untouched.
+        guard let cosine = verifier.cosine(pcm16k: window) else { return }
+
         // W-VSCORESCALE — convert to the scale the thresholds actually live
-        // on before comparing. `verify` returns a raw cosine; the constants
+        // on before comparing. `cosine` is a raw cosine; the constants
         // are V_score values inherited (via Android) from the remote-voice
         // gate of that time, which was fed
         // SpeakerVerifier.computeVerificationScore. Thresholding the cosine
@@ -244,7 +313,6 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         // numbers. The conversion is affine and monotonic, so it changes no
         // ordering — only that the value and the bar are finally in the same
         // units. Smooth AFTER converting so `ema` is a V_score too.
-        let cosine = verifier.verify(pcmFrame: chunk)
         let vScore = min(max((cosine + 1) / 2, 0), 1)
         let smoothed = ema.map { Self.emaAlpha * vScore + (1 - Self.emaAlpha) * $0 } ?? vScore
         ema = smoothed

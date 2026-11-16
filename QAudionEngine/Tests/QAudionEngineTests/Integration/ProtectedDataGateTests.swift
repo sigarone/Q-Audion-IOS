@@ -22,7 +22,7 @@ final class ProtectedDataGateTests: XCTestCase {
             protectedData: protectedData, foregroundIntervalSeconds: 3, backgroundIntervalSeconds: 10,
             armTimer: noTimer)
         verifier.setActiveContact("alice")
-        for _ in 0..<60 {
+        for _ in 0..<(SpeakerVerifier.verificationWindowSamples / AudioConstants.samplesPerFrame + 10) {
             verifier.feedContinuous(TestAudioHelpers.makeSinePCM(frequency: 440, sampleCount: AudioConstants.samplesPerFrame))
         }
         return verifier

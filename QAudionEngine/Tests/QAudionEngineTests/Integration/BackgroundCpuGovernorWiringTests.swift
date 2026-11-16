@@ -43,7 +43,7 @@ final class BackgroundCpuGovernorWiringTests: XCTestCase {
             embedder: embedder, store: store, cohortNormalizer: nil, backgroundFlag: flag,
             foregroundIntervalSeconds: 3, backgroundIntervalSeconds: 10, armTimer: noTimer, governor: governor)
         verifier.setActiveContact("alice")
-        for _ in 0..<60 {
+        for _ in 0..<(SpeakerVerifier.verificationWindowSamples / AudioConstants.samplesPerFrame + 10) {
             verifier.feedContinuous(TestAudioHelpers.makeSinePCM(frequency: 440, sampleCount: AudioConstants.samplesPerFrame))
         }
         return verifier

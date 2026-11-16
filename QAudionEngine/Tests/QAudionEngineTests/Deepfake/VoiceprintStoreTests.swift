@@ -290,6 +290,10 @@ final class VoiceprintStoreTests: XCTestCase {
         var wrongVersion = good
         wrongVersion[4] ^= 0xFF
         XCTAssertNil(VoiceprintCodec.decode(wrongVersion))
+        var version2 = good
+        version2[4] = 2
+        XCTAssertNil(VoiceprintCodec.decode(version2), "the layout before the 200-frame embedding is not read")
+        XCTAssertEqual(VoiceprintKeychainRead.lookup(status: errSecSuccess, item: version2 as AnyObject), .absent)
         XCTAssertNil(VoiceprintCodec.decode(VoiceprintCodec.encode([])), "a template with no dimension")
     }
 }
