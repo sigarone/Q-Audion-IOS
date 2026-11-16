@@ -169,8 +169,8 @@ enum VoiceprintCodec {
     /// 2 == CAM++ 512-dim (2026-08-01); no version 1 header ever existed — pre-migration blobs are unversioned and
     /// rejected by decode().
     /// 3 == the embedding the model gives for a multiple of 200 fbank frames (2026-11-16, see
-    /// `CamPlusSpeakerEmbedder.modelFrames(from:)`): a version 2 template is not comparable with it, so it does not
-    /// decode and reads as "no template" (`VoiceprintLookup.absent`).
+    /// `CamPlusSpeakerEmbedder.modelFrames(from:)`). Only this version decodes; any other reads as "no template"
+    /// (`VoiceprintLookup.absent`).
     private static let formatVersion: UInt32 = 3
     private static let headerSize = 12 // magic(4) + version(4) + dim(4)
 

@@ -154,8 +154,8 @@ final class OwnerContinuityMonitorTests: XCTestCase {
         XCTAssertEqual(scoredCount(recorder), 1)
     }
 
-    /// A window the embedder gives no embedding for is no score either, so a model that is unavailable cannot walk the
-    /// smoothed value down to a Mismatch alert.
+    /// A window the embedder gives no embedding for is no score either: nothing is delivered and the smoothed value and
+    /// the streak stay as they are.
     func testAWindowWithNoEmbeddingIsNotScored() {
         let (monitor, recorder) = makeMonitor(registered: true, embedder: NoEmbedding())
         monitor.start()

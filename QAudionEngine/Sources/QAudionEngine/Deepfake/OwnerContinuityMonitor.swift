@@ -60,32 +60,16 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     /// kept independent of `VoiceAuthGate.defaultThreshold` and of Android's
     /// `VoicePrintVault` bars so tuning one never silently retunes another.
     ///
-    /// Measured basis (offline, on the embedding the model gives for 4 s windows
-    /// of 400 frames, with a template the way the enrolment builds it: one
-    /// embedding of 9 s of one sitting). LibriSpeech test-clean and MLS Italian,
-    /// 29 owners each, the windows from another sitting, clean and with a
-    /// per-call room reverb (70 %) and MUSAN noise at 5-25 dB, this class's
-    /// smoothing replayed over streams of 12 windows, the impostor another
-    /// speaker of the same sex (figures LibriSpeech / MLS):
-    ///  - the owner, clean: raw cosine p5 0.66 / 0.56, median 0.77 / 0.74; the
-    ///    smoothed V_score never under 0.81 / 0.75, always Verified, no alert in
-    ///    29 streams. Degraded: raw cosine p5 0.23 / 0.24, median 0.59 / 0.57;
-    ///    Verified in 79 % / 81 % of the smoothed windows, an alert in 1 of 29
-    ///    streams for each corpus;
-    ///  - the impostor, clean: raw cosine p95 0.35 / 0.44, p99 0.44 / 0.52; at
-    ///    0.72 / 0.62 Verified in 0.6 % / 3.6 % of the smoothed windows (degraded
-    ///    0.1 % / 1.5 %) and the alert arms within 12 windows in 82 % / 62 % of
-    ///    the streams (degraded 91 % / 78 %), a median of 5-7 windows after he
-    ///    takes over from the owner.
-    /// The alternatives measured on the same streams: a Verified bar of 0.62
-    /// admits the impostor into Verified in 21 % / 44 % of the windows, 0.66 in
-    /// 7 % / 21 %; a Mismatch bar of 0.50 arms the alert in 13 % / 2 % of the
-    /// impostor streams, 0.66 in 94 % / 83 % but also on the owner in 3 and 1 of
-    /// 29 degraded streams. 0.62 keeps the alert on the owner to 1 of 29
-    /// degraded streams because the template is one clean sitting, not learned
-    /// from calls, and the margin is what absorbs a worse microphone path.
-    /// Studio and audiobook speech is a guide, not a phone call, and the signal
-    /// stays the soft, advisory indicator it is.
+    /// At or above `verifiedThreshold` the smoothed score reads as the owner's
+    /// voice (`.verified`); under `uncertainThreshold` it reads as a different
+    /// voice (`.mismatch`, which counts toward `mismatchStreakForAlert`); in
+    /// between it is `.uncertain`. Both bars are set on the embedding the model
+    /// gives for a 4 s window of 400 frames, scored against the template the
+    /// enrolment builds (one embedding of the 9 s recorded in one sitting), on
+    /// offline read speech (LibriSpeech and MLS Italian, windows from another
+    /// sitting than the template's, clean and with room reverb and noise) with
+    /// the smoothing of this class. Offline speech is a guide, not a phone
+    /// call: the signal is a soft, advisory indicator.
     private static let verifiedThreshold: Float = 0.72
     private static let uncertainThreshold: Float = 0.62
 
@@ -113,22 +97,16 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
 
     /// The least speech, in milliseconds of the 4 s window, that a window must
     /// hold to be scored: the gate of `speechDetector` (Silero VAD, a 32 ms chunk
-    /// counts at a probability of 0.5). The bars above are measured on windows
-    /// of speech. A window with none is not a sample of anybody's voice: its
-    /// cosine against a template is about 0.04 (p99 0.20, max 0.28 over noise
-    /// windows at RMS 200 to 1000), a V_score under the Mismatch bar, so the gate
-    /// keeps such a window out and an owner who listens in a car, a street or a
-    /// café is not read as a different voice.
+    /// counts at a probability of 0.5). The bars above are set on windows of
+    /// speech, and a window without enough of it is not a sample of anybody's
+    /// voice, so the gate keeps it out of the score: an owner who listens in a
+    /// car, a street or a café is not scored.
     ///
-    /// Measured offline on 4 s windows, with the Silero model and threshold of
-    /// the voice bundle: of 600 windows of noise without voices (MUSAN noise and
-    /// DNS-challenge Freesound noise at RMS 200 to 1000, pink noise at RMS 25 to
-    /// 1000) none reaches 1,500 ms of speech. Windows of LibriSpeech and MLS
-    /// speech: 4 s of it passes in 100 % of the windows (90 % / 91 % with room
-    /// reverb and noise), 2 s of it plus 2 s of dead air in 96 % / 98 %, 1 s of
-    /// it in 0 %. Music passes in 5-8 % of the windows (singing). Not covered:
-    /// another voice (a TV, the other party leaking into the microphone) holds
-    /// speech and is scored as the different voice it is.
+    /// The value is set offline on 4 s windows, with the Silero model and
+    /// threshold of the voice bundle, on windows of read speech (LibriSpeech and
+    /// MLS Italian, clean and with room reverb and noise) and on windows of noise
+    /// without voices (MUSAN and DNS-challenge Freesound noise and pink noise, at
+    /// several levels).
     static let minSpeechMs = 1_500
 
     private let verifier: SpeakerVerifier
@@ -229,8 +207,8 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     /// PRE-encode from the LOCAL microphone — never RX/remote audio). Safe
     /// to call every capture frame; enqueues onto `queue` and returns
     /// immediately (never blocks the caller — see class doc's never-block
-    /// note). Internally buffered and only scored once ~3s of audio has
-    /// accumulated.
+    /// note). Internally buffered and only scored once a 4 s window of audio
+    /// has accumulated (`targetWindowSeconds`).
     public func feed(pcmFrame: Data) {
         guard !pcmFrame.isEmpty else { return }
         // Not registered (no Voice-as-Key template): the state can only be
