@@ -47,7 +47,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Q-Audion uses your microphone for end-to-end encrypted voice and video calls, for voice messages in chats, and for voice authentication.</string>
+	<string>Q-Audion uses your microphone for end-to-end encrypted voice and video calls, for voice messages in chats, and to record your voice for Voice-as-Key.</string>
 	<key>NFCReaderUsageDescription</key>
 	<string>Q-Audion uses NFC only when you pair a contact in person: you hold your iPhone against their Android phone running Q-Audion, and the two phones together derive a shared key that you compare using a 6-digit code.</string>
 	<!-- W-NFCIOS  -  the AID of the Android HCE service we tap against

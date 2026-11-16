@@ -17,11 +17,10 @@ import Foundation
 /// split (`feedVerificationFrame`/`computeVerificationScore`) that Feature
 /// B's continuous per-contact "voce remota" verification needs — see
 /// `ContactVoiceVerifier`, the iOS port of Android's `VoicePrintBridgeImpl`
-/// and the only consumer of these new methods. Feature A's 3 existing call
-/// sites (`VoiceEnrollmentContainer`/`VoiceUnlockController`/`VoiceAuthGate`)
-/// use only the ORIGINAL manual-enrollment API
-/// (`startEnrollment`/`processEnrollmentFrame`/`finishEnrollment`/`verify`/
-/// `exportTemplate`/`importTemplate`), unchanged in behavior.
+/// and the only consumer of these new methods. Feature A's enrollment call
+/// site (`VoiceEnrollmentContainer`) uses only the ORIGINAL manual-enrollment
+/// API (`startEnrollment`/`processEnrollmentFrame`/`finishEnrollment`/
+/// `exportTemplate`), unchanged in behavior.
 ///
 /// **Embedding computation (512 dimensions):**
 /// 1. Concatenate accumulated raw PCM frames (48kHz, this app's native rate)

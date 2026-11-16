@@ -531,7 +531,7 @@ struct SettingsScreen: View {
                     }
                     Button("Annulla", role: .cancel) { }
                 } message: {
-                    Text("Il modello vocale salvato su questo dispositivo viene cancellato. Lo sblocco vocale si disattiva e ai tuoi contatti non verrà più annunciata la voce come chiave, finché non registri di nuovo.")
+                    Text("Il modello vocale salvato su questo dispositivo viene cancellato. Ai tuoi contatti non verrà più annunciata la voce come chiave, finché non registri di nuovo.")
                 }
             }
 

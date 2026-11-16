@@ -57,8 +57,8 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     }
 
     /// Cutoffs on the smoothed V_score (`(cosine + 1) / 2`, see the class doc),
-    /// kept independent of `VoiceAuthGate.defaultThreshold` and of Android's
-    /// `VoicePrintVault` bars so tuning one never silently retunes another.
+    /// kept independent of Android's `VoicePrintVault` bars so tuning one never
+    /// silently retunes another.
     ///
     /// At or above `verifiedThreshold` the smoothed score reads as the owner's
     /// voice (`.verified`); under `uncertainThreshold` it reads as a different

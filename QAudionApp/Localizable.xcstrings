@@ -33878,47 +33878,6 @@
         }
       }
     },
-    "In ascolto…": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "In ascolto…"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Listening…"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Escuchando…"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "En écoute…"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Hört zu…"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ouvindo…"
-          }
-        }
-      }
-    },
     "In attesa della prima telemetria…": {
       "extractionState": "manual",
       "localizations": {
@@ -50960,47 +50919,6 @@
         }
       }
     },
-    "Sblocca con la voce": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sblocca con la voce"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Unlock with your voice"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Desbloquear con la voz"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Déverrouiller avec la voix"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Mit der Stimme entsperren"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Desbloquear com a voz"
-          }
-        }
-      }
-    },
     "Sblocca contatto": {
       "extractionState": "manual",
       "localizations": {
@@ -54032,88 +53950,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Visualizado"
-          }
-        }
-      }
-    },
-    "Voce non riconosciuta": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voce non riconosciuta"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice not recognized"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voz no reconocida"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voix non reconnue"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stimme nicht erkannt"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voz não reconhecida"
-          }
-        }
-      }
-    },
-    "Voce riconosciuta": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voce riconosciuta"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice recognized"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voz reconocida"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voix reconnue"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stimme erkannt"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voz reconhecida"
           }
         }
       }
@@ -87514,43 +87350,43 @@
         }
       }
     },
-    "Il modello vocale salvato su questo dispositivo viene cancellato. Lo sblocco vocale si disattiva e ai tuoi contatti non verrà più annunciata la voce come chiave, finché non registri di nuovo.": {
+    "Il modello vocale salvato su questo dispositivo viene cancellato. Ai tuoi contatti non verrà più annunciata la voce come chiave, finché non registri di nuovo.": {
       "extractionState": "manual",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Il modello vocale salvato su questo dispositivo viene cancellato. Lo sblocco vocale si disattiva e ai tuoi contatti non verrà più annunciata la voce come chiave, finché non registri di nuovo."
+            "value": "Il modello vocale salvato su questo dispositivo viene cancellato. Ai tuoi contatti non verrà più annunciata la voce come chiave, finché non registri di nuovo."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The voice model saved on this device will be deleted. Voice unlock is turned off and your contacts will no longer be told your voice is a key until you record it again."
+            "value": "The voice model saved on this device will be deleted. Your contacts will no longer be told your voice is a key until you record it again."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le modèle vocal enregistré sur cet appareil sera supprimé. Le déverrouillage vocal est désactivé et tes contacts ne seront plus informés que ta voix est une clé, tant que tu ne l'auras pas enregistrée de nouveau."
+            "value": "Le modèle vocal enregistré sur cet appareil sera supprimé. Tes contacts ne seront plus informés que ta voix est une clé, tant que tu ne l'auras pas enregistrée de nouveau."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Das auf diesem Gerät gespeicherte Stimmmodell wird gelöscht. Die Entsperrung per Stimme wird deaktiviert und Ihre Kontakte erfahren nicht mehr, dass Ihre Stimme ein Schlüssel ist, bis Sie sie erneut aufnehmen."
+            "value": "Das auf diesem Gerät gespeicherte Stimmmodell wird gelöscht. Ihre Kontakte erfahren nicht mehr, dass Ihre Stimme ein Schlüssel ist, bis Sie sie erneut aufnehmen."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El modelo de voz guardado en este dispositivo se eliminará. El desbloqueo por voz se desactiva y tus contactos ya no sabrán que tu voz es una clave hasta que la grabes de nuevo."
+            "value": "El modelo de voz guardado en este dispositivo se eliminará. Tus contactos ya no sabrán que tu voz es una clave hasta que la grabes de nuevo."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O modelo de voz salvo neste dispositivo será excluído. O desbloqueio por voz é desativado e seus contatos deixarão de ser informados de que sua voz é uma chave, até você gravá-la novamente."
+            "value": "O modelo de voz salvo neste dispositivo será excluído. Seus contatos deixarão de ser informados de que sua voz é uma chave, até você gravá-la novamente."
           }
         }
       }
@@ -89686,37 +89522,37 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Il contatto ha attivato lo sblocco vocale sul proprio dispositivo. Quando il suo telefono rileva una transizione live (per esempio uno scambio di persona a metà chiamata), il colore di questo scudo cambia per segnalarlo — altrimenti mostra semplicemente il fatto statico che l'ha attivato. Non è una prova crittografica: è un'informazione che il dispositivo del contatto dichiara di sé stesso."
+            "value": "Il contatto ha attivato la Voce-come-chiave sul proprio dispositivo. Se durante la chiamata il suo telefono rileva che la voce sul suo microfono non corrisponde più a quella registrata in passato, questo scudo diventa rosso — segnale che il telefono è passato in un'altra mano. Non è una prova crittografica: è un'informazione che il dispositivo del contatto dichiara di sé stesso."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The contact has turned on voice unlock on their own device. When their phone detects a live transition (for example, the person being swapped mid-call), the color of this shield changes to flag it — otherwise it simply shows the static fact that they turned it on. This is not cryptographic proof: it is information that the contact's device declares about itself."
+            "value": "The contact has Voice-as-Key enabled on their device. If their phone detects during the call that the voice on their microphone no longer matches their past recording, this shield turns red — a sign the phone changed hands. This is not cryptographic proof: it is information that the contact's device declares about itself."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El contacto ha activado el desbloqueo por voz en su propio dispositivo. Cuando su teléfono detecta una transición en vivo (por ejemplo, un cambio de persona a mitad de la llamada), el color de este escudo cambia para avisarlo — si no, simplemente muestra el hecho estático de que lo activó. No es una prueba criptográfica: es una información que el dispositivo del contacto declara sobre sí mismo."
+            "value": "El contacto ha activado Voice-as-Key en su dispositivo. Si durante la llamada su teléfono detecta que la voz de su micrófono ya no coincide con la grabada anteriormente, este escudo se pone rojo — señal de que el teléfono ha pasado a otras manos. No es una prueba criptográfica: es una información que el dispositivo del contacto declara sobre sí mismo."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le contact a activé le déverrouillage vocal sur son propre appareil. Quand son téléphone détecte une transition en direct (par exemple un changement de personne en cours d'appel), la couleur de ce bouclier change pour le signaler — sinon il indique simplement le fait statique qu'il l'a activé. Ce n'est pas une preuve cryptographique : c'est une information que l'appareil du contact déclare sur lui-même."
+            "value": "Le contact a activé Voice-as-Key sur son appareil. Si, pendant l'appel, son téléphone détecte que la voix sur son microphone ne correspond plus à celle enregistrée auparavant, ce bouclier devient rouge — signe que le téléphone est passé dans d'autres mains. Ce n'est pas une preuve cryptographique : c'est une information que l'appareil du contact déclare sur lui-même."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Der Kontakt hat die Entsperrung per Stimme auf seinem eigenen Gerät aktiviert. Erkennt sein Telefon einen Live-Übergang (zum Beispiel einen Personenwechsel mitten im Anruf), ändert dieses Schutzschild seine Farbe, um darauf hinzuweisen — andernfalls zeigt es nur die statische Tatsache an, dass die Funktion aktiviert wurde. Das ist kein kryptografischer Beweis: Es ist eine Angabe, die das Gerät des Kontakts über sich selbst macht."
+            "value": "Der Kontakt hat Voice-as-Key auf seinem Gerät aktiviert. Erkennt sein Telefon während des Anrufs, dass die Stimme an seinem Mikrofon nicht mehr mit seiner früheren Aufnahme übereinstimmt, wird dieses Schutzschild rot — ein Zeichen dafür, dass das Telefon in andere Hände geraten ist. Das ist kein kryptografischer Beweis: Es ist eine Angabe, die das Gerät des Kontakts über sich selbst macht."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O contato ativou o desbloqueio por voz no próprio dispositivo. Quando o telefone dele detecta uma transição ao vivo (por exemplo, uma troca de pessoa no meio da chamada), a cor deste escudo muda para sinalizar isso — caso contrário, mostra apenas o fato estático de que ele o ativou. Não é uma prova criptográfica: é uma informação que o dispositivo do contato declara sobre si mesmo."
+            "value": "O contato ativou o Voice-as-Key no próprio dispositivo. Se, durante a chamada, o telefone dele detectar que a voz no microfone não corresponde mais à gravada anteriormente, este escudo fica vermelho — sinal de que o telefone passou para outras mãos. Não é uma prova criptográfica: é uma informação que o dispositivo do contato declara sobre si mesmo."
           }
         }
       }

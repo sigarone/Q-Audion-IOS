@@ -1411,8 +1411,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
 
     public init() {
         // Tier 1 — build a SpeakerVerifier pre-loaded with the owner's
-        // stored Voice-as-Key template, if any (mirrors
-        // `VoiceUnlockController`'s init pattern exactly). No template yet
+        // stored Voice-as-Key template, if any. No template yet
         // ⇒ verifier stays `.idle` ⇒ `OwnerContinuityMonitor` stays
         // `.inactive` forever for this call, matching its own "never nag
         // an un-enrolled user" contract.

@@ -23,7 +23,7 @@ public enum AudioInterruptionRecoveryPolicy {
     /// Who owns the audio session an `AudioCapture` instance runs under.
     ///
     /// `.passive` is the default and is byte-for-byte today's behaviour:
-    /// voice enrollment, voice unlock and the group-call fallback capture
+    /// voice enrollment and the group-call fallback capture
     /// never set anything and keep giving up on an interruption that ends
     /// without a resume hint. `.voiceCall` is set by the 1:1 `CallService`
     /// on its own capture: for the duration of a call the audio session
@@ -202,7 +202,7 @@ public enum AudioEngineStateBeacon {
     public static let routeCodeUsb: Int = 9
     public static let routeCodeBuiltInMic: Int = 10
 
-    /// Only a voice-call capture beacons; enrollment / unlock / group
+    /// Only a voice-call capture beacons; enrollment / group
     /// fallback captures stay byte-for-byte as they were (no timer, no
     /// extra lines).
     public static func shouldRun(ownership: AudioInterruptionRecoveryPolicy.SessionOwnership,

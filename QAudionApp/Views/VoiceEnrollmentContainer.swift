@@ -48,7 +48,7 @@ final class VoiceEnrollmentContainer: ObservableObject {
     private let speakerVerifier = SpeakerVerifier(embedder: CamPlusSpeakerEmbedder.shared)
     /// Keychain-backed (`VoiceprintStore`) — persists the finished template
     /// under `VoiceprintStore.deviceOwnerId` so it survives an app restart
-    /// and can be loaded later by `VoiceUnlockController`/`VoiceAuthGate`.
+    /// and is loaded for the owner-voice check during calls.
     private let voiceprintStore = VoiceprintStore()
 
     init(initial: VoiceEnrollmentViewModel = .mock) {
@@ -311,6 +311,19 @@ final class VoiceEnrollmentContainer: ObservableObject {
         // silenced later calls the same way `.playback` silenced their
         // capture (see VoiceNotePlayer for the measured incident).
         restoreVoipCategoryAfterCapture()
+    }
+
+    /// W-SESSIONCATLEAK (2026-08-30) — puts the shared session back in the VoIP
+    /// category after the capture, which switches it to `.record`. See
+    /// `VoiceNotePlayer`'s note for the live incident this closes.
+    private func restoreVoipCategoryAfterCapture() {
+        let session = AVAudioSession.sharedInstance()
+        #if os(iOS) && !targetEnvironment(simulator)
+        let opts: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .interruptSpokenAudioAndMixWithOthers]
+        #else
+        let opts: AVAudioSession.CategoryOptions = [.interruptSpokenAudioAndMixWithOthers]
+        #endif
+        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: opts)
     }
 
     @MainActor

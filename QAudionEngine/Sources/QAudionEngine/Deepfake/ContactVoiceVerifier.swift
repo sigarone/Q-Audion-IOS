@@ -3,8 +3,8 @@ import Foundation
 /// "Voce remota" (Tier 2 / Feature B) per-contact continuous verification —
 /// 2026-08-01 iOS port of Android's `bridges/EngineBridges.kt`
 /// `VoicePrintBridgeImpl`. Owns ONE `SpeakerVerifier` instance (never
-/// shared with Tier 1 — `OwnerContinuityMonitor`/`VoiceAuthGate` each own
-/// their own, matching Android's separate `VoicePrintVault` vs
+/// shared with Tier 1 — `OwnerContinuityMonitor` owns its own, matching
+/// Android's separate `VoicePrintVault` vs
 /// `deepfake.SpeakerVerifier` class split) and switches its loaded
 /// template whenever the active call's peer changes.
 ///

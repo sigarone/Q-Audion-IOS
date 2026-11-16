@@ -310,7 +310,7 @@ final class MessageSoundSettingsTests: XCTestCase {
         XCTAssertFalse(idle(.playAndRecord, .voiceChat, call: true))
         XCTAssertFalse(idle(.playAndRecord, .voiceChat, audio: true))
         XCTAssertFalse(idle(.ambient, .default, call: true))
-        // Voice note playback, voice note recording, voice unlock.
+        // Voice note playback, voice note recording, voice enrollment.
         XCTAssertFalse(idle(.playback, .spokenAudio))
         XCTAssertFalse(idle(.playAndRecord, .default))
         XCTAssertFalse(idle(.record, .measurement))
@@ -339,7 +339,7 @@ final class MessageSoundSettingsTests: XCTestCase {
         // Declined or missed ring, WebRTC pre-warm already set play-and-record/voice-chat: music must resume.
         XCTAssertEqual(S.endAction(callInFlight: false, callAudioActive: false, stillOurs: false, inCallCategory: true),
                        .deactivateOnly)
-        // A voice note or the voice unlock has the session: untouched.
+        // A voice note or the voice enrollment has the session: untouched.
         XCTAssertEqual(S.endAction(callInFlight: false, callAudioActive: false, stillOurs: false, inCallCategory: false),
                        .none)
         // A call or ring in flight, or call audio running: never touched.
