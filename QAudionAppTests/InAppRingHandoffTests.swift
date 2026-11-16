@@ -11,32 +11,29 @@ final class InAppRingHandoffTests: XCTestCase {
 
     func test_ringingInAppCall_isHandedOverWhenTheWindowIsInTheBackground() {
         XCTAssertTrue(WsIncomingPresentation.inAppOnly.handsOffToCallKit(
-            scene: .background, reportedToCallKit: false, callState: .ringing))
+            scene: .background, reportedToCallKit: false, ringing: true))
     }
 
     func test_inactiveAndActiveWindow_keepTheCallInTheApp() {
         // `.inactive` is also what Control Center and the app switcher produce.
         for scene in [ScenePhase.inactive, ScenePhase.active] {
             XCTAssertFalse(WsIncomingPresentation.inAppOnly.handsOffToCallKit(
-                scene: scene, reportedToCallKit: false, callState: .ringing))
+                scene: scene, reportedToCallKit: false, ringing: true))
         }
     }
 
     func test_callPresentedByCallKit_isNeverHandedOver() {
         XCTAssertFalse(WsIncomingPresentation.callKit.handsOffToCallKit(
-            scene: .background, reportedToCallKit: false, callState: .ringing))
+            scene: .background, reportedToCallKit: false, ringing: true))
     }
 
     func test_callCallKitAlreadyHas_isNotReportedAgain() {
         XCTAssertFalse(WsIncomingPresentation.inAppOnly.handsOffToCallKit(
-            scene: .background, reportedToCallKit: true, callState: .ringing))
+            scene: .background, reportedToCallKit: true, ringing: true))
     }
 
     func test_callThatIsNotRinging_isNotHandedOver() {
-        let notRinging: [CallState] = [.idle, .connecting, .active, .encrypted, .ended]
-        for state in notRinging {
-            XCTAssertFalse(WsIncomingPresentation.inAppOnly.handsOffToCallKit(
-                scene: .background, reportedToCallKit: false, callState: state))
-        }
+        XCTAssertFalse(WsIncomingPresentation.inAppOnly.handsOffToCallKit(
+            scene: .background, reportedToCallKit: false, ringing: false))
     }
 }
