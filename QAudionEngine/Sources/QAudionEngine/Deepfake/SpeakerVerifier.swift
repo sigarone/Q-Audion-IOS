@@ -34,7 +34,7 @@ import Foundation
 ///    least that gives an embedding, a 4 s window is used whole.
 ///
 /// **Two verification scores, two different scales — do not conflate:**
-/// - `verify(pcmFrame:)` (original, Tier 1 / Feature A): raw cosine
+/// - `cosine(pcm16k:)` (original, Tier 1 / Feature A): raw cosine
 ///   similarity, `[-1, 1]`. `OwnerContinuityMonitor` thresholds this
 ///   directly — confirmed against Android's `analysis/VoicePrintVault.kt`
 ///   `verify()`, which returns raw (clamped) cosine, not a mapped score.
@@ -133,7 +133,7 @@ public final class SpeakerVerifier: @unchecked Sendable {
     /// Last real, computed V-score (`[0, 1]`) — cached for parity with
     /// Android's `cachedVerificationScore`; currently read only via
     /// `computeVerificationScore()`'s own return value (no separate
-    /// cheap-read accessor exists yet — iOS's `verify(pcmFrame:)` is a
+    /// cheap-read accessor exists yet — `cosine(pcm16k:)` is a
     /// DIFFERENT method serving Tier 1's different, raw-cosine contract).
     private var cachedVerificationScore: Float = 0.5
 
@@ -224,12 +224,10 @@ public final class SpeakerVerifier: @unchecked Sendable {
         return true
     }
 
-    /// Verifies raw PCM (Int16, mono, `Self.nativeSampleRate`) against the
-    /// stored template. Returns raw cosine similarity in `[-1, 1]`, or `0` if
-    /// not ready / embedding fails — matches this method's pre-existing "0 =
-    /// not a real score" contract (a caller that needs to tell "no score"
-    /// from a real low one uses `cosine(pcmFrame:)`, or checks `getState()`
-    /// first).
+    /// The cosine of raw PCM (Int16, mono, `Self.nativeSampleRate`) against the
+    /// stored template, in `[-1, 1]`, or `nil` when there is no score: not ready,
+    /// no audio, or no embedding (the model is unavailable or the audio is too
+    /// short).
     ///
     /// The embedder needs at least 2 s of audio (`CamPlusSpeakerEmbedder.embed`)
     /// and uses all of a 4 s window, so pass a window, never a 20 ms frame.
@@ -241,13 +239,6 @@ public final class SpeakerVerifier: @unchecked Sendable {
     /// (per-frame) feeding, use `feedVerificationFrame`/
     /// `computeVerificationScore` instead — this method's own inline embed
     /// makes it unsuitable for that cadence.
-    public func verify(pcmFrame: Data) -> Float {
-        cosine(pcmFrame: pcmFrame) ?? 0
-    }
-
-    /// The cosine of the audio's embedding against the stored template, or `nil`
-    /// when there is no score: not ready, no audio, or no embedding (the model is
-    /// unavailable or the audio is too short). Same work as `verify(pcmFrame:)`.
     public func cosine(pcmFrame: Data) -> Float? {
         lock.lock()
         guard state == .ready, storedTemplate != nil else { lock.unlock(); return nil }
@@ -285,7 +276,7 @@ public final class SpeakerVerifier: @unchecked Sendable {
     public func exportTemplate() -> [Float]? { lock.lock(); defer { lock.unlock() }; return storedTemplate }
 
     /// Restore a previously-persisted template into a freshly-constructed
-    /// verifier so it can serve `verify(pcmFrame:)` calls without
+    /// verifier so it can serve `cosine(pcm16k:)` calls without
     /// re-running enrollment. Moves straight to `.ready`.
     public func importTemplate(_ template: [Float]) {
         lock.lock()
@@ -397,8 +388,7 @@ public final class SpeakerVerifier: @unchecked Sendable {
 
     /// AS-Norm-normalized companion to `computeVerificationScore()` — a pure
     /// read of the value that method already cached as a side effect of its
-    /// ONE embed call, exactly like `verify(pcmFrame:)`'s Tier-1 contract
-    /// reads a value someone else already computed. MUST be called AFTER
+    /// ONE embed call. MUST be called AFTER
     /// `computeVerificationScore()` on the same tick, never as a substitute
     /// for it — `computeVerificationScore()` always recomputes the embedding
     /// unconditionally (no "already computed this tick" cache-hit guard, see
