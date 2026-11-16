@@ -72,6 +72,7 @@ targets:
           - FileV2ImageCleanerTests.swift
           - GlassPolicyTests.swift
           - IntentHandlerTests.swift
+          - InAppRingHandoffTests.swift
           - KmsSweepStatusTests.swift
           - LiveActivityPolicyTests.swift
           - LegalLinksTests.swift

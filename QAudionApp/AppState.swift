@@ -3660,6 +3660,10 @@ final class AppState: ObservableObject {
     /// Currently-active CallKit call UUID (one at a time).
     private(set) var activeCallKitId: UUID?
 
+    /// How the incoming WebSocket call that rings in the app alone is presented, by its call UUID. Read when the
+    /// phone window changes phase (`handOffInAppRingToCallKit`); set to `.callKit` once the call has been handed over.
+    private var wsRingPresentation: (callId: UUID, presentation: WsIncomingPresentation)?
+
     /// W-GHOSTCALL (2026-09-25) — call UUIDs this app has already ended (filled
     /// in `endCall` and `handleRemoteCallHangup`, before the CallKit report and
     /// before `activeCallKitId` is cleared). Read by the cancel-push handler and
@@ -8388,6 +8392,7 @@ final class AppState: ObservableObject {
                         // the single-dialer guarantee.
                         if !alreadyRegisteredByPushKit && wsPresentation == .inAppOnly {
                             self.callState = .ringing
+                            self.wsRingPresentation = (callId: callUUID, presentation: wsPresentation)
                             // In-app ringtone: CallKit (suppressed for in-app dialer) was
                             // previously the only ring source. Play the system "sms-received"
                             // sound on repeat every 3 s until the call is answered/declined.
@@ -21640,6 +21645,40 @@ final class AppState: ObservableObject {
     /// Stop the in-app ringtone. Called on answer, decline, or hangup.
     func stopInAppRingtone() {
         inAppRing.stop()
+    }
+
+    /// The phone window changed phase while an incoming call rings in the app alone. Once the window is in the
+    /// background the call goes to CallKit, which shows it and rings outside the app: the same report a call that
+    /// arrived in the background gets, for the same call UUID, so answer, decline and end run through the CallKit
+    /// delegate as for any other call. The in-app ring stops once CallKit has accepted the report; a refused report
+    /// leaves the call as it was.
+    func handOffInAppRingToCallKit(scene: ScenePhase) {
+        guard let uuid = activeCallKitId,
+              let ring = wsRingPresentation, ring.callId == uuid,
+              !CallsGate.callKitFreeMode,
+              answeredCallKitId != uuid,
+              !recentlyEndedCallIds.wasRecentlyEnded(uuid),
+              let provider = callKit as? CallKitProvider else { return }
+        guard ring.presentation.handsOffToCallKit(
+            scene: scene, reportedToCallKit: provider.hasReport(for: uuid), callState: callState) else { return }
+        // One report per call: from here the call counts as presented by CallKit, whatever the report's outcome.
+        wsRingPresentation = (callId: uuid, presentation: .callKit)
+        // CallKit's own video flag follows the WebSocket path: forced on, except with CarPlay connected.
+        let carPlay: Bool = CarPlayLink.read().connected
+        SoundPreviewCoordinator.stopAll()
+        provider.reportSuppressedCall(
+            uuid: uuid, callerName: incomingCallerName, hasVideo: carPlay ? isVideoCall : true
+        ) { [weak self] outcome in
+            Task { @MainActor [weak self] in
+                let line: String = "callkit handoff ok=\(outcome.ok ? 1 : 0) code=\(outcome.code)"
+                guard outcome.ok else {
+                    RTLog.warn("call", line)
+                    return
+                }
+                RTLog.info("call", line)
+                if self?.activeCallKitId == uuid { self?.stopInAppRingtone() }
+            }
+        }
     }
 
     /// True while a call is in progress, from the app's call state (never from the audio session's category): a live

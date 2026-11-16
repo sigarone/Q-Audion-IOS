@@ -359,6 +359,13 @@ final class CallKitCallLedger: @unchecked Sendable {
         return nativelyReportedUUIDs.contains(uuid)
     }
 
+    /// CallKit already has `uuid`: a report of it is in flight, or the call is open with CallKit.
+    func hasReport(_ uuid: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return reportsInFlight.contains(uuid) || outstandingUUIDs.contains(uuid)
+    }
+
     /// W-GHOSTCALL — atomic claim, taken right before `reportNewIncomingCall` is
     /// awaited. `true` for exactly one caller per uuid: the first one, while no
     /// other report of it is in flight and none has succeeded. Every later caller

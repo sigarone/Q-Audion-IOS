@@ -528,6 +528,8 @@ struct QAudionApp: App {
 
     private func handleScenePhase(_ phase: ScenePhase) {
         RTLog.info("call", "W-CALLFG-DIAG handleScenePhase(\(phase)) — isInCall=\(appState.isInCall) callState=\(appState.callState) callWasAnswered=\(appState.callWasAnswered) groupCallControllerState=\(appState.groupCallControllerState) isLocked=\(lockService.isLocked)")
+        // An incoming call that rings in the app alone goes to CallKit once the phone window is in the background.
+        appState.handOffInAppRingToCallKit(scene: phase)
         // Group calls v2 (spec 4.6): a backgrounded app unsubscribes every remote
         // video and pauses its own video publish; audio is never touched.
         switch phase {
