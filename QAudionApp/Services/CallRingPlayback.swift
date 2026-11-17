@@ -183,7 +183,7 @@ final class RingPreviewPlayer: ObservableObject {
             RTLog.warn("call", "ringpreview res=0")
             return
         }
-        // Another voice feature of the app (a voice note, the voice unlock) has the session: leave it alone.
+        // Another voice feature of the app (a voice note, the voice enrollment) has the session: leave it alone.
         guard AppAudioSession.isIdleNow(callInFlight: inCall()) else {
             RTLog.info("call", "ringpreview skip=1 busy=1")
             return

@@ -3,42 +3,42 @@
   "strings": {
     "NSMicrophoneUsageDescription": {
       "extractionState": "manual",
-      "comment": "Microphone access: calls, voice messages, voice auth",
+      "comment": "Microphone access: calls, voice messages, Voice-as-Key enrollment",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion uses your microphone for end-to-end encrypted voice and video calls, for voice messages in chats, and for voice authentication."
+            "value": "Q-Audion uses your microphone for end-to-end encrypted voice and video calls, for voice messages in chats, and to record your voice for Voice-as-Key."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion usa il microfono per le chiamate vocali e video cifrate end-to-end, per i messaggi vocali nelle chat e per l'autenticazione vocale."
+            "value": "Q-Audion usa il microfono per le chiamate vocali e video cifrate end-to-end, per i messaggi vocali nelle chat e per registrare la tua voce in Voice-as-Key."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion usa el micrófono para llamadas de voz y vídeo cifradas de extremo a extremo, para mensajes de voz en los chats y para la autenticación por voz."
+            "value": "Q-Audion usa el micrófono para llamadas de voz y vídeo cifradas de extremo a extremo, para mensajes de voz en los chats y para registrar tu voz en Voice-as-Key."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion utilise le microphone pour les appels vocaux et vidéo chiffrés de bout en bout, pour les messages vocaux dans les discussions et pour l'authentification vocale."
+            "value": "Q-Audion utilise le microphone pour les appels vocaux et vidéo chiffrés de bout en bout, pour les messages vocaux dans les discussions et pour enregistrer ta voix dans Voice-as-Key."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Q-Audion verwendet das Mikrofon für Ende-zu-Ende-verschlüsselte Sprach- und Videoanrufe, für Sprachnachrichten in Chats und für die Sprachauthentifizierung."
+            "value": "Q-Audion verwendet das Mikrofon für Ende-zu-Ende-verschlüsselte Sprach- und Videoanrufe, für Sprachnachrichten in Chats und zum Aufnehmen Ihrer Stimme für Voice-as-Key."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O Q-Audion usa o microfone para chamadas de voz e vídeo com criptografia de ponta a ponta, para mensagens de voz nas conversas e para autenticação por voz."
+            "value": "O Q-Audion usa o microfone para chamadas de voz e vídeo com criptografia de ponta a ponta, para mensagens de voz nas conversas e para gravar sua voz no Voice-as-Key."
           }
         }
       }

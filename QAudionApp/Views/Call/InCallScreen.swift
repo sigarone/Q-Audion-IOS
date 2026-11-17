@@ -1807,7 +1807,7 @@ struct InCallScreen: View {
             switch self {
             case .voiceKey:
                 return String(localized: "incall.trust_body.voice_key",
-                              defaultValue: "Il contatto ha attivato lo sblocco vocale sul proprio dispositivo. Quando il suo telefono rileva una transizione live (per esempio uno scambio di persona a metà chiamata), il colore di questo scudo cambia per segnalarlo — altrimenti mostra semplicemente il fatto statico che l'ha attivato. Non è una prova crittografica: è un'informazione che il dispositivo del contatto dichiara di sé stesso.",
+                              defaultValue: "Il contatto ha attivato la Voce-come-chiave sul proprio dispositivo. Se durante la chiamata il suo telefono rileva che la voce sul suo microfono non corrisponde più a quella registrata in passato, questo scudo diventa rosso — segnale che il telefono è passato in un'altra mano. Non è una prova crittografica: è un'informazione che il dispositivo del contatto dichiara di sé stesso.",
                               comment: "Call screen, popup text of the voice-as-key shield")
             case .speakerChange:
                 return VoiceGuardCopy.infoBody

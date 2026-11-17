@@ -57,7 +57,7 @@ public final class RingAudioSession {
     /// Never touch the session while a call or ring is in flight or call audio runs. When the session is still the
     /// one this object set, deactivate it and reset the category. When WebRTC pre-warm already put it in the call
     /// category (play-and-record, voice chat), still deactivate it so the user's music resumes, but leave the category.
-    /// When another voice feature (a voice note, the voice unlock) has it, leave it alone.
+    /// When another voice feature (a voice note, the voice enrollment) has it, leave it alone.
     public static func endAction(callInFlight: Bool, callAudioActive: Bool, stillOurs: Bool,
                                  inCallCategory: Bool) -> EndAction {
         if callInFlight || callAudioActive { return .none }

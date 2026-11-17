@@ -123,7 +123,7 @@ final class MessageSoundPlayback {
 
 /// Whether the app's audio session is free to be taken for a short sound. The voice features of the app leave it in
 /// their own category while they work (a voice note plays with `.playback` and records with `.playAndRecord`, the
-/// voice unlock records with `.record`). Play-and-record with voice chat is the call category: the app also keeps it
+/// voice enrollment records with `.record`). Play-and-record with voice chat is the call category: the app also keeps it
 /// outside calls, so it only counts as idle when no call or ring is in flight and no call audio is running.
 enum AppAudioSession {
 

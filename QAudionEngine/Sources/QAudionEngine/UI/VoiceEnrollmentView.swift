@@ -48,7 +48,7 @@ public struct VoiceEnrollmentView: View {
             Image(systemName: "waveform.badge.mic")
                 .font(.system(size: 64))
                 .foregroundStyle(.blue)
-            Text("Set up Voice Authentication")
+            Text("Set up Voice-as-Key")
                 .font(.title2.bold())
             Text("You'll read \(viewModel.totalPrompts) short sentences. This trains a voice model that helps detect deepfakes during calls.")
                 .multilineTextAlignment(.center)
@@ -114,7 +114,7 @@ public struct VoiceEnrollmentView: View {
                 .font(.system(size: 64))
                 .foregroundStyle(.green)
             Text("Voice enrolled").font(.title.bold())
-            Text("Voice authentication is now active. We'll alert you if a call's voice doesn't match.")
+            Text("Voice-as-Key is on. During calls your contacts are told if the voice on your microphone stops matching your recording.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
         }

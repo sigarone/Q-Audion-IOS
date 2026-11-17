@@ -13,7 +13,7 @@ import XCTest
 /// instead, on the production code path, with only the backend swapped.
 ///
 /// Behaviour that matters to `SpeakerVerifier`: identical audio yields an
-/// identical vector (so a verify against the enrolled template scores ~1),
+/// identical vector (so a cosine against the enrolled template scores ~1),
 /// different audio yields a different one, and the vector is L2-normalised
 /// like the real embedder's output.
 final class DeterministicTestEmbedder: SpeakerEmbedding {
@@ -23,7 +23,7 @@ final class DeterministicTestEmbedder: SpeakerEmbedding {
     /// Bounded autocorrelation, then L2-normalised.
     ///
     /// The property that matters: the result must not depend on how MUCH
-    /// audio was passed. Enrollment accumulates 160 frames while `verify`
+    /// audio was passed. Enrollment accumulates 160 frames while `cosine(pcmFrame:)`
     /// embeds a single one, and the tests assert that verifying the SAME
     /// tone against the enrolled template scores positively — so a
     /// signature that shifted with input length (a per-index bucket mean,
@@ -126,14 +126,13 @@ final class SpeakerVerifierTests: XCTestCase {
 
     // MARK: - Verification
 
-    func testVerifyReturnsZeroWhenNotReady() {
+    func testCosineIsNilWhenNotReady() {
         let verifier = SpeakerVerifier(embedder: DeterministicTestEmbedder())
         let frame = TestAudioHelpers.makeSinePCM(frequency: 440, sampleCount: AudioConstants.samplesPerFrame)
-        let score = verifier.verify(pcmFrame: frame)
-        XCTAssertEqual(score, 0, "verify should return 0 when not in ready state")
+        XCTAssertNil(verifier.cosine(pcmFrame: frame), "there is no score when not in ready state")
     }
 
-    func testVerifyAfterEnrollmentReturnsSimilarityScore() {
+    func testCosineAfterEnrollmentReturnsSimilarityScore() throws {
         let verifier = SpeakerVerifier(embedder: DeterministicTestEmbedder())
         let frame = TestAudioHelpers.makeSinePCM(frequency: 440, sampleCount: AudioConstants.samplesPerFrame)
 
@@ -143,23 +142,21 @@ final class SpeakerVerifierTests: XCTestCase {
         }
         XCTAssertTrue(verifier.finishEnrollment())
 
-        // Verify with the same waveform should produce a high similarity score
-        let score = verifier.verify(pcmFrame: frame)
+        // The same waveform should produce a high similarity score
+        let score = try XCTUnwrap(verifier.cosine(pcmFrame: frame))
         XCTAssertGreaterThan(score, 0, "Similarity score should be positive for matching audio")
         XCTAssertLessThanOrEqual(score, 1.0, "Cosine similarity should not exceed 1.0")
     }
 
-    func testVerifyWithEmptyDataReturnsZero() {
+    func testCosineWithEmptyDataIsNil() {
         let verifier = enrolledVerifier()
-        let score = verifier.verify(pcmFrame: Data())
-        XCTAssertEqual(score, 0, "verify with empty data should return 0")
+        XCTAssertNil(verifier.cosine(pcmFrame: Data()), "empty data has no score")
     }
 
-    func testVerifyWithTinyDataReturnsZero() {
+    func testCosineWithTinyDataIsNil() {
         let verifier = enrolledVerifier()
-        // Data too small for KaldiFbankExtractor to produce features
-        let score = verifier.verify(pcmFrame: Data(repeating: 0, count: 4))
-        XCTAssertEqual(score, 0, "verify with tiny data should return 0")
+        // Data too small to leave any 16 kHz sample after the resampling
+        XCTAssertNil(verifier.cosine(pcmFrame: Data(repeating: 0, count: 4)), "tiny data has no score")
     }
 
     // MARK: - Re-enrollment
@@ -178,9 +175,9 @@ final class SpeakerVerifierTests: XCTestCase {
 
     // MARK: - Owner paths
 
-    /// What the owner paths (continuity monitor, enrollment screen, voice
-    /// unlock) use: enrollment, the exported and imported template, verify.
-    func testOwnerEnrollmentTemplateImportAndVerifyStillWork() throws {
+    /// What the owner paths (continuity monitor, enrollment screen) use:
+    /// enrollment, the exported and imported template, the cosine.
+    func testOwnerEnrollmentTemplateImportAndCosineStillWork() throws {
         let verifier = SpeakerVerifier(embedder: DeterministicTestEmbedder())
         let frame = TestAudioHelpers.makeSinePCM(frequency: 440, sampleCount: AudioConstants.samplesPerFrame)
         verifier.startEnrollment()
@@ -196,9 +193,10 @@ final class SpeakerVerifierTests: XCTestCase {
         if case .ready = restored.getState() {} else {
             XCTFail("Expected ready state after a template import")
         }
-        let score = restored.verify(pcmFrame: frame)
+        let score = try XCTUnwrap(restored.cosine(pcmFrame: frame))
+        let reference = try XCTUnwrap(verifier.cosine(pcmFrame: frame))
         XCTAssertGreaterThan(score, 0)
-        XCTAssertEqual(score, verifier.verify(pcmFrame: frame))
+        XCTAssertEqual(score, reference)
     }
 
     // MARK: - Windows in audio time

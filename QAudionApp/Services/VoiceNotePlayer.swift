@@ -190,10 +190,10 @@ final class VoiceNotePlayer: NSObject, ObservableObject, AVAudioPlayerDelegate {
     }
 
     // W-SESSIONCATLEAK (2026-08-30) — restore the VoIP category on the way
-    // out. Six places in this app set a category on the SHARED
+    // out. Several places in this app set a category on the SHARED
     // AVAudioSession and, until now, not one of them put it back: this
     // player left `.playback` (no input at all, speaker output, long
-    // buffer), voice-unlock and enrollment leave `.record` (no output).
+    // buffer), the voice enrollment leaves `.record` (no output).
     // Whatever ran last owned every later call. Measured consequence on the
     // live 1.0.1063 call: the in-call session reported `in=` EMPTY,
     // `out=Speaker`, `buf=0.02` — the `.playback` signature exactly — so

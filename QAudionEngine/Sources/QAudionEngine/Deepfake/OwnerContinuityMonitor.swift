@@ -27,7 +27,7 @@ import Foundation
 /// embedding for — neither is a score, and neither touches the smoothed
 /// value or the mismatch streak. See `speechDetector`.
 ///
-/// Score scale — W-VSCORESCALE (2026-08-02). `verifier.verify(pcmFrame:)`
+/// Score scale — W-VSCORESCALE (2026-08-02). `verifier.cosine(pcm16k:)`
 /// returns a RAW COSINE in `[-1, 1]`, and this class converts it to
 /// `V_score = (cosine + 1) / 2` BEFORE thresholding, because
 /// `verifiedThreshold`/`uncertainThreshold` are V_score-scale values.
@@ -57,8 +57,8 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     }
 
     /// Cutoffs on the smoothed V_score (`(cosine + 1) / 2`, see the class doc),
-    /// kept independent of `VoiceAuthGate.defaultThreshold` and of Android's
-    /// `VoicePrintVault` bars so tuning one never silently retunes another.
+    /// kept independent of Android's `VoicePrintVault` bars so tuning one never
+    /// silently retunes another.
     ///
     /// At or above `verifiedThreshold` the smoothed score reads as the owner's
     /// voice (`.verified`); under `uncertainThreshold` it reads as a different

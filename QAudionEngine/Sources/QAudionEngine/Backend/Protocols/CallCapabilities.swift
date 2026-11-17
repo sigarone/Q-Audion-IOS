@@ -239,8 +239,7 @@ public enum CallCapabilities {
     /// same `enqueueForAnalysis` choke point `processIncomingAudio` already
     /// fed, so `VoiceAnalysisEngine`/`GuardianMode`/`ContactVoiceVerifier`
     /// see no gap in coverage (full trace in the
-    /// IOS-C4b task report). `VoiceUnlockController` was confirmed local-mic
-    /// only, unaffected either way.
+    /// IOS-C4b task report).
     ///
     /// FLIPPED BACK TO `false` 2026-09-09 (W-AUDIOSRTPOFF) — the "zero
     /// live-call verification" risk this doc already carried forward from
