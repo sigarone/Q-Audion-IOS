@@ -1,5 +1,40 @@
 [
   {
+    "version": "1.0.1293",
+    "notes": {
+      "it": [
+        "Condivisione dello schermo con un pulsante per interromperla in ogni momento",
+        "Schermata della chiamata più essenziale",
+        "Miglioramenti di affidabilità e stabilità"
+      ],
+      "en": [
+        "Screen sharing with a button to stop it at any time",
+        "A cleaner call screen",
+        "Reliability and stability improvements"
+      ],
+      "de": [
+        "Bildschirmfreigabe mit einer Taste, um sie jederzeit zu beenden",
+        "Übersichtlicherer Anrufbildschirm",
+        "Verbesserungen bei Zuverlässigkeit und Stabilität"
+      ],
+      "es": [
+        "Compartir pantalla con un botón para detenerlo en cualquier momento",
+        "Pantalla de llamada más sencilla",
+        "Mejoras de fiabilidad y estabilidad"
+      ],
+      "fr": [
+        "Partage d'écran avec un bouton pour l'arrêter à tout moment",
+        "Écran d'appel plus épuré",
+        "Améliorations de la fiabilité et de la stabilité"
+      ],
+      "pt-BR": [
+        "Compartilhamento de tela com um botão para interrompê-lo a qualquer momento",
+        "Tela de chamada mais simples",
+        "Melhorias de confiabilidade e estabilidade"
+      ]
+    }
+  },
+  {
     "version": "1.0.1292",
     "notes": {
       "it": [
