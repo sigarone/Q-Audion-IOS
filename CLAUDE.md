@@ -381,6 +381,27 @@ diagnostics screen, `-f vpn=true` to combine with the VPN: `project-vpn-earbud.y
 No signing, capability or entitlement changes. To make it permanent, point the tag build at
 `project-earbud.yml` and invert the gate (see below); that is an owner decision, not a CI change.
 
+What the variant does as the phone of an earbud (2026-11, branch fix/earbud-host-prereq-2026-11). There is ONE earbud GATT
+client, `IOSEarbudGattProxy`, and it is `AppState.earbudGattProxy`: the KMS sweep and the diagnostics screen (handed this
+same instance by `SettingsScreen`) share it, and it owns the only CBCentralManager that connects to the earbud (the screen's
+own central only scans). It connects by CoreBluetooth identifier (`ensureConnected(identifier:timeout:)`); `isConnected` is
+true only once the service and its characteristics are discovered; every public operation runs in one `EarbudSerialGate`
+(a DIAG poll, a key import and a pairing never overlap on the single pending write/read). The sweep reaches the remembered
+earbud (`AppState.rememberEarbudIdentifier`) through `EarbudAckPopRelay.prepareLink`, only when a hw_only key is pending and
+no link is up, with a bounded wait and a 60 s cooldown after a failure. Wire framing is decided by two pure engine functions
+and pinned against a Swift model of the firmware's write handlers (`EarbudGattFramingTests`): KEY_IMPORT (c3) writes the
+82 B PoP-INPUTS frame FIRST and then the package as BIG-endian-offset fragments (`EarbudKeyImportFragmenter.writeFrames`),
+PAIR_BEGIN (c5) uses LITTLE-endian offsets (`EarbudPairGatt.pairBeginFrames`), and both are sized from
+`maximumWriteValueLength(for: .withoutResponse)` (ATT_MTU - 3): the firmware refuses a write with a non-zero ATT offset, which
+is what a long write (the 512 B that `.withResponse` reports) becomes. DIAG (0x90) is READ-only in the firmware: it is
+polled every 2 s, never subscribed. FE-5 pairing waits, before PAIR_FIN, for a person to confirm six words derived from the
+pair_id (`EarbudPairTranscript.sasWords`, `EarbudSasPrompter`, 120 s timeout, `isConfirmed` has no default); a refusal or a
+timeout writes no PAIR_FIN and drops the link (the earbud keeps this attempt's PAIR_RESP until it disconnects). The words and
+the fingerprint are pinned by `earbud-pair-sas-v1-kat.json` (generator `scripts/kat/gen_earbud_pair_sas_kat.py`), shared with
+Android. Not done: `key_type == "sovereign"` rows are not routed to any relay (`KmsPollerService` only logs them;
+`EarbudKeyImportService` has no caller), no background BLE (the earbud central has no state restoration identifier, so
+nothing wakes the app when the earbud connects), no PROTOCOL_VERSION check, no LE Audio.
+
 Proof, in layers, each independent: `scripts/ci/check_earbud_gating.py` (sources: with the flag off no
 symbol of the stack is left in code the compiler sees; also checks the specs and the workflow wiring;
 runs on every release build and in the job `gates` of `ios-ci.yml`); `scripts/ci/assert-no-earbud.sh` (binary: no

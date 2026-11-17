@@ -15,7 +15,13 @@ QAudionApp/Views/ScreenshotDemo/ScreenshotDemo.swift | Ti vedo, arrivo tra 5 min
 QAudionApp/Views/Settings/DevResetScreen.swift | Wipe completato — \(wiped) chiavi rimosse. | developer or hardware-diagnostics screen, not part of the user-facing app
 QAudionApp/Views/Settings/EarbudDiagScreen.swift | Errore: ct_ee assente dopo Stage 1 | developer or hardware-diagnostics screen, not part of the user-facing app
 QAudionApp/Views/Settings/EarbudDiagScreen.swift | Timeout: ct_ee non ricevuto | developer or hardware-diagnostics screen, not part of the user-facing app
-QAudionApp/Views/Settings/EarbudDiagScreen.swift | proxy GATT non disponibile | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionApp/Views/Settings/EarbudDiagScreen.swift | Conferma il codice di pairing | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionApp/Views/Settings/EarbudDiagScreen.swift | Confronta queste sei parole con quelle mostrate sull'altro telefono. Se sono identiche, tocca CONFERMA COINCIDONO. Se sono diverse, annulla: qualcuno potrebbe aver alterato lo scambio e l'auricolare non sigillerà alcuna chiave. | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionApp/Views/Settings/EarbudDiagScreen.swift | Impronta del pairing: \(prompt.fingerprint) | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionApp/Views/Settings/EarbudDiagScreen.swift | Pairing annullato: codice non confermato | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionApp/Views/Settings/EarbudDiagScreen.swift | Pairing annullato: codice non confermato · nulla sigillato sull'auricolare | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionApp/Views/Settings/EarbudDiagScreen.swift | Pairing annullato: codice non confermato. Nulla è stato sigillato sull'auricolare. Ricollega l'auricolare per riprovare. | developer or hardware-diagnostics screen, not part of the user-facing app
+QAudionApp/Views/Settings/EarbudDiagScreen.swift | Pairing fallito: ricollega l'auricolare per riprovare (l'auricolare conserva la risposta di questo tentativo fino alla disconnessione). | developer or hardware-diagnostics screen, not part of the user-facing app
 QAudionApp/Views/Settings/P3ControlScreen.swift | Errore: \(msg) | developer or hardware-diagnostics screen, not part of the user-facing app
 QAudionApp/Views/Settings/P3ControlScreen.swift | Modalità | developer or hardware-diagnostics screen, not part of the user-facing app
 QAudionApp/Views/Settings/P3ControlScreen.swift | Più forte | developer or hardware-diagnostics screen, not part of the user-facing app

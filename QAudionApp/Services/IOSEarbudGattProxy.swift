@@ -24,15 +24,23 @@ import QAudionEngine
 // without QAUDION_EARBUD carries none of them. The frozen sizes stay in the engine
 // (EarbudAckPopRelay and EarbudPairGatt use them). UPPER_SNAKE_CASE mirrors the
 // firmware / Android constant names byte for byte.
+//
+// ONE source for every earbud UUID in the app: this extension. The sovereign relay
+// (EarbudKeyImportService / CoreBluetoothSovereignRelay) and the diagnostics screen
+// read the same constants; the sovereign relay used to carry its own copy of the
+// service UUID with the last byte 0x00, which no firmware service has.
 // swiftlint:disable identifier_name
 extension EarbudGattConstants {
-    /// Primary earbud service
+    /// Primary earbud service (QAUDION_SVC_UUID_VAL)
     static let SERVICE_UUID      = "f2c0aaaa-bcc0-4001-8000-000000000001"
+    /// DIAG characteristic (0x90) -- READ only (BT_GATT_CHRC_READ, READ_ENCRYPT): the earbud never
+    /// notifies it, so the phone polls it with a read (Android: every 2 s)
+    static let DIAG_UUID         = "f2c0aaaa-bcc0-4001-8000-000000000090"
     /// KEY_IMPORT characteristic (c3) -- sovereign + hw_only relay
     static let KEY_IMPORT_UUID   = "f2c0aaaa-bcc0-4001-8000-0000000000c3"
     /// ATTEST_POP characteristic (c1) -- 32-byte SE PoP after import
     static let ATTEST_POP_UUID   = "f2c0aaaa-bcc0-4001-8000-0000000000c1"
-    /// ATTEST characteristic (c2)
+    /// ATTEST_PQ characteristic (c2) -- not used by this client (firmware and WIRE_SPEC call it ATTEST_PQ)
     static let ATTEST_UUID       = "f2c0aaaa-bcc0-4001-8000-0000000000c2"
     /// PAIR_BEGIN (c5) -- initiator writes 1632B fragmented
     static let PAIR_BEGIN_UUID   = "f2c0aaaa-bcc0-4001-8000-0000000000c5"
@@ -51,16 +59,30 @@ extension EarbudGattConstants {
 ///
 /// Implements earbud GATT operations:
 ///   c1  ATTEST_POP      : read 32 B SE PoP
-///   c3  KEY_IMPORT       : fragment-write pkg (1668 B) + PoP-INPUTS frame (82 B), read status
-///   c5  PAIR_BEGIN       : fragment-write 1632 B with 2-byte LE u16 offset header per frag
+///   c3  KEY_IMPORT       : write the PoP-INPUTS frame (82 B) FIRST, then the package (1668 B) as
+///                          [offset u16 BIG-endian][data] fragments, then read [status][slot]
+///   c5  PAIR_BEGIN       : fragment-write 1632 B with a 2-byte LITTLE-endian u16 offset header per frag
 ///   c6  PAIR_RESP        : write 1-byte chunk index, read 408 B × 4
 ///   c7  PAIR_FIN         : single 32-byte write
 ///   c8  FP_ADV_REQUEST   : Phase B — write ct_bind[32], read fp_adv[32]||key_epoch_le[8]
+///   0x90 DIAG            : read (polled; the characteristic has no notify)
+///
+/// ONE instance serves the whole app (AppState.earbudGattProxy: the KMS sweep and the diagnostics screen
+/// share it). It owns the only CBCentralManager that connects to the earbud, and every public operation
+/// runs inside `opGate`, so a DIAG poll, a KMS key import and a pairing never overlap on the single
+/// pending write / read continuation.
 ///
 /// Connection flow:
-///   1. Call connect(_:) with a CBPeripheral obtained from a CBCentralManager scan.
-///   2. Characteristics are discovered automatically after GATT service discovery.
-///   3. Once isConnected is true and all characteristics are set, invoke the proxy methods.
+///   1. `ensureConnected(identifier:timeout:)` with the CoreBluetooth identifier of the earbud: the id
+///      of a scan result (the diagnostics screen), or the remembered one (the KMS sweep). It returns when
+///      the earbud service and its characteristics have been discovered, so `isConnected` is true only
+///      when an operation can run (it used to be true as soon as the link was up, before discovery).
+///   2. Invoke the proxy methods.
+///
+/// Write size: every write must fit ONE ATT PDU (ATT_MTU - 3). The firmware refuses an ATT write with a
+/// non-zero offset, which is what CoreBluetooth sends for the second part of a long write, so the frames
+/// are sized from `maximumWriteValueLength(for: .withoutResponse)`; the `.withResponse` figure is the 512
+/// that CoreBluetooth reports for a long write, not what the link carries in one PDU.
 ///
 /// Thread safety: all CoreBluetooth callbacks arrive on the main queue (queue: nil in init).
 /// @MainActor ensures all properties and continuations are accessed on the main actor.
@@ -74,6 +96,9 @@ public final class IOSEarbudGattProxy: NSObject {
         case characteristicNotFound(String)
         case gattError(String)
         case unexpectedChunkSize(got: Int, expected: Int)
+        /// A frame that cannot be split (the 82 B PoP-INPUTS frame) does not fit one ATT write of this link.
+        case writeBudgetTooSmall(have: Int, need: Int)
+        case badInput(String)
 
         public var description: String {
             switch self {
@@ -81,6 +106,8 @@ public final class IOSEarbudGattProxy: NSObject {
             case .characteristicNotFound(let u):    return "char_not_found:\(u)"
             case .gattError(let m):                 return "gatt:\(m)"
             case .unexpectedChunkSize(let g, let e): return "chunk_size:\(g)≠\(e)"
+            case .writeBudgetTooSmall(let h, let n): return "write_budget:\(h)<\(n)"
+            case .badInput(let m):                  return "bad_input:\(m)"
             }
         }
     }
@@ -105,6 +132,12 @@ public final class IOSEarbudGattProxy: NSObject {
     private nonisolated(unsafe) var pairRespChar: CBCharacteristic?   // c6
     private nonisolated(unsafe) var pairFinChar: CBCharacteristic?   // c7
     private nonisolated(unsafe) var fpAdvChar: CBCharacteristic?   // c8 (Phase B)
+    private nonisolated(unsafe) var diagChar: CBCharacteristic?   // 0x90 (read only)
+
+    /// True once the earbud service and its characteristics have been discovered on the live link.
+    private nonisolated(unsafe) var linkReady = false
+    /// Why the last connect / discovery attempt failed; nil while it has not.
+    private nonisolated(unsafe) var linkError: String?
 
     // Active continuations — at most one write and one read outstanding at a time
     // nonisolated(unsafe): set on the main actor in writeChar/readChar, resumed in
@@ -112,6 +145,20 @@ public final class IOSEarbudGattProxy: NSObject {
     // main thread, so ordering is byte-identical to the @MainActor original.
     private nonisolated(unsafe) var writeCont: CheckedContinuation<Void, Error>?
     private nonisolated(unsafe) var readCont: CheckedContinuation<Data, Error>?
+
+    /// Identifies the operation whose timer is running, so a stale timer never fails a later operation.
+    private var opSeq: UInt64 = 0
+
+    /// One public operation at a time (see the class comment).
+    private let opGate = EarbudSerialGate()
+
+    /// A write or read that gets no answer in this long drops the link: a late answer would otherwise
+    /// be taken for the next operation's, and a hung operation would hold `opGate` for ever.
+    private static let opTimeoutNS: UInt64 = 45 * 1_000_000_000
+    private static let maxWriteRetries = 6
+    /// See `reconnect(to:timeout:)`.
+    private static let reconnectCooldown: TimeInterval = 60
+    private var lastReconnectFailureAt: Date?
 
     // MARK: - Init
 
@@ -123,16 +170,97 @@ public final class IOSEarbudGattProxy: NSObject {
 
     // MARK: - Connection helpers (for caller / app layer)
 
-    /// Initiate a GATT connection. Service + characteristic discovery runs automatically.
-    public func connect(_ peripheral: CBPeripheral) {
-        self.peripheral = peripheral
-        peripheral.delegate = self
-        central.connect(peripheral, options: nil)
+    /// Connects to the earbud with this CoreBluetooth identifier and returns when its service and
+    /// characteristics are discovered (`isConnected` is then true). Already connected to it: returns at once.
+    ///
+    /// The identifier is the `CBPeripheral.identifier` of a scan result, or the one the app remembered
+    /// (`AppState.rememberEarbudIdentifier`): CoreBluetooth resolves it with `retrievePeripherals`, so a
+    /// peripheral that another central of this app discovered can be connected here.
+    ///
+    /// When the earbud is not in range the connection request stays pending in the system; after
+    /// `timeout` this call throws but the request is NOT withdrawn, so the link comes up by itself when the
+    /// earbud appears and a later call finds it ready. `disconnect()` withdraws it.
+    public func ensureConnected(identifier: UUID, timeout: TimeInterval = 15) async throws {
+        if isConnected, peripheral?.identifier == identifier { return }
+        let deadline = Date().addingTimeInterval(timeout)
+        try await waitForPoweredOn(deadline: deadline)
+        guard let p = central.retrievePeripherals(withIdentifiers: [identifier]).first else {
+            throw GattError.gattError("peripheral_not_found")
+        }
+        if let old = peripheral, old.identifier != p.identifier {
+            // another earbud was linked: leave it, this call is for the new one
+            central.cancelPeripheralConnection(old)
+            clearCharacteristics()
+        }
+        peripheral = p
+        p.delegate = self
+        linkError = nil
+        switch p.state {
+        case .connected:
+            if !linkReady { p.discoverServices([CBUUID(string: EarbudGattConstants.SERVICE_UUID)]) }
+        case .disconnected:
+            central.connect(p, options: nil)
+        default:
+            break   // connecting / disconnecting: the delegate carries on, this call waits
+        }
+        while !(p.state == .connected && linkReady) {
+            if let why = linkError { throw GattError.gattError(why) }
+            if Date() >= deadline { throw GattError.gattError("connect_timeout") }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
 
-    /// Cancel the current GATT connection.
+    /// The KMS sweep's way to the earbud: connects to `identifier` (the remembered earbud) with a bounded
+    /// wait, and does nothing when there is none or the link is already up. A failure only means the key
+    /// stays pending for the next sweep, so it is logged and not thrown.
+    ///
+    /// After a failed attempt the next one waits `reconnectCooldown`: a sweep with several hw_only keys
+    /// pays the wait for an absent earbud once, not once per key. The connection request itself stays
+    /// pending in the system (see `ensureConnected`), so an earbud that comes into range is linked anyway.
+    public func reconnect(to identifier: UUID?, timeout: TimeInterval) async {
+        if isConnected { return }
+        guard let identifier = identifier else {
+            RTLog.info("earbud", "reconnect skipped no remembered earbud")
+            return
+        }
+        if let failedAt = lastReconnectFailureAt,
+           Date().timeIntervalSince(failedAt) < Self.reconnectCooldown {
+            return
+        }
+        do {
+            try await ensureConnected(identifier: identifier, timeout: timeout)
+            lastReconnectFailureAt = nil
+        } catch {
+            lastReconnectFailureAt = Date()
+            let why: String = String(describing: error)
+            RTLog.info("earbud", "reconnect failed why=\(why)")
+        }
+    }
+
+    /// Cancel the current GATT connection (and withdraw a pending connection request).
     public func disconnect() {
         if let p = peripheral { central.cancelPeripheralConnection(p) }
+        clearCharacteristics()
+        failPendingOps(with: GattError.notConnected)
+    }
+
+    private func waitForPoweredOn(deadline: Date) async throws {
+        while true {
+            switch central.state {
+            case .poweredOn:
+                return
+            case .poweredOff:
+                throw GattError.gattError("bluetooth_off")
+            case .unauthorized:
+                throw GattError.gattError("bluetooth_unauthorized")
+            case .unsupported:
+                throw GattError.gattError("bluetooth_unsupported")
+            default:
+                break   // unknown / resetting: wait for the state update
+            }
+            if Date() >= deadline { throw GattError.gattError("bluetooth_not_ready") }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
 
     // MARK: - EarbudKeyGattProxy
@@ -146,23 +274,45 @@ public final class IOSEarbudGattProxy: NSObject {
     // `.state` returns a Sendable enum. Keeping this nonisolated (instead of
     // @MainActor-ing the protocols) leaves the non-@MainActor relay callers
     // (EarbudAckPopRelay/EarbudPairingRelay `guard gatt.isConnected`) intact.
-    public nonisolated var isConnected: Bool { peripheral?.state == .connected }
+    //
+    // True only when the link is up AND the service is discovered: an operation can run.
+    public nonisolated var isConnected: Bool { peripheral?.state == .connected && linkReady }
 
     public func readAttestPop() async throws -> Data {
+        try await opGate.run { try await self.readAttestPopLocked() }
+    }
+
+    private func readAttestPopLocked() async throws -> Data {
         let c = try require(attestPopChar, uuid: EarbudGattConstants.ATTEST_POP_UUID)
         return try await readChar(c)
     }
 
     public func startKeyImport(pkg: Data, popInputs: Data) async throws -> KeyImportOutcome {
+        guard pkg.count == EarbudGattConstants.KEYIMPORT_PKG_LEN else {
+            throw GattError.badInput("package_size:\(pkg.count)")
+        }
+        guard popInputs.count == EarbudGattConstants.KEYIMPORT_POP_FRAME_LEN else {
+            throw GattError.badInput("pop_inputs_size:\(popInputs.count)")
+        }
+        return try await opGate.run { try await self.startKeyImportLocked(pkg: pkg, popInputs: popInputs) }
+    }
+
+    /// The ATT writes are decided by `EarbudKeyImportFragmenter.writeFrames` (engine, unit-tested against a
+    /// model of the firmware's `key_import_write`): the PoP-INPUTS frame first, then the package as
+    /// big-endian-offset fragments. The firmware imports and computes the PoP on the LAST fragment and
+    /// wipes the staged PoP inputs right after, so the inputs written after the package never counted.
+    private func startKeyImportLocked(pkg: Data, popInputs: Data) async throws -> KeyImportOutcome {
         let c = try require(keyImportChar, uuid: EarbudGattConstants.KEY_IMPORT_UUID)
+        let budget = try writeBudget()
+        guard let frames = EarbudKeyImportFragmenter.writeFrames(
+            pkg: pkg, popInputs: popInputs, maxWriteLength: budget) else {
+            throw GattError.writeBudgetTooSmall(have: budget, need: popInputs.count)
+        }
+        for frame in frames {
+            try await writeWithRetry(c, data: frame)
+        }
 
-        // 1. Fragment-write pkg (1668 B) with 2-byte LE u16 offset header
-        try await fragmentWrite(c, payload: pkg)
-
-        // 2. Write PoP-INPUTS frame (82 B, first 2 bytes = 0xFFFF sentinel, written as-is)
-        try await writeChar(c, data: popInputs)
-
-        // 3. Read status (≥1 byte: [status][slot])
+        // Read status (≥1 byte: [status][slot])
         let resp = try await readChar(c)
         guard resp.count >= 2 else {
             return resp.count == 1
@@ -175,11 +325,26 @@ public final class IOSEarbudGattProxy: NSObject {
     // MARK: - EarbudPairingGattProxy
 
     public func writePairBegin(_ payload: Data) async throws {
+        try await opGate.run { try await self.writePairBeginLocked(payload) }
+    }
+
+    /// c5 is little-endian (the firmware's `pair_begin_write`), c3 big-endian: `EarbudPairGatt.pairBeginFrames`.
+    private func writePairBeginLocked(_ payload: Data) async throws {
         let c = try require(pairBeginChar, uuid: EarbudGattConstants.PAIR_BEGIN_UUID)
-        try await fragmentWrite(c, payload: payload)
+        let budget = try writeBudget()
+        guard let frames = EarbudPairGatt.pairBeginFrames(payload, maxWriteLength: budget) else {
+            throw GattError.badInput("pair_begin_frames")
+        }
+        for frame in frames {
+            try await writeWithRetry(c, data: frame)
+        }
     }
 
     public func readPairResp() async throws -> Data {
+        try await opGate.run { try await self.readPairRespLocked() }
+    }
+
+    private func readPairRespLocked() async throws -> Data {
         let c = try require(pairRespChar, uuid: EarbudGattConstants.PAIR_RESP_UUID)
         var result = Data()
         result.reserveCapacity(EarbudGattConstants.EE_PAIR_MSG_LEN)
@@ -196,6 +361,10 @@ public final class IOSEarbudGattProxy: NSObject {
     }
 
     public func writePairFin(_ confirm: Data) async throws {
+        try await opGate.run { try await self.writePairFinLocked(confirm) }
+    }
+
+    private func writePairFinLocked(_ confirm: Data) async throws {
         let c = try require(pairFinChar, uuid: EarbudGattConstants.PAIR_FIN_UUID)
         try await writeChar(c, data: confirm)
     }
@@ -206,6 +375,10 @@ public final class IOSEarbudGattProxy: NSObject {
     /// Precondition: ctBind must be exactly 32 bytes.
     public func writeFpAdvSeed(_ ctBind: Data) async throws {
         precondition(ctBind.count == 32, "ct_bind must be 32 bytes")
+        try await opGate.run { try await self.writeFpAdvSeedLocked(ctBind) }
+    }
+
+    private func writeFpAdvSeedLocked(_ ctBind: Data) async throws {
         let c = try require(fpAdvChar, uuid: EarbudGattConstants.FP_ADV_UUID)
         try await writeChar(c, data: ctBind)
     }
@@ -214,6 +387,10 @@ public final class IOSEarbudGattProxy: NSObject {
     /// Caller must have written ct_bind first via writeFpAdvSeed(_:).
     /// Returns (fpAdv: 32 bytes, epoch: little-endian UInt64).
     public func readFpAdv() async throws -> (fpAdv: Data, epoch: UInt64) {
+        try await opGate.run { try await self.readFpAdvLocked() }
+    }
+
+    private func readFpAdvLocked() async throws -> (fpAdv: Data, epoch: UInt64) {
         let c = try require(fpAdvChar, uuid: EarbudGattConstants.FP_ADV_UUID)
         let data = try await readChar(c)
         guard data.count >= 40 else {
@@ -227,6 +404,20 @@ public final class IOSEarbudGattProxy: NSObject {
         return (fpAdv, epoch)
     }
 
+    // MARK: - DIAG (0x90)
+
+    /// One read of the DIAG characteristic: the 28 / 32 B metrics packet. DIAG is READ only in the
+    /// firmware (it declares BT_GATT_CHRC_READ, no notify and no CCC descriptor), so a subscription
+    /// never delivers anything: the diagnostics screen calls this every 2 s, as Android does.
+    public func readDiag() async throws -> Data {
+        try await opGate.run { try await self.readDiagLocked() }
+    }
+
+    private func readDiagLocked() async throws -> Data {
+        let c = try require(diagChar, uuid: EarbudGattConstants.DIAG_UUID)
+        return try await readChar(c)
+    }
+
     // MARK: - Private helpers
 
     private func require(_ char: CBCharacteristic?, uuid: String) throws -> CBCharacteristic {
@@ -234,40 +425,29 @@ public final class IOSEarbudGattProxy: NSObject {
         return c
     }
 
-    /// Write `payload` to `char` in fragments with a 2-byte LE u16 byte-offset header.
-    /// Retries up to 6 times on GATT-busy errors with exponential backoff.
-    private func fragmentWrite(_ char: CBCharacteristic, payload: Data) async throws {
-        guard let p = peripheral else { throw GattError.notConnected }
-        // maximumWriteValueLength returns mtu-3 (ATT header already subtracted)
-        let maxWrite = p.maximumWriteValueLength(for: .withResponse)
-        let dataPerFrag = max(1, maxWrite - EarbudGattConstants.KEYIMPORT_FRAG_HEADER)
+    /// The most one ATT write can carry on this link: ATT_MTU - 3. See the class comment.
+    private func writeBudget() throws -> Int {
+        guard let p = peripheral, p.state == .connected else { throw GattError.notConnected }
+        return p.maximumWriteValueLength(for: .withoutResponse)
+    }
 
-        var offset = 0
-        while offset < payload.count {
-            let chunkLen = min(dataPerFrag, payload.count - offset)
-            var frame = Data(count: 2 + chunkLen)
-            frame[0] = UInt8(offset & 0xFF)
-            frame[1] = UInt8((offset >> 8) & 0xFF)
-            frame.replaceSubrange(2..<(2 + chunkLen),
-                                  with: payload[offset..<(offset + chunkLen)])
-
-            var retries = 0
-            while true {
-                do {
-                    try await writeChar(char, data: frame)
-                    break
-                } catch GattError.gattError(let msg)
-                    where msg.contains("busy") || msg.contains("congested") {
-                    retries += 1
-                    let backoffMs = 200 + retries * 300
-                    try await Task.sleep(nanoseconds: UInt64(backoffMs) * 1_000_000)
-                } catch where retries < 6 {
-                    retries += 1
-                    let backoffMs = 200 + retries * 300
-                    try await Task.sleep(nanoseconds: UInt64(backoffMs) * 1_000_000)
-                }
+    /// One frame, written with response. A transient failure is retried (a frame at the same offset is
+    /// absorbed by the firmware's reassembler); a lost link is not.
+    private func writeWithRetry(_ char: CBCharacteristic, data: Data) async throws {
+        var retries = 0
+        while true {
+            do {
+                try await writeChar(char, data: data)
+                return
+            } catch GattError.notConnected {
+                throw GattError.notConnected
+            } catch GattError.gattError(let msg) where msg.hasPrefix("disconnected") || msg == "timeout" {
+                throw GattError.gattError(msg)
+            } catch where retries < Self.maxWriteRetries {
+                retries += 1
+                let backoffMs = 200 + retries * 300
+                try await Task.sleep(nanoseconds: UInt64(backoffMs) * 1_000_000)
             }
-            offset += chunkLen
         }
     }
 
@@ -276,6 +456,7 @@ public final class IOSEarbudGattProxy: NSObject {
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             writeCont = cont
             p.writeValue(data, for: char, type: .withResponse)
+            armOpTimeout()
         }
     }
 
@@ -284,7 +465,26 @@ public final class IOSEarbudGattProxy: NSObject {
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
             readCont = cont
             p.readValue(for: char)
+            armOpTimeout()
         }
+    }
+
+    private func armOpTimeout() {
+        opSeq &+= 1
+        let seq = opSeq
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: IOSEarbudGattProxy.opTimeoutNS)
+            self?.expireOp(seq)
+        }
+    }
+
+    /// The timer of operation `seq` ran out. Only the operation that is still pending is failed, and the
+    /// link is dropped with it: the earbud may still answer, and that answer must not land on the next op.
+    private func expireOp(_ seq: UInt64) {
+        guard seq == opSeq, writeCont != nil || readCont != nil else { return }
+        RTLog.warn("earbud", "gatt op timeout")
+        failPendingOps(with: GattError.gattError("timeout"))
+        disconnect()
     }
 
     // nonisolated: called synchronously from the nonisolated CB delegate
@@ -297,6 +497,8 @@ public final class IOSEarbudGattProxy: NSObject {
         pairRespChar  = nil
         pairFinChar   = nil
         fpAdvChar     = nil
+        diagChar      = nil
+        linkReady     = false
     }
 
     // nonisolated: called synchronously from every nonisolated delegate witness
@@ -328,6 +530,7 @@ extension IOSEarbudGattProxy: CBCentralManagerDelegate {
 
     public nonisolated func centralManager(_ central: CBCentralManager,
                                            didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        linkError = error?.localizedDescription ?? "connect_failed"
         failPendingOps(with: error ?? GattError.gattError("connect_failed"))
     }
 
@@ -347,12 +550,14 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
     public nonisolated func peripheral(_ peripheral: CBPeripheral,
                                        didDiscoverServices error: Error?) {
         if let err = error {
+            linkError = err.localizedDescription
             failPendingOps(with: err)
             return
         }
         guard let svc = peripheral.services?.first(where: {
             $0.uuid == CBUUID(string: EarbudGattConstants.SERVICE_UUID)
         }) else {
+            linkError = "service_not_found"
             failPendingOps(with: GattError.gattError("service_not_found"))
             return
         }
@@ -363,6 +568,7 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
             EarbudGattConstants.PAIR_RESP_UUID,
             EarbudGattConstants.PAIR_FIN_UUID,
             EarbudGattConstants.FP_ADV_UUID,
+            EarbudGattConstants.DIAG_UUID,
         ].map { CBUUID(string: $0) }
         peripheral.discoverCharacteristics(uuids, for: svc)
     }
@@ -371,6 +577,7 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
                                        didDiscoverCharacteristicsFor service: CBService,
                                        error: Error?) {
         if let err = error {
+            linkError = err.localizedDescription
             failPendingOps(with: err)
             return
         }
@@ -382,8 +589,17 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
             case CBUUID(string: EarbudGattConstants.PAIR_RESP_UUID):  pairRespChar  = char
             case CBUUID(string: EarbudGattConstants.PAIR_FIN_UUID):   pairFinChar   = char
             case CBUUID(string: EarbudGattConstants.FP_ADV_UUID):     fpAdvChar     = char
+            case CBUUID(string: EarbudGattConstants.DIAG_UUID):       diagChar      = char
             default: break
             }
+        }
+        // The link is usable once the KMS characteristics (c3 KEY_IMPORT, c1 ATTEST_POP) are there; the
+        // others are looked up when used and name the missing one (characteristicNotFound).
+        if keyImportChar != nil, attestPopChar != nil {
+            linkError = nil
+            linkReady = true
+        } else {
+            linkError = "service_incomplete"
         }
     }
 

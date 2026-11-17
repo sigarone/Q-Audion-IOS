@@ -809,7 +809,7 @@ struct SettingsScreen: View {
             // is compiled out without it, so the row must be as well.
             #if QAUDION_EARBUD
             NavigationLink {
-                LazyView { EarbudDiagScreen() }
+                LazyView { EarbudDiagScreen(gatt: appState.earbudGattProxy) }
             } label: {
                 SettingsRow(icon: "headphones",
                             iconColor: .orange,
