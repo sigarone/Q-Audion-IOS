@@ -26,6 +26,8 @@ final class EarbudPairingRelaySasGateTests: XCTestCase {
         var failPairBegin = false
         var failPairResp = false
         var failPairFin = false
+        /// When set, every pairing operation runs inside it, as the real client's operations run inside `opGate`.
+        var gate: EarbudSerialGate?
         var pairResp: Data
         let pairBeginWrites = Recorder<Data>()
         let pairFinWrites = Recorder<Data>()
@@ -34,17 +36,27 @@ final class EarbudPairingRelaySasGateTests: XCTestCase {
 
         func startKeyImport(pkg: Data, popInputs: Data) async throws -> KeyImportOutcome { .err("unused") }
         func readAttestPop() async throws -> Data { Data() }
+        private func gated<T>(_ body: () async throws -> T) async throws -> T {
+            if let gate = gate { return try await gate.run(body) }
+            return try await body()
+        }
         func writePairBegin(_ payload: Data) async throws {
-            if failPairBegin { throw FakeError.boom }
-            pairBeginWrites.append(payload)
+            try await gated {
+                if self.failPairBegin { throw FakeError.boom }
+                self.pairBeginWrites.append(payload)
+            }
         }
         func readPairResp() async throws -> Data {
-            if failPairResp { throw FakeError.boom }
-            return pairResp
+            try await gated {
+                if self.failPairResp { throw FakeError.boom }
+                return self.pairResp
+            }
         }
         func writePairFin(_ confirm: Data) async throws {
-            if failPairFin { throw FakeError.boom }
-            pairFinWrites.append(confirm)
+            try await gated {
+                if self.failPairFin { throw FakeError.boom }
+                self.pairFinWrites.append(confirm)
+            }
         }
         func writeFpAdvSeed(_ ctBind: Data) async throws {}
         func readFpAdv() async throws -> (fpAdv: Data, epoch: UInt64) { (Data(count: 32), 0) }
@@ -171,6 +183,77 @@ final class EarbudPairingRelaySasGateTests: XCTestCase {
         XCTAssertEqual(earbud.pairFinWrites.all.count, 0)
     }
 
+    // MARK: - PAIR_FIN behind another operation of the shared client
+
+    private final class Flag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+        func set() { lock.lock(); value = true; lock.unlock() }
+        var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
+    }
+
+    /// Another user of the one GATT client (a DIAG poll, a key import) takes the gate and keeps it until `release`.
+    private func holdGate(_ gate: EarbudSerialGate, until release: Flag) async -> Task<Void, Never> {
+        let held = Flag()
+        let task = Task {
+            _ = try? await gate.run {
+                held.set()
+                while !release.isSet { try? await Task.sleep(nanoseconds: 2_000_000) }
+            }
+        }
+        for _ in 0..<2000 where !held.isSet { try? await Task.sleep(nanoseconds: 1_000_000) }
+        return task
+    }
+
+    /// After the person confirms, a PAIR_FIN that cannot get the client's gate within its timeout is reported as a
+    /// failure. It used to stay in the gate's queue (the gate ignored cancellation, and the relay's task group waited
+    /// for it), so it was written the moment the other operation ended: the earbud sealed a pairing the screen had
+    /// reported as failed, and `pairWithPeer` itself did not return before then.
+    func testAPairFinThatTimesOutBehindAnotherOperationIsNeverWrittenLate() async {
+        let gate = EarbudSerialGate()
+        let earbud = makeEarbud()
+        earbud.gate = gate
+        let relay = EarbudPairingRelay(gatt: earbud, finTimeout: 0.15)
+        let release = Flag()
+        let watchdogFired = Flag()
+        // Safety net only: a gate that ignores cancellation would hold the call until the other operation ends.
+        let watchdog = Task {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if !Task.isCancelled { watchdogFired.set(); release.set() }
+        }
+        let holders = Recorder<Task<Void, Never>>()
+
+        let result = await pair(relay) { _ in
+            // The person taps "confirm"; right then a DIAG poll of the shared client takes the gate.
+            holders.append(await self.holdGate(gate, until: release))
+            return true
+        }
+        watchdog.cancel()
+
+        XCTAssertFalse(watchdogFired.isSet, "pairWithPeer returned on its own timeout while the other operation still held the gate")
+        guard case .defer(let reason, let cached) = result else { return XCTFail("expected defer, got \(result)") }
+        XCTAssertTrue(reason.hasPrefix("pair_fin_failed"), reason)
+        XCTAssertTrue(cached)
+        XCTAssertTrue(result.needsFreshLink)
+
+        release.set()
+        for h in holders.all { await h.value }
+        // Give a wrongly queued write the time it would need to run once the gate is free.
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        XCTAssertEqual(earbud.pairFinWrites.all.count, 0, "PAIR_FIN must not reach the earbud after the pairing was reported failed")
+        let free = try? await gate.run { true }
+        XCTAssertEqual(free, true, "the gate is free: the timed-out write left its queue")
+    }
+
+    func testAPairFinThatGetsTheGateInTimeIsStillWritten() async {
+        let gate = EarbudSerialGate()
+        let earbud = makeEarbud()
+        earbud.gate = gate
+        let result = await pair(EarbudPairingRelay(gatt: earbud, finTimeout: 5)) { _ in true }
+        guard case .success = result else { return XCTFail("expected success, got \(result)") }
+        XCTAssertEqual(earbud.pairFinWrites.all.count, 1)
+    }
+
     // MARK: - needsFreshLink
 
     func testNeedsFreshLinkPerOutcome() {
@@ -224,5 +307,9 @@ final class EarbudPairingRelaySasGateTests: XCTestCase {
 
     func testTheDefaultTimeoutIsTwoMinutes() {
         XCTAssertEqual(EarbudPairingRelay.sasConfirmTimeoutDefault, 120)
+    }
+
+    func testTheDefaultPairFinTimeoutIsTenSeconds() {
+        XCTAssertEqual(EarbudPairingRelay.finTimeoutDefault, 10)
     }
 }

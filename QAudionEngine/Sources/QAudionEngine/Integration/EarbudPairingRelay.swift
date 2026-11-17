@@ -24,7 +24,9 @@ import Foundation
 /// ## Timeouts
 ///   PAIR_BEGIN write + PAIR_RESP read : 60 s
 ///   SAS confirmation by the person    : 120 s (`sasConfirmTimeout`)
-///   PAIR_FIN write                    : 10 s
+///   PAIR_FIN write                    : 10 s (`finTimeout`), the wait for the GATT client's operation gate
+///                                       included: a write still queued when it runs out is withdrawn
+///                                       (`EarbudSerialGate` honours cancellation), never sent late
 public final class EarbudPairingRelay {
 
     // MARK: - Result
@@ -72,22 +74,30 @@ public final class EarbudPairingRelay {
     // MARK: - Private constants
 
     private static let pairingTimeoutNS: UInt64 = 60 * 1_000_000_000
-    private static let finTimeoutNS: UInt64 = 10 * 1_000_000_000
 
     /// How long the person has to compare the words and answer before the pairing is aborted.
     public static let sasConfirmTimeoutDefault: TimeInterval = 120
+
+    /// How long PAIR_FIN may take, from the call to the write's end.
+    public static let finTimeoutDefault: TimeInterval = 10
 
     // MARK: - Init
 
     private let gatt: EarbudPairingGattProxy
     private let sasConfirmTimeoutNS: UInt64
+    private let finTimeoutNS: UInt64
 
-    /// - Parameter sasConfirmTimeout: how long `isConfirmed` may take; a parameter only so a unit test
-    ///   need not wait 2 minutes.
+    /// - Parameters:
+    ///   - sasConfirmTimeout: how long `isConfirmed` may take; a parameter only so a unit test
+    ///     need not wait 2 minutes.
+    ///   - finTimeout: how long the PAIR_FIN write may take; a parameter only so a unit test need not
+    ///     wait 10 s.
     public init(gatt: EarbudPairingGattProxy,
-                sasConfirmTimeout: TimeInterval = EarbudPairingRelay.sasConfirmTimeoutDefault) {
+                sasConfirmTimeout: TimeInterval = EarbudPairingRelay.sasConfirmTimeoutDefault,
+                finTimeout: TimeInterval = EarbudPairingRelay.finTimeoutDefault) {
         self.gatt = gatt
         self.sasConfirmTimeoutNS = UInt64(max(0, sasConfirmTimeout) * 1_000_000_000)
+        self.finTimeoutNS = UInt64(max(0, finTimeout) * 1_000_000_000)
     }
 
     // MARK: - Public API
@@ -167,9 +177,12 @@ public final class EarbudPairingRelay {
             return .sasRejected(pairId: computedPairId)
         }
 
-        // c7: write PAIR_FIN (32 B confirm hash)
+        // c7: write PAIR_FIN (32 B confirm hash). The write waits in the GATT client's operation gate behind
+        // any other operation of the shared client (a DIAG poll, a key import); when the timeout runs out
+        // first, the cancelled write leaves the gate's queue and is NOT sent later, so a pairing reported
+        // as failed here is never sealed by the earbud behind the person's back.
         do {
-            try await withThrowingTimeout(nanoseconds: Self.finTimeoutNS) { [gatt] in
+            try await withThrowingTimeout(nanoseconds: finTimeoutNS) { [gatt] in
                 try await gatt.writePairFin(confirm)
             }
         } catch {
