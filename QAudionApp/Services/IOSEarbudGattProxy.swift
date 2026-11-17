@@ -188,9 +188,12 @@ public final class IOSEarbudGattProxy: NSObject {
             throw GattError.gattError("peripheral_not_found")
         }
         if let old = peripheral, old.identifier != p.identifier {
-            // another earbud was linked: leave it, this call is for the new one
+            // another earbud was linked: leave it, this call is for the new one. The operation that was
+            // running on the old link fails now: its disconnect callback arrives after `peripheral` is the
+            // new earbud and is ignored (`isCurrent`), so nothing else would end it before the op timeout.
             central.cancelPeripheralConnection(old)
             clearCharacteristics()
+            failPendingOps(with: GattError.notConnected)
         }
         peripheral = p
         p.delegate = self
@@ -487,6 +490,16 @@ public final class IOSEarbudGattProxy: NSObject {
         disconnect()
     }
 
+    /// True when a CoreBluetooth callback about `p` concerns the link this client follows now.
+    ///
+    /// After `ensureConnected` switched from earbud A to earbud B, CoreBluetooth still reports A's end
+    /// (`didDisconnectPeripheral`, `didFailToConnect`) and may deliver A's late discovery or read / write
+    /// results. Acting on them would clear B's characteristics and ready flag, set B's `linkError`, or
+    /// resume B's pending write / read with A's answer. The rule is `EarbudLinkIdentity` (engine, unit-tested).
+    private nonisolated func isCurrent(_ p: CBPeripheral) -> Bool {
+        EarbudLinkIdentity.concernsCurrentLink(callback: p.identifier, current: peripheral?.identifier)
+    }
+
     // nonisolated: called synchronously from the nonisolated CB delegate
     // witnesses (didDisconnect / didUpdateState); touches only the
     // nonisolated(unsafe) characteristic slots — always on the main thread.
@@ -523,6 +536,7 @@ extension IOSEarbudGattProxy: CBCentralManagerDelegate {
 
     public nonisolated func centralManager(_ central: CBCentralManager,
                                            didConnect peripheral: CBPeripheral) {
+        guard isCurrent(peripheral) else { return }
         peripheral.delegate = self
         let svcUUID = CBUUID(string: EarbudGattConstants.SERVICE_UUID)
         peripheral.discoverServices([svcUUID])
@@ -530,6 +544,7 @@ extension IOSEarbudGattProxy: CBCentralManagerDelegate {
 
     public nonisolated func centralManager(_ central: CBCentralManager,
                                            didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        guard isCurrent(peripheral) else { return }
         linkError = error?.localizedDescription ?? "connect_failed"
         failPendingOps(with: error ?? GattError.gattError("connect_failed"))
     }
@@ -537,6 +552,7 @@ extension IOSEarbudGattProxy: CBCentralManagerDelegate {
     public nonisolated func centralManager(_ central: CBCentralManager,
                                            didDisconnectPeripheral peripheral: CBPeripheral,
                                            error: Error?) {
+        guard isCurrent(peripheral) else { return }
         clearCharacteristics()
         failPendingOps(with: GattError.gattError(
             "disconnected:\(error?.localizedDescription ?? "nil")"))
@@ -549,6 +565,7 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
 
     public nonisolated func peripheral(_ peripheral: CBPeripheral,
                                        didDiscoverServices error: Error?) {
+        guard isCurrent(peripheral) else { return }
         if let err = error {
             linkError = err.localizedDescription
             failPendingOps(with: err)
@@ -576,6 +593,7 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
     public nonisolated func peripheral(_ peripheral: CBPeripheral,
                                        didDiscoverCharacteristicsFor service: CBService,
                                        error: Error?) {
+        guard isCurrent(peripheral) else { return }
         if let err = error {
             linkError = err.localizedDescription
             failPendingOps(with: err)
@@ -606,6 +624,7 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
     public nonisolated func peripheral(_ peripheral: CBPeripheral,
                                        didWriteValueFor characteristic: CBCharacteristic,
                                        error: Error?) {
+        guard isCurrent(peripheral) else { return }
         if let err = error {
             writeCont?.resume(throwing: GattError.gattError(err.localizedDescription))
         } else {
@@ -617,6 +636,7 @@ extension IOSEarbudGattProxy: CBPeripheralDelegate {
     public nonisolated func peripheral(_ peripheral: CBPeripheral,
                                        didUpdateValueFor characteristic: CBCharacteristic,
                                        error: Error?) {
+        guard isCurrent(peripheral) else { return }
         if let err = error {
             readCont?.resume(throwing: GattError.gattError(err.localizedDescription))
         } else {
