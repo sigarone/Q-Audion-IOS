@@ -4,9 +4,7 @@ import QAudionEngine
 
 /// W546+W547 — Bidirectional in-app feedback channel.
 ///
-/// Talks to bcrypto-server `/api/v1/feedback*` (see
-/// apps/bcrypto-server/cmd/bcrypto-lite/feedback.go for the wire
-/// contract). Three duties:
+/// Talks to the server's `/api/v1/feedback*` endpoints. Four duties:
 ///
 /// 1. `submit(...)` — POST a new feedback thread (subject + body + kind).
 ///    The server auto-replies with a maintainer "Grazie" so the user
@@ -231,10 +229,9 @@ public final class FeedbackService: ObservableObject {
         req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
-        // W-AUXPIN (2026-09-01): cert-pinned session (same delegate/pins as
-        // the REST client) instead of URLSession.shared — these bearer-token
-        // calls had no pin at all (audit memory
-        // reference_ios_stability_audit_2026_09_01, P1 item 6).
+        // W-AUXPIN: cert-pinned session (same delegate/pins as the REST
+        // client) instead of URLSession.shared, so these bearer-token calls
+        // are pinned.
         let (data, resp) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: req)
         try noteResponse(resp)
         return data

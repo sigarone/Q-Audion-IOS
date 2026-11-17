@@ -2,7 +2,7 @@ import SwiftUI
 import QAudionEngine
 
 /// Active 1:1 call screen (audio, with optional video). Aligns with:
-///   - Android `qaudion-android-new/feature/feature-call/.../InCallScreen.kt`
+///   - The Android implementation of this screen
 ///   - Desktop `Q-Audion Desktop — Call Surface Variants` Stitch project
 ///   - Mobile Stitch mockup `Q-Audion Active Call` (project 15710203507549916868)
 ///
@@ -1096,14 +1096,17 @@ struct InCallScreen: View {
 
                 guardianRibbon.padding(.horizontal, 20)
 
-                Spacer().frame(height: 6)
+                // The card is part of the screen only while the monitor's verdict is displayed.
+                if VoiceGuard.showsCard() {
+                    Spacer().frame(height: 6)
 
-                VoiceGuardCard(learningState: voiceLearningState,
-                               confidenceHistory: voiceConfidenceHistory,
-                               speakerChange: speakerChange,
-                               voiceSpectrum: voiceSpectrum,
-                               voiceReference: voiceReference)
-                    .padding(.horizontal, 20)
+                    VoiceGuardCard(learningState: voiceLearningState,
+                                   confidenceHistory: voiceConfidenceHistory,
+                                   speakerChange: speakerChange,
+                                   voiceSpectrum: voiceSpectrum,
+                                   voiceReference: voiceReference)
+                        .padding(.horizontal, 20)
+                }
 
                 // Live crypto-engine meter (the ENGINE cipher tube), right
                 // below the voice check card: real AES-256-GCM frame ops/s
@@ -1582,13 +1585,12 @@ struct InCallScreen: View {
             // confirmed. It follows the same local verdict as the voice check
             // card and says the same words; what the far end reports about
             // its own detector is about our own voice and never reaches it.
-            if speakerChange.level == .suspect || speakerChange.level == .changed {
+            if let line = VoiceGuard.shieldLine(forChange: speakerChange.level) {
                 trustShield(
-                    tint: speakerChange.level == .changed ? extras.riskHigh : extras.warning,
+                    tint: line == .changed ? extras.riskHigh : extras.warning,
                     icon: "arrow.left.arrow.right",
                     info: .speakerChange,
-                    accessibilityLabel: VoiceGuardCopy.text(
-                        for: speakerChange.level == .changed ? .changed : .suspect)
+                    accessibilityLabel: VoiceGuardCopy.text(for: line)
                 )
             }
             // W-NFCVISIBLE / W-NFCCOMMON — Pavel: an NFC key held in common with

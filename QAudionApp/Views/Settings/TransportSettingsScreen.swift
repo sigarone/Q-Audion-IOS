@@ -86,7 +86,7 @@ final class TransportSettingsContainer: ObservableObject {
     var showSavedNote: Bool { saveState.showsSavedNote(draft: draftChoice) }
 
     #if QAUDION_VPN
-    /// Fetch the live exit-node list (Helsinki, Milano, …) for the picker.
+    /// Fetch the live exit-node list for the picker.
     /// Best-effort: a failure leaves the list empty (the row still shows
     /// "Auto"); never throws to the UI.
     func loadVpnNodes() async {

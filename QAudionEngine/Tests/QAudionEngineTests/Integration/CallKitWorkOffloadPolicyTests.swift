@@ -5,7 +5,6 @@ import XCTest
 /// `VideoCallPipeline.stop()` and `CallService.startAudioIOIfReady()` act
 /// on, without a live `AVCaptureSession`/`AVAudioEngine`. Same discipline as
 /// `AudioInterruptionRecoveryPolicyTests` / `RestartIceDecisionsTests`.
-/// Evidence: audit memory reference_ios_stability_audit_2026_09_01, P1 (8).
 final class CallKitWorkOffloadPolicyTests: XCTestCase {
 
     private typealias Policy = CallKitWorkOffloadPolicy

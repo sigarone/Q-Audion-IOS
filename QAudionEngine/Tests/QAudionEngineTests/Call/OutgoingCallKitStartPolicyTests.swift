@@ -5,12 +5,12 @@ import XCTest
 /// finished starting the outgoing call.
 ///
 /// `AppState.startCall` assigns `activeCallKitId` only after `CallKitManaging.startOutgoingCall` returns (the
-/// `CXStartCallAction` round trip). In the incident of 2026-10-03 10:43 the server's busy arrived 577 ms after the
-/// dial and the CallKit start was fulfilled at about 691 ms: `AppState.endCall` found `activeCallKitId == nil`,
-/// reported nothing, and the late assignment re-created the orphan call group that made every redial fail with
-/// `maximumCallGroupsReached`. The decision that closes it is `OutgoingCallKitStartPolicy`; `AppState` cannot be
-/// driven here (CallKit, live provider, WebSocket), so the wiring is pinned by `CallerBusyWiringTests` and the
-/// sequence is replayed below against the real policy, the real accept latch and `MockCallKitManager`.
+/// `CXStartCallAction` round trip). If the server's busy arrives before that round trip finishes,
+/// `AppState.endCall` finds `activeCallKitId == nil` and reports nothing, and the late assignment would re-create
+/// an orphan call group that makes every redial fail with `maximumCallGroupsReached`. The decision that closes it
+/// is `OutgoingCallKitStartPolicy`; `AppState` cannot be driven here (CallKit, live provider, WebSocket), so the
+/// wiring is pinned by `CallerBusyWiringTests` and the sequence is replayed below against the real policy, the
+/// real accept latch and `MockCallKitManager`.
 final class OutgoingCallKitStartPolicyTests: XCTestCase {
 
     private let callA = "11111111-1111-4111-8111-111111111111"
@@ -85,7 +85,7 @@ final class OutgoingCallKitStartPolicyTests: XCTestCase {
         XCTAssertNil(CallerTerminalEndRecord(callId: "", outcome: .busy).outcome(forCallId: ""))
     }
 
-    // MARK: - the incident sequence, replayed
+    // MARK: - busy before the CallKit start returns, replayed
 
     /// The `AppState` pieces that matter, reduced to what the policy sees. `endCall` reports to CallKit only when it
     /// knows the uuid (`activeCallKitId`); `callKitStartReturned` is the tail of `startCall`'s CallKit `Task`
@@ -134,7 +134,7 @@ final class OutgoingCallKitStartPolicyTests: XCTestCase {
         }
     }
 
-    /// The incident: busy first, the CallKit start returns afterwards. Exactly one report, `.unanswered`, and no
+    /// Busy first, the CallKit start returns afterwards. Exactly one report, `.unanswered`, and no
     /// orphan left in `activeCallKitId` (what `noCallInFlight()` and the next dial look at).
     func testBusyBeforeTheCallKitStartReturnsClosesTheLateCallKitCall() async {
         let d = Dialer()
@@ -206,7 +206,7 @@ final class OutgoingCallKitStartPolicyTests: XCTestCase {
         XCTAssertEqual(d.callKit.records.count, 1, "the redial's call is adopted, not reported")
     }
 
-    /// The incident's three dials, each with the busy landing before CallKit answered: nothing is left open and every
+    /// Three dials in a row, each with the busy landing before CallKit answered: nothing is left open and every
     /// CallKit call was reported once.
     func testThreeBusyDialsLeaveNoCallKitCallOpen() async {
         let d = Dialer()

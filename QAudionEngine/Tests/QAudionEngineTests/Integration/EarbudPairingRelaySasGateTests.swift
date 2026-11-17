@@ -3,8 +3,8 @@ import XCTest
 
 /// CL-2.2: `EarbudPairingRelay` writes PAIR_FIN only after a person has confirmed the pairing words.
 ///
-/// The gate used to be `isConfirmed: { _ in true }` at every call site and the default of the parameter, so
-/// the confirmation never happened. These tests drive the relay against a fake earbud and pin what the
+/// A call site or a parameter default of `isConfirmed: { _ in true }` would mean the confirmation never
+/// happens. These tests drive the relay against a fake earbud and pin what the
 /// Android `EarbudPairingRelaySasGateTest` pins: a "no", no answer within the timeout, or a cancelled task all end
 /// the pairing without a PAIR_FIN, and the result says the link must be dropped before a retry.
 final class EarbudPairingRelaySasGateTests: XCTestCase {
@@ -216,9 +216,9 @@ final class EarbudPairingRelaySasGateTests: XCTestCase {
     }
 
     /// After the person confirms, a PAIR_FIN that cannot get the client's gate within its timeout is reported as a
-    /// failure. It used to stay in the gate's queue (the gate ignored cancellation, and the relay's task group waited
-    /// for it), so it was written the moment the other operation ended: the earbud sealed a pairing the screen had
-    /// reported as failed, and `pairWithPeer` itself did not return before then.
+    /// failure. A gate that ignored cancellation would keep it in the queue (and the relay's task group would wait
+    /// for it), so it would be written the moment the other operation ended: the earbud would seal a pairing the
+    /// screen had reported as failed, and `pairWithPeer` itself would not return before then.
     func testAPairFinThatTimesOutBehindAnotherOperationIsNeverWrittenLate() async {
         let gate = EarbudSerialGate()
         let earbud = makeEarbud()
@@ -296,9 +296,9 @@ final class EarbudPairingRelaySasGateTests: XCTestCase {
         return result
     }
 
-    /// The limit bounds the wait for the gate, not a write that has already left it. It used to abandon that write
-    /// as well: the relay reported `pair_fin_failed:CancellationError()` although the earbud had the PAIR_FIN and
-    /// sealed the pairing, so the person was told it failed and started over on a pairing that was already done.
+    /// The limit bounds the wait for the gate, not a write that has already left it. Abandoning that write as
+    /// well would report `pair_fin_failed:CancellationError()` although the earbud has the PAIR_FIN and seals
+    /// the pairing, so the person would be told it failed and start over on a pairing that is already done.
     func testAPairFinThatLeftTheGateBeforeItsLimitRanOutIsNotReportedFailed() async {
         let earbud = makeEarbud()
         let result = await pairWithPairFinInFlightWhenItsLimitRunsOut(earbud)

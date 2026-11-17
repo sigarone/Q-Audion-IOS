@@ -6,11 +6,9 @@ import XCTest
 /// IOSEarbudGattProxy (CoreBluetooth, app target, QAUDION_EARBUD only) cannot run in a unit test, so what
 /// it writes is decided by two pure functions of the engine, `EarbudKeyImportFragmenter.writeFrames` and
 /// `EarbudPairGatt.pairBeginFrames`, and these tests replay their output through a Swift model of the
-/// firmware's write handlers (qaudion-firmware firmware/nspe/src/transport/qaudion_gatt.c at 38fad83,
-/// `key_import_write` 1612-1757 and `pair_begin_write` 1822-1857). The defects they pin were all in the
-/// shipped proxy: it framed c3 with LITTLE-endian offsets (the firmware reads them big-endian) and wrote
-/// the PoP-INPUTS frame AFTER the package (the firmware needs it before), so from the second fragment on
-/// the import was refused.
+/// firmware's write handlers (qaudion_gatt.c, `key_import_write` 1612-1757 and `pair_begin_write`
+/// 1822-1857). What they pin: c3 takes BIG-endian offsets (little-endian ones are refused from the second
+/// fragment on) and needs the PoP-INPUTS frame BEFORE the package (written after it, no PoP is produced).
 final class EarbudGattFramingTests: XCTestCase {
 
     // MARK: - Firmware models
@@ -101,8 +99,8 @@ final class EarbudGattFramingTests: XCTestCase {
         XCTAssertEqual(Array(frames.dropFirst()), EarbudKeyImportFragmenter.fragment(pkg, mtuPayload: 180),
                        "the package follows as the engine's big-endian contiguous fragments")
         XCTAssertEqual(frames.count, 1 + 10, "1668 B in fragments of 180 B is 10 frames")
-        // The second fragment starts at byte 180 = 0x00B4: big-endian is 00 B4 (little-endian, the old
-        // proxy, was B4 00), the third at 360 = 0x0168 is 01 68.
+        // The second fragment starts at byte 180 = 0x00B4: big-endian is 00 B4 (little-endian would be
+        // B4 00), the third at 360 = 0x0168 is 01 68.
         XCTAssertEqual(Array(frames[2].prefix(2)), [0x00, 0xB4])
         XCTAssertEqual(Array(frames[3].prefix(2)), [0x01, 0x68])
         for f in frames {
@@ -146,13 +144,13 @@ final class EarbudGattFramingTests: XCTestCase {
         XCTAssertNotNil(EarbudKeyImportFragmenter.writeFrames(pkg: pkg, popInputs: nil, maxWriteLength: 3))
     }
 
-    /// What the shipped proxy did, replayed on the model, so the model proves it catches the defects.
+    /// A client that frames c3 with LITTLE-endian offsets, replayed on the model, so the model proves it catches the error.
     func testTheShippedLittleEndianFramingWasRefusedFromTheSecondFragment() {
         var legacy: [Data] = []
         var offset = 0
         while offset < pkg.count {
             let len = min(180, pkg.count - offset)
-            var f = Data([UInt8(offset & 0xFF), UInt8((offset >> 8) & 0xFF)])   // LITTLE-endian: the defect
+            var f = Data([UInt8(offset & 0xFF), UInt8((offset >> 8) & 0xFF)])   // LITTLE-endian: wrong for c3
             f.append(pkg[offset..<(offset + len)])
             legacy.append(f)
             offset += len
@@ -165,7 +163,7 @@ final class EarbudGattFramingTests: XCTestCase {
     func testThePopInputsFrameWrittenAfterThePackageNeverReachedTheSe() throws {
         var fw = KeyImportFirmware()
         for f in EarbudKeyImportFragmenter.fragment(pkg, mtuPayload: 180) { try fw.write(f) }
-        try fw.write(popInputs)   // the shipped order: PoP-INPUTS last
+        try fw.write(popInputs)   // the wrong order: PoP-INPUTS last
         XCTAssertEqual(fw.imported, [UInt8](pkg))
         XCTAssertEqual(fw.importedWithPop, false, "the import ran before the inputs were staged: no PoP on c1")
     }

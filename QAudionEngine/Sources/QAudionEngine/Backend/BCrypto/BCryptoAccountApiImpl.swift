@@ -147,7 +147,7 @@ public final class BCryptoAccountApiImpl: AccountApi {
         _ = try await rest.post("/api/v1/account/fcm-token", body: body)
     }
 
-    /// Registers an APNs VoIP push token (PushKit) with the bcrypto-server.
+    /// Registers an APNs VoIP push token (PushKit) with the server.
     /// Wave 2B-3 / WIRE_SPEC §3.8.1.
     ///
     /// Use this in preference to ``registerPushToken(_:platform:)`` for iOS

@@ -93,20 +93,17 @@ public final class GroupMessageStore: ObservableObject {
         /// (today's behavior); true = the sender marked this attachment
         /// export-blocked. Client-side/UI honor-system signal only.
         public var exportBlocked: Bool?
-        /// W-GRPOUTBOX (2026-09-15, audit reference_ios_full_audit_2026_09_15
-        /// .md finding #2) — true once the send attempt for this `mine` row
-        /// is known to have failed (no live WS at send time). Before this
-        /// field, a group send with no live socket was silently dropped: the
-        /// optimistic row stayed in `.sending` forever with no way for the
-        /// UI to ever show it as failed or offer a retry, unlike the 1:1
-        /// path's persisted, retried outbox. This is a lighter-weight fix
-        /// than 1:1's full disk-persisted backoff outbox (no survives-a-
-        /// relaunch retry queue) — it closes the "stuck forever, invisible"
-        /// part specifically: the row becomes visibly `.failed`
+        /// W-GRPOUTBOX — true once the send attempt for this `mine` row is
+        /// known to have failed (no live WS at send time). Without it, a
+        /// group send with no live socket would leave the optimistic row in
+        /// `.sending` forever, with no way for the UI to show it as failed
+        /// or offer a retry. The row becomes visibly `.failed`
         /// (`GroupChatScreen.deliveryStatus`) with a manual retry action,
-        /// same as 1:1. nil/false for every row that hasn't failed and every
-        /// pre-existing persisted row (additive optional field, decodes
-        /// unchanged like every other Fase 1B/2 field above).
+        /// same as 1:1; unlike 1:1's disk-persisted backoff outbox, there is
+        /// no retry queue that survives a relaunch. nil/false for every row
+        /// that hasn't failed and every pre-existing persisted row (additive
+        /// optional field, decodes unchanged like every other Fase 1B/2
+        /// field above).
         public var sendFailed: Bool?
         /// Message replies (WIRE_SPEC 13.7, "same rules" in a group): the body of a VALID reply exactly as received (the object with `to`,
         /// `k`, `q`, `b`), kept beside `text` (which holds `b`, what the row shows and previews) so that the references are not lost and

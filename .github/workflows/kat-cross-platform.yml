@@ -1,7 +1,7 @@
 # Cross-platform KAT for Q-Audion iOS
 #
 # Runs the Swift+CryptoKit+liboqs implementation against canonical
-# vectors hosted in bcrypto-server/test/kat/wire_v1.0.0/.
+# vectors published by the server.
 #
 # This GitHub Actions workflow (CI moved off Codemagic 2026-05-06, see
 # CLAUDE.md) was meant to be a cross-platform PR-gating canary that runs
@@ -24,11 +24,10 @@
 # at which point it costs exactly what ios-ci.yml already costs, for
 # zero additional coverage (that job runs this same test class). Vectors
 # stay vendored under Tests/QAudionEngineTests/Crypto/Resources/wire_v1.0.0/
-# (bcrypto-server is private, CI can't curl it, and SPM needs the files to
-# exist on disk regardless) so ios-ci.yml's run of this class keeps
-# working. Re-enable this workflow only if it's rewritten to not need
-# the WebRTC binary at all (e.g. a build configuration that excludes it), not
-# by just re-adding the triggers.
+# (SPM needs every declared resource to exist on disk at build time) so
+# ios-ci.yml's run of this class keeps working. Re-enable this workflow
+# only if it's rewritten to not need the WebRTC binary at all (e.g. a build
+# configuration that excludes it), not by just re-adding the triggers.
 #
 # Scope: does not cover canonical_cbor/sealed_sender_cert_v2.json —
 # SenderCertV2/sealed-sender has no iOS implementation at all.

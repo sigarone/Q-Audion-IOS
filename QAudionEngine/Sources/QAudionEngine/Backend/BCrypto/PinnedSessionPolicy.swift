@@ -8,11 +8,8 @@ import Foundation
 /// Why: those four clients called `URLSession.shared.data(for:)` directly —
 /// system-default TLS chain validation, NO pin — while every other request
 /// to the same host (REST client, WS, VPN control plane, update checker,
-/// group membership, Track-B sync, FE-5 exchange) has been pinned since
-/// SECURITY C-6. A bearer token on an unpinned session is exactly the gap the
-/// audit flagged (see audit memory reference_ios_stability_audit_2026_09_01,
-/// P1 item 6: TelemetryService.swift:333, BugReporter.swift:256/:375,
-/// FeedbackService.swift:225/:239, SelfTestService.swift:240).
+/// group membership, Track-B sync, FE-5 exchange) is pinned. A bearer token
+/// on an unpinned session is exactly the gap this closes.
 ///
 /// Design — risk-minimal, and by construction the SAME trust decision as
 /// the REST client:

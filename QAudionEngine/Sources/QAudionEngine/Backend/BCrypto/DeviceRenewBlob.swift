@@ -3,7 +3,7 @@ import Foundation
 /// Pure functions for the Phase 2 device-bound silent re-auth blobs.
 ///
 /// Mirror of:
-///   - Go server : `bcrypto-server/internal/auth/blob.go`
+///   - Go server : the server's device-renew blob code
 ///   - Android   : `core-data/auth/DeviceRenewBlob.kt`
 ///   - Desktop   : `src/main/transport/DeviceRenewBlob.ts`
 ///

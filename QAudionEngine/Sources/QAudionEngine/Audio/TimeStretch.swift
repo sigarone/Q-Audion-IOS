@@ -1,22 +1,20 @@
 import Foundation
 
-/// W-JBSTRETCH (2026-08-25, parity plan Fase C3) — pure intra-frame time
-/// compression for `PlayoutJitterBuffer`'s excess-depth correction.
+/// W-JBSTRETCH — pure intra-frame time compression for
+/// `PlayoutJitterBuffer`'s excess-depth correction.
 ///
 /// Originally a byte-for-byte port of Android's
-/// `com.bcrypto.qaudion.audio.TimeStretch`
-/// (`qaudion-android-new/qaudion-engine/.../audio/TimeStretch.kt`) — same
-/// SOLA-lite algorithm, same linear integer-weighted crossfade, same
-/// decline contract. What follows is that file's own kdoc, carried over
-/// verbatim because the design rationale did not change in the port
-/// EXCEPT for one iOS-only enhancement layered on top afterward (see
-/// "W-JBSTRETCH-WSOLA" below): a bounded correlation search for the
-/// crossfade source. That change is receive-side-only local playout
-/// concealment quality — it never touches the wire format either platform
-/// speaks — so it does not need to stay byte-identical with Android's twin
-/// the way the codec/handshake/wire-format code in this codebase does; this
-/// file's linear-crossfade math and decline contract otherwise still match
-/// Android exactly.
+/// `com.bcrypto.qaudion.audio.TimeStretch` — same SOLA-lite algorithm, same
+/// linear integer-weighted crossfade, same decline contract. What follows is
+/// that file's own kdoc, carried over verbatim because the design rationale
+/// did not change in the port EXCEPT for one iOS-only enhancement layered on
+/// top afterward (see "W-JBSTRETCH-WSOLA" below): a bounded correlation
+/// search for the crossfade source. That change is receive-side-only local
+/// playout concealment quality — it never touches the wire format either
+/// platform speaks — so it does not need to stay byte-identical with
+/// Android's twin the way the codec/handshake/wire-format code in this
+/// codebase does; this file's linear-crossfade math and decline contract
+/// otherwise still match Android exactly.
 ///
 /// ## Why intra-frame rather than a cross-frame WSOLA search
 ///

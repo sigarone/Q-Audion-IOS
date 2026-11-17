@@ -15,6 +15,12 @@ CPU as a percentage of one core, the checks skipped and run since the previous s
 being held back ("[Voice] bg=1 every=10 cpu=42 skip=3 run=2 high=0", "[Guardian] bg=1 cpu=250 skip=0 run=7 high=1").
 Keep in sync with BackgroundCpuGovernor and BackgroundCpuGovernorTests.
 
+And the level-change lines of the voice-change monitor (RemoteSpeakerChangeMonitor.transitionLine, same stdout tee): one per
+change of level, with the level code (0 unknown, 1 steady, 2 suspect, 3 changed), the scores seen so far, the reference centre
+("base") and deviation ("sd") of the detector when it has them, and the last score ("cur"), all plain numbers
+("[Voice] change lv=1 n=7 base=0.63 sd=0.05 cur=0.58"). Keep in sync with RemoteSpeakerChangeMonitor and
+RemoteSpeakerChangeMonitorTests.
+
 And the numeric diagnostics of a call (CallResourceLine.line and CallResourceLine.answerLine, same stdout tee): the
 process CPU over the last interval as a percentage of one core, the raw application state (0 active, 1 inactive,
 2 background), whether protected data is not available, the thermal state (0 nominal .. 3 critical) and whether Low
@@ -80,6 +86,20 @@ GOVERNOR_LINES = [
     "[Guardian] bg=1 cpu=250 skip=0 run=7 high=1",
     "[Guardian] bg=1 cpu=48 skip=2 run=1 high=0",
     "[Guardian] bg=0 cpu=30 skip=0 run=1 high=0",
+]
+
+# Same text as RemoteSpeakerChangeMonitor.transitionLine: every level code, the shorter forms (no reference yet, and the reset
+# line), negative scores, and the widest numbers the line can carry.
+SPEAKER_CHANGE_LINES = [
+    "[Voice] change lv=1 n=7 base=0.63 sd=0.05 cur=0.58",
+    "[Voice] change lv=2 n=11 base=0.80 sd=0.03 cur=0.20",
+    "[Voice] change lv=3 n=13 base=0.80 sd=0.03 cur=0.20",
+    "[Voice] change lv=0 n=0",
+    "[Voice] change lv=0 n=9 cur=0.50",
+    "[Voice] change lv=2 n=40 base=-0.12 sd=0.30 cur=-0.55",
+    "[Voice] change lv=1 n=7 base=-0.00 sd=0.00 cur=-0.00",
+    "[Voice] change lv=3 n=1200 base=12.34 sd=3.21 cur=-10.55",
+    "[Voice] change lv=3 n=99999 base=-99.99 sd=99.99 cur=-99.99",
 ]
 
 # Same text as CallResourceLine.line: every state, both ends of the CPU range, every flag on and off.
@@ -161,13 +181,13 @@ for text in LINES:
     got = shipped(text)
     if got != text:
         failures.append("%r -> %r" % (text, got))
-for text in CADENCE_LINES + GOVERNOR_LINES + CALL_RESOURCE_LINES:
+for text in CADENCE_LINES + GOVERNOR_LINES + CALL_RESOURCE_LINES + SPEAKER_CHANGE_LINES:
     for tag in ("stdout", "call"):
         got = shipped(text, tag)
         if got != text:
             failures.append("[%s] %r -> %r" % (tag, text, got))
 
-print("checks: %d, failures: %d" % (len(AVATAR_LINES) + len(AVATAR_LIMIT_LINES) + len(LINES) + 2 * len(CADENCE_LINES + GOVERNOR_LINES + CALL_RESOURCE_LINES), len(failures)))
+print("checks: %d, failures: %d" % (len(AVATAR_LINES) + len(AVATAR_LIMIT_LINES) + len(LINES) + 2 * len(CADENCE_LINES + GOVERNOR_LINES + CALL_RESOURCE_LINES + SPEAKER_CHANGE_LINES), len(failures)))
 for f in failures:
     print("FAIL", f)
 sys.exit(1 if failures else 0)

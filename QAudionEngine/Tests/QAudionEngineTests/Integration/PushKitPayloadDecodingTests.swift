@@ -56,10 +56,8 @@ final class PushKitPayloadDecodingTests: XCTestCase {
         XCTAssertThrowsError(try PushKitProvider.parsePayload(dict))
     }
 
-    // MARK: - TRUST-6 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md, security audit
-    // backlog item 9) — opaque call-wakeup payload. Wire shape mirrors
-    // bcrypto-server's existing opaque_wakeup pattern for messages
-    // (`internal/push/fcm.go`'s SendOpaquePush: type/kind/shash/ts).
+    // MARK: - Opaque call-wakeup payload. Wire shape mirrors the
+    // server's existing opaque_wakeup pattern for messages (type/kind/shash/ts).
 
     func test_decodesOpaqueCallWakeupPayload() throws {
         let dict: [String: Any] = [

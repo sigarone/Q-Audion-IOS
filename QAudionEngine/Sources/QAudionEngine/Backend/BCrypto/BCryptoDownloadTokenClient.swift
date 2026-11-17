@@ -2,8 +2,8 @@ import Foundation
 
 /// Client for the Wave 3-4 recipient capability-token flow.
 ///
-/// Companion to bcrypto-server commit `576512d` (`download_token.go`)
-/// and WIRE_SPEC §3.6.4 + §5.1.4. Two roles:
+/// Companion to the server's download-token implementation and
+/// WIRE_SPEC §3.6.4 + §5.1.4. Two roles:
 ///
 /// 1. **Sender** (`issueToken`): owner of a tus.io upload mints a
 ///    capability for a peer recipient by calling

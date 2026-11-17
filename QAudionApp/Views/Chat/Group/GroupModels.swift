@@ -1,7 +1,7 @@
 import Foundation
 
-/// Modelli condivisi per il trio Group Chat (W40). 1:1 port di
-/// `qaudion-android-new/feature/feature-chat/.../group/*UiState`.
+/// Shared models for the Group Chat trio (W40). 1:1 port of the Android
+/// UI-state models.
 ///
 /// Engine wiring pending: nessun `GroupChatRepository` iOS-side oggi —
 /// queste struct sono il contratto-API che l'engine implementerà

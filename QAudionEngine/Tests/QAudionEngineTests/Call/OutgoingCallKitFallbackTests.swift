@@ -83,8 +83,8 @@ final class OutgoingCallKitFallbackTests: XCTestCase {
         }
     }
 
-    /// The incident: busy first, the fallback branch runs afterwards. Nothing is activated, so the W464 gate of the
-    /// redial is not pre-satisfied.
+    /// Busy first, the fallback branch runs afterwards. Nothing is activated, so the W464 gate of the redial is not
+    /// pre-satisfied.
     func testABusyBeforeTheFallbackBranchLeavesTheGateClosedForTheRedial() {
         let d = Dialer()
         d.dial(callA)

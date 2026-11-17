@@ -252,20 +252,19 @@ struct QAudionApp: App {
             languageBinding.wrappedValue = AppLanguageManager.effectiveLanguageCode
         }
 
-        // W-DBOPENRECOVER (2026-09-01) — a local-database open/migration
-        // failure no longer traps the process (audit memory
-        // reference_ios_stability_audit_2026_09_01, P0; ladder in
-        // DatabaseOpenRecoveryPolicy). Installed HERE, before `AppState()`
-        // is built (StateObject is lazy) and therefore before the first
-        // `QAudionDatabase.shared` access anywhere, so a quarantine/degrade
-        // decided during that first open reaches the ring buffer via RTLog
-        // even when it happens before the stdout tee attaches in `.onAppear`,
-        // and the sealed telemetry when consent is on. Same closure shape as
-        // `controller.videoTelemetry` in AppState. Tag "chat": the file IS
-        // the chat store, and only tags on scripts/ship-ios-logs.py's
-        // TAG_SCOPE_PREFIXES survive the shipper's gate (a new "db" tag
-        // would be dropped whole); the line's numeric tail is the part the
-        // redactor lets through. Must not touch the database itself.
+        // A local-database open/migration failure does not trap the process
+        // (recovery ladder in DatabaseOpenRecoveryPolicy). Installed HERE,
+        // before `AppState()` is built (StateObject is lazy) and therefore
+        // before the first `QAudionDatabase.shared` access anywhere, so a
+        // quarantine/degrade decided during that first open reaches the
+        // ring buffer via RTLog even when it happens before the stdout tee
+        // attaches in `.onAppear`, and the sealed telemetry when consent is
+        // on. Same closure shape as `controller.videoTelemetry` in
+        // AppState. Tag "chat": the file IS the chat store, and only tags
+        // on scripts/ship-ios-logs.py's TAG_SCOPE_PREFIXES survive the
+        // shipper's gate (a new "db" tag would be dropped whole); the
+        // line's numeric tail is the part the redactor lets through. Must
+        // not touch the database itself.
         QAudionDatabase.onOpenOutcome = { outcome in
             let line = DatabaseOpenRecoveryPolicy.logLine(for: outcome)
             if outcome.isDegraded {
@@ -431,6 +430,10 @@ struct QAudionApp: App {
                 registerScreenRecordingObserver()
                 // Blur for the App Switcher and a cover while a protected screen is recorded or mirrored.
                 PrivacyShield.start()
+                // The capture cover shows a stop control while this device's own screen share is what is captured.
+                PrivacyShield.ownShare = PrivacyShield.OwnShareHook(
+                    isActive: { AppState.shared.isScreenSharing },
+                    stop: { Task { @MainActor in await AppState.shared.stopScreenShare() } })
                 // W-APPSTORAGEDEADLOCK — keep the root-level @State in sync
                 // with the real (Keychain-backed) value without SwiftUI's
                 // own @AppStorage/UserDefaults-observer machinery. See
@@ -621,17 +624,15 @@ struct QAudionApp: App {
         }
     }
 
-    /// W-SCREENRECDETECT (2026-09-02) — sibling to the screenshot observer
-    /// above. The screenshot notification is one-shot (a still capture);
-    /// `UIScreen.capturedDidChangeNotification` is Apple's own API for a
-    /// LIVE capture session (Control Center screen recording, AirPlay/
-    /// QuickTime device mirroring — `isCaptured` does not distinguish the
-    /// two, per Apple's own doc) and had no listener at all before this fix
-    /// (audit memory reference_ios_stability_audit_2026_09_01, P2 "privacy
-    /// overlay default OFF" item). `UIScreen.main` matches this codebase's
-    /// existing convention (`AboutSettingsScreen.swift`); the actual
-    /// log-or-not decision is `ScreenCaptureAlertPolicy.shouldLog`, pure and
-    /// unit-tested, so this closure is just wiring.
+    /// Sibling to the screenshot observer above. The screenshot notification
+    /// is one-shot (a still capture); `UIScreen.capturedDidChangeNotification`
+    /// is Apple's own API for a LIVE capture session (Control Center screen
+    /// recording, AirPlay/QuickTime device mirroring — `isCaptured` does not
+    /// distinguish the two, per Apple's own doc), so it needs its own
+    /// listener. `UIScreen.main` matches this codebase's existing convention
+    /// (`AboutSettingsScreen.swift`); the actual log-or-not decision is
+    /// `ScreenCaptureAlertPolicy.shouldLog`, pure and unit-tested, so this
+    /// closure is just wiring.
     private func registerScreenRecordingObserver() {
         NotificationCenter.default.addObserver(
             forName: UIScreen.capturedDidChangeNotification,

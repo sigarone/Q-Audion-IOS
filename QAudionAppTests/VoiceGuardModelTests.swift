@@ -406,6 +406,43 @@ final class VoiceGuardModelTests: XCTestCase {
         XCTAssertEqual(VoiceGuard.line(forLevel: VoiceGuardLevel.highRisk), .changed)
         XCTAssertEqual(VoiceGuard.line(forLevel: VoiceGuard.level(of: .unknown)), .waiting)
         XCTAssertEqual(VoiceGuard.line(forLevel: VoiceGuard.level(of: .steady)), .steady)
+        XCTAssertEqual(VoiceGuard.shownLine(forChange: .unknown, displayed: true), .waiting)
+        XCTAssertEqual(VoiceGuard.shownLine(forChange: .steady, displayed: true), .steady)
+    }
+
+    // MARK: - Voice check card: display switch
+
+    /// With the switch off no verdict level maps to anything visible: no card, no line, no shield.
+    func testWithTheSwitchOffNoVerdictLevelMapsToAnythingVisible() {
+        XCTAssertFalse(VoiceGuard.showsCard(displayed: false))
+        let levels: [RemoteSpeakerChangeMonitor.Level] = [.unknown, .steady, .suspect, .changed]
+        for change in levels {
+            XCTAssertNil(VoiceGuard.shownLine(forChange: change, displayed: false), "\(change)")
+            XCTAssertNil(VoiceGuard.shieldLine(forChange: change, displayed: false), "\(change)")
+        }
+    }
+
+    /// With the switch on the mapping is the one the card and the shield always had.
+    func testWithTheSwitchOnEveryLevelReadsAsItAlwaysDid() {
+        XCTAssertTrue(VoiceGuard.showsCard(displayed: true))
+        let expected: [(RemoteSpeakerChangeMonitor.Level, VoiceGuardLine, VoiceGuardLine?)] = [
+            (.unknown, .waiting, nil),
+            (.steady, .steady, nil),
+            (.suspect, .suspect, .suspect),
+            (.changed, .changed, .changed),
+        ]
+        for (change, line, shield) in expected {
+            XCTAssertEqual(VoiceGuard.shownLine(forChange: change, displayed: true), line, "\(change)")
+            XCTAssertEqual(VoiceGuard.shieldLine(forChange: change, displayed: true), shield, "\(change)")
+        }
+    }
+
+    /// The build as shipped has the switch off.
+    func testTheShippedSwitchShowsNothing() {
+        XCTAssertFalse(RemoteSpeakerChangeMonitor.verdictShownToUser)
+        XCTAssertFalse(VoiceGuard.showsCard())
+        XCTAssertNil(VoiceGuard.shownLine(forChange: .changed))
+        XCTAssertNil(VoiceGuard.shieldLine(forChange: .changed))
     }
 
     // MARK: - Voice check card: one line per state
@@ -548,7 +585,11 @@ final class VoiceGuardModelTests: XCTestCase {
     func testTheCardLineFollowsTheLocalDetector() {
         func cardLine(_ monitor: RemoteSpeakerChangeMonitor) -> VoiceGuardLine {
             let level = VoiceGuard.level(ofVerdict: monitor.verdict)
-            return VoiceGuard.line(for: VoiceGuard.content(banner: nil, learning: nil, hasHistory: false, level: level))
+            let line = VoiceGuard.line(for: VoiceGuard.content(banner: nil, learning: nil, hasHistory: false, level: level))
+            // The gate gives the same line with the switch on, and none with it off.
+            XCTAssertEqual(VoiceGuard.shownLine(forChange: monitor.verdict.level, displayed: true), line)
+            XCTAssertNil(VoiceGuard.shownLine(forChange: monitor.verdict.level, displayed: false))
+            return line
         }
 
         // No local verdict yet: still waiting, never "possible change".

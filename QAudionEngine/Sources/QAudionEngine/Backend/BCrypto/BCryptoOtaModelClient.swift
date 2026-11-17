@@ -1,10 +1,10 @@
 import Foundation
 import CryptoKit
 
-/// Fetches and verifies AASIST deepfake-detection model bundles from
-/// `bcrypto-server`. Per server audit, this endpoint is gated behind
-/// admin signing — the manifest carries an Ed25519 signature over the
-/// other fields, plus SHA-256 of the binary for client-side integrity.
+/// Fetches and verifies AASIST deepfake-detection model bundles from the
+/// server. The endpoint is gated behind admin signing — the manifest
+/// carries an Ed25519 signature over the other fields, plus SHA-256 of the
+/// binary for client-side integrity.
 ///
 /// iOS uses a smaller AASIST model (per Resources/aasist_raw_*.onnx in
 /// the engine). This client lets future iOS deepfake-detector code

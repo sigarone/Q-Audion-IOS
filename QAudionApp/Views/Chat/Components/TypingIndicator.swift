@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 3-dot typing indicator. 1:1 port of Android
-/// `qaudion-android-new/feature/feature-chat/.../components/TypingIndicator.kt`.
+/// 3-dot typing indicator. 1:1 port of the Android implementation of this
+/// component.
 ///
 /// Three 6pt circles, 4pt spacing, color = `scheme.primary`. Each dot
 /// animates its alpha 0.3↔1.0 via an infinite reverse animation, with

@@ -151,17 +151,12 @@ public final class MessageRatchet {
     public static let maxSkipAhead: UInt64 = 10_000
     /// LRU bound on the per-session skipped-keys cache.
     ///
-    /// W-SKIPCACHEWIDEN (2026-09-10) — was 256, widened 16x as defense-in-
-    /// depth alongside the Android fix for the same class of risk (see
-    /// Android's `MessageRatchet.SKIPPED_KEYS_CACHE_MAX` kdoc for the full
-    /// incident writeup). iOS itself is no longer exposed to THAT specific
-    /// trigger — control/protocol envelopes were moved off this ratchet
-    /// entirely (`ChatMessageSendService.encryptForWire`'s
-    /// `forceStatelessFormat`, same date) — but a large-enough burst of
-    /// genuine real-content messages arriving out of order could still
-    /// exhaust a small cache the same way, so the wider margin is kept
-    /// here too. Pure capacity change, no cryptographic construction
-    /// touched.
+    /// The bound is deliberately wide, as defense in depth. Control and
+    /// protocol envelopes are sealed on the control channel (the `.service`
+    /// payload class of `ChatMessageSendService.encryptForWire`) rather than
+    /// on this ratchet, but a large-enough burst of genuine real-content
+    /// messages arriving out of order could still exhaust a small cache. This
+    /// is a capacity bound only and touches no cryptographic construction.
     public static let skippedKeysCacheMax = 4096
     /// TTL for skipped-key cache entries (7 days, in ms).
     public static let skippedKeysTtlMs: Int64 = 7 * 24 * 3600 * 1000
@@ -262,12 +257,11 @@ public final class MessageRatchet {
                 "epochId must encode to 1..255 UTF-8 bytes (got \(epochBytes.count))")
         }
 
-        // W-KCAFTERUNLOCK (2026-09-01) — `loadChecked`, not `load`: a locked
-        // Keychain (-25308) used to read as "no snapshot", and this branch then
-        // DERIVED a fresh chain from pskRoot and tried to persist it over the
-        // real one. Now it throws `VaultError.deviceLocked` instead —
-        // transient, retry after unlock (audit memory
-        // reference_ios_stability_audit_2026_09_01, P1 item 5).
+        // W-KCAFTERUNLOCK — `loadChecked`, not `load`: a locked Keychain
+        // (-25308) must not read as "no snapshot", or this branch would
+        // DERIVE a fresh chain from pskRoot and try to persist it over the
+        // real one. A locked Keychain throws `VaultError.deviceLocked`
+        // instead — transient, retry after unlock.
         if let existing = try vault.loadChecked(epochId: epochId, peerId: peerId) {
             guard existing.selfId == selfId else {
                 throw RatchetError.invalidArguments(

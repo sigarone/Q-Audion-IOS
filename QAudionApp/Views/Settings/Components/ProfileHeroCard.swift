@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// Profile hero card rendered at the top of the new `SettingsScreen`
-/// root. 1:1 port of Android `ProfileHero` from
-/// `qaudion-android-new/feature/feature-settings/.../SettingsUi.kt`.
+/// root. 1:1 port of the Android `ProfileHero` component.
 ///
 /// Layout (left → right):
 ///   - 72pt `QAudionAvatar` with the user's display name + image

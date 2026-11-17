@@ -29,8 +29,8 @@ private func deterministicGalleryId(for raw: String) -> UUID {
     }
 }
 
-/// Group chat detail. 1:1 port di Android
-/// `qaudion-android-new/feature/feature-chat/.../group/GroupChatScreen.kt`.
+/// Group chat detail. 1:1 port of the Android implementation of this
+/// screen.
 ///
 /// Layout:
 ///   1. Top bar — back chevron + 36pt group icon + nome / "N membri"

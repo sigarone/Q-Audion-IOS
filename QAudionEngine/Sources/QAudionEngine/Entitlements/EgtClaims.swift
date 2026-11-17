@@ -2,10 +2,9 @@ import Foundation
 
 /// Design doc §8 security-policy payload, carried inside the EGT so it
 /// survives offline — a separate mechanism from tiering, riding the same
-/// signed envelope. Matches `bcrypto-server`'s `EGTPolicy`
-/// (`cmd/bcrypto-lite/entitlements_egt.go`) field-for-field; the server
-/// always sets this (plain struct, no `omitempty`), so it is never absent
-/// on a real token.
+/// signed envelope. Matches the server's `EGTPolicy` field-for-field; the
+/// server always sets this (plain struct, no `omitempty`), so it is never
+/// absent on a real token.
 ///
 /// Both fields fall back rather than failing the decode, matching Android's
 /// `parseClaims` (`min_assurance` -> `"none"`, `on_violation` -> `"warn"`).
@@ -35,11 +34,10 @@ public struct EgtPolicy: Codable, Equatable {
 }
 
 /// Decoded, SIGNATURE-VERIFIED payload of an Entitlement Grant Token (EGT),
-/// design doc §3.1. Matches `bcrypto-server`'s `EGTClaims`
-/// (`cmd/bcrypto-lite/entitlements_egt.go`) field-for-field — `sub`/`iat`/
-/// `exp` come from an embedded `jwt.RegisteredClaims` there; Swift has no
-/// equivalent embedded-claims type, so they are flattened into this
-/// struct's own top-level fields (still with matching JSON keys).
+/// design doc §3.1. Matches the server's `EGTClaims` field-for-field —
+/// `sub`/`iat`/`exp` come from an embedded `jwt.RegisteredClaims` there;
+/// Swift has no equivalent embedded-claims type, so they are flattened into
+/// this struct's own top-level fields (still with matching JSON keys).
 ///
 /// This is everything `EgtVerifier.verify` hands back once the JWS
 /// signature over `header.payload` has checked out under the pinned

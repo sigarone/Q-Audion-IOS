@@ -15,7 +15,7 @@ final class IdentitySelfCheckPolicyTests: XCTestCase {
     }
 
     func test_myKeyAbsentFromServerSet_needsRepublish() {
-        // The exact incident this closes: the server holds a DIFFERENT key
+        // The case this covers: the server holds a DIFFERENT key
         // for this account (overwritten by another device), mine isn't in
         // the set at all.
         XCTAssertTrue(IdentitySelfCheckPolicy.needsRepublish(

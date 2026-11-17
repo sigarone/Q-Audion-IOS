@@ -17,8 +17,8 @@ import QAudionEngine
 ///   ATTEST_POP   : slot 0xc1 (read the 32-byte qa-kms-pop-v1 SE PoP after import)
 ///
 /// The strings are NOT written here: they are the `EarbudGattConstants` constants of
-/// IOSEarbudGattProxy.swift, the one definition of the earbud UUIDs in the app. This enum used to hold
-/// a copy of its own whose service UUID ended in 0x00, so `CoreBluetoothSovereignRelay` looked for a
+/// IOSEarbudGattProxy.swift, the one definition of the earbud UUIDs in the app. A copy of its own here
+/// could drift: a service UUID ending in 0x00 would send `CoreBluetoothSovereignRelay` looking for a
 /// service the firmware does not have (serviceNotFound).
 ///
 /// NOTE: the plan-draft UUIDs (5a3e00c3 / 5a3e00c4) were derived from the

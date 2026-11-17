@@ -4,8 +4,8 @@ import XCTest
 /// `EarbudAckPopRelay.prepareLink`: the KMS sweep reaches the remembered earbud only when a hw_only key is
 /// there to deliver and the earbud is not connected, so the sweep never waits for an earbud it does not need.
 ///
-/// Before, nothing connected the app's GATT proxy, `gatt.isConnected` was always false in the sweep and every
-/// hw_only key ended `earbud_not_connected` forever.
+/// Without it, nothing would connect the app's GATT proxy, `gatt.isConnected` would be false in every sweep and
+/// every hw_only key would end `earbud_not_connected` forever.
 final class EarbudAckPopRelayLinkTests: XCTestCase {
 
     private final class Counter: @unchecked Sendable {

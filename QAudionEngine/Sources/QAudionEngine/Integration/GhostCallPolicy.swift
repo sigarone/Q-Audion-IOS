@@ -1,21 +1,15 @@
 import Foundation
 
-/// W-GHOSTCALL (2026-09-25) — the pure decisions behind the "ghost call" fix
-/// (incident e3acecd7, 2026-09-23 15:04:43-15:04:52): a call that had already
-/// ended came back to life as a ringing, answerable CallKit call.
+/// W-GHOSTCALL — the pure decisions behind the "ghost call" fix:
+/// a call that has already ended must not come back to life as a ringing,
+/// answerable CallKit call.
 ///
-/// `e3acecd7` here and in the files that share this fix is the first 8 hex
-/// digits of that call's id, as the device logs print them (`id=<8 hex>`); it is
-/// not a commit hash. Times are UTC.
-///
-/// Timeline of the incident, from the device log (15:04): the caller hangs up
-/// over the WS at 43.794 (`opaquehang rx`, `reportCallEnded` + `endCall` at
-/// 43.795), the server still sends its `call_cancelled` VoIP push, the push
-/// handler reports the SAME uuid to CallKit at 44.445 (`callkit report ok=1
-/// dup=0`: CallKit had already dropped it, so this was a brand-new ring), the
-/// user taps Answer at 45.726 and `performAcceptIncoming` — which never asked
-/// whether the call was still alive — runs an in-call state with no call id for
-/// 6.6 s while the server rejects the `call_accepted` (F4 foreign call_id).
+/// The case it covers: the caller hangs up over the WS and the call ends
+/// locally, but the server's `call_cancelled` VoIP push for the same uuid can
+/// still follow. Reporting that uuid to CallKit again rings a brand-new call
+/// (CallKit has already dropped it), and an Answer on that ring would put the
+/// app in an in-call state with no call id. The rules below report a
+/// placeholder for the cancel push instead and refuse that Answer.
 ///
 /// These types decide ONLY what to do; they own no CallKit object and no app
 /// state, the same split as `CallKitProviderResetPolicy`. Every input is a plain
@@ -165,7 +159,7 @@ public enum GhostCallPolicy {
     /// watchdog ends it. 3 s: an incoming call has its peer set within
     /// milliseconds of the ring (PushKit sets it before the ring is reported, the
     /// WS path right after the report, in the same task), so this only has to
-    /// outlast scheduling noise. Incident e3acecd7 stayed in that state 6.6 s.
+    /// outlast scheduling noise.
     public static let answeredWithoutCallGraceSeconds: TimeInterval = 3
 
     /// True when the call identified by `expectedUuid` was answered
@@ -191,11 +185,10 @@ public enum GhostCallPolicy {
     /// `callState == .ringing` is only half the answer. When CallKit owns the ring
     /// (PushKit-woken, or a background WS call) `callState` deliberately stays
     /// `.idle` until the user answers (see the `call_incoming` handler and
-    /// `noCallInFlight`), so a caller that gave up on its own timeout was never
-    /// recorded as missed (e3acecd7, F-08: `endCall ... state=idle`, no
-    /// `hangup-while-ringing` line). What identifies that ring instead is: a
-    /// CallKit id is held, it was never answered, and the incoming ring flag is
-    /// still up.
+    /// `noCallInFlight`), so a caller that gives up on its own timeout would
+    /// never be recorded as missed by that check alone. What identifies that
+    /// ring instead is: a CallKit id is held, it was never answered, and the
+    /// incoming ring flag is still up.
     ///
     /// `incomingRingVisible` is NOT optional. `activeCallKitId` is also held for
     /// the whole life of an OUTGOING call, and `callWasAnswered` (which is only
@@ -214,8 +207,8 @@ public enum GhostCallPolicy {
     }
 
     /// The `call_cancel` reasons the server sends to the SIBLING devices of a user who took or refused a call on one
-    /// of them (`bcrypto-server` `cmd/bcrypto-lite/main.go`: `call_answer` on another device, and the callee's
-    /// decline). They say "stand down, this call is handled", never "the caller gave up".
+    /// of them (`call_answer` on another device, and the callee's decline). They say "stand down, this call is
+    /// handled", never "the caller gave up".
     public static let siblingDeviceCancelReasons: Set<String> = [
         "answered_on_other_device",
         "declined_on_other_device",

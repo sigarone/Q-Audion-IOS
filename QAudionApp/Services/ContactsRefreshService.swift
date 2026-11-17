@@ -42,10 +42,9 @@ final class ContactsRefreshService {
         }
         let client = BCryptoContactsDiscoverV2Client(
             baseUrl: url,
-            // W-AUXPIN (2026-09-02) — pinned session, same as every other
-            // bearer-token aux client (audit reference_ios_stability_audit_
-            // 2026_09_01, P1 item 6 / B11). PinnedSessionPolicy
-            // .auxiliaryClientsUsePinnedSession == false restores `.shared`.
+            // Pinned session, same as every other bearer-token aux client.
+            // PinnedSessionPolicy.auxiliaryClientsUsePinnedSession == false
+            // restores `.shared`.
             session: PinnedURLSession.auxiliary(for: appState.serverUrl),
             bearerTokenProvider: { token }
         )

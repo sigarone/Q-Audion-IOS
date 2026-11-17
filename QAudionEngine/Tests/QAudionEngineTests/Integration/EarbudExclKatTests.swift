@@ -10,8 +10,8 @@ import XCTest
 /// CL-5.5 — KAT guard for public earbud-exclusive v2 constants.
 ///
 /// Pins client-COMPUTABLE public values against the frozen KAT vector
-/// `earbud-excl-v2-kat.json` (byte-copy of
-/// `apps/qaudion-firmware/portable/tests/kms-v2/earbud-excl-v2-kat.json`).
+/// `earbud-excl-v2-kat.json` (byte-copy of the fixture of the same name in the
+/// firmware).
 ///
 /// CLIENT-COMPUTABLE (tested here):
 ///   - server_id  = SHA-256("qa-kms-server-id-v1|qa-kms-test-server-2026-06-16")

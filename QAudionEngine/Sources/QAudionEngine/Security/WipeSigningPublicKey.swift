@@ -18,8 +18,8 @@ import Foundation
 /// extraction, SAME "compare decoded key bytes, not PEM text" ship-guard
 /// discipline (this repo has `core.autocrlf=true` and no `.gitattributes`
 /// pinning `.pem`, so the committed file is CRLF on a Windows checkout and LF
-/// on the macOS CI runner — see `EntitlementPublicKey`'s own kdoc for the
-/// prior incident that made this the rule, not a stylistic choice).
+/// on the macOS CI runner — see `EntitlementPublicKey`'s own kdoc for why
+/// this is the rule, not a stylistic choice).
 /// `BCryptoOtaModelClient` was checked as an alternative template and
 /// rejected for the identical reason `EntitlementPublicKey.swift` already
 /// documents: its trust anchors are an injected, runtime-fetched map, not a
@@ -30,23 +30,18 @@ import Foundation
 /// `EntitlementPublicKey.swift` is the actual closest precedent on this
 /// platform and the one this mirrors).
 ///
-/// ## ⚠️ The committed asset is a PLACEHOLDER
-/// `Resources/wipe_signing_pubkey.pem` currently holds a throwaway keypair
-/// generated for this task (`openssl genpkey -algorithm ed25519`) — the
-/// PRIVATE half was never persisted anywhere, only the public half is
-/// committed. It is **not** a production key; bcrypto-server had not issued
-/// one at the time this file was written (verified: no
-/// `wipe_signing_pubkey.pem` in the sibling `bcrypto-server` repo). Every
-/// real `remote_wipe` command signed by the eventual production key will
-/// FAIL verification against this placeholder — fail-closed (refuses to
-/// wipe), not fail-open — until the real public key is substituted in.
-/// Swapping the asset's content is the only change needed when it lands;
-/// nothing in this file or in `WipeCommandVerifier` has to change.
+/// ## The committed asset
+/// `Resources/wipe_signing_pubkey.pem` holds the server's wipe-signing public
+/// key (the raw key is `hORZ2NjhScB3UVxyqHApIiHgjL+ddPuQ7oXm/NOn79s=`). A
+/// `remote_wipe` command signed by any other key FAILS verification —
+/// fail-closed (refuses to wipe), not fail-open. Replacing the asset's
+/// content is the only change needed to pin a different key; nothing in this
+/// file or in `WipeCommandVerifier` has to change.
 ///
-/// `WipeSigningPublicKeyTests.testCommittedAssetIsNotStillThePlaceholderKey`
-/// is the ship-guard for that swap, deliberately skipped today for the same
-/// reason `EntitlementPublicKeyTests`' equivalent guard was skipped before
-/// its real key landed.
+/// `placeholderRawKeyBase64` is the raw key of a throwaway keypair that is
+/// not the server's key. `WipeSigningPublicKeyTests.testCommittedAssetIsNotStillThePlaceholderKey`
+/// is the ship-guard that asserts the bundled asset is not that key; it is
+/// skipped only while the test's `assetIsStillThePlaceholder` switch is `true`.
 public enum WipeSigningPublicKey {
 
     /// Basename of the SPM `.copy()` resource declared in `Package.swift`.

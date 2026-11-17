@@ -12,9 +12,8 @@ import CryptoKit
 /// Phase-1 (v1) ratchet exactly as if the bytes had arrived from a
 /// PQXDH voice handshake.
 ///
-/// Direct byte-for-byte port of Android
-/// `qaudion-android-new/qaudion-engine/.../crypto/KmsPreBootstrap.kt`
-/// (that file is the authoritative algorithm spec — read it before
+/// Direct byte-for-byte port of the Android implementation (that
+/// implementation is the authoritative algorithm spec — read it before
 /// touching this one). Cross-platform contract, verified against the
 /// shared KAT fixture `kms-prebootstrap-kat.json` (structural / ad_bytes
 /// fidelity — see `KmsPreBootstrapKatTests.swift`; the KAT vectors use

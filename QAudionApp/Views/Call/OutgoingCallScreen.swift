@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Outgoing-call (ringing) screen. 1:1 visual port of Android
-/// `qaudion-android-new/feature/feature-call/.../OutgoingCallScreen.kt`.
+/// Outgoing-call (ringing) screen. 1:1 visual port of the Android
+/// implementation of this screen.
 ///
 /// Shown while we are dialing a peer and the PQC handshake is happening
 /// in the background. Layout (top → bottom):

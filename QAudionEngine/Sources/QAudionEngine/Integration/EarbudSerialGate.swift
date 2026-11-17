@@ -3,7 +3,7 @@ import Foundation
 /// A first-in-first-out async mutex: `run` bodies execute one at a time, in the order they asked.
 ///
 /// WHY. The CoreBluetooth earbud client keeps ONE pending write and ONE pending read (a
-/// continuation each). One client now serves the KMS sweep, the diagnostics poll (a DIAG read every
+/// continuation each). One client serves the KMS sweep, the diagnostics poll (a DIAG read every
 /// 2 s) and an FE-5 pairing at once, and a second read started while the first is outstanding
 /// replaces its continuation: the first caller then never resumes. Each public operation of the
 /// client therefore runs inside this gate. It serialises whole operations, not single ATT

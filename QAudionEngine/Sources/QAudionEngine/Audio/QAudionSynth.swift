@@ -1,11 +1,10 @@
 import Foundation
 
-/// W-RINGBACKCONFIRMED (2026-09-02) — pure-Swift port of the Android/Desktop
-/// `QAudionSynth` procedural synthesizer. See
-/// `qaudion-android-new/.../feature/call/audio/QAudionSynth.kt` and
-/// `qaudion-desktop/src/renderer/lib/QAudionSynth.ts` — same algorithm, same
-/// constants, so the three platforms play recognisably the same sound
-/// identity for the outgoing-call cues.
+/// W-RINGBACKCONFIRMED — pure-Swift port of the Android/Desktop
+/// `QAudionSynth` procedural synthesizer. The Android implementation and
+/// `qaudion-desktop/src/renderer/lib/QAudionSynth.ts` use the same
+/// algorithm and the same constants, so the three platforms play
+/// recognisably the same sound identity for the outgoing-call cues.
 ///
 /// No audio assets ship with the app — every tone is computed on the fly.
 /// Output is `[Float]` in [-1, 1] at `defaultSampleRate`, ready to copy into

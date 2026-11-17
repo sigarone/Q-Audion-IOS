@@ -2,18 +2,15 @@ import XCTest
 import CryptoKit
 @testable import QAudionEngine
 
-/// TRUST-2 (`docs/security/CRYPTO_PROTOCOL_AUDIT_2026-09-01.md`, security
-/// audit backlog item 6) — coverage for the signed `remote_wipe` command
-/// verifier. Signs its own fixtures inline with a fresh
-/// `Curve25519.Signing.PrivateKey()` each run (same pattern
-/// `BCryptoOtaModelClientTests` uses) rather than a committed KAT vector,
-/// because bcrypto-server's real signer is being implemented by a separate
-/// agent in the same batch and no cross-platform vector exists yet — see
-/// `WipeSigningPublicKey`'s kdoc for that caveat. Every case here exercises
-/// `WipeCommandVerifier` as a pure primitive (raw key in, no bundle/network
-/// dependency), so it needs no KAT to be meaningful: the fail-closed
-/// contract is what matters, not byte-for-byte interop with a signer that
-/// does not exist to test against yet.
+/// Coverage for the signed `remote_wipe` command verifier. Signs
+/// its own fixtures inline with a fresh `Curve25519.Signing.PrivateKey()`
+/// each run (same pattern `BCryptoOtaModelClientTests` uses) rather than a
+/// committed KAT vector, because no cross-platform vector is committed for
+/// it — see `WipeSigningPublicKey`'s kdoc for that caveat. Every case here
+/// exercises `WipeCommandVerifier` as a pure primitive (raw key in, no
+/// bundle/network dependency), so it needs no KAT to be meaningful: the
+/// fail-closed contract is what matters, not byte-for-byte interop with the
+/// server's signer.
 final class WipeCommandVerifierTests: XCTestCase {
 
     private var privateKey: Curve25519.Signing.PrivateKey!

@@ -203,18 +203,15 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// on the scale of seconds.
     static let adaptRecomputeEvery = 16
 
-    /// W-JBFRAMEFLOOR (2026-09-18) — `adaptTargetMaxMs` (160) is a frame-count
-    /// margin (4 frames) frozen at the 20 ms cadence this class shipped with
-    /// first; at a larger inbound frame duration it silently shrinks to fewer
-    /// frames of headroom (e.g. under 3 at 60 ms), capping the adaptive
-    /// estimator below what it measures on a genuinely jittery link even
-    /// though the estimator itself (p95 over a time window, decoupled from
-    /// ptime) was never the problem — see
-    /// `reference_jitterbuffer_60ms_tier_scaling_audit_2026_09_18.md`
-    /// (external memory; ported from Android's `JitterBuffer.kt`
-    /// `ADAPT_TARGET_MAX_MIN_FRAMES` fix, same audit). `effectiveAdaptTargetMaxMs`
-    /// floors the ceiling at this many frames instead, and is a no-op at
-    /// 20 ms (`max(160, 4*20=80) == 160`).
+    /// `adaptTargetMaxMs` (160) is a frame-count margin (4 frames) fixed at
+    /// the 20 ms cadence this class shipped with first; at a larger inbound
+    /// frame duration it silently shrinks to fewer frames of headroom (e.g.
+    /// under 3 at 60 ms), capping the adaptive estimator below what it
+    /// measures on a genuinely jittery link, even though the estimator itself
+    /// is a p95 over a time window and does not depend on ptime. Ported from
+    /// Android's `JitterBuffer.kt` `ADAPT_TARGET_MAX_MIN_FRAMES`.
+    /// `effectiveAdaptTargetMaxMs` floors the ceiling at this many frames
+    /// instead, and is a no-op at 20 ms (`max(160, 4*20=80) == 160`).
     static let adaptTargetMaxMinFrames = 4
 
     /// The live adaptive-target ceiling for the given inbound frame duration —
@@ -234,7 +231,7 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// the shipped cadence is untouched; at 60 ms it is 120 ms where the bare
     /// floor let `framesForMs(p95 + 60)` round to a single queued frame —
     /// one late arrival away from an underrun. Ported from Android's
-    /// `JitterBuffer.ADAPT_TARGET_MIN_FRAMES`, same audit as
+    /// `JitterBuffer.ADAPT_TARGET_MIN_FRAMES`, like
     /// `adaptTargetMaxMinFrames` above.
     static let adaptTargetMinFrames = 2
 
@@ -345,16 +342,14 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// before the first arrival / since the last `reset()`.
     private var lastPushMonotonic: Double?
 
-    /// W-JBREORDER (2026-09-10) — highest wire sequence number seen so far
-    /// this call, or `nil` before the first known-seq arrival. Caller
-    /// (`push`) already holds `lock`. Ported from Android's `JitterBuffer
-    /// .highestSeqSeen` — see that property's kdoc for the full rationale
-    /// (best-practices audit `reference_jitterbuffer_reorder_audit_2026_09_10.md`,
-    /// external memory, competitor names quarantined there): this
-    /// architecture genuinely reorders (the resilient dual-leg transport,
-    /// and the W-AUDIONACK retransmit feature deliberately re-delivering an
-    /// old sequence number), and the adaptive target was blind to it,
-    /// driven by inter-arrival lateness alone.
+    /// W-JBREORDER — highest wire sequence number seen so far this call, or
+    /// `nil` before the first known-seq arrival. Caller (`push`) already
+    /// holds `lock`. Ported from Android's `JitterBuffer.highestSeqSeen`
+    /// (see that property's kdoc for the full rationale). This architecture
+    /// genuinely reorders (the resilient dual-leg transport, and the
+    /// W-AUDIONACK retransmit feature deliberately re-delivering an old
+    /// sequence number), so the adaptive target must not be driven by
+    /// inter-arrival lateness alone.
     private var highestSeqSeen: Int64?
 
     /// Ring of recent per-arrival LATENESS values, in ms: how much later
@@ -362,13 +357,11 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// rather than raw gap, because depth only has to cover frames that
     /// arrive LATE — an early (bunched) arrival costs no depth.
     ///
-    /// W-JBREORDERSPLIT (2026-09-15, best-practices audit
-    /// reference_ios_full_audit_2026_09_15.md, audio finding 1) — this ring
-    /// holds RAW lateness ONLY; the reorder penalty used to be added in here
-    /// directly (see `recordArrival`'s prior revision), which meant a handful
-    /// of reorder samples shared one p95 slot with ordinary lateness and
-    /// could get diluted under low reorder frequency. `reorderPenaltyRing`
-    /// below is the reorder track's own separately-decaying estimator.
+    /// W-JBREORDERSPLIT — this ring holds RAW lateness ONLY. The reorder
+    /// penalty is not added in here: a handful of reorder samples would share
+    /// one p95 slot with ordinary lateness and could get diluted under low
+    /// reorder frequency. `reorderPenaltyRing` below is the reorder track's
+    /// own separately-decaying estimator.
     private var latenessRing: [Int]
 
     /// W-JBREORDERSPLIT — the reorder-penalty companion to `latenessRing`,
@@ -376,11 +369,8 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// reordered, or reorder status is unknown) so it decays back down on
     /// its own once reordering stops, independent of ordinary lateness.
     /// `computeTargetMs` takes the MAX of the two tracks' targets rather
-    /// than summing them into one — the reference technique this was
-    /// audited against (a decaying probability histogram plus a SEPARATE
-    /// reorder-optimizer, max-combined) confirmed this is the missing half,
-    /// not merely a style difference; competitor/implementation names are
-    /// intentionally not repeated here, see the audit memory file.
+    /// than summing them into one, so each track stays its own estimator and
+    /// the larger demand wins.
     private var reorderPenaltyRing: [Int]
 
     /// Number of arrivals recorded since construction / the last `reset()`.
@@ -535,7 +525,7 @@ public final class PlayoutJitterBuffer: @unchecked Sendable {
     /// not reordered), so it decays back down on its own once reordering
     /// stops, the same way `latenessRing` already decays. Ported from
     /// Android's `JitterBuffer.recordArrival`; the split against the two
-    /// separately-decaying tracks is this audit's own addition (see
+    /// separately-decaying tracks is an addition on top of that port (see
     /// `reorderPenaltyRing`'s kdoc).
     private func recordArrival(seq: Int64?) {
         let now = nowSeconds()

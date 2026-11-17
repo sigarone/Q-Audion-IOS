@@ -155,9 +155,10 @@ final class RestartIceDecisionsTests: XCTestCase {
 
     // MARK: - W-WATCHDOGDEBOUNCE (2026-08-30)
 
-    /// The live incident: the watchdog's second `restartIce` fell at
-    /// T+1.5 s against the 3 s debounce and was ALWAYS discarded — a
-    /// logged-but-inert attempt. The retry sleep must clear the debounce.
+    /// The watchdog's retry sleep must clear the `restartIce` debounce: with
+    /// the raw initial settle (1.5 s) against a 3 s debounce, the second
+    /// attempt would land inside the debounce and be discarded, so the
+    /// initial settle is floored past it.
     func test_recoveryRetrySettle_floorsTheInitialSettlePastTheDebounce() {
         XCTAssertEqual(
             RestartIceDecisions.recoveryRetrySettleMs(proposedMs: RestartIceDecisions.recoverySettleInitialMs),

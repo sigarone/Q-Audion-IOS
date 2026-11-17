@@ -6,7 +6,7 @@ import CryptoKit
 /// AttachmentEncryption.kt`. Cross-platform parity with the Desktop
 /// reference TS impl is the explicit non-negotiable.
 ///
-/// Authoritative spec: `apps/bcrypto-server/docs/WIRE_SPEC.md` §5.1.3.
+/// Authoritative spec: `WIRE_SPEC.md` §5.1.3.
 ///
 /// **XChaCha20-Poly1305 in pure Swift / CryptoKit**
 ///

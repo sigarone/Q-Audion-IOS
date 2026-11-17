@@ -55,7 +55,7 @@ public final class EarbudPairingRelay {
         /// True when the connected earbud may still hold the PAIR_RESP of the attempt that just ended, so
         /// the caller must drop the link (`disconnect`) before the next attempt.
         ///
-        /// Why: the firmware (qaudion_gatt.c, 38fad83) copies the SE's PAIR_RESP into its own buffer on the
+        /// Why: the firmware (qaudion_gatt.c) copies the SE's PAIR_RESP into its own buffer on the
         /// FIRST chunk-index write (`pair_resp_write`) and releases it only after a successful PAIR_FIN,
         /// after an out-of-range PAIR_BEGIN fragment (`pair_begin_reset`) or on disconnect. A new PAIR_BEGIN
         /// makes the SE create a fresh ct_ee but does not refresh that buffer, so a retry on the same link

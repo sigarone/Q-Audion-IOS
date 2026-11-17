@@ -12,9 +12,8 @@ import Foundation
 /// member of this group"** when the caller had already left. Every client
 /// renders that as "this chat does not exist" — and then keeps the local row,
 /// because the leave "failed". The conversation became permanently
-/// undeletable. The server rejected that call 160 times in seven days in
-/// production before it was fixed (bcrypto-server 54c9f5d made leave
-/// idempotent: already-left now answers 200 with no membership change).
+/// undeletable. The server's leave endpoint is now idempotent: an
+/// already-left caller gets 200 with no membership change.
 ///
 /// The client half of the fix is here, and it rests on two rules.
 ///
@@ -77,7 +76,7 @@ import Foundation
 ///
 /// ## The catch-up replay, and why `replay` has to be honoured
 ///
-/// `bcrypto-server` runs `replayMembershipCatchup` at EVERY server start, i.e.
+/// The server runs `replayMembershipCatchup` at EVERY server start, i.e.
 /// after every deploy. For each recently-active group it re-emits
 /// `group_membership_changed` built from the LAST membership-log entry — so a
 /// group whose most recent mutation was an add is replayed carrying
@@ -267,9 +266,8 @@ public func shouldSkipGroupResurrection(source: GroupResurrectionSource, hasTomb
 ///     `admin_add`, `admin_remove` — while the membership-log tokens
 ///     (`member_added`, `member_removed`, `member_left`) come from
 ///     `replayMembershipCatchup` re-reading the log. Verified against every
-///     `fanOutMembershipChanged` call site in
-///     `bcrypto-server/cmd/bcrypto-lite`: `member_added` is emitted from the
-///     replay path and ONLY the replay path.
+///     `fanOutMembershipChanged` call site in the server: `member_added` is
+///     emitted from the replay path and ONLY the replay path.
 ///
 ///     Which is why `isReplay` had to be added rather than just dropping the
 ///     token from the switch: accepting `member_added` as a re-add did not

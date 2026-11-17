@@ -4,8 +4,7 @@
 # Connect, but the post-build artifact archive failed and turned the
 # whole run red).
 #
-# Mirrors the same workflow on the Android repo
-# (qaudion-android-new/.github/workflows/artifact-cleanup.yml).
+# Mirrors the same workflow in the Android app's repository.
 
 name: Artifact cleanup
 

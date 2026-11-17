@@ -1,8 +1,7 @@
 import Foundation
 
 /// Earbud firmware handshake PDU framing — direct port of Android
-/// `FwPduCodec.kt` (ADP-A redesign), byte-identical wire layout per
-/// qaudion-android-new/docs/superpowers/plans/2026-05-19-hwswitch-2a-fw-pdu-layout.md.
+/// `FwPduCodec.kt` (ADP-A redesign), byte-identical wire layout.
 ///
 /// PURE, FAIL-CLOSED byte framing of the earbud firmware handshake PDUs
 /// (HSINIT / HSRESP / HSFIN). Builds the SW-counterparty outbound PDUs

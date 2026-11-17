@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Voice-note waveform renderer. 1:1 port of Android
-/// `qaudion-android-new/feature/feature-chat/.../components/VoiceWaveform.kt`.
+/// Voice-note waveform renderer. 1:1 port of the Android implementation of
+/// this component.
 ///
 /// Layout: optional 32pt circular play button + 10pt gap + waveform
 /// canvas (default 160×32pt) + 10pt gap + duration label. Inside a chat

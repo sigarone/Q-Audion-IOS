@@ -204,9 +204,7 @@ final class OpusCodecTests: XCTestCase {
         // relies on exactly this: it loops 4 times over the SAME loud→
         // silence transition and checks only the last iteration.
         //
-        // Verified 2026-08-26 with a real CI/simulator run (see
-        // reference_opus_fec_decode_audit_2026_08_26.md "Diagnosi finale"):
-        // a control that never calls decodeFEC at all shows the identical
+        // A control that never calls decodeFEC at all shows the identical
         // first-frame loudness (rms 2824.6) and the identical ~3-4 frame
         // decay curve down to the ~0.08 noise floor as this FEC path (rms
         // 4428.6 on frame 1, 0.64 by frame 3) — the settle time is a codec

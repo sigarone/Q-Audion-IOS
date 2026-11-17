@@ -1,9 +1,8 @@
 import SwiftUI
 import QAudionEngine
 
-/// "Nuovo gruppo" — ContactPicker per selezionare partecipanti +
-/// nome gruppo + bottone "Crea (N)". 1:1 port di Android
-/// `qaudion-android-new/feature/feature-chat/.../group/CreateGroupScreen.kt`.
+/// "Nuovo gruppo" — ContactPicker to select participants + group name +
+/// "Crea (N)" button. 1:1 port of the Android implementation of this screen.
 ///
 /// Layout:
 ///   1. Top bar — back chevron + "NUOVO GRUPPO" titleSmall semibold tracking 2

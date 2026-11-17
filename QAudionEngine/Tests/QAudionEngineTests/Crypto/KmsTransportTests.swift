@@ -4,11 +4,9 @@ import CryptoKit
 
 /// Cross-platform crypto guard for the iOS KMS transport.
 ///
-/// Mirrors the test scenarios in Android's
-/// `apps/qaudion-android-new/qaudion-engine/src/test/java/com/bcrypto/
-/// qaudion/crypto/KmsTransportTest.kt` and Desktop's
-/// `apps/qaudion-desktop/test/KmsTransport.spec.ts` — but pinned to
-/// the iOS-side primitives so a regression on either label / IKM
+/// Mirrors the test scenarios in the Android implementation's KMS transport
+/// test and Desktop's `apps/qaudion-desktop/test/KmsTransport.spec.ts` — but
+/// pinned to the iOS-side primitives so a regression on either label / IKM
 /// order / tier discrimination fails the build before merge.
 ///
 /// ## Round-trip self-tests

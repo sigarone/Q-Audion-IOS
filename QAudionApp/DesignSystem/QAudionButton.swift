@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// Q-Audion button. 1:1 port of Android `QAudionButton` /
-/// `QAudionButtonVariant` from
-/// `qaudion-android-new/core/core-ui/.../components/QAudionButton.kt`.
+/// `QAudionButtonVariant`.
 ///
 /// 4 variants (Primary / Secondary / Destructive / Text). Pill shape
 /// (Capsule) matching Material 3 default `RoundedCornerShape(50%)`.

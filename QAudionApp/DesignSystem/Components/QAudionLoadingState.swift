@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Full-bleed loading placeholder. 1:1 port di
-/// `qaudion-android-new/core/core-ui/.../components/LoadingState.kt`.
+/// Full-bleed loading placeholder. 1:1 port of the Android implementation
+/// of this component.
 ///
 /// Layout: spinner circular + label opzionale, centrato sullo screen.
 /// Usato come stato transitorio quando una schermata è in attesa di

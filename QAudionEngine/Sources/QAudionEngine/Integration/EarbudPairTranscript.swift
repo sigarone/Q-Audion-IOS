@@ -69,7 +69,7 @@ public enum EarbudPairTranscript {
     /// do the two word lists. Nothing on the wire changes and no new KDF, label or hash is involved
     /// (`pair_id` is already a SHA-256 output).
     ///
-    /// Byte-for-byte the Android `EarbudPairTranscript.sasWords` (qaudion-engine, earbuddiag): the
+    /// Byte-for-byte the Android `EarbudPairTranscript.sasWords`: the
     /// first 18 bytes of `pair_id` through `PgpSasWords.wordsFromEntropy`, which reads each 3-byte group
     /// as a big-endian 24-bit integer and takes it modulo the 256-word list (`idx = uint24_be % 256`).
     /// 256 divides 2^24, so the index is the last byte of each group. The vectors of

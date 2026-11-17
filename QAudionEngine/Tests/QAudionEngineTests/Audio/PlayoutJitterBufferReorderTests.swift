@@ -4,9 +4,7 @@ import XCTest
 /// W-JBREORDER (2026-09-10) — the reorder-aware component of the adaptive
 /// target, pinned. Direct port of Android's `JitterBufferReorderTest.kt`.
 /// See `PlayoutJitterBufferAdaptiveTargetTests` for the plain-lateness half
-/// this extends, and `reference_jitterbuffer_reorder_audit_2026_09_10.md`
-/// (external memory, competitor names quarantined there) for the
-/// best-practices research this closes a gap against.
+/// this extends.
 final class PlayoutJitterBufferReorderTests: XCTestCase {
 
     private final class Clock {

@@ -5,8 +5,7 @@ import XCTest
 /// `PinnedURLSession.auxiliary(for:)` relies on: the cached session for a
 /// pinned config carries the REST client's own `CertPinningDelegate`, one
 /// session is shared per host + trust configuration, and the kill switch
-/// defaults to the pinned behaviour. See audit memory
-/// reference_ios_stability_audit_2026_09_01 (P1 item 6).
+/// defaults to the pinned behaviour.
 ///
 /// No TLS handshake happens here: the delegate only decodes the pin string
 /// into its set at init, and no request is ever sent.

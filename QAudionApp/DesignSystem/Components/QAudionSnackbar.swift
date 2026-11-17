@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// Severità semantica della snackbar. 1:1 port di
-/// `qaudion-android-new/core/core-ui/.../components/Snackbars.kt`
-/// (`QAudionSnackbarSeverity` enum).
+/// Semantic severity of the snackbar. 1:1 port of the Android
+/// `QAudionSnackbarSeverity` enum.
 public enum QAudionSnackbarSeverity {
     case info
     case warning

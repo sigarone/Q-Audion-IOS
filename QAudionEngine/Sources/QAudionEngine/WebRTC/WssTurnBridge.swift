@@ -85,15 +85,14 @@ public final class WssTurnBridge: @unchecked Sendable {
         get { stateLock.withLock { _running } }
         set { stateLock.withLock { _running = newValue } }
     }
-    /// W-WSSTURNHEAL (2026-09-15, audit reference_ios_full_audit_2026_09_15.md
-    /// connectivity finding #1) — this is the exact hostile-network path
+    /// W-WSSTURNHEAL — this is the exact hostile-network path
     /// (UDP/TURN/TURNS all firewalled) where losing the bridge silently is
-    /// worst: `pumpWsToUdp` used to `return` permanently on the first read
-    /// error, leaving the local UDP port bound but talking to nobody, with
-    /// no rebuild until the NEXT full call/PC-creation cycle. Bounded
-    /// exponential backoff, capped — same shape as `ChatOutboxDrain`'s wake
-    /// scheduling elsewhere in this app, scaled for a socket instead of a DB
-    /// row. Reset to 0 on every successful frame.
+    /// worst: if `pumpWsToUdp` returned on a read error, the local UDP port
+    /// would stay bound but talk to nobody, with no rebuild until the NEXT
+    /// full call/PC-creation cycle. The WS is re-dialled instead, with
+    /// bounded exponential backoff, capped — same shape as `ChatOutboxDrain`'s
+    /// wake scheduling elsewhere in this app, scaled for a socket instead of
+    /// a DB row. Reset to 0 on every successful frame.
     private var reconnectAttempt = 0
     private let maxReconnectBackoffSec: TimeInterval = 8
 

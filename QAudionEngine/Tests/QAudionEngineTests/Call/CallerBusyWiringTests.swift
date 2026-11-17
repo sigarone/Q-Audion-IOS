@@ -177,7 +177,7 @@ final class CallerBusyWiringTests: XCTestCase {
 
     /// The CallKit start result is never assigned straight to `activeCallKitId`: it goes through
     /// `settleOutgoingCallKitStart`, which closes the late CallKit call of a call that ended while CallKit was
-    /// starting it (the incident: busy at +577 ms, CallKit start fulfilled at ~+691 ms).
+    /// starting it.
     func testTheCallKitStartResultGoesThroughTheLateStartSettle() throws {
         let body = try slice(
             try appCode(), from: "func startCall(contactId: String, video: Bool = false, origin: CallStartOrigin = .phone) async {",

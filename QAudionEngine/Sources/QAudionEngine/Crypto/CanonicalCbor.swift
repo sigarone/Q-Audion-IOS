@@ -10,7 +10,7 @@ import Foundation
 ///
 /// Any CBOR byte mismatch breaks AEAD decryption silently, so this
 /// encoder must be byte-identical to:
-///  - `qaudion-android-new/.../MessageRatchet.kt::CanonicalCbor`
+///  - the Android `CanonicalCbor` implementation
 ///  - `qaudion-desktop/scripts/ratchet-kat-dump.mjs` (the Node oracle)
 ///
 /// **Restricted profile** — covers v3.1 needs only:

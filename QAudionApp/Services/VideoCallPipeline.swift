@@ -141,6 +141,8 @@ public final class VideoCallPipeline: NSObject {
     // VideoConstants default) so the very first frames are already crisp; ABR
     // adjusts from here.
     private let encoder = HevcEncoder(bitrateBps: 1_500_000)
+    /// Decides, for a frame the encoder refused, whether the encoder session is rebuilt and whether a line is logged.
+    private let encodeFailureGate = EncodeFailureGate()
     private let decoder = HevcDecoder()
     /// W524: when true the captureOutput delegate skips encoding so
     /// no fragments are emitted to the peer. AVCaptureSession keeps
@@ -282,6 +284,7 @@ public final class VideoCallPipeline: NSObject {
         guard !isRunning else { return }
         if sourceMode == .external {
             try encoder.start()
+            encodeFailureGate.arm()
             encoder.requestForcedKeyFrame()
             startPurgeTimer()
             startNackWatchdog()
@@ -291,6 +294,7 @@ public final class VideoCallPipeline: NSObject {
         try await ensurePermission()
         try setupSession()
         try encoder.start()
+        encodeFailureGate.arm()
         // W565 — MUST NOT call startRunning() on the main thread.
         // Apple docs: "Do not call startRunning() on the main thread —
         // it can block until the hardware is ready, stalling the UI and
@@ -320,6 +324,8 @@ public final class VideoCallPipeline: NSObject {
 
     public func stop() {
         guard isRunning else { return }
+        // No frame refused from here on asks for a rebuild of the encoder session.
+        encodeFailureGate.disarm()
         // Drop the WebRTC bridge callback before stopping the session so
         // no frames are pushed to a deallocated RTCVideoSource after teardown.
         onCapturedPixelBuffer = nil
@@ -738,8 +744,40 @@ public final class VideoCallPipeline: NSObject {
             try self.encoder.encode(
                 pixelBuffer: pixelBuffer,
                 presentationTimeNs: UInt64(max(0, presentationTimeNs)))
+            self.encodeFailureGate.noteSuccess()
         } catch {
-            print("[VideoCallPipeline] external frame encode failed: \(error)")
+            self.noteEncodeFailure(error)
+        }
+    }
+
+    /// A frame the encoder refused: the session is rebuilt when VideoToolbox reports it invalid (at most once per
+    /// second, see `EncodeFailureGate`), and one line is logged per episode of failures, not one per frame.
+    private nonisolated func noteEncodeFailure(_ failure: Error) {
+        let nowMs = Int64(DispatchTime.now().uptimeNanoseconds / 1_000_000)
+        let decision = encodeFailureGate.noteFailure(failure, nowMs: nowMs)
+        var rebuilt = false
+        var rebuildStatus: Int32 = 0
+        if decision.recreate {
+            do {
+                try encoder.setResolution(width: encoder.width, height: encoder.height)
+                encoder.requestForcedKeyFrame()
+                rebuilt = true
+            } catch {
+                rebuildStatus = Self.status(of: error)
+            }
+            encodeFailureGate.noteRecreateResult(succeeded: rebuilt)
+        }
+        guard decision.log else { return }
+        RTLog.warn("call", "vcap encfail st=\(Self.status(of: failure)) ask=\(decision.recreate ? 1 : 0) rec=\(rebuilt ? 1 : 0) code=\(rebuildStatus)")
+    }
+
+    private nonisolated static func status(of failure: Error) -> Int32 {
+        guard let encoderError = failure as? HevcEncoder.EncoderError else { return 0 }
+        switch encoderError {
+        case .sessionCreateFailed(let code), .sessionPropertyFailed(let code), .prepareFailed(let code), .encodeFailed(let code):
+            return code
+        case .sessionNotInitialised:
+            return 0
         }
     }
 
@@ -1106,8 +1144,9 @@ extension VideoCallPipeline: AVCaptureVideoDataOutputSampleBufferDelegate {
         // guards `frameIndex` updates.
         do {
             try self.encoder.encode(pixelBuffer: pixelBuffer, presentationTimeNs: ns)
+            self.encodeFailureGate.noteSuccess()
         } catch {
-            print("[VideoCallPipeline] encode failed: \(error)")
+            self.noteEncodeFailure(error)
         }
     }
 }

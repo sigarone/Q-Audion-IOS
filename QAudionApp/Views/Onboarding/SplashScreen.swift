@@ -4,8 +4,8 @@ import SwiftUI
 /// onboarding (no token) or straight to the home shell (token + userId
 /// present and verified).
 ///
-/// 1:1 port of `qaudion-android-new/feature/feature-auth/ui/SplashScreen.kt`:
-/// centred Q-AUDION wordmark, circular progress, "SECURE COMMS" label.
+/// 1:1 port of the Android implementation of this screen: centred
+/// Q-AUDION wordmark, circular progress, "SECURE COMMS" label.
 /// Background uses the design-system `background` token.
 ///
 /// W-BRAND parity (2026-08-15): the wordmark is the same shield+"Q-AUDION"

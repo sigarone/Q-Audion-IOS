@@ -1,9 +1,8 @@
 import SwiftUI
 
 /// Small monospace pill used everywhere in the call UI to surface a
-/// status or meta value (e.g. "PQC ACTIVE", "RE-KEY 4m 12s",
-/// "RELAY"). 1:1 port of Android
-/// `qaudion-android-new/feature/feature-call/.../components/MetaPill.kt`.
+/// status or meta value (e.g. "PQC ACTIVE", "RE-KEY 4m 12s", "RELAY").
+/// 1:1 port of the Android implementation of this component.
 ///
 /// Two visual states:
 ///   - `filled = false` (default) — transparent fill, 1pt border at

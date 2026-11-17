@@ -27,8 +27,8 @@ import QAudionEngine
 //
 // ONE source for every earbud UUID in the app: this extension. The sovereign relay
 // (EarbudKeyImportService / CoreBluetoothSovereignRelay) and the diagnostics screen
-// read the same constants; the sovereign relay used to carry its own copy of the
-// service UUID with the last byte 0x00, which no firmware service has.
+// read the same constants, so no copy can drift (a service UUID with the last byte 0x00
+// names no firmware service).
 // swiftlint:disable identifier_name
 extension EarbudGattConstants {
     /// Primary earbud service (QAUDION_SVC_UUID_VAL)
@@ -76,7 +76,7 @@ extension EarbudGattConstants {
 ///   1. `ensureConnected(identifier:timeout:)` with the CoreBluetooth identifier of the earbud: the id
 ///      of a scan result (the diagnostics screen), or the remembered one (the KMS sweep). It returns when
 ///      the earbud service and its characteristics have been discovered, so `isConnected` is true only
-///      when an operation can run (it used to be true as soon as the link was up, before discovery).
+///      when an operation can run (not as soon as the link is up, before discovery).
 ///   2. Invoke the proxy methods.
 ///
 /// Write size: every write must fit ONE ATT PDU (ATT_MTU - 3). The firmware refuses an ATT write with a

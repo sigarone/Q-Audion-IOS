@@ -812,7 +812,6 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         self.config = config
         // Pre-negotiation dispatch — server emits these on top of the standard
         // call_offer / call_answer / call_hangup signaling envelopes.
-        // See bcrypto-server cmd/bcrypto-lite/main.go pre-negotiation flow.
         registerPreNegotiationHandlers()
         startPathMonitor()
     }
@@ -1145,35 +1144,29 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         scheduleConnectingWatchdog(generation: gen)
     }
 
-    /// W-CONNECTINGWATCHDOG (2026-09-11) — the backstop this class never had:
-    /// live incident (2026-09-11, iOS device 4ffd5614) showed `_state` stuck
-    /// at `.connecting` — "Riconnessione in corso…" — for 36+ minutes at
-    /// rest, with no call active and no network transition to trigger a
-    /// retry, requiring an app restart to clear. Root cause, confirmed by
-    /// reading this class's own state machine (not guessed): `connect()`'s
-    /// entry guard only proceeds from `_state == .disconnected`, and NOTHING
-    /// in `connect()` itself ever bounds how long a `URLSessionWebSocketTask`
-    /// is allowed to sit unresolved — if the underlying task NEVER delivers
-    /// either an open+authenticate success or a `receive()` failure (a real,
-    /// previously-documented iOS failure mode — see `forceReconnect()`'s own
+    /// W-CONNECTINGWATCHDOG — the backstop for `_state` staying at
+    /// `.connecting` forever. `connect()`'s entry guard only proceeds from
+    /// `_state == .disconnected`, and NOTHING in `connect()` itself ever
+    /// bounds how long a `URLSessionWebSocketTask` is allowed to sit
+    /// unresolved — if the underlying task NEVER delivers either an
+    /// open+authenticate success or a `receive()` failure (a real,
+    /// documented iOS failure mode — see `forceReconnect()`'s own
     /// `expireReconnectGuardIfStuck` comment for the sibling case this
     /// mirrors), neither `handleMessage("authenticated")` nor
     /// `handleDisconnect()` ever fires, so `_state` never moves and nothing
-    /// ever calls `connect()` again on its own. `forceReconnect()` already
-    /// had a 10 s failsafe for its OWN `reconnectInFlight` flag, but that
-    /// failsafe never touched `_state` — a plain `connect()` call (from
+    /// ever calls `connect()` again on its own. `forceReconnect()` has a
+    /// 10 s failsafe for its OWN `reconnectInFlight` flag, but that failsafe
+    /// does not touch `_state` — a plain `connect()` call (from
     /// `applyDesiredConnectionState`, initial launch, or anywhere else that
-    /// doesn't route through `forceReconnect()`) had no failsafe at all.
+    /// doesn't route through `forceReconnect()`) has no failsafe of its own.
     /// Scheduling this here, unconditionally, from `connect()` itself closes
     /// that gap for every call site uniformly.
     ///
     /// Deliberately a HARD reset, not a gentle nudge: past this deadline the
     /// class stops trying to diagnose WHICH internal flag is stuck (recovery
     /// cascade hung? auth wrongly latched permanently-rejected? the task
-    /// itself ghosted?) and just clears all of them, exactly the class of
-    /// "device decides to reset on its own when something looks wrong"
-    /// resilience this was asked to add — see
-    /// reference_ws_reconnect_watchdog_audit_2026_09_11.md.
+    /// itself ghosted?) and just clears all of them, so the device resets
+    /// on its own when something looks wrong.
     private func scheduleConnectingWatchdog(generation: Int) {
         DispatchQueue.global().asyncAfter(deadline: .now() + connectingWatchdogTimeoutSec) { [weak self] in
             self?.fireConnectingWatchdogIfStuck(generation: generation)
@@ -1967,10 +1960,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// carried as TOP-LEVEL JSON fields (`frag_idx`/`total_frags`/
     /// `is_key_frame`), matching Android's real `WsCommand.VideoFrame` /
     /// `WsCodec` encoding exactly (`frag_idx`, `total_frags`,
-    /// `is_key_frame` — see qaudion-android-new's `WsCodec.kt`). Defaults
-    /// (0/1/false) exist only so any pre-Task-10 call site still compiles;
-    /// production callers (AppState.startVideoPipeline) always pass the
-    /// real per-fragment values.
+    /// `is_key_frame`). Defaults (0/1/false) exist only so a call site that
+    /// omits them still compiles; production callers (AppState.startVideoPipeline)
+    /// always pass the real per-fragment values.
     public func sendVideoFrame(
         recipientId: String, frame: Data, callId: String? = nil,
         fragIdx: UInt16 = 0, totalFrags: UInt16 = 1, isKeyFrame: Bool = false

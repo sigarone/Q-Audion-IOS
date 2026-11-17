@@ -1,22 +1,19 @@
 import XCTest
 @testable import QAudionApp
 
-/// Pins `LocalCallerIdSettings`'s digit-normalization/persistence contract —
-/// the mechanism section 11.6 of `ACCOUNT_REGISTRATION_SPEC.md` (bcrypto-server
-/// repo) explicitly says must stay UNCHANGED while `AccountSettingsScreen`'s
-/// caller-ID field was upgraded from free text to a single-select `Picker`
-/// (2026-07-29). This file does not test the new picker UI itself (its
-/// `callerIdPicker`/`callerIdOptions`/`extensionOptionLabel` are `private`
-/// computed properties on a SwiftUI `View` struct in `AccountSettingsScreen
-/// .swift` — `@testable import` only lifts `internal` access, not `private`,
-/// so they are not reachable from a test target without an out-of-scope
-/// refactor to extract them into a separately-testable type. Flagged here as
-/// a real, currently-untested surface rather than silently skipped) — it
-/// pins the one thing underneath the picker that genuinely was, and had to
-/// stay, unchanged: whatever the user selects still round-trips through
-/// `LocalCallerIdSettings.setPhoneNumber`/`.phoneNumber()` exactly as the old
-/// free-text field did, which is what `AppState`'s outbound `call_offer`
-/// (`caller_display`) plumbing reads at call time.
+/// Pins `LocalCallerIdSettings`'s digit-normalization/persistence contract:
+/// the value picked in `AccountSettingsScreen`'s single-select caller-ID
+/// `Picker` is stored through `LocalCallerIdSettings.setPhoneNumber` and read
+/// back with `.phoneNumber()`, which is what `AppState`'s outbound
+/// `call_offer` (`caller_display`) plumbing reads at call time. A number
+/// keeps its leading "+", separators are stripped, and empty, nil or
+/// digit-less input clears the stored value. This file does not test the
+/// picker UI itself (its `callerIdPicker`/`callerIdOptions`/
+/// `extensionOptionLabel` are `private` computed properties on a SwiftUI
+/// `View` struct in `AccountSettingsScreen.swift` — `@testable import` only
+/// lifts `internal` access, not `private`, so they are not reachable from a
+/// test target without extracting them into a separately-testable type), so
+/// the picker is a currently-untested surface.
 ///
 /// NOTE (not yet wired into a build target): this repo has no
 /// `QAudionAppTests` XCTest target in `QAudionApp/project.yml` today — only

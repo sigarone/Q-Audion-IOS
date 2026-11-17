@@ -365,10 +365,9 @@ public final class TelemetryService {
         req.httpBody = wire
 
         do {
-            // W-AUXPIN (2026-09-01): cert-pinned session (same delegate/pins
-            // as the REST client) instead of URLSession.shared — this
-            // bearer-token POST had no pin at all (audit memory
-            // reference_ios_stability_audit_2026_09_01, P1 item 6).
+            // W-AUXPIN: cert-pinned session (same delegate/pins as the REST
+            // client) instead of URLSession.shared, so this bearer-token POST
+            // is certificate-pinned.
             let (_, resp) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: req)
             let http = resp as? HTTPURLResponse
             applyBatchOutcome(status: http?.statusCode,

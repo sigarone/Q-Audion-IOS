@@ -102,8 +102,8 @@ final class EarbudSerialGateTests: XCTestCase {
         return task
     }
 
-    /// Reproduces the pairing bug: the relay's PAIR_FIN timeout cancels the write while an earlier operation holds
-    /// the gate. The old gate kept the cancelled caller in line, so the write ran the moment the gate freed.
+    /// The relay's PAIR_FIN timeout cancels the write while an earlier operation holds the gate. A gate that kept
+    /// the cancelled caller in line would run the write the moment the gate freed.
     func testACancelledWaiterLeavesTheQueueAndItsBodyNeverRuns() async {
         let gate = EarbudSerialGate()
         let release = Flag()

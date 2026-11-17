@@ -91,6 +91,16 @@ final class ScreenshotLockServiceTests: XCTestCase {
         XCTAssertFalse(PrivacyShield.shouldCoverCapture(isCaptured: false, lockHeld: true))
     }
 
+    func test_captureCoverModeKeepsTheStopControlForTheOwnShareOnly() {
+        for ownShare in [false, true] {
+            XCTAssertEqual(PrivacyShield.captureCoverMode(isCaptured: false, lockHeld: true, ownShareActive: ownShare), .absent)
+            XCTAssertEqual(PrivacyShield.captureCoverMode(isCaptured: true, lockHeld: false, ownShareActive: ownShare), .absent)
+            XCTAssertEqual(PrivacyShield.captureCoverMode(isCaptured: false, lockHeld: false, ownShareActive: ownShare), .absent)
+        }
+        XCTAssertEqual(PrivacyShield.captureCoverMode(isCaptured: true, lockHeld: true, ownShareActive: false), .notice)
+        XCTAssertEqual(PrivacyShield.captureCoverMode(isCaptured: true, lockHeld: true, ownShareActive: true), .noticeWithStop)
+    }
+
     func test_snapshotBlurWhenLockHeldOrSettingOn() {
         XCTAssertTrue(PrivacyShield.shouldBlurSnapshot(lockHeld: true, protectionSetting: false))
         XCTAssertTrue(PrivacyShield.shouldBlurSnapshot(lockHeld: false, protectionSetting: true))

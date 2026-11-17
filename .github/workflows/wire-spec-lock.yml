@@ -1,6 +1,6 @@
 # WIRE_SPEC drift lock
 #
-# WIRE_SPEC.md is duplicated in four repos (bcrypto-server, qaudion-android-new,
+# WIRE_SPEC.md is duplicated in four repos (the server, the Android app,
 # qaudion-ios, qaudion-desktop) because each client must be able to read the
 # contract it implements without cloning the others. Nothing enforced that the
 # four copies stayed equal, and they did not: as of 2026-07-24 the Desktop copy

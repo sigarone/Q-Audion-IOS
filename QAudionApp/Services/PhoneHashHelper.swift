@@ -3,8 +3,8 @@ import CryptoKit
 
 /// E.164 phone-number normaliser + SHA-256 hash helper.
 ///
-/// 1:1 port of the Android source of truth:
-///   `qaudion-android-new/feature/feature-auth/PhoneHashHelper.kt`
+/// 1:1 port of the Android implementation of this helper, which is the
+/// source of truth.
 ///
 /// Cross-platform discipline: every platform must derive the SAME
 /// `phone_hash` from the SAME raw phone number, otherwise contact discovery

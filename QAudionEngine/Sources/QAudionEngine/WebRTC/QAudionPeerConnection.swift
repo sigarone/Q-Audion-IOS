@@ -367,19 +367,15 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
     /// Android's `pendingAudioSrtpMuted`) — latched here and applied the
     /// moment `activateNativeAudioSrtp` creates the track.
     ///
-    /// W-MICBEFOREACCEPT-NATIVE (2026-09-08, live evidence calls 58af7891 /
-    /// a683e3cb) — defaults to `true` (muted). Unlike Android/Desktop, iOS
-    /// builds the WebRTC controller and activates native audio-srtp at RING
-    /// TIME on both roles (W-DCSTUCK, load-bearing, not being removed) —
-    /// `activateNativeAudioSrtp` was measured completing (cryptor attached,
-    /// track enabled) well under a second after the OFFER, on BOTH the
-    /// caller and the callee, before either side's human had touched the
-    /// screen: real, unmuted, bidirectional voice audible on both phones
-    /// during ringing. `setNativeAudioSrtpMuted(false)` is now called
-    /// explicitly at the same two genuine-accept points that already gate
-    /// the legacy DataChannel mic (`CallService.handleCallAnswered()` for
-    /// the caller, `CallService.activateIncomingCallAudio()` for the
-    /// callee) — see [[project_ios_native_mic_before_accept_2026_09_08]].
+    /// W-MICBEFOREACCEPT-NATIVE — defaults to `true` (muted). iOS builds the
+    /// WebRTC controller and activates native audio-srtp at RING TIME on both
+    /// roles, so `activateNativeAudioSrtp` completes (cryptor attached, track
+    /// enabled) shortly after the OFFER on the caller and the callee, before
+    /// either user has accepted. The mic track therefore starts muted:
+    /// `setNativeAudioSrtpMuted(false)` is called explicitly at the same two
+    /// accept points that already gate the legacy DataChannel mic
+    /// (`CallService.handleCallAnswered()` for the caller,
+    /// `CallService.activateIncomingCallAudio()` for the callee).
     private var pendingAudioSrtpMuted: Bool = true
     /// W-CALLERUNMUTELOST (2026-09-27) — true once `activateNativeAudioSrtp`
     /// has confirmed the SENDER FrameCryptor is attached (`attached` local
@@ -404,7 +400,7 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
     /// phantom duplicate m-line libwebrtc M144 mints on a callee-side video
     /// upgrade — it is IGNORED so the renderer sink stays on the established
     /// track (mirrors Android `cryptorBoundMid` +
-    /// `shouldIgnorePhantomVideoTransceiver`, qaudion-android-new 39ea0e5f).
+    /// `shouldIgnorePhantomVideoTransceiver`).
     /// nil until the first video receiver arrives; cleared in `close()`.
     /// Read-public (WIRE_SPEC §8.7): the call controller ships it as the
     /// `mid` field of `call_media_ready` when the receiver cryptor is ready.
@@ -1371,29 +1367,26 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
         //   en  = local track isEnabled at exit
         //   att = cryptor attachSender result
         var diagN = 0, diagSel = 0, diagDir = -1, diagBr = 0
-        // W-AUDIOSRTPSENDERCARRYOVER (2026-08-28, port of the equivalent
-        // Android/qaudion-android-new fix) — `audioTransceiver` is cached
+        // Port of the equivalent Android fix — `audioTransceiver` is cached
         // ONCE at `init()`, before any SDP round-trip. libwebrtc's JSEP
         // can silently replace the pre-created transceiver object during
         // `setRemoteDescription`/`setLocalDescription` — this repo's own
         // VIDEO path already documents and handles that exact behavior (see
-        // `didAdd rtpReceiver`'s `.relatch` branch above), but the AUDIO
-        // sender path never re-resolved its cached reference, so a rewire
-        // here would silently attach the mic track to a dead transceiver
-        // while the live one (the one libwebrtc actually sends RTP for)
-        // stayed track-less — indistinguishable from "audio works" in every
-        // log this function emits, and exactly the shape of a live call
-        // (9b542759, Android<->iOS, 2026-08-28) that negotiated audio-srtp-v1
-        // and died to iOS's own W-MEDIADEAD watchdog with reason=media-lost
-        // after ~90s of zero decoded inbound audio on the Android side.
-        // Fix: never trust the cached reference — always re-resolve the live
-        // audio transceiver from the peer connection's current transceiver
-        // list (ObjC wrapper objects are not identity-stable across a
-        // rewire, per the video path's own `.relatch` comment, so `mid`/
-        // object-identity comparison against the cache would be unreliable;
-        // a 1:1 call has at most one audio transceiver, so `mediaType`
-        // alone is a safe, unambiguous match). Cache is refreshed so any
-        // other call site reading `audioTransceiver` sees the live object too.
+        // `didAdd rtpReceiver`'s `.relatch` branch above). A rewire against
+        // the stale cached reference would silently attach the mic track to a
+        // dead transceiver while the live one (the one libwebrtc actually
+        // sends RTP for) stayed track-less, which looks like "audio works" in
+        // every log this function emits while the peer decodes no inbound
+        // audio (the W-MEDIADEAD watchdog ends such a call with
+        // reason=media-lost). So never trust the cached reference — always
+        // re-resolve the live audio transceiver from the peer connection's
+        // current transceiver list (ObjC wrapper objects are not
+        // identity-stable across a rewire, per the video path's own
+        // `.relatch` comment, so `mid`/object-identity comparison against the
+        // cache would be unreliable; a 1:1 call has at most one audio
+        // transceiver, so `mediaType` alone is a safe, unambiguous match).
+        // Cache is refreshed so any other call site reading
+        // `audioTransceiver` sees the live object too.
         // W-AUDIOSENDPICK (2026-08-30, iOS<->iOS call at 10:23, TestFlight
         // 1050) — `.first(where: audio)` is only correct while there is
         // exactly ONE audio transceiver. When JSEP cannot recycle the
@@ -2849,8 +2842,7 @@ extension QAudionPeerConnection: RTCDataChannelDelegate {
 /// just-added inbound video receiver belongs to a PHANTOM transceiver that must
 /// be IGNORED (do not forward didReceiveRemoteVideoTrack /
 /// didReceiveRemoteVideoReceiver; keep the renderer on the established mid).
-/// Mirrors Android `shouldIgnorePhantomVideoTransceiver`
-/// (qaudion-android-new commit 39ea0e5f, PeerConnectionHolder.kt).
+/// Mirrors Android `shouldIgnorePhantomVideoTransceiver`.
 ///
 /// Phantom shape (device-verified on Android A36↔S26, same libwebrtc M144 on
 /// iOS): once a real inbound video mid is ESTABLISHED, a transceiver at a

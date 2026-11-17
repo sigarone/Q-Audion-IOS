@@ -960,11 +960,10 @@ public final class AudioCapture {
     private var vpioRetryInFlight = false
     private var vpioRetryGaveUp = false
 
-    // ── W-AUDIORESUME / W-MEDIARESET / W-AUDIOBEACON (2026-09-01) ──────────
-    // Evidence: audit memory reference_ios_stability_audit_2026_09_01, P1
-    // (1)/(2) — background audio loss with the process alive for 80 s and no
-    // shipped line able to say whether the engine was running; `.ended`
-    // without `.shouldResume` never resumed; mediaServicesWereReset unhandled.
+    // ── W-AUDIORESUME / W-MEDIARESET / W-AUDIOBEACON ───────────────────────
+    // In-call audio-session recovery: an interruption that ends without
+    // `.shouldResume` is retried, a media-services reset rebuilds the engine,
+    // and a periodic beacon reports the engine state.
     // Decisions live in `AudioInterruptionRecoveryPolicy` (pure, tested);
     // this file only owns the timers/notifications and funnels every
     // recovery through the existing `start()` / `restartEngineForRoute`.
@@ -1632,29 +1631,23 @@ public final class AudioCapture {
         // endpoint that never negotiated anything.
         noteInboundFrameDuration(pcmBytes: pcmData.count)
         playoutJitter.push(pcmData, seq: seq)
-        // W-PLAYOUTRACE (2026-07-26) — hop to main BEFORE touching the engine.
+        // W-PLAYOUTRACE — hop to main BEFORE touching the engine.
         //
-        // Live incident, first call on a build carrying this pump: user tapped the
-        // in-call speaker button and the phone froze. Root cause, found by reading
-        // rather than guessing: `pumpPlayout` was called from TWO places on two
-        // DIFFERENT, unsynchronized threads — inline here (whatever thread decrypts
-        // network audio) and again inline inside `scheduleBuffer`'s OWN completion
-        // handler, which AVFoundation fires on an internal thread that is neither
-        // this one nor main. Both paths read/wrote `self.engine`/`self.playerNode`
-        // with zero lock. `restartEngineForRoute` — which a speaker tap triggers via
-        // `.override` — tears the SAME two properties down and rebuilds them, also
-        // unsynchronized, on the main queue (`scheduleDebouncedRouteRestart`'s
-        // `DispatchQueue.main.asyncAfter`). A teardown landing mid-schedule raced an
-        // AVAudioEngine object that Apple does not document as safe for concurrent
-        // configuration and scheduling from different threads — and it also meant
-        // `scheduleBuffer` could be called REENTRANTLY, from inside its own
-        // completion callback, which is its own known hazard independent of the race.
+        // `pumpPlayout` must not run inline on the thread that decrypts network
+        // audio, nor inline inside `scheduleBuffer`'s OWN completion handler,
+        // which AVFoundation fires on an internal thread that is neither this one
+        // nor main. Pumping from several unsynchronized threads would touch
+        // `self.engine`/`self.playerNode` while a route restart tears the same two
+        // properties down and rebuilds them, racing an AVAudioEngine object that
+        // Apple does not document as safe for concurrent configuration and
+        // scheduling from different threads. Pumping from inside the completion
+        // handler would also call `scheduleBuffer` REENTRANTLY, from inside its
+        // own completion callback, which is its own known hazard independent of
+        // the race.
         //
-        // The fix is not a lock. It is giving `engine`/`playerNode` exactly ONE
-        // owning thread — main, since that is where `restartEngineForRoute` already
-        // runs on its primary (debounced, i.e. every real route flip including this
-        // one) path — and moving every entry point into the pump onto it. See the
-        // completion handler below for the other half.
+        // So every entry point into the pump is moved onto main, which gives the
+        // pump exactly ONE calling thread. See the completion handler below for
+        // the other half.
         DispatchQueue.main.async { [weak self] in
             self?.pumpPlayout()
         }
@@ -2636,8 +2629,8 @@ public final class AudioCapture {
     ///     mid-flip (or a transient HAL error) still recovers seconds later
     ///     instead of never.
     ///
-    /// Every failed attempt increments `engine_restart_fail` so the next
-    /// incident is visible in telemetry instead of being a `print` on a device
+    /// Every failed attempt increments `engine_restart_fail` so a failed
+    /// restart is visible in telemetry instead of being a `print` on a device
     /// nobody is attached to.
     private func restartEngineWithRecovery(attempt: Int) {
         // Bound the ladder. 0,1 = plain retries; 2+ = retries with VP-IO forced
@@ -2721,13 +2714,11 @@ public final class AudioCapture {
                 let opts = AVAudioSession.InterruptionOptions(rawValue: optRaw)
                 shouldResume = opts.contains(.shouldResume)
             }
-            // W-AUDIORESUME (2026-09-01) — `.ended` without `.shouldResume`
-            // used to `return` here and the engine stayed dead for the rest
-            // of the call (audit reference_ios_stability_audit_2026_09_01,
-            // P1 (2)). The missing hint is the OS saying "not sure you want
-            // it back", not a prohibition: while a voice call owns the
-            // session the app DOES want it back, so a bounded 1 s / 3 s
-            // retry runs instead. `.passive` captures still return here.
+            // W-AUDIORESUME — `.ended` without `.shouldResume` is not a reason
+            // to stay stopped. The missing hint is the OS saying "not sure you
+            // want it back", not a prohibition: while a voice call owns the
+            // session the app DOES want it back, so a bounded 1 s / 3 s retry
+            // runs. `.passive` captures return here.
             let endedAction = AudioInterruptionRecoveryPolicy.interruptionEndedAction(
                 shouldResumeHint: shouldResume, ownership: sessionOwnership)
             switch endedAction {
@@ -2786,7 +2777,7 @@ public final class AudioCapture {
             // Exhausted: the engine is down for the rest of this call. Say so
             // in a form that survives the remote-log redactor (short numeric
             // tokens, no bracketed prefix — see AudioEngineStateBeacon's
-            // kdoc) so the next incident is a fact rather than an inference.
+            // kdoc) so the loss is a fact in the logs rather than an inference.
             let lost: String = "audioresume lost=1 attempts=" + String(attemptIndex)
             print(lost)
             print("[AudioCapture] W-AUDIORESUME: resume retries exhausted — audio is DOWN for this call")
@@ -2973,11 +2964,10 @@ public final class AudioCapture {
     }
 
     private func stopLocked(deactivateSession: Bool) {
-        // W-AUDIODEATH (2026-07-24) — latch whether the engine was still alive at
-        // teardown, BEFORE we tear it down ourselves. `false` here on a call that
-        // reported healthy rx_dec counts is the fingerprint of a dead-playout call
-        // (see `restartEngineWithRecovery`); it is the one fact the live incident
-        // could not establish from any log or telemetry record we shipped.
+        // W-AUDIODEATH — latch whether the engine was still alive at teardown,
+        // BEFORE we tear it down ourselves. `false` here on a call that
+        // reported healthy rx_dec counts is the fingerprint of a dead-playout
+        // call (see `restartEngineWithRecovery`).
         // (W-VPIOOBS: CallService now latches it earlier, via `noteRunningAtEndNow()`, because the
         // diag stats are consumed before this runs.)
         // Not running from here on, before anything slow: the playout path reads this flag first.

@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Toggle row used inside `SettingsScreen` and any sub-screen that
-/// adopts the design tokens. 1:1 port of Android `SettingsToggleRow`
-/// from `qaudion-android-new/feature/feature-settings/.../SettingsUi.kt`.
+/// adopts the design tokens. 1:1 port of the Android `SettingsToggleRow`
+/// component.
 ///
 /// Same shell as `SettingsRow` but the trailing element is a SwiftUI
 /// `Toggle`, tinted to `scheme.primary`. The leading icon is fixed to

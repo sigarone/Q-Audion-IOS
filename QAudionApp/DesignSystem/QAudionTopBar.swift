@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Q-Audion top bar. 1:1 port of Android `QAudionTopBar` from
-/// `qaudion-android-new/core/core-ui/.../components/QAudionTopBar.kt`.
+/// Q-Audion top bar. 1:1 port of Android `QAudionTopBar`.
 ///
 /// - Title slot: plain `String` (rendered with `titleLarge`).
 /// - Optional `onBack` callback: when non-nil renders a leading

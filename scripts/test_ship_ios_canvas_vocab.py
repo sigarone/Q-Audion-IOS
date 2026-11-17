@@ -43,11 +43,25 @@ LINES = [
     "canvas hosted=1",
     "canvas hosted=0 why=1",
     "capcover shown=1",
+    "capcover shown=1 own=1",
+    "capcover shown=0",
+]
+
+# The "call" lines of the screen share (AppState.swift) and of the encoder session (VideoCallPipeline.swift).
+CALL_LINES = [
+    "vcap capture end=1 why=1",
+    "vcap capture end=1 why=2",
+    "vcap encfail st=-12903 ask=1 rec=1 code=0",
+    "vcap encfail st=-12903 ask=1 rec=0 code=-12908",
 ]
 
 failures = []
 for line in LINES:
     got = red(line)
+    if got != line:
+        failures.append("%r -> %r" % (line, got))
+for line in CALL_LINES:
+    got = red(line, "call")
     if got != line:
         failures.append("%r -> %r" % (line, got))
 
@@ -56,4 +70,4 @@ if failures:
     for f in failures:
         print("  " + f)
     sys.exit(1)
-print("OK: %d secure canvas lines ship verbatim" % len(LINES))
+print("OK: %d secure canvas and share lines ship verbatim" % (len(LINES) + len(CALL_LINES)))

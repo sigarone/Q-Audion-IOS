@@ -20,7 +20,7 @@ import CryptoKit
 ///                     ECDH || SHA-256(mlkemPub)
 ///
 /// Sister tests:
-///   apps/qaudion-android-new/.../KmsRoundTripKatTest.kt
+///   the Android implementation's round-trip KAT test
 ///   apps/qaudion-desktop/test/KmsRoundTrip.kat.spec.ts
 final class KmsRoundTripKatTests: XCTestCase {
 

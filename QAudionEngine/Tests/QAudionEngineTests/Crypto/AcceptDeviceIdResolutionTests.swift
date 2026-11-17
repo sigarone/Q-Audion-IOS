@@ -2,11 +2,10 @@ import XCTest
 @testable import QAudionEngine
 
 /// W-ACCEPTDEVSTALE (2026-09-08) — pins `AcceptDeviceIdResolution` against
-/// the exact device-id-confusion incident found by adversarial review of the
-/// W-SASPIN/W-CAPTURELIVE-SIGNAL diff: a peer-keyed stash can leak a STALE
-/// device id from an unrelated earlier call into the current call's ACCEPT
-/// verdict. These tests exercise the call-scoped replacement directly, with
-/// no `AppState` involved (that class cannot be unit-tested in isolation).
+/// device-id confusion: a peer-keyed stash can leak a STALE device id from an
+/// unrelated earlier call into the current call's ACCEPT verdict. These tests
+/// exercise the call-scoped replacement directly, with no `AppState` involved
+/// (that class cannot be unit-tested in isolation).
 final class AcceptDeviceIdResolutionTests: XCTestCase {
 
     /// The regression itself, modeled directly: peer X called us from device

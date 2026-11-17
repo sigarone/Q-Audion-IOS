@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Slim 30pt status strip rendered above the chat thread. 1:1 port of
-/// Android `qaudion-android-new/feature/feature-chat/.../components/SessionStatusStrip.kt`.
+/// the Android implementation of this component.
 ///
 /// Layout (left → right):
 ///   [confidence dot] [presence label] [C=0.NN] [mini spark] [RE-KEY in MM:SS]

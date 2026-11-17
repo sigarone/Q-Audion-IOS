@@ -3,7 +3,7 @@ import CryptoKit
 
 /// Persistent safety-number derivation — iOS side.
 ///
-/// Authoritative spec: `apps/bcrypto-server/docs/WIRE_SPEC.md` §5.1.2.
+/// Authoritative spec: `WIRE_SPEC.md` §5.1.2.
 /// Direct port of Android `core-trust/.../SafetyNumber.kt` (canonical
 /// reference, KAT-tested against Desktop `SafetyNumber.ts`).
 ///

@@ -19,8 +19,8 @@ public enum BCryptoCallingError: LocalizedError {
 }
 
 /// Wire-format adapter between the high-level `CallingApi` protocol and the
-/// `bcrypto-server` signaling envelopes (see `internal/signaling/messages.go`
-/// `CallOfferData`, `CallAnswerData`, `CallICEData`, `CallHangupData`).
+/// server's signaling envelopes (`CallOfferData`, `CallAnswerData`,
+/// `CallICEData`, `CallHangupData`).
 ///
 /// **HISTORY**: previous revisions sent camelCase field names
 /// (`recipientId`, `sdp` only, no `call_id`/`call_type`/`reason`) which the
@@ -102,7 +102,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
     ///
     /// Mirrors Android `WsCommand.CallOffer.capabilities` (commit 540b79c0).
     /// The `capabilities` JSON key is OMITTED when the list is empty so
-    /// older bcrypto-server builds that don't yet recognise the field
+    /// older server builds that don't yet recognise the field
     /// stay happy; the agreement is a pure end-to-end concern (the
     /// server is a relay).
     ///
@@ -285,22 +285,21 @@ public final class BCryptoCallingApiImpl: CallingApi {
             print("[BCryptoCalling] sendIceCandidate DROPPED — no active call_id bound")
             return
         }
-        // W-ICEBEFOREOFFER (2026-09-08) — this fires from a synchronous
-        // WebRTC delegate (didDiscoverLocalIceCandidate) via an unstructured
-        // Task with no readiness gate of its own, so without this wait it
-        // can reach `ws.send()` — and therefore the server — before
+        // W-ICEBEFOREOFFER — this fires from a synchronous WebRTC delegate
+        // (didDiscoverLocalIceCandidate) via an unstructured Task with no
+        // readiness gate of its own, so without this wait it can reach
+        // `ws.send()` — and therefore the server — before
         // `sendCallOffer`/`sendCallOfferWithId`'s OWN send, which is stuck
         // behind an async `ws.ensureAuthenticated(timeoutSec: 5)` whenever
         // the persistent WS needs reconnecting right at call start (e.g.
         // CallKit's audio-session takeover suspending the old
-        // URLSessionWebSocketTask — confirmed live, 3 `ws: opened` events
-        // inside ~1s at call launch). bcrypto-server's F4 gate has nothing
-        // to authorize an offer-less call_ice against and used to drop it
-        // for good. Bounded at the same 5s the offer's own gate uses; falls
-        // through afterward (fail-open) rather than dropping the candidate
-        // — the server now also buffers a short grace window as defense in
-        // depth (main.go bufferEarlyCallIce/drainEarlyCallIce), so a candidate
-        // that still beats the offer past this wait is not lost either.
+        // URLSessionWebSocketTask). The server has nothing to authorize an
+        // offer-less call_ice against, so the candidate waits
+        // here for the offer. Bounded at the same 5s the offer's own gate
+        // uses; falls through afterward (fail-open) rather than dropping the
+        // candidate — the server also buffers a short grace window as defense
+        // in depth, so a candidate that still beats the offer past this wait
+        // is not lost either.
         //
         // I1/W-ICEBEFOREANSWER (2026-09-28, TURN-stuck-on-P2P fix) — this
         // gate used to check ONLY `isOfferDispatched`, which is the
@@ -338,7 +337,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// the bound active call id rather than an externally-passed callId (the call
     /// is already established by the time a reaction can be sent).
     /// `targetId` is the peer's userId; the server validates both sender
-    /// and target are the two call parties (mirrors bcrypto-server's
+    /// and target are the two call parties (mirrors the server's
     /// `group_call_signal` case) before relaying as `call_reaction_recv`.
     /// Wire: {call_id, target_id, emoji}.
     public func sendCallReaction(targetId: String, emoji: String) async throws {
@@ -509,16 +508,16 @@ public final class BCryptoCallingApiImpl: CallingApi {
     /// are silent no-ops everywhere.
     ///
     /// Park: a hangup pressed mid-network-outage must NOT be lost — the
-    /// live Android incident (call afc64e8d) had the peer learn via the DC
-    /// control frame while the SERVER kept the call tracked, leaving both
-    /// users "busy" to any third caller until the sweep. Fast path waits up
-    /// to 5 s for an authenticated socket (same gate as call_offer/answer);
-    /// failing that, a DETACHED task parks the pair for up to 40 more
-    /// seconds (~45 s total from the press, under the server's 60 s
-    /// disconnect-grace ceiling, matching Android's HANGUP_PARK_BUDGET_MS)
-    /// and resends the moment `ensureAuthenticated` sees the socket come
-    /// back. Detached so the caller (endCall's fire-and-forget Task, the
-    /// originator-cleanup error path) is never blocked for the park window.
+    /// peer can learn of it via the DC control frame while the SERVER keeps
+    /// the call tracked, leaving both users "busy" to any third caller until
+    /// the sweep. Fast path waits up to 5 s for an authenticated socket (same
+    /// gate as call_offer/answer); failing that, a DETACHED task parks the
+    /// pair for up to 40 more seconds (~45 s total from the press, under the
+    /// server's 60 s disconnect-grace ceiling, matching Android's
+    /// HANGUP_PARK_BUDGET_MS) and resends the moment `ensureAuthenticated`
+    /// sees the socket come back. Detached so the caller (endCall's
+    /// fire-and-forget Task, the originator-cleanup error path) is never
+    /// blocked for the park window.
     private func deliverHangup(callId: String, recipientId: String, reason: String) async {
         let envelope: [String: Any] = [
             "call_id": callId,
@@ -695,8 +694,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
 
     /// Acknowledge to the caller that this device received the call_offer and is
     /// initialising the PQC handshake. Pre-negotiation step 1.
-    /// Server forwards this back to the caller verbatim — see bcrypto-server
-    /// pre-negotiation flow in cmd/bcrypto-lite/main.go (call_processing case).
+    /// The server forwards this back to the caller verbatim.
     ///
     /// Same pre-flight gate as `sendCallAnswer` — this fires the moment the
     /// incoming call_offer arrives, i.e. potentially the very first thing
@@ -718,8 +716,7 @@ public final class BCryptoCallingApiImpl: CallingApi {
 
     /// Notify the caller that the responder finished the PQC OFFER deserialisation
     /// and is ready to ring. Pre-negotiation step 2 — caller can now show "Ringing".
-    /// See bcrypto-server pre-negotiation flow. Same pre-flight gate as
-    /// `sendCallProcessing` above, same reasoning.
+    /// Same pre-flight gate as `sendCallProcessing` above, same reasoning.
     public func sendCallReady(callId: String, callerId: String) async throws {
         let ready = await ws.ensureAuthenticated(timeoutSec: 5)
         if !ready {
@@ -746,18 +743,16 @@ public final class BCryptoCallingApiImpl: CallingApi {
         let data: [String: Any] = ["call_id": callId]
         let ready = await ws.ensureAuthenticated(timeoutSec: 5)
         if !ready {
-            // W-SIGSWALLOW (2026-09-01) — this used to throw BEFORE sending,
-            // so an accept pressed while the socket was still reconnecting
-            // (the exact background-wake race `sendCallAnswer`'s comment
-            // documents) was lost outright: the W-SETUPRETRY ladder that
-            // protects the success path below was never armed on the one
-            // path that needed it. Now: one best-effort send (`ws.send`
-            // kicks its own reconnect for control envelopes) plus the SAME
-            // bounded ladder (2.5 s / 5 s, stops on unbind/progression; the
-            // caller's RX is idempotent), then still throw so the caller
-            // logs the fast-path miss. Decision + kill switch live in
-            // `CallSignalingFailurePolicy` (audit memory
-            // reference_ios_stability_audit_2026_09_01, P1 item 7).
+            // W-SIGSWALLOW — the send happens BEFORE throwing, so an accept
+            // pressed while the socket is still reconnecting (the exact
+            // background-wake race `sendCallAnswer`'s comment documents) is
+            // not lost outright: the W-SETUPRETRY ladder that protects the
+            // success path below is armed on this path too. One best-effort
+            // send (`ws.send` kicks its own reconnect for control envelopes)
+            // plus the SAME bounded ladder (2.5 s / 5 s, stops on
+            // unbind/progression; the caller's RX is idempotent), then still
+            // throw so the caller logs the fast-path miss. Decision + kill
+            // switch live in `CallSignalingFailurePolicy`.
             if CallSignalingFailurePolicy.socketNotReadyAction(for: .callAccepted) == .bestEffortSendAndArmRetransmit {
                 ws.send(type: "call_accepted", data: data)
                 print("[BCryptoCalling] call_accepted fast-path miss call_id=\(callId.prefix(8))… — best-effort send, resend armed for the authenticated socket")

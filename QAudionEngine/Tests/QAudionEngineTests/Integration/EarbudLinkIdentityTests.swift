@@ -13,7 +13,7 @@ final class EarbudLinkIdentityTests: XCTestCase {
         XCTAssertTrue(EarbudLinkIdentity.concernsCurrentLink(callback: earbudA, current: earbudA))
     }
 
-    /// The bug: `ensureConnected(B)` cancels A and makes B current; A's didDisconnect arrives afterwards and
+    /// The switch: `ensureConnected(B)` cancels A and makes B current; A's didDisconnect arrives afterwards and
     /// must not touch B's state.
     func testALateCallbackOfThePreviousPeripheralDoesNotConcernTheNewLink() {
         XCTAssertFalse(EarbudLinkIdentity.concernsCurrentLink(callback: earbudA, current: earbudB))

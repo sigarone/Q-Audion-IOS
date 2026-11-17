@@ -36,8 +36,7 @@ import os
 ///
 /// Frames flow as standard WebRTC video RTP through the existing
 /// `QAudionWebRtcCallController.webrtcPixelBufferCapturer`. Desktop
-/// (`qaudion-desktop` PeerConnectionManager) and Android
-/// (`qaudion-android-new` PeerConnectionHolder) render it as a
+/// (`qaudion-desktop` PeerConnectionManager) and Android render it as a
 /// normal remote video track — they don't need to know it's a screen
 /// instead of a camera. A future "screen-share started" opaque-
 /// message signal (W534) can add the explicit badge.

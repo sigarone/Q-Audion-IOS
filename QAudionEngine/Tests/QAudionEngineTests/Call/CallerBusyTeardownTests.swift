@@ -164,8 +164,8 @@ final class CallerBusyTeardownTests: XCTestCase {
 
     // MARK: - an immediate redial is admitted
 
-    /// Incident timeline: busy, redial, busy, redial, busy. Every envelope ends exactly its own call, and a late
-    /// redelivery of an earlier busy never touches the call that is live.
+    /// Consecutive dials, each ended by a terminal answer (busy, peer offline) and redialled at once. Every envelope
+    /// ends exactly its own call, and a late redelivery of an earlier busy never touches the call that is live.
     func testRedialRightAfterBusyIsAdmittedAndLateEnvelopesAreIgnored() {
         var c = Caller()
         c.startCall(callA)

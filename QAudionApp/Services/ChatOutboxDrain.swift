@@ -8,10 +8,9 @@ import QAudionEngine
 /// give up (→ `.failed`, manual retry as before). Delivery receipts the
 /// socket could not carry are flushed by the same pass.
 ///
-/// Why (audit memory reference_ios_stability_audit_2026_09_01, P1 item 3):
-/// the live send was one in-memory `Task` with a ~10 s budget and no
-/// sweep, so a socket blip meant a red row and a process kill meant a
-/// clock icon forever. See `OutboxRetryPolicy`'s header.
+/// Why: the live send is one in-memory `Task` with a ~10 s budget and no
+/// sweep, so without a drain a socket blip would leave a red row and a
+/// process kill a clock icon forever. See `OutboxRetryPolicy`'s header.
 ///
 /// Runs ONLY when kicked — on every WS transition into `.authenticated`
 /// (which covers app launch: the persistent socket authenticates right

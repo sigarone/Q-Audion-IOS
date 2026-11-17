@@ -1,9 +1,8 @@
 import SwiftUI
 
 /// Horizontal strip of security status chips rendered just below the
-/// `ProfileHeroCard` on the Settings root. 1:1 port of Android
-/// `SecurityChips` from
-/// `qaudion-android-new/feature/feature-settings/.../SettingsUi.kt`.
+/// `ProfileHeroCard` on the Settings root. 1:1 port of the Android
+/// `SecurityChips` component.
 ///
 /// Default chips (matches Android root):
 ///   - "PSK HW-BOUND"  — `extras.success`

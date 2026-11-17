@@ -1,8 +1,8 @@
 import SwiftUI
 import QAudionEngine
 
-/// Top-level Contacts screen. 1:1 visual port of Android
-/// `qaudion-android-new/feature/feature-contacts/.../ContactsScreen.kt`.
+/// Top-level Contacts screen. 1:1 visual port of the Android implementation
+/// of this screen.
 ///
 /// Layout (top → bottom):
 ///   1. **Top bar** "Contatti" + trailing `person.badge.plus` (Aggiungi).

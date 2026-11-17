@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// Slow-cycling dual radial-gradient background used by every call screen.
-/// 1:1 port of Android `CallMeshBackground` from
-/// `qaudion-android-new/feature/feature-call/.../components/CallMeshBackground.kt`.
+/// 1:1 port of the Android `CallMeshBackground` component.
 ///
 /// Animation: a single phase value cycles 0 → 1 → 0 over 60 s with
 /// `easeInOut`. Two soft radial gradients are positioned proportionally
