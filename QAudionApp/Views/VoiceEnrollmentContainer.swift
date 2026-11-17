@@ -313,9 +313,8 @@ final class VoiceEnrollmentContainer: ObservableObject {
         restoreVoipCategoryAfterCapture()
     }
 
-    /// W-SESSIONCATLEAK (2026-08-30) — puts the shared session back in the VoIP
-    /// category after the capture, which switches it to `.record`. See
-    /// `VoiceNotePlayer`'s note for the live incident this closes.
+    /// Puts the shared session back in the VoIP category after the capture,
+    /// which switches it to `.record` (a session left in `.record` has no output).
     private func restoreVoipCategoryAfterCapture() {
         let session = AVAudioSession.sharedInstance()
         #if os(iOS) && !targetEnvironment(simulator)
