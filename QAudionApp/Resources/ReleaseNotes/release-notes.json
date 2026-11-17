@@ -1,5 +1,46 @@
 [
   {
+    "version": "1.0.1292",
+    "notes": {
+      "it": [
+        "Chiamate in arrivo più affidabili, anche con il telefono bloccato",
+        "Protezione delle chiamate ancora più completa",
+        "Voice-as-Key più preciso: registra di nuovo la tua voce nelle Impostazioni",
+        "Miglioramenti di affidabilità e stabilità"
+      ],
+      "en": [
+        "More reliable incoming calls, even with the phone locked",
+        "Even more complete call protection",
+        "More accurate Voice-as-Key: record your voice again in Settings",
+        "Reliability and stability improvements"
+      ],
+      "de": [
+        "Zuverlässigere eingehende Anrufe, auch bei gesperrtem Telefon",
+        "Noch umfassenderer Schutz für Anrufe",
+        "Genaueres Voice-as-Key: Nehmen Sie Ihre Stimme in den Einstellungen erneut auf",
+        "Verbesserungen bei Zuverlässigkeit und Stabilität"
+      ],
+      "es": [
+        "Llamadas entrantes más fiables, incluso con el teléfono bloqueado",
+        "Protección de las llamadas aún más completa",
+        "Voice-as-Key más preciso: vuelve a grabar tu voz en Ajustes",
+        "Mejoras de fiabilidad y estabilidad"
+      ],
+      "fr": [
+        "Appels entrants plus fiables, même avec le téléphone verrouillé",
+        "Protection des appels encore plus complète",
+        "Voice-as-Key plus précis : enregistre à nouveau ta voix dans Réglages",
+        "Améliorations de la fiabilité et de la stabilité"
+      ],
+      "pt-BR": [
+        "Chamadas recebidas mais confiáveis, mesmo com o telefone bloqueado",
+        "Proteção das chamadas ainda mais completa",
+        "Voice-as-Key mais preciso: grave sua voz novamente em Ajustes",
+        "Melhorias de confiabilidade e estabilidade"
+      ]
+    }
+  },
+  {
     "version": "1.0.1291",
     "notes": {
       "it": [
