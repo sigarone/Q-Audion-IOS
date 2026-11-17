@@ -50,7 +50,7 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
     func testLegacyItemInABackgroundCategoryIsUpgraded() {
         for category: Policy.ItemCategory in [.sovereignIdentity, .sessionPsk, .ratchetState] {
             XCTAssertEqual(
-                Policy.migrationTarget(category: category, currentClass: .whenUnlockedThisDeviceOnly, hasAccessControl: false),
+                Policy.migrationTarget(category: category, currentClass: .whenUnlockedThisDeviceOnly, requiresUserPresence: false),
                 .afterFirstUnlockThisDeviceOnly, "\(category)")
         }
     }
@@ -59,28 +59,50 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
     /// costs no `SecItemUpdate`.
     func testAlreadyUpgradedItemIsLeftAlone() {
         XCTAssertNil(Policy.migrationTarget(
-            category: .sessionPsk, currentClass: .afterFirstUnlockThisDeviceOnly, hasAccessControl: false))
+            category: .sessionPsk, currentClass: .afterFirstUnlockThisDeviceOnly, requiresUserPresence: false))
     }
 
     /// Biometric key protection ON: the item carries a `.userPresence` access
     /// control, which is the user's choice and cannot be rewritten in place.
     func testUserPresenceProtectedItemIsNeverTouched() {
         XCTAssertNil(Policy.migrationTarget(
-            category: .sessionPsk, currentClass: .whenUnlockedThisDeviceOnly, hasAccessControl: true))
+            category: .sessionPsk, currentClass: .whenUnlockedThisDeviceOnly, requiresUserPresence: true))
         XCTAssertNil(Policy.migrationTarget(
-            category: .sessionPsk, currentClass: .afterFirstUnlockThisDeviceOnly, hasAccessControl: true))
+            category: .sessionPsk, currentClass: .afterFirstUnlockThisDeviceOnly, requiresUserPresence: true))
+    }
+
+    /// The non-interactive read decides: only a successful one shows the item needs no user.
+    func testOnlyASuccessfulNonInteractiveReadShowsNoUserPresence() {
+        XCTAssertFalse(Policy.requiresUserPresence(probeStatus: 0))
+        // -25308 the system needs the user (or the phone is locked), -25293 authentication failed,
+        // -128 cancelled, -25300 gone, -4 no way to read without asking: all leave the item as it is.
+        for status: OSStatus in [-25308, -25293, -128, -25300, -4, -34018, -50] {
+            XCTAssertTrue(Policy.requiresUserPresence(probeStatus: status), "\(status)")
+        }
+    }
+
+    /// The composition the read path runs: a legacy plain item moves, a legacy item that needs the user stays.
+    func testLegacyItemMovesOnlyWhenTheNonInteractiveReadSucceeded() {
+        XCTAssertEqual(
+            Policy.migrationTarget(
+                category: .sessionPsk, currentClass: .whenUnlockedThisDeviceOnly,
+                requiresUserPresence: Policy.requiresUserPresence(probeStatus: 0)),
+            .afterFirstUnlockThisDeviceOnly)
+        XCTAssertNil(Policy.migrationTarget(
+            category: .sessionPsk, currentClass: .whenUnlockedThisDeviceOnly,
+            requiresUserPresence: Policy.requiresUserPresence(probeStatus: -25308)))
     }
 
     func testUiOnlyNeverMigrates() {
         XCTAssertNil(Policy.migrationTarget(
-            category: .uiOnly, currentClass: .whenUnlockedThisDeviceOnly, hasAccessControl: false))
+            category: .uiOnly, currentClass: .whenUnlockedThisDeviceOnly, requiresUserPresence: false))
     }
 
     /// A class this codebase never wrote, or one the read did not report, is
     /// left untouched rather than guessed at.
     func testUnknownOrMissingCurrentClassIsLeftAlone() {
-        XCTAssertNil(Policy.migrationTarget(category: .ratchetState, currentClass: .other, hasAccessControl: false))
-        XCTAssertNil(Policy.migrationTarget(category: .ratchetState, currentClass: nil, hasAccessControl: false))
+        XCTAssertNil(Policy.migrationTarget(category: .ratchetState, currentClass: .other, requiresUserPresence: false))
+        XCTAssertNil(Policy.migrationTarget(category: .ratchetState, currentClass: nil, requiresUserPresence: false))
     }
 
     // MARK: - Read classification
@@ -163,7 +185,7 @@ final class KeychainAccessibilityPolicyTests: XCTestCase {
 
     func testMigrationTargetAlwaysHasAConstantToWrite() {
         let target = Policy.migrationTarget(
-            category: .sessionPsk, currentClass: .whenUnlockedThisDeviceOnly, hasAccessControl: false)
+            category: .sessionPsk, currentClass: .whenUnlockedThisDeviceOnly, requiresUserPresence: false)
         XCTAssertNotNil(target)
         XCTAssertNotNil(target.flatMap { Policy.secAttrAccessible($0) })
         XCTAssertNil(Policy.secAttrAccessible(.other))

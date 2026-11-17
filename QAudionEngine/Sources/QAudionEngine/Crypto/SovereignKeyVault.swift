@@ -488,6 +488,85 @@ public final class SovereignKeyVault {
         }
     }
 
+    /// Moves every entry still on the legacy class to the class a fresh entry gets, with the same attribute-only
+    /// update `loadPsk` applies to the entry it reads (`KeychainAccessibilityMigration`), so the entries no read path
+    /// touches move as well. An entry that may need the user stays as it is; nothing is deleted or re-added.
+    ///
+    /// Runs only while protected data is available, one pass at a time, and no more once a pass finished with the
+    /// phone still unlocked and nothing failed. Prints one line when the pass found anything to move or to leave.
+    /// - Returns: the number of entries moved by this call.
+    @discardableResult
+    public func upgradeLegacyAccessibility(protectedData: ProtectedDataFlag = .shared) -> Int {
+        #if canImport(Security)
+        guard protectedData.isAvailable, Self.legacyClassPass.begin() else { return 0 }
+        var finished = false
+        defer { Self.legacyClassPass.end(finished: finished) }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll
+        ]
+        var items: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &items)
+        if status == errSecItemNotFound {
+            finished = protectedData.isAvailable
+            return 0
+        }
+        guard status == errSecSuccess, let results = items as? [[String: Any]] else { return 0 }
+        var moved = 0, left = 0, failed = 0
+        for attrs in results {
+            guard let name = attrs[kSecAttrAccount as String] as? String else { continue }
+            let outcome = KeychainAccessibilityMigration.upgradeIfNeeded(
+                attributes: attrs,
+                baseQuery: [
+                    kSecClass as String: kSecClassGenericPassword,
+                    kSecAttrService as String: Self.service,
+                    kSecAttrAccount as String: name
+                ],
+                category: .sessionPsk,
+                tag: "SovereignKeyVault")
+            switch outcome {
+            case .unchanged: break
+            case .upgraded: moved += 1
+            case .leftForUser: left += 1
+            case .failed: failed += 1
+            }
+        }
+        if moved + left + failed > 0 {
+            let total: Int = results.count
+            let line: String = "[SovereignKeyVault] class pass moved=\(moved) left=\(left) failed=\(failed) of=\(total)"
+            print(line)
+        }
+        finished = failed == 0 && protectedData.isAvailable
+        return moved
+        #else
+        return 0
+        #endif
+    }
+
+    /// State of `upgradeLegacyAccessibility` for this process: one pass at a time, none after a finished one.
+    private static let legacyClassPass = LegacyClassPass()
+
+    private final class LegacyClassPass: @unchecked Sendable {
+        private let lock = NSLock()
+        private var running = false
+        private var done = false
+
+        func begin() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard !running, !done else { return false }
+            running = true
+            return true
+        }
+
+        func end(finished: Bool) {
+            lock.lock(); defer { lock.unlock() }
+            running = false
+            if finished { done = true }
+        }
+    }
+
     public func getFingerprint(name: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
