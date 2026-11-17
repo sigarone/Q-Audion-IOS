@@ -55,6 +55,67 @@ public enum EarbudPairTranscript {
         lexLess(selfEid, peerEid)
     }
 
+    // MARK: - SAS words of a pairing (CL-2.2)
+
+    /// Bytes of `pair_id` the words are drawn from: 3 bytes per word, `SasConstants.wordCount` words.
+    public static let sasEntropyBytes = 3 * SasConstants.wordCount
+
+    /// The words a person compares between the two phones before PAIR_FIN is written.
+    ///
+    /// The earbud firmware has no word-form SAS for pairing (`ee_pair.c` only checks the
+    /// public-transcript hash of `confirmHash`), so the words are a pure view of the 32-byte
+    /// `pair_id` both phones derive from the two eids they actually sent to / received from their own
+    /// earbud: when a relay substituted an earbud identity on the way the two pair_ids differ, and so
+    /// do the two word lists. Nothing on the wire changes and no new KDF, label or hash is involved
+    /// (`pair_id` is already a SHA-256 output).
+    ///
+    /// Byte-for-byte the Android `EarbudPairTranscript.sasWords` (qaudion-engine, earbuddiag): the
+    /// first 18 bytes of `pair_id` through `PgpSasWords.wordsFromEntropy`, which reads each 3-byte group
+    /// as a big-endian 24-bit integer and takes it modulo the 256-word list (`idx = uint24_be % 256`).
+    /// 256 divides 2^24, so the index is the last byte of each group. The vectors of
+    /// `earbud-pair-sas-v1-kat.json` pin it on both platforms.
+    ///
+    /// - Returns: nil when `pairId` is not exactly 32 bytes.
+    public static func sasWords(pairId: Data) -> [String]? {
+        guard pairId.count == 32 else { return nil }
+        let b = [UInt8](pairId)
+        let size = PgpSasWordList.words.count
+        var words: [String] = []
+        words.reserveCapacity(SasConstants.wordCount)
+        for i in 0..<SasConstants.wordCount {
+            let hi = Int(b[3 * i])
+            let mid = Int(b[3 * i + 1])
+            let lo = Int(b[3 * i + 2])
+            let idx = ((hi << 16) | (mid << 8) | lo) % size
+            words.append(PgpSasWordList.words[idx])
+        }
+        return words
+    }
+
+    /// The 16 lower-case hex characters (the first 8 bytes of `pair_id`) shown under the words as a
+    /// second, independent thing to compare. Same as Android `pairIdHex.take(16)`.
+    ///
+    /// - Returns: nil when `pairId` is not exactly 32 bytes.
+    public static func sasFingerprint(pairId: Data) -> String? {
+        guard pairId.count == 32 else { return nil }
+        let hex = [UInt8](pairId.prefix(8)).map { String(format: "%02x", $0) }.joined()
+        return hex
+    }
+
+    /// `sasFingerprint` in groups of four, as the dialog shows it ("0a1b 2c3d 4e5f 6071"), the same
+    /// layout as Android (`take(16).chunked(4).joinToString(" ")`).
+    public static func sasFingerprintDisplay(pairId: Data) -> String? {
+        guard let hex = sasFingerprint(pairId: pairId) else { return nil }
+        var groups: [String] = []
+        var start = hex.startIndex
+        while start < hex.endIndex {
+            let end = hex.index(start, offsetBy: 4, limitedBy: hex.endIndex) ?? hex.endIndex
+            groups.append(String(hex[start..<end]))
+            start = end
+        }
+        return groups.joined(separator: " ")
+    }
+
     /// Unsigned-lexicographic less-than for two Data values (byte-by-byte, first difference decides).
     private static func lexLess(_ a: Data, _ b: Data) -> Bool {
         for (x, y) in zip(a, b) {

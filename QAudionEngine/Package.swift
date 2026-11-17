@@ -359,6 +359,11 @@ let package = Package(
                 // vector's own "notes" field — NOT bit-reproduced by encode()).
                 .copy("Resources/kat/kms-prebootstrap-kat.json"),
                 .copy("Integration/Resources/earbud-excl-v2-kat.json"),
+                // FE-5 pairing SAS words (earbud-pair-sas-v1): the six words and the fingerprint of a pair_id, a BYTE-FOR-BYTE copy of
+                // scripts/kat/earbud-pair-sas-v1-kat.json (written by scripts/kat/gen_earbud_pair_sas_kat.py, an independent hashlib
+                // implementation; the Android app runs the same file). EarbudPairSasWordsTests pins its SHA-256 and .gitattributes marks
+                // it -text so a CRLF checkout cannot change it. Re-copy it, never edit it.
+                .copy("Resources/kat/earbud-pair-sas-v1-kat.json"),
                 // W-KEYSCRUB (2026-09-21) -- golden vectors of KeyMaterialScrubber, shared with
                 // scripts/test_keymaterial_scrub_parity.py (the Python port); synthetic data only.
                 .copy("Diagnostics/Resources/key-material-scrub-vectors.json"),

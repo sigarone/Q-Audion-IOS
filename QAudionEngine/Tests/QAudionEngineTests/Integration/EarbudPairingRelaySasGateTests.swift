@@ -1,0 +1,228 @@
+import XCTest
+@testable import QAudionEngine
+
+/// CL-2.2: `EarbudPairingRelay` writes PAIR_FIN only after a person has confirmed the pairing words.
+///
+/// The gate used to be `isConfirmed: { _ in true }` at every call site and the default of the parameter, so
+/// the confirmation never happened. These tests drive the relay against a fake earbud and pin what the
+/// Android `EarbudPairingRelaySasGateTest` pins: a "no", no answer within the timeout, or a cancelled task all end
+/// the pairing without a PAIR_FIN, and the result says the link must be dropped before a retry.
+final class EarbudPairingRelaySasGateTests: XCTestCase {
+
+    // MARK: - Fakes
+
+    private final class Recorder<T>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [T] = []
+        func append(_ v: T) { lock.lock(); values.append(v); lock.unlock() }
+        var all: [T] { lock.lock(); defer { lock.unlock() }; return values }
+    }
+
+    private enum FakeError: Error { case boom }
+
+    /// An earbud that answers PAIR_BEGIN, returns a canned PAIR_RESP and records what is written to PAIR_FIN.
+    private final class FakeEarbud: EarbudPairingGattProxy, @unchecked Sendable {
+        var isConnected: Bool = true
+        var failPairBegin = false
+        var failPairResp = false
+        var failPairFin = false
+        var pairResp: Data
+        let pairBeginWrites = Recorder<Data>()
+        let pairFinWrites = Recorder<Data>()
+
+        init(pairResp: Data) { self.pairResp = pairResp }
+
+        func startKeyImport(pkg: Data, popInputs: Data) async throws -> KeyImportOutcome { .err("unused") }
+        func readAttestPop() async throws -> Data { Data() }
+        func writePairBegin(_ payload: Data) async throws {
+            if failPairBegin { throw FakeError.boom }
+            pairBeginWrites.append(payload)
+        }
+        func readPairResp() async throws -> Data {
+            if failPairResp { throw FakeError.boom }
+            return pairResp
+        }
+        func writePairFin(_ confirm: Data) async throws {
+            if failPairFin { throw FakeError.boom }
+            pairFinWrites.append(confirm)
+        }
+        func writeFpAdvSeed(_ ctBind: Data) async throws {}
+        func readFpAdv() async throws -> (fpAdv: Data, epoch: UInt64) { (Data(count: 32), 0) }
+    }
+
+    // MARK: - Fixtures
+
+    /// The OTHER earbud (relayed by the other phone): the lesser eid, so the connected earbud is the RESPONDER.
+    private let ownPkSe = Data((0..<32).map { UInt8(0x10 + $0) })
+    private let ownMaterial = Data((0..<1568).map { UInt8($0 & 0xFF) })
+    private let ownEid = Data((0..<32).map { UInt8(0x01 + $0) })
+    /// The connected earbud's PAIR_RESP: pk_se || material (its ct_ee) || eid (the greater one).
+    private let respPkSe = Data((0..<32).map { UInt8(0x60 + $0) })
+    private let respMaterial = Data((0..<1568).map { UInt8(($0 * 3) & 0xFF) })
+    private let respEid = Data((0..<32).map { UInt8(0x80 + $0) })
+
+    private func makeEarbud() -> FakeEarbud {
+        FakeEarbud(pairResp: respPkSe + respMaterial + respEid)
+    }
+
+    private var expectedPairId: Data {
+        EarbudPairTranscript.pairId(eidA: ownEid, eidB: respEid)
+    }
+
+    private func pair(_ relay: EarbudPairingRelay,
+                      isConfirmed: @escaping @Sendable (Data) async -> Bool) async -> EarbudPairingRelay.PairResult {
+        await relay.pairWithPeer(
+            peerPkSe: respPkSe, peerMaterial: respMaterial, peerEid: respEid,
+            ownPkSe: ownPkSe, ownMaterial: ownMaterial, ownEid: ownEid,
+            isConfirmed: isConfirmed)
+    }
+
+    // MARK: - The gate
+
+    func testConfirmedPairingWritesPairFinOnceAndSucceeds() async {
+        let earbud = makeEarbud()
+        let asked = Recorder<Data>()
+        let result = await pair(EarbudPairingRelay(gatt: earbud)) { pairId in
+            asked.append(pairId)
+            return true
+        }
+
+        guard case .success(let pairId, let ctEe) = result else { return XCTFail("expected success, got \(result)") }
+        XCTAssertEqual(pairId, expectedPairId)
+        XCTAssertEqual(asked.all, [expectedPairId], "the gate is asked once, with the pair_id the words come from")
+        XCTAssertEqual(ctEe, respMaterial, "the connected earbud was the RESPONDER: its ct_ee is handed back")
+        XCTAssertEqual(earbud.pairBeginWrites.all.count, 1)
+        XCTAssertEqual(earbud.pairFinWrites.all.count, 1)
+        // The PAIR_FIN the earbud checks: SHA-256(label || pair_id || eid_I || eid_R || SHA-256(ct_ee)).
+        let expectedConfirm = EarbudPairTranscript.confirmHash(
+            pairId: expectedPairId, eidI: ownEid, eidR: respEid, ctEe: respMaterial)
+        XCTAssertEqual(earbud.pairFinWrites.all.first, expectedConfirm)
+        XCTAssertFalse(result.needsFreshLink)
+    }
+
+    func testTheGateIsAskedWithThePairIdTheWordsAreDerivedFrom() async {
+        let asked = Recorder<Data>()
+        _ = await pair(EarbudPairingRelay(gatt: makeEarbud())) { pairId in
+            asked.append(pairId)
+            return false
+        }
+        guard let pairId = asked.all.first else { return XCTFail("the gate was not asked") }
+        XCTAssertNotNil(EarbudPairTranscript.sasWords(pairId: pairId))
+        XCTAssertEqual(pairId, expectedPairId)
+    }
+
+    func testADeclinedPairingNeverWritesPairFin() async {
+        let earbud = makeEarbud()
+        let result = await pair(EarbudPairingRelay(gatt: earbud)) { _ in false }
+
+        guard case .sasRejected(let pairId) = result else { return XCTFail("expected sasRejected, got \(result)") }
+        XCTAssertEqual(pairId, expectedPairId)
+        XCTAssertEqual(earbud.pairFinWrites.all.count, 0, "PAIR_FIN is never written: the earbud seals nothing")
+        XCTAssertTrue(result.needsFreshLink, "the earbud holds this attempt's PAIR_RESP until it disconnects")
+    }
+
+    func testNoAnswerWithinTheTimeoutIsARejection() async {
+        let earbud = makeEarbud()
+        let relay = EarbudPairingRelay(gatt: earbud, sasConfirmTimeout: 0.2)
+        let started = Date()
+        let result = await pair(relay) { _ in
+            // A gate that only answers when it is cancelled, and then says "yes": too late to count.
+            while !Task.isCancelled { try? await Task.sleep(nanoseconds: 20_000_000) }
+            return true
+        }
+
+        guard case .sasRejected = result else { return XCTFail("expected sasRejected, got \(result)") }
+        XCTAssertEqual(earbud.pairFinWrites.all.count, 0)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 10, "the timeout ended the wait")
+    }
+
+    func testAnAnswerBeforeTheDeadlineWinsAndTheTimerIsCancelled() async {
+        let earbud = makeEarbud()
+        let relay = EarbudPairingRelay(gatt: earbud, sasConfirmTimeout: 30)
+        let started = Date()
+        let result = await pair(relay) { _ in
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            return true
+        }
+
+        guard case .success = result else { return XCTFail("expected success, got \(result)") }
+        XCTAssertEqual(earbud.pairFinWrites.all.count, 1)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 10, "the 30 s timer did not hold the call open")
+    }
+
+    func testACancelledPairingIsARejectionAndWritesNothing() async {
+        let earbud = makeEarbud()
+        let relay = EarbudPairingRelay(gatt: earbud)
+        let entered = Recorder<Bool>()
+        let task = Task {
+            await self.pair(relay) { _ in
+                entered.append(true)
+                while !Task.isCancelled { try? await Task.sleep(nanoseconds: 20_000_000) }
+                return false
+            }
+        }
+        // Wait until the relay reached the gate, then cancel (the screen went away, the link dropped).
+        for _ in 0..<200 where entered.all.isEmpty { try? await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertFalse(entered.all.isEmpty, "the relay reached the SAS gate")
+        task.cancel()
+        let result = await task.value
+
+        guard case .sasRejected = result else { return XCTFail("expected sasRejected, got \(result)") }
+        XCTAssertEqual(earbud.pairFinWrites.all.count, 0)
+    }
+
+    // MARK: - needsFreshLink
+
+    func testNeedsFreshLinkPerOutcome() {
+        XCTAssertFalse(EarbudPairingRelay.PairResult.success(pairId: Data(count: 32)).needsFreshLink)
+        XCTAssertFalse(EarbudPairingRelay.PairResult.defer(reason: "x").needsFreshLink)
+        XCTAssertFalse(EarbudPairingRelay.PairResult.defer(reason: "x", pairRespCached: false).needsFreshLink)
+        XCTAssertTrue(EarbudPairingRelay.PairResult.defer(reason: "x", pairRespCached: true).needsFreshLink)
+        XCTAssertTrue(EarbudPairingRelay.PairResult.sasRejected(pairId: Data(count: 32)).needsFreshLink)
+    }
+
+    func testAFailureBeforeThePairRespLeavesTheLinkUsable() async {
+        let notConnected = makeEarbud()
+        notConnected.isConnected = false
+        let r1 = await pair(EarbudPairingRelay(gatt: notConnected)) { _ in true }
+        guard case .defer(let reason1, let cached1) = r1 else { return XCTFail("got \(r1)") }
+        XCTAssertEqual(reason1, "earbud_not_connected")
+        XCTAssertFalse(cached1)
+
+        let beginFails = makeEarbud()
+        beginFails.failPairBegin = true
+        let r2 = await pair(EarbudPairingRelay(gatt: beginFails)) { _ in true }
+        guard case .defer(let reason2, let cached2) = r2 else { return XCTFail("got \(r2)") }
+        XCTAssertTrue(reason2.hasPrefix("pair_begin_failed"))
+        XCTAssertFalse(cached2, "nothing is cached on the earbud yet: the same link is reused (the stage-2 flow)")
+        XCTAssertFalse(r2.needsFreshLink)
+    }
+
+    func testAFailureFromThePairRespOnNeedsAFreshLink() async {
+        let respFails = makeEarbud()
+        respFails.failPairResp = true
+        let r1 = await pair(EarbudPairingRelay(gatt: respFails)) { _ in true }
+        guard case .defer(let reason1, _) = r1 else { return XCTFail("got \(r1)") }
+        XCTAssertTrue(reason1.hasPrefix("pair_resp_error"))
+        XCTAssertTrue(r1.needsFreshLink, "the first chunk-index write already made the earbud copy its PAIR_RESP")
+
+        let garbled = FakeEarbud(pairResp: Data(count: 100))
+        let r2 = await pair(EarbudPairingRelay(gatt: garbled)) { _ in true }
+        guard case .defer(let reason2, _) = r2 else { return XCTFail("got \(r2)") }
+        XCTAssertEqual(reason2, "pair_resp_parse_failed")
+        XCTAssertTrue(r2.needsFreshLink)
+
+        let finFails = makeEarbud()
+        finFails.failPairFin = true
+        let r3 = await pair(EarbudPairingRelay(gatt: finFails)) { _ in true }
+        guard case .defer(let reason3, _) = r3 else { return XCTFail("got \(r3)") }
+        XCTAssertTrue(reason3.hasPrefix("pair_fin_failed"))
+        XCTAssertTrue(r3.needsFreshLink)
+    }
+
+    // MARK: - API
+
+    func testTheDefaultTimeoutIsTwoMinutes() {
+        XCTAssertEqual(EarbudPairingRelay.sasConfirmTimeoutDefault, 120)
+    }
+}
