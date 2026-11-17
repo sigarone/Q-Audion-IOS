@@ -79,12 +79,14 @@ while IFS= read -r f; do
       ENGINE=true; NOTE "engine: $f" ;;
     scripts/ci/select-xcode.sh|scripts/ci/resolve_simulator.py|scripts/ci/xcresult_test_list.py)
       ENGINE=true; NOTE "engine: $f" ;;
+    # The two locked spec copies run the same job (the engine tests read WIRE_SPEC.md); the endpoint document must be
+    # named before docs/*, which would otherwise make it irrelevant.
+    WIRE_SPEC.md|docs/EARBUD_V6_ENDPOINT.md)
+      ENGINE=true; NOTE "engine: $f" ;;
     docs/*|maestro/*|.jules/*|.github/workflows/*|scripts/ci/*)
       NOTE "not read by the engine job: $f" ;;
     QAudionAppTests/*|QAudionIntents/*|QAudionShare/*|QAudionLiveActivity/*|QAudionNotificationService/*|QAudionPacketTunnel/*)
       NOTE "not read by the engine job: $f" ;;
-    WIRE_SPEC.md)
-      ENGINE=true; NOTE "engine: $f" ;;
     */*)
       ENGINE=true; NOTE "engine: $f" ;;
     *.md|*.html)

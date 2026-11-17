@@ -3,10 +3,11 @@
 # WIRE_SPEC.md is duplicated in six repos (bcrypto-server, qaudion-android-new,
 # qaudion-ios, qaudion-desktop, qaudion-webapp, qaudion-firmware) because each client must be able to read the
 # contract it implements without cloning the others. Nothing enforced that the
-# four copies stayed equal, and they did not: as of 2026-07-24 the Desktop copy
+# copies stayed equal, and they did not: as of 2026-07-24, when only the server,
+# Android, iOS and Desktop carried one, the Desktop copy
 # defined `### 3.5` as "Base WebRTC SDP exchange" while the server copy defined
 # the SAME number as "Call acceptance gate" -- and every single code reference
-# to §3.5 across all four repos meant the acceptance gate. Desktop's own code
+# to §3.5 across those four repos meant the acceptance gate. Desktop's own code
 # cited a section its own spec copy no longer contained. Android and iOS had
 # neither section at all.
 #

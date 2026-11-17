@@ -32,6 +32,7 @@ expect "engine source: app and engine" $PR "QAudionEngine/Sources/QAudionEngine/
 expect "engine test only: app and engine" $PR "QAudionEngine/Tests/QAudionEngineTests/Crypto/ScryptTests.swift" "app=true engine=true scripts=false signing=false"
 expect "vectors read by the engine tests: the engine job only" $PR "tools/kat/kms/kms-roundtrip-kat.json" "app=false engine=true scripts=false signing=false"
 expect "the wire spec: the engine job only" $PR "WIRE_SPEC.md" "app=false engine=true scripts=false signing=false"
+expect "the earbud endpoint spec, locked with the wire spec: the engine job only" $PR "docs/EARBUD_V6_ENDPOINT.md" "app=false engine=true scripts=false signing=false"
 expect "a path nobody listed: the engine job (never skipped by default)" $PR "somewhere/new/file.txt" "app=false engine=true scripts=false signing=false"
 expect "a CI script of the Linux job: scripts only" $PR "scripts/ci/ci-run-reuse.sh scripts/ci/test-ci-run-reuse.sh" "app=false engine=false scripts=true signing=false"
 expect "a gate the app job runs on the built app: app and scripts" $PR "scripts/ci/assert-no-vpn.sh" "app=true engine=false scripts=true signing=false"
