@@ -28,6 +28,12 @@ final class EarbudPairingRelaySasGateTests: XCTestCase {
         var failPairFin = false
         /// When set, every pairing operation runs inside it, as the real client's operations run inside `opGate`.
         var gate: EarbudSerialGate?
+        /// When set, the earbud's answer to PAIR_FIN comes when this returns. It is waited for the way
+        /// `IOSEarbudGattProxy.writeChar` waits for the answer to a write (a continuation): a caller that is
+        /// cancelled meanwhile is NOT interrupted.
+        var pairFinAnswer: (@Sendable () async -> Void)?
+        /// The earbud's answer to PAIR_FIN is an error (the frame has been written all the same).
+        var pairFinAnswerFails = false
         var pairResp: Data
         let pairBeginWrites = Recorder<Data>()
         let pairFinWrites = Recorder<Data>()
@@ -55,7 +61,11 @@ final class EarbudPairingRelaySasGateTests: XCTestCase {
         func writePairFin(_ confirm: Data) async throws {
             try await gated {
                 if self.failPairFin { throw FakeError.boom }
-                self.pairFinWrites.append(confirm)
+                self.pairFinWrites.append(confirm)   // the frame has left the gate: the earbud has it
+                if let answer = self.pairFinAnswer {
+                    await Task.detached { await answer() }.value   // not cancelled with the caller
+                }
+                if self.pairFinAnswerFails { throw FakeError.boom }
             }
         }
         func writeFpAdvSeed(_ ctBind: Data) async throws {}
@@ -252,6 +262,67 @@ final class EarbudPairingRelaySasGateTests: XCTestCase {
         let result = await pair(EarbudPairingRelay(gatt: earbud, finTimeout: 5)) { _ in true }
         guard case .success = result else { return XCTFail("expected success, got \(result)") }
         XCTAssertEqual(earbud.pairFinWrites.all.count, 1)
+    }
+
+    // MARK: - PAIR_FIN already written when its time limit runs out
+
+    /// One pairing in which another operation holds the client's gate when the person confirms, lets go of it well
+    /// inside the PAIR_FIN's 0.3 s limit (so the write gets the gate and goes out) and then keeps the earbud's
+    /// answer back until the limit has run out. The write has left the gate: the earbud has the frame.
+    private func pairWithPairFinInFlightWhenItsLimitRunsOut(
+        _ earbud: FakeEarbud) async -> EarbudPairingRelay.PairResult {
+        let gate = EarbudSerialGate()
+        earbud.gate = gate
+        let holdOver = Flag()
+        let answerNow = Flag()
+        earbud.pairFinAnswer = {
+            while !answerNow.isSet { try? await Task.sleep(nanoseconds: 2_000_000) }
+        }
+        let helpers = Recorder<Task<Void, Never>>()
+
+        let result = await pair(EarbudPairingRelay(gatt: earbud, finTimeout: 0.3)) { _ in
+            helpers.append(await self.holdGate(gate, until: holdOver))
+            helpers.append(Task {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+                holdOver.set()
+                for _ in 0..<3000 where earbud.pairFinWrites.all.isEmpty { try? await Task.sleep(nanoseconds: 1_000_000) }
+                // The limit (0.3 s from the start of the write) has surely run out by now.
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                answerNow.set()
+            })
+            return true
+        }
+        for h in helpers.all { await h.value }
+        return result
+    }
+
+    /// The limit bounds the wait for the gate, not a write that has already left it. It used to abandon that write
+    /// as well: the relay reported `pair_fin_failed:CancellationError()` although the earbud had the PAIR_FIN and
+    /// sealed the pairing, so the person was told it failed and started over on a pairing that was already done.
+    func testAPairFinThatLeftTheGateBeforeItsLimitRanOutIsNotReportedFailed() async {
+        let earbud = makeEarbud()
+        let result = await pairWithPairFinInFlightWhenItsLimitRunsOut(earbud)
+
+        XCTAssertEqual(earbud.pairFinWrites.all.count, 1, "the PAIR_FIN reached the earbud")
+        guard case .success(let pairId, _) = result else {
+            return XCTFail("the earbud got the PAIR_FIN and answered it, but the pairing is reported as \(result)")
+        }
+        XCTAssertEqual(pairId, expectedPairId)
+        XCTAssertFalse(result.needsFreshLink)
+    }
+
+    /// The same write, answered with an error after the limit: the report is the write's own error, not the limit's.
+    func testAPairFinThatLeftTheGateAndIsRefusedAfterItsLimitReportsTheRefusal() async {
+        let earbud = makeEarbud()
+        earbud.pairFinAnswerFails = true
+        let result = await pairWithPairFinInFlightWhenItsLimitRunsOut(earbud)
+
+        XCTAssertEqual(earbud.pairFinWrites.all.count, 1)
+        guard case .defer(let reason, let cached) = result else { return XCTFail("expected defer, got \(result)") }
+        XCTAssertTrue(reason.hasPrefix("pair_fin_failed"), reason)
+        XCTAssertTrue(reason.contains("boom"), "the failure is the write's own, not the time limit's: \(reason)")
+        XCTAssertTrue(cached)
+        XCTAssertTrue(result.needsFreshLink)
     }
 
     // MARK: - needsFreshLink

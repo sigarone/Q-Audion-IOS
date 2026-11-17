@@ -388,7 +388,9 @@ own central only scans). It connects by CoreBluetooth identifier (`ensureConnect
 true only once the service and its characteristics are discovered; every public operation runs in one `EarbudSerialGate`
 (a DIAG poll, a key import and a pairing never overlap on the single pending write/read; a caller cancelled while it
 waits LEAVES the gate's queue and `run` throws CancellationError, so a PAIR_FIN that timed out behind another operation is
-never written late; callbacks of a peripheral that is no longer the current one are ignored, `EarbudLinkIdentity`, and a
+never written late, while a PAIR_FIN that has already left the gate when its 10 s run out is not abandoned: the relay cancels
+the call at the deadline but waits for the write's own result (`withCancellationAtDeadline`), so the screen never says "failed"
+for a pairing the earbud sealed; callbacks of a peripheral that is no longer the current one are ignored, `EarbudLinkIdentity`, and a
 switch to another earbud fails the old link's pending operation at once). The sweep reaches the remembered
 earbud (`AppState.rememberEarbudIdentifier`) through `EarbudAckPopRelay.prepareLink`, only when a hw_only key is pending and
 no link is up, with a bounded wait and a 60 s cooldown after a failure. Wire framing is decided by two pure engine functions

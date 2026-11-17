@@ -24,9 +24,12 @@ import Foundation
 /// ## Timeouts
 ///   PAIR_BEGIN write + PAIR_RESP read : 60 s
 ///   SAS confirmation by the person    : 120 s (`sasConfirmTimeout`)
-///   PAIR_FIN write                    : 10 s (`finTimeout`), the wait for the GATT client's operation gate
-///                                       included: a write still queued when it runs out is withdrawn
-///                                       (`EarbudSerialGate` honours cancellation), never sent late
+///   PAIR_FIN                          : 10 s (`finTimeout`) to get through the GATT client's operation gate
+///                                       behind any other operation. When it runs out the call is cancelled: a
+///                                       write still queued is withdrawn (`EarbudSerialGate` honours
+///                                       cancellation) and never sent late; a write that has already left the
+///                                       gate is NOT abandoned, its own result decides (the client bounds it
+///                                       with its 45 s per-operation timeout)
 public final class EarbudPairingRelay {
 
     // MARK: - Result
@@ -78,7 +81,8 @@ public final class EarbudPairingRelay {
     /// How long the person has to compare the words and answer before the pairing is aborted.
     public static let sasConfirmTimeoutDefault: TimeInterval = 120
 
-    /// How long PAIR_FIN may take, from the call to the write's end.
+    /// How long PAIR_FIN may wait for the GATT client's operation gate before it is withdrawn. A write that
+    /// has left the gate by then is not bounded by this: its own result decides.
     public static let finTimeoutDefault: TimeInterval = 10
 
     // MARK: - Init
@@ -90,8 +94,8 @@ public final class EarbudPairingRelay {
     /// - Parameters:
     ///   - sasConfirmTimeout: how long `isConfirmed` may take; a parameter only so a unit test
     ///     need not wait 2 minutes.
-    ///   - finTimeout: how long the PAIR_FIN write may take; a parameter only so a unit test need not
-    ///     wait 10 s.
+    ///   - finTimeout: how long the PAIR_FIN write may wait for the GATT client's operation gate; a
+    ///     parameter only so a unit test need not wait 10 s.
     public init(gatt: EarbudPairingGattProxy,
                 sasConfirmTimeout: TimeInterval = EarbudPairingRelay.sasConfirmTimeoutDefault,
                 finTimeout: TimeInterval = EarbudPairingRelay.finTimeoutDefault) {
@@ -178,11 +182,14 @@ public final class EarbudPairingRelay {
         }
 
         // c7: write PAIR_FIN (32 B confirm hash). The write waits in the GATT client's operation gate behind
-        // any other operation of the shared client (a DIAG poll, a key import); when the timeout runs out
-        // first, the cancelled write leaves the gate's queue and is NOT sent later, so a pairing reported
-        // as failed here is never sealed by the earbud behind the person's back.
+        // any other operation of the shared client (a DIAG poll, a key import). `finTimeout` bounds only that
+        // wait: when it runs out the call is cancelled, a write still queued leaves the gate's queue and is NOT
+        // sent later, and a write that has already left the gate is not abandoned, because the earbud may hold
+        // the frame and seal the pairing: its own result decides (the client bounds it with its per-operation
+        // timeout). So a pairing reported as failed here was never written, or the write itself failed, and
+        // the person is never told "failed" about a pairing the earbud sealed.
         do {
-            try await withThrowingTimeout(nanoseconds: finTimeoutNS) { [gatt] in
+            try await withCancellationAtDeadline(nanoseconds: finTimeoutNS) { [gatt] in
                 try await gatt.writePairFin(confirm)
             }
         } catch {
@@ -222,7 +229,45 @@ public final class EarbudPairingRelay {
     }
 }
 
-// MARK: - Timeout helper
+// MARK: - Timeout helpers
+
+private enum DeadlineOutcome<T: Sendable>: Sendable {
+    case finished(T)
+    case deadline
+}
+
+/// Runs `operation` and cancels it when `nanoseconds` have passed, but keeps waiting for it: the result is
+/// the operation's own, never the deadline's. An operation that is still waiting and honours cancellation (a
+/// queued `EarbudSerialGate.run`) ends with `CancellationError` without having started; one that has already
+/// started and does not react to cancellation (a write waiting for the earbud's answer) runs to its end and
+/// reports what really happened. `withThrowingTimeout` abandons the operation at the deadline instead, which
+/// is wrong for a write that may already have reached the earbud.
+private func withCancellationAtDeadline<T: Sendable>(
+    nanoseconds: UInt64,
+    operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    try await withThrowingTaskGroup(of: DeadlineOutcome<T>.self) { group in
+        group.addTask {
+            let value = try await operation()
+            return .finished(value)
+        }
+        group.addTask {
+            // A cancelled sleep (the operation finished first, or the caller was cancelled) ends this child too.
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            return .deadline
+        }
+        while let outcome = try await group.next() {
+            switch outcome {
+            case .finished(let value):
+                group.cancelAll()
+                return value
+            case .deadline:
+                group.cancelAll()   // withdraws the operation if it still waits; one that has started goes on
+            }
+        }
+        throw CancellationError()
+    }
+}
 
 private func withThrowingTimeout<T: Sendable>(
     nanoseconds: UInt64,

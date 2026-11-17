@@ -11,12 +11,13 @@ import Foundation
 /// another operation's frames.
 ///
 /// Cancellation. A caller that is cancelled while it waits for its turn LEAVES the queue and `run`
-/// throws `CancellationError`; its body never runs. This matters to the FE-5 pairing: the relay
-/// bounds PAIR_FIN with a 10 s timeout and cancels the write when it runs out. A gate that kept the
+/// throws `CancellationError`; its body never runs. This matters to the FE-5 pairing: the relay gives
+/// PAIR_FIN 10 s to get through the gate and cancels the call when that runs out. A gate that kept the
 /// cancelled caller in line would let the write go out the moment an earlier operation (a DIAG poll,
 /// a key import) finished, after the person was told the pairing had failed, and the earbud would
 /// seal a pairing nobody believed in. A body that is already running is not interrupted: it is the
-/// body's own business to react to cancellation. A caller cancelled in the instant it is let in does
+/// body's own business to react to cancellation (a PAIR_FIN write that has started is not abandoned
+/// either, the relay waits for its own result). A caller cancelled in the instant it is let in does
 /// not start its body either.
 ///
 /// Not reentrant: a body must not call `run` on the same gate again (it would wait for itself).
