@@ -54,8 +54,8 @@ The PQC RTP frame sealer (`PqcRtpFrameSealer`, the inner AEAD layer on
 the BcryptoWsRelay / WebRTC audio path) derives a 32-byte SRTP master
 key on the ENDPOINTS only. The server is a pure E2EE relay and derives
 NO SRTP key material (no SRTP HKDF label exists anywhere in
-`bcrypto-server`; the firmware SPE comment confirms "the session key
-NEVER leaves the SPE").
+`bcrypto-server`). In a call whose endpoint is a hardware earbud the earbud
+derives these keys and hands them to its host phone (§3.7.3).
 
 | Field | Value | Length |
 |---|---|---|
@@ -307,6 +307,9 @@ in the `data` field of an `opaque_message`.
 }
 ```
 
+An earbud endpoint's bundle also carries the member `endpoint` (§3.7.3); it is outside the transcript and outside
+EXTX, and a receiver that does not implement §3.7.3 ignores it.
+
 `ciphertext` is OMITTED in OFFER and PRESENT in ACCEPT.
 
 The following fields are REQUIRED in every OFFER and ACCEPT, including rekey
@@ -355,7 +358,8 @@ the transcript of §3.7, never over the JSON bytes.
   CAPSX is active (the receiver's own bundle and the peer's raw object both carry `capsBindV1`), and is decoded as
   today otherwise (§2.3 of that document); a second `chainBase` member in a rekey OFFER makes that value malformed, so the round is
   refused and the call goes on (B13, D8, D27); a duplicate member inside `relayKem`, or a duplicated top-level
-  `relayKem`, makes `relayKem` count as absent. No other duplicate rule exists, and no duplicate ends a call by itself.
+  `relayKem`, makes `relayKem` count as absent. A duplicated top-level `endpoint` member, or a duplicate member inside `endpoint`, makes `endpoint` count as absent
+  (§3.7.3). No other duplicate rule exists, and no duplicate ends a call by itself.
 
 ### 3.2 QUAD binary frame — handshake dialect RETIRED
 
@@ -1136,7 +1140,7 @@ frameKey_a2o = HKDF-SHA256(IKM = sessionKey, salt = "qaudion-frame-salt-v5",
 - The relay sealer (`srtp_master` a2b/b2a, §1.1) is unchanged.
 - The frame wire format and the receiver replay window are defined in §11.
 
-#### 3.7.3 No unauthenticated handshake path (R-EARBUD)
+#### 3.7.3 No unauthenticated handshake path; the hardware earbud endpoint (R-EARBUD, R-EARBUD-EP)
 
 Every 1:1 call on every platform runs the v6 handshake of §3.7: signed OFFER/ACCEPT, DTLS binding (§3.8) and
 KCMAC (§3.7.1). There is no other way to set up a 1:1 call.
@@ -1144,14 +1148,57 @@ KCMAC (§3.7.1). There is no other way to set up a 1:1 call.
 - The hardware-earbud relay handshake (`earbud-relay-v1` capability, the EARBUDPDU frames, the PSK-less relay
   agreement) is **retired**. A client MUST NOT advertise `earbud-relay-v1`, and MUST ignore it when it is present in
   the unsigned `capabilities` of `call_incoming`, `call_answer` or any other server-relayed message: such a field
-  never selects a different handshake, never exempts the DTLS binding checks (a) and (b), and never skips KCMAC. The
-  capabilities that matter are the signed ones inside the bundle (CAPS9, §3.7).
+  never selects a different handshake, never exempts the DTLS binding checks (a) and (b), never skips KCMAC and never
+  selects an audio profile. The capabilities that matter are the signed or bound ones inside the bundle (CAPS9, and
+  CAPSX under `capsBindV1`).
 - A signalling field that the server, or anyone on the path, can add or change MUST NOT turn off or weaken any step
   of §3.7 or §3.8. In particular there is no "exempt" state of the DTLS binding.
 - If a KCMAC context is required for a round whose key was derived (§3.7.1) and is missing, the call ends with reason
   `kcmac_mismatch`. A missing context is a failure, never a reason to skip the check.
-- The earbud GATT key-import family of §7 is a local BLE interface of the hardware earbud and is unaffected by this
-  rule; it is not a call-handshake path.
+
+**Hardware earbud endpoint (R-EARBUD-EP).** A Q-Audion hardware earbud MAY be the endpoint of a 1:1 call, hosted by a
+phone it is bonded to. It is a v6 endpoint like any other, and nothing of §3.7, §3.8, §4 or §11 changes for such a
+call:
+
+- The earbud signs OFFER_v6 and ACCEPT_v6 with its own Ed25519 key, which is the bundle's `signerIdentityKey`; it runs
+  the round's ML-KEM-1024 and X25519 exchange and derives the session key, the KCMAC and the SAS of §3.7.1 and §4; it
+  seals and opens the inner media layer. The host phone keeps signalling, DTLS, the outer layer, the KCMAC state
+  machine and the UI, and receives from the earbud only the outer-layer keys and the voice-confidence key, each
+  derived one way from the session key. The split, the phone-earbud link and the earbud's key schedule are defined in
+  `docs/EARBUD_V6_ENDPOINT.md`, which is locked together with this file: every locked copy carries it byte-identical
+  and the lock job checks its own expected hash.
+- Identity (R-EP-VERIFY). Every bundle the earbud signs carries the member `endpoint`
+  (`{v, kind, hostDeviceId, hostKey, earbudId, created, profile, board, cert, pop}`, `docs/EARBUD_V6_ENDPOINT.md`
+  §3.5), a certificate by the host device's identity key over the earbud's key and a proof of possession by the
+  earbud's key. A receiver whose identity resolution (pins, the per-device fetch, the published set) does not resolve
+  `signerIdentityKey` verifies `cert` and `pop` (the uniform Ed25519 rule), requires the envelope's
+  `sender_device_id` to equal `hostDeviceId`, resolves `hostKey` as the peer's device key with the same resolution,
+  and checks the server's endpoint list of that device: a revocation tombstone gives `identity_key_mismatch`; an
+  endpoint that the list does not contain is accepted only within 7 days of its `created` time, and otherwise, or
+  when the list cannot be fetched and the endpoint is not pinned, gives `identity_unresolved`. On success
+  `signerIdentityKey` is authenticated as an endpoint of that device: the device pin stays the device key, the
+  endpoint key is pinned beside it, and a SAS confirmed in such a call confirms both. On any failure the existing rule
+  applies: an unknown identity key holds media pending the SAS (§3.8.6). The earbud's key is never part of the device
+  key set of `?all=1` and never replaces a device pin.
+- Post-quantum pins (R-EP-PQ). For an authenticated endpoint, every capability and post-quantum pin record of
+  `docs/PQC_HARDENING_V1.md` §2.5 and §5.5 is the record of the host device key `hostKey`, never a record of the
+  endpoint key. The ML-DSA half of the endpoint's `sigHybrid` is made by the host device's ML-DSA key, or by an
+  earbud ML-DSA key that the host device's ML-DSA key certified; anything else is judged against the host device's
+  record, so toward a contact who pinned that device an endpoint call is never classical without the warning.
+- Tag `earbudEpV1` (requires `capsBindV1`). The earbud's bundles carry it; it is a declaration of the signer, applied
+  whenever the peer's round-1 bundle carries it. It means: the signer sends 20 ms Opus frames in 120-byte blocks (50
+  per second) and receives frames of 20, 40 or 60 ms in blocks of at most 256 bytes; the call is audio only (no
+  video, screen share, mid-call upgrade of §8 or promotion to a group call); every bundle of the signer carries
+  `endpoint`. Each side keeps its own constant send profile (R-EP-PROFILE): a phone keeps 60 ms / 256 B, and a
+  receiver MUST accept the earbud's 20 ms / 120 B frames.
+- The earbud's bundles carry `capsBindV1`, `earbudEpV1`, `innerSealV2` and `rekeyChainV1`, never `frameKeyV6`; the
+  earbud signs CAPS9 with `sframeV1` and `vkeyV1` set to 0 and the other seven bytes as its host phone would sign
+  them. In such a call the host does not advertise `audio-srtp-v1` or any capability string that offers video,
+  SFrame, a mid-call upgrade or a 60 ms send profile (the platform strings are listed in
+  `docs/EARBUD_V6_ENDPOINT.md` §2.4), declines a mid-call upgrade (§8.4) and never promotes the call to a group call;
+  a peer whose peer bundle carries `earbudEpV1` disables its video and promote-to-group controls for the call.
+- The earbud's BLE interfaces of §7 (the GATT family and the endpoint link) are local interfaces between a host and
+  its earbud. They are not call-handshake paths and nothing of them crosses the server.
 
 #### 3.7.4 SAS commitment and REVEAL (round 1 only)
 
@@ -1666,6 +1713,9 @@ Rules 1-3 above apply from the first public release on. The signed transcript v6
 and the SAS commitment, §3.7, §3.7.4, §3.8), the frame IV counter change (§11) and the file format v2 (§12) are hard
 switches of this kind.
 
+The earbud endpoint of §3.7.3 (PROTOCOL_VERSION `0x02` of §7) is a hard switch of this kind: the relay dialect of
+PROTOCOL_VERSION `0x01` is deleted, not negotiated.
+
 A new version of a file message (the `qa_file` member of §12.7.1) is a binary-incompatible change. Until a signed
 per-device announcement of the highest file message version it reads is defined in this specification, a sender MUST
 emit version 2 only; a group sender uses the lowest version announced by every current member device; a device that has announced nothing
@@ -1683,50 +1733,53 @@ text); a frame with another first byte is dropped.
 
 ---
 
-## 7. Earbud key-import GATT family (0xc0–0xca)
+## 7. Earbud BLE contract: GATT family and endpoint link (PROTOCOL_VERSION 0x02)
 
-Canonical 128-bit characteristic UUIDs for the earbud (nRF firmware).
-FROZEN cross-platform contract — iOS / Android / Desktop MUST use these
-EXACT UUIDs when relaying sovereign-key import + Proof-of-Possession to
-the earbud. Source of truth: `firmware/nspe/src/transport/qaudion_gatt.c`.
+The hardware earbud (nRF54LM20B firmware) exposes one GATT service and one L2CAP channel to the phone it is bonded to.
+FROZEN cross-platform contract: iOS and Android MUST use these exact values. Source of truth: the firmware commit that
+introduces PROTOCOL_VERSION `0x02`, `firmware/nspe/src/transport/qaudion_gatt.c`; the endpoint link and the call
+plane are specified in `docs/EARBUD_V6_ENDPOINT.md` (§4 to §7), locked with this file (§3.7.3).
 
-**Base UUID pattern:** `f2c0aaaa-bcc0-4001-8000-0000000000XX`, where
-`XX` is the opcode's last byte (`qaudion_gatt.c:374`).
+**Base UUID pattern:** `f2c0aaaa-bcc0-4001-8000-0000000000XX`, where `XX` is the characteristic's last byte; the
+service is `...0001`. Every attribute needs an encrypted link; the bond is LESC numeric comparison, confirmed with a
+press of the earbud button (FW-C2). The earbud has no display, so the bond gives link confidentiality against passive
+observers only; the endpoint link authenticates itself (below). New characteristics are appended at the end of the
+attribute table.
 
-| Opcode | Name | Dir | Purpose | Cite |
-|---|---|---|---|---|
-| 0xc0 | ATTEST_INFO | read | pk_se(32) || earbud_id | `qaudion_gatt.c:376` |
-| 0xc1 | ATTEST_POP | read | 32-byte SE PoP (relay to /kms/ack-pop) | `qaudion_gatt.c:377,396` |
-| 0xc2 | ATTEST_PQ | read | pk_pq (ML-KEM pub, 4×392 B chunked) | `qaudion_gatt.c:378` |
-| 0xc3 | KEY_IMPORT | write | sealed package + PoP inputs; read-back `[status:u8][slot:u8]` | `qaudion_gatt.c:379,385-397` |
-| 0xc4 | MEDIA_KEY_INSTALL | write | 60-B sealed PQ-ratchet media key (Phase 18) | `qaudion_gatt.c:334-337,380` |
-| 0xc5 | PAIR_BEGIN | write | FE-5 earbud-excl msg1 = pk_se(32)\|\|pk_pq(1568)\|\|eid(32) | `qaudion_gatt.c:345,381` |
-| 0xc6 | PAIR_RESP | read | FE-5 msg2 = pk_se(32)\|\|ct_ee(1568)\|\|eid(32) | `qaudion_gatt.c:346,382` |
-| 0xc7 | PAIR_FIN | write | FE-5 msg3 = SAS-confirm MAC (seals ss_ee in NVS) | `qaudion_gatt.c:347,383` |
-| 0xc8 | FP_ADV_REQUEST | write+read | write 32-B ct_bind; read 40-B fp_adv[32]\|\|epoch_le[8] | `qaudion_gatt.c:355-358` |
-| 0xc9 | KC_CONFIRM | read | diagnostic kc_mac (zeroed transcript) after FP_ADV write | `qaudion_gatt.c:360-363` |
-| 0xca | PSK_LIST | read | active hw_only PSK list: `[n:1] + n×[epoch_le8(8)+fp(32)]` | `qaudion_gatt.c:365-368` |
+| Opcode | Name | Dir | Content |
+|---|---|---|---|
+| 0x90 | DIAG | read | 32-byte little-endian diagnostics record (heap, battery, handshake count, call state, BLE interval, voice score, uptime, AEAD operation count) |
+| 0xa9 | PROTOCOL_VERSION | read | 1 byte, `0x02` = this section and the endpoint link; `0x01` was the retired relay dialect |
+| 0xc0 | ATTEST_INFO | read | pk_se(32) ‖ earbud_id(32), earbud_id = SHA-256(pk_se) |
+| 0xc1 | ATTEST_POP | write 48 B, read 32 B | attestation PoP (qa-attest-pop-v1); also returns the KMS PoP after KEY_IMPORT |
+| 0xc2 | ATTEST_PQ | write 1 B, read 392 B | pk_pq (ML-KEM-1024 public key), 4 × 392 B chunks |
+| 0xc3 | KEY_IMPORT | write, read | sealed KMS package and PoP inputs (big-endian offsets, PoP-INPUTS frame first); read-back `[status:u8][slot:u8]` |
+| 0xc5 | PAIR_BEGIN | write | FE-5 earbud-exclusive msg1 = pk_se(32) ‖ pk_pq(1568) ‖ eid(32), little-endian offsets |
+| 0xc6 | PAIR_RESP | write 1 B, read 408 B | FE-5 msg2 = pk_se(32) ‖ ct_ee(1568) ‖ eid(32), 4 chunks |
+| 0xc7 | PAIR_FIN | write | FE-5 msg3 = SAS-confirm MAC (32 B) |
+| 0xca | PSK_LIST | read | active hw_only PSK list: `[n:1] + n × [epoch_le8(8) + fp(32)]` |
+| 0xd0 | EP_INFO | read | 88-byte endpoint information record (`docs/EARBUD_V6_ENDPOINT.md` §8.2): protocol and firmware version, build profile, board, capability bits, link parameters, earbud_id, endpoint key |
 
-**0xc4 MEDIA_KEY_INSTALL wire format** (`qaudion_gatt.c:334-336`):
+Retired with PROTOCOL_VERSION `0x02` and absent from the service: `0x10` HANDSHAKE_INIT, `0x20` HANDSHAKE_RESPONSE,
+`0x30` HANDSHAKE_FINALIZE, `0x40` CALL_STATE, `0x50` MODE, `0x60` PTT, `0x70` DEEPFAKE_SCORE, `0x80` VOLUME, `0xb0`
+SAS_ENTROPY, `0xc4` MEDIA_KEY_INSTALL, `0xc8` FP_ADV_REQUEST, `0xc9` KC_CONFIRM. A phone MUST NOT write or subscribe
+to them.
 
-```
-nonce(12) || AES-256-GCM(ble_session_key, nonce, media_key(32),
-                         aad="qa/v4/mkd/v1")(32 + 16 tag)   = 60 bytes
-```
+**Endpoint link.** L2CAP LE credit-based channel on PSM `0x00B5`, the earbud being the server, security level L4,
+one channel per connection; PSM `0x00B3` (AudioLink, 148-byte sealed frames) is retired. The channel is a byte
+stream of records `BE16(len) ‖ u8(type) ‖ u8(flags) ‖ body` (`2 ≤ len ≤ 4094`, flags bit 0 = more), independent of
+SDU boundaries. Every channel starts with `HOST_HELLO` (a commitment), `EP_HELLO`, `HOST_AUTH` and `EP_AUTH`: an
+X25519 exchange whose ephemeral keys are signed by the host's and the earbud's Ed25519 identity keys. The earbud
+accepts the call plane only from a host whose enrolled identity key signed, and every later record in both directions
+is sealed with AES-256-GCM under the session's keys. Enrolling a new host needs a fresh bond or a pairing-mode window
+opened on the earbud, and a confirm gesture on the earbud after an audible code derived from the session. The
+message catalogue, the call flows, the key schedule and the media envelopes are those of
+`docs/EARBUD_V6_ENDPOINT.md`.
 
-The SPE handler `nsc_import_media_key` (`firmware/spe/src/secure_services.c:2384-2448`)
-unseals with the SPE-resident `ble_session_key` and stages via
-`audio_pipeline_set_session_key`. AAD = `qa/v4/mkd/v1` (12 B, no NUL —
-`secure_services.c:2386`).
-
-**0xc4 replay-counter status (no dedicated monotonic counter today):**
-unlike the HANDSHAKE_INIT path (explicit per-connection 8-bit `hs_counter`
-anti-replay, `qaudion_gatt.c:655-781`), the 0xc4 write carries NO dedicated
-monotonic replay counter. Replay resistance currently relies on (1) the GCM
-AEAD tag and (2) the freshness of `ble_session_key` (re-derived per BLE
-handshake — a 0xc4 frame from a previous session cannot be replayed because
-the session key differs). A within-session replay window is NOT closed; a
-dedicated 0xc4 counter is a planned hardening (audit D10-3).
+**Phone obligations.** A phone reads PROTOCOL_VERSION and EP_INFO before it opens the endpoint link, refuses calls
+with firmware below `0x02` or below its compiled minimum ("Earbud firmware too old"), handles Service Changed on a
+bonded earbud, never routes system call audio (SCO, LE Audio) to the earbud during a call whose endpoint is the
+earbud, and uses `createL2capChannel` (Android, API 29 or later) or `openL2CAPChannel` (iOS) on the bonded earbud.
 
 ---
 

@@ -1,7 +1,7 @@
 # WIRE_SPEC drift lock
 #
-# WIRE_SPEC.md is duplicated in four repos (bcrypto-server, qaudion-android-new,
-# qaudion-ios, qaudion-desktop) because each client must be able to read the
+# WIRE_SPEC.md is duplicated in six repos (bcrypto-server, qaudion-android-new,
+# qaudion-ios, qaudion-desktop, qaudion-webapp, qaudion-firmware) because each client must be able to read the
 # contract it implements without cloning the others. Nothing enforced that the
 # four copies stayed equal, and they did not: as of 2026-07-24 the Desktop copy
 # defined `### 3.5` as "Base WebRTC SDP exchange" while the server copy defined
@@ -14,15 +14,17 @@
 # worse than no spec: it produces confident, wrong implementations. This job
 # fails the build if this repo's copy stops matching the canonical hash.
 #
-# To change WIRE_SPEC.md: edit it, copy the SAME bytes into all four repos,
-# update WIRE_SPEC_SHA256 below in all four, and push together.
+# docs/EARBUD_V6_ENDPOINT.md is locked the same way (EXPECTED_EARBUD_EP) and is byte-identical in the same six repos.
+#
+# To change WIRE_SPEC.md or docs/EARBUD_V6_ENDPOINT.md: edit it, copy the SAME bytes into all six repos,
+# update EXPECTED (WIRE_SPEC.md) or EXPECTED_EARBUD_EP below in all six, and push together.
 
 name: WIRE_SPEC drift lock
 
 on:
   pull_request:
     branches: [main, release/*]
-    paths: ['WIRE_SPEC.md', '.github/workflows/wire-spec-lock.yml']
+    paths: ['WIRE_SPEC.md', 'docs/EARBUD_V6_ENDPOINT.md', '.github/workflows/wire-spec-lock.yml']
   # No push trigger for main: every change reaches main through a pull request whose
   # checks are required, so a run on the merge commit would test the same code twice.
   workflow_dispatch:
@@ -38,17 +40,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Verify WIRE_SPEC.md matches the canonical hash
+      - name: Verify WIRE_SPEC.md and docs/EARBUD_V6_ENDPOINT.md match the canonical hashes
         run: |
-          EXPECTED=7a12b308ba282fb79d10ce7bd0b0c8d06d409e4dcb5828c30278eb2da7a4c277
-          ACTUAL=$(sha256sum WIRE_SPEC.md | cut -d' ' -f1)
-          echo "expected $EXPECTED"
-          echo "actual   $ACTUAL"
-          if [ "$EXPECTED" != "$ACTUAL" ]; then
-            echo "::error file=WIRE_SPEC.md::WIRE_SPEC.md diverged from the canonical copy."
-            echo "The four repo copies MUST be byte-identical. Either revert this edit, or"
-            echo "apply the same bytes to bcrypto-server, qaudion-android-new, qaudion-ios"
-            echo "and qaudion-desktop and update WIRE_SPEC_SHA256 in all four workflows."
+          EXPECTED=d59b321bbe1f6d298483aa23bd251899aadf17482e52256590a861de1da25092
+          EXPECTED_EARBUD_EP=6bdea4bbd539dbb13acfb3ddd7792da7f2db57038434ac6c25d45fa6354ce247
+          status=0
+          check() {
+            ACTUAL=$(sha256sum "$1" | cut -d' ' -f1)
+            echo "$1"
+            echo "expected $2"
+            echo "actual   $ACTUAL"
+            if [ "$2" != "$ACTUAL" ]; then
+              echo "::error file=$1::$1 diverged from the canonical copy."
+              status=1
+            else
+              echo "$1 is in sync."
+            fi
+          }
+          check WIRE_SPEC.md "$EXPECTED"
+          check docs/EARBUD_V6_ENDPOINT.md "$EXPECTED_EARBUD_EP"
+          if [ "$status" != 0 ]; then
+            echo "The six repo copies of WIRE_SPEC.md and of docs/EARBUD_V6_ENDPOINT.md MUST be byte-identical."
+            echo "Either revert this edit, or apply the same bytes to the other five repos and update EXPECTED"
+            echo "and EXPECTED_EARBUD_EP in all six workflows."
             exit 1
           fi
-          echo "WIRE_SPEC.md is in sync."
+          echo "WIRE_SPEC.md and docs/EARBUD_V6_ENDPOINT.md are in sync."
