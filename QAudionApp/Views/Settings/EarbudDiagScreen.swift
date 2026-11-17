@@ -49,7 +49,7 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
     /// Human-readable step label emitted by startAutoRelay(); nil when no relay is running.
     @Published var relayStatus: String? = nil
     /// What the confirmation sheet shows while an FE-5 pairing waits for the person (CL-2.2); non-nil
-    /// while a question is open. The sheet must call confirmSas() or rejectSas().
+    /// while a question is open. The sheet must call confirmSas(_:) or rejectSas(_:) with this prompt.
     @Published var sasPrompt: EarbudSasPrompter.Prompt? = nil
     /// Why the pairing ended with the link dropped (the earbud keeps this attempt's PAIR_RESP until it
     /// disconnects, so a retry needs a fresh link); shown under the connection state until the next connect.
@@ -326,13 +326,15 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
     }
 
     /// The person confirms that the words on the sheet match the other phone: PAIR_FIN may be written.
-    func confirmSas() {
-        sasPrompter.confirm()
+    /// `prompt` is the question the sheet shows: a tap that reaches this after that question has closed,
+    /// with another one open, answers nothing (EarbudSasPrompter binds the answer to its token).
+    func confirmSas(_ prompt: EarbudSasPrompter.Prompt) {
+        sasPrompter.confirm(prompt)
     }
 
     /// The person declines (or backs out of) the sheet: the pairing stops and PAIR_FIN is never written.
-    func rejectSas() {
-        sasPrompter.reject()
+    func rejectSas(_ prompt: EarbudSasPrompter.Prompt) {
+        sasPrompter.reject(prompt)
     }
 
     /// Android records the confirmation only once PAIR_FIN has been acknowledged, not at the tap: a tap
@@ -706,7 +708,7 @@ struct EarbudDiagScreen: View {
                 Text(fingerprintLine)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(scheme.onSurfaceVariant)
-                Button(action: vm.confirmSas) {
+                Button(action: { vm.confirmSas(prompt) }) {
                     Text("CONFERMA COINCIDONO")
                         .qaudionStyle(type.labelLarge)
                         .foregroundStyle(scheme.onPrimary)
@@ -718,7 +720,7 @@ struct EarbudDiagScreen: View {
                         )
                 }
                 .buttonStyle(.plain)
-                Button(action: vm.rejectSas) {
+                Button(action: { vm.rejectSas(prompt) }) {
                     Text("Annulla pairing")
                         .qaudionStyle(type.labelLarge)
                         .foregroundStyle(extras.riskHigh)
