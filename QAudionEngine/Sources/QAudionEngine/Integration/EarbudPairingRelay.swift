@@ -27,9 +27,9 @@ import Foundation
 ///   PAIR_FIN                          : 10 s (`finTimeout`) to get through the GATT client's operation gate
 ///                                       behind any other operation. When it runs out the call is cancelled: a
 ///                                       write still queued is withdrawn (`EarbudSerialGate` honours
-///                                       cancellation) and never sent late; a write that has already left the
-///                                       gate is NOT abandoned, its own result decides (the client bounds it
-///                                       with its 45 s per-operation timeout)
+///                                       cancellation), never sent late and reported as failed; a write that has
+///                                       already left the gate is NOT abandoned, its own result decides (the
+///                                       client bounds it with its 45 s per-operation timeout)
 public final class EarbudPairingRelay {
 
     // MARK: - Result
@@ -183,12 +183,12 @@ public final class EarbudPairingRelay {
 
         // c7: write PAIR_FIN (32 B confirm hash). The write waits in the GATT client's operation gate behind
         // any other operation of the shared client (a DIAG poll, a key import). `finTimeout` bounds only that
-        // wait: when it runs out the call is cancelled, a write still queued leaves the gate's queue and is NOT
-        // sent later, and a write that has already left the gate is not abandoned, because the earbud may hold
-        // the frame and seal the pairing: its own result decides (the client bounds it with its per-operation
-        // timeout). The person is never told "failed" because of the time limit alone: a PAIR_FIN whose answer is
-        // lost after the write left the gate (link drop, the client's 45 s operation timeout) may still have been
-        // sealed by the earbud, and is then reported as failed.
+        // wait: when it runs out the call is cancelled. A PAIR_FIN still queued in the gate then leaves the queue
+        // and is NOT sent later: it is withdrawn and reported as failed, with nothing written. A PAIR_FIN that has
+        // already left the gate is not abandoned, because the earbud may hold the frame and seal the pairing: its
+        // own answer decides (the client bounds it with its 45 s per-operation timeout). If that answer is lost
+        // (link drop, the operation timeout), the earbud may still have sealed the pairing and it is reported as
+        // failed.
         do {
             try await withCancellationAtDeadline(nanoseconds: finTimeoutNS) { [gatt] in
                 try await gatt.writePairFin(confirm)

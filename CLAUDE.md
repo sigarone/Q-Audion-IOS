@@ -387,12 +387,12 @@ same instance by `SettingsScreen`) share it, and it owns the only CBCentralManag
 own central only scans). It connects by CoreBluetooth identifier (`ensureConnected(identifier:timeout:)`); `isConnected` is
 true only once the service and its characteristics are discovered; every public operation runs in one `EarbudSerialGate`
 (a DIAG poll, a key import and a pairing never overlap on the single pending write/read; a caller cancelled while it
-waits LEAVES the gate's queue and `run` throws CancellationError, so a PAIR_FIN that timed out behind another operation is
-never written late, while a PAIR_FIN that has already left the gate when its 10 s run out is not abandoned: the relay cancels
-the call at the deadline but waits for the write's own result (`withCancellationAtDeadline`), so the time limit alone never
-makes the screen say "failed"; a PAIR_FIN whose answer is lost after the write left the gate (link drop, the client's 45 s
-operation timeout) may still have been sealed by the earbud, and is then reported as failed; callbacks of a peripheral that is no
-longer the current one are ignored, `EarbudLinkIdentity`, and a
+waits LEAVES the gate's queue and `run` throws CancellationError, so a PAIR_FIN still queued when its 10 s run out is
+withdrawn, never written late, and reported as failed, while a PAIR_FIN that has already left the gate is not abandoned: the
+relay cancels the call at the deadline but waits for the write's own result (`withCancellationAtDeadline`), so once its write has
+left the gate the time limit alone never makes the screen say "failed"; a PAIR_FIN whose answer is lost after the write left the
+gate (link drop, the client's 45 s operation timeout) may still have been sealed by the earbud, and is then reported as failed;
+callbacks of a peripheral that is no longer the current one are ignored, `EarbudLinkIdentity`, and a
 switch to another earbud fails the old link's pending operation at once). The sweep reaches the remembered
 earbud (`AppState.rememberEarbudIdentifier`) through `EarbudAckPopRelay.prepareLink`, only when a hw_only key is pending and
 no link is up, with a bounded wait and a 60 s cooldown after a failure. Wire framing is decided by two pure engine functions
