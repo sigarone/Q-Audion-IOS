@@ -431,6 +431,10 @@ struct QAudionApp: App {
                 registerScreenRecordingObserver()
                 // Blur for the App Switcher and a cover while a protected screen is recorded or mirrored.
                 PrivacyShield.start()
+                // The capture cover shows a stop control while this device's own screen share is what is captured.
+                PrivacyShield.ownShare = PrivacyShield.OwnShareHook(
+                    isActive: { AppState.shared.isScreenSharing },
+                    stop: { Task { @MainActor in await AppState.shared.stopScreenShare() } })
                 // W-APPSTORAGEDEADLOCK — keep the root-level @State in sync
                 // with the real (Keychain-backed) value without SwiftUI's
                 // own @AppStorage/UserDefaults-observer machinery. See

@@ -660,6 +660,8 @@ final class AppState: ObservableObject {
             callScreenMinimized = CallMinimizePolicy.next(
                 minimized: callScreenMinimized, event: .callBoundary, canMinimize: false)
             if isInCall { startVideoBeacon() } else { stopVideoBeacon() }
+            // The screen share belongs to the call: whichever site ended it, the capture ends with it.
+            if !isInCall { endScreenShareWithCall() }
             // W-CALLAWAKE — same choke point, same reason as the beacon: the
             // system auto-lock must be held off for exactly as long as a
             // call lives, from whichever of the dozen sites flipped this.
@@ -2468,7 +2470,12 @@ final class AppState: ObservableObject {
     // PeerConnectionManager.isScreenSharing flag and toggles a stub
     // `cameraFrameClosureSnapshot` so the camera-to-WebRTC pipe can
     // be restored when the user stops sharing.
-    @Published public private(set) var isScreenSharing: Bool = false
+    @Published public private(set) var isScreenSharing: Bool = false {
+        didSet {
+            // The capture cover carries a stop control while this device's own share is what is captured.
+            if oldValue != isScreenSharing { PrivacyShield.refreshCaptureCover() }
+        }
+    }
 
     /// W534 — true when the REMOTE peer has announced an active
     /// `<callId>|SCREEN_SHARE:start` piggy-back for the current call.
@@ -2708,6 +2715,8 @@ final class AppState: ObservableObject {
     /// stopScreenShare can restore it without re-running the whole
     /// startVideoPipeline wiring sequence.
     private var preScreenShareCameraClosure: ((CVPixelBuffer, Int64) -> Void)?
+    /// True while `startScreenShare()` waits for the capture to start (the system prompt is up).
+    private var screenShareStartInFlight = false
     #endif
     /// W396: responder-side QAudionCallIntegration. Lazy-created on
     /// inbound `call_incoming` BEFORE the user accepts on CallKit so
@@ -23937,15 +23946,7 @@ extension AppState {
         // releases its capture session cleanly. We don't await — the
         // call is already ending, the user doesn't need to wait for
         // ReplayKit's stopCapture callback.
-        #if os(iOS)
-        if isScreenSharing {
-            isScreenSharing = false
-            preScreenShareCameraClosure = nil
-            Task { @MainActor [weak self] in
-                await self?.screenShareController.stop()
-            }
-        }
-        #endif
+        endScreenShareWithCall()
         videoPipeline?.stop()
         videoPipeline = nil
         videoNackCache = nil
@@ -25193,6 +25194,7 @@ extension AppState {
             RTLog.warn("call", "startScreenShare: not in a call — refusing")
             return
         }
+        let shareCallGeneration = callService.currentCallGeneration()
         guard let peerId = callContactId, !peerId.isEmpty else {
             RTLog.warn("call", "startScreenShare: callContactId nil — aborting")
             errorMessage = String(localized: "call.screenshare.peer_unknown", defaultValue: "Impossibile avviare la condivisione: peer sconosciuto.", comment: "Error banner when starting screen sharing but the other party of the call is not known.")
@@ -25267,8 +25269,16 @@ extension AppState {
         screenShareController.onFrame = { [weak self] pixelBuffer, ts in
             self?.videoPipeline?.submitExternalFrame(pixelBuffer, presentationTimeNs: ts)
         }
+        screenShareStartInFlight = true
+        defer { screenShareStartInFlight = false }
         do {
             try await screenShareController.start(into: capturer)
+            // The call ended while the system prompt or the capture start was pending: the capture stops with it.
+            guard isInCall, callService.currentCallGeneration() == shareCallGeneration else {
+                RTLog.info("call", "vcap capture end=1 why=2")
+                await screenShareController.stop()
+                return
+            }
             isScreenSharing = true
             RTLog.info("call", "startScreenShare: ReplayKit capture live (camera untouched)")
             // W538: fire-and-forget peer announce so cross-platform
@@ -25330,6 +25340,24 @@ extension AppState {
         // not blocking the UI restoration on the opaque-message round-trip.
         Task { @MainActor [weak self] in
             await self?.announceScreenShare(active: false)
+        }
+        #endif
+    }
+
+    /// The screen share ends with the call, whichever way the call ended (hang-up of either side, a failure, a system
+    /// reset): the capture stops, the share state and the pipeline flags go back, and nothing is announced to the peer.
+    /// Does nothing when no share is up or starting, so every call-end site can reach it.
+    func endScreenShareWithCall() {
+        #if os(iOS)
+        guard isScreenSharing || screenShareStartInFlight else { return }
+        RTLog.info("call", "vcap capture end=1 why=1")
+        isScreenSharing = false
+        preScreenShareCameraClosure = nil
+        screenShareController.onFrame = nil
+        videoPipeline?.externalFeedActive = false
+        abrController?.isScreenSharing = false
+        Task { @MainActor [weak self] in
+            await self?.screenShareController.stop()
         }
         #endif
     }
