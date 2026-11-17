@@ -5083,6 +5083,8 @@ final class AppState: ObservableObject {
             }
         }
         callService.onSpeakerChangeVerdict = { [weak self] verdict in
+            // The verdict reaches the screens only while the monitor's display switch is on.
+            guard RemoteSpeakerChangeMonitor.verdictShownToUser else { return }
             Task { @MainActor in
                 guard let self else { return }
                 self.speakerChangeVerdict = verdict

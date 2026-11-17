@@ -471,6 +471,31 @@ enum VoiceGuard {
         level(of: verdict.level)
     }
 
+    /// Whether the call screen draws the card at all. `displayed` is the
+    /// monitor's display switch (`RemoteSpeakerChangeMonitor.verdictShownToUser`);
+    /// while it is off the card, with all its lines, is not part of the screen.
+    static func showsCard(displayed: Bool = RemoteSpeakerChangeMonitor.verdictShownToUser) -> Bool {
+        displayed
+    }
+
+    /// The line a verdict level reads as on the call screen, or nil while the
+    /// verdict is not displayed: nothing is drawn for it then.
+    static func shownLine(forChange change: RemoteSpeakerChangeMonitor.Level,
+                          displayed: Bool = RemoteSpeakerChangeMonitor.verdictShownToUser) -> VoiceGuardLine? {
+        guard displayed else { return nil }
+        return line(forLevel: level(of: change))
+    }
+
+    /// The line of the trust-bar shield for a verdict level. Only a possible
+    /// or a confirmed change has a shield; nil for every other level, and for
+    /// all of them while the verdict is not displayed.
+    static func shieldLine(forChange change: RemoteSpeakerChangeMonitor.Level,
+                           displayed: Bool = RemoteSpeakerChangeMonitor.verdictShownToUser) -> VoiceGuardLine? {
+        guard let shown = shownLine(forChange: change, displayed: displayed),
+              shown == .suspect || shown == .changed else { return nil }
+        return shown
+    }
+
     /// The line of text a card content reads as.
     static func line(for content: VoiceGuardContent) -> VoiceGuardLine {
         switch content {
