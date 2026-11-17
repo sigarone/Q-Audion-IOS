@@ -38,7 +38,9 @@ import Security
 ///
 /// Pure: no Keychain call in this type, so every branch is pinned by
 /// `KeychainAccessibilityPolicyTests` on the CI simulator. The attribute-only
-/// upgrade of items already on disk lives in `KeychainAccessibilityMigration`.
+/// upgrade of items already on disk lives in `KeychainAccessibilityMigration`,
+/// called on each read and, for the session-PSK vault, by
+/// `SovereignKeyVault.upgradeLegacyAccessibility` when the phone is unlocked.
 public enum KeychainAccessibilityPolicy {
 
     // MARK: - Kill switches (compile-time, same discipline as
@@ -110,23 +112,38 @@ public enum KeychainAccessibilityPolicy {
     /// Given what a successful read reported about an EXISTING item, the class
     /// it should be moved to with an attribute-only `SecItemUpdate`, or `nil`
     /// when it must be left alone. `nil` is the answer for everything except
-    /// the one legacy shape this codebase wrote: no access control, currently
-    /// `WhenUnlockedThisDeviceOnly`, in a category that now wants
+    /// the one legacy shape this codebase wrote: no user-presence constraint,
+    /// currently `WhenUnlockedThisDeviceOnly`, in a category that now wants
     /// `AfterFirstUnlockThisDeviceOnly`. An unreadable / unknown current class
     /// is left untouched rather than guessed at.
+    ///
+    /// `requiresUserPresence` comes from `requiresUserPresence(probeStatus:)`,
+    /// not from the presence of `kSecAttrAccessControl` in the attributes: the
+    /// system reports that attribute for every item, a plain one included.
     public static func migrationTarget(
         category: ItemCategory,
         currentClass: AccessClass?,
-        hasAccessControl: Bool
+        requiresUserPresence: Bool
     ) -> AccessClass? {
         guard backgroundKeyAccessEnabled else { return nil }
         // A `.userPresence` item stays as it is: the access control IS the
-        // user's choice, and `SecItemUpdate` cannot rewrite one in place.
-        guard !hasAccessControl else { return nil }
+        // user's choice, and an update of `kSecAttrAccessible` would replace it
+        // with a protection-class-only one.
+        guard !requiresUserPresence else { return nil }
         let target = accessClass(for: category)
         guard target == .afterFirstUnlockThisDeviceOnly else { return nil }
         guard let current = currentClass, current == .whenUnlockedThisDeviceOnly else { return nil }
         return target
+    }
+
+    /// Whether an item may need the user, from the status of one read of its
+    /// value made with an authentication context that may not interact with
+    /// the user (`LAContext.interactionNotAllowed`). Only success shows that
+    /// the item has no user-presence constraint; every other status (the system
+    /// needing the user, a locked device, an item that is gone, any failure)
+    /// counts as "may need the user", so the item is left as it is.
+    public static func requiresUserPresence(probeStatus: OSStatus) -> Bool {
+        probeStatus != successStatus
     }
 
     // MARK: - Read side: status classification

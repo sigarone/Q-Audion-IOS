@@ -2576,7 +2576,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     // peer's advertised roles say an NFC/PSK secret was expected —
                     // this print just makes the underlying cause visible in device
                     // logs instead of leaving no trace at all.
-                    print("[QAudionCallIntegration] OFFER: peer advertised \(advertised.count) PSK fp(s), none held locally or SHA-256 gate failed — session key mixes NO psk callId=\(callId.prefix(8))…")
+                    // `locked` and `userkeys` tell a phone that is locked, and keys behind user presence, apart from
+                    // a key that is simply not held.
+                    let heldCount: Int = eligiblePsks.count
+                    let lockedFlag: Int = ProtectedDataFlag.shared.isAvailable ? 0 : 1
+                    let userKeysFlag: Int = KeychainProtectionPolicy.shared.isEnabled ? 1 : 0
+                    let noPskLine: String = "[QAudionCallIntegration] OFFER: peer advertised \(advertised.count) PSK fp(s), none held locally or SHA-256 gate failed — session key mixes NO psk callId=\(callId.prefix(8))… held=\(heldCount) locked=\(lockedFlag) userkeys=\(userKeysFlag)"
+                    print(noPskLine)
                 }
             }
 
