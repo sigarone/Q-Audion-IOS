@@ -42,7 +42,7 @@ public enum EarbudGattConstants {
     /// Each PAIR_RESP chunk returned by the earbud (4 × 408 = 1632)
     public static let EE_PAIR_RESP_CHUNK   = 408
     public static let EE_PAIR_RESP_NCHUNKS = 4
-    /// Fragment header for pair messages = [chunk_idx: u8]
+    /// Fragment header of a PAIR_BEGIN (c5) write = [offset: u16 LITTLE-endian] (KEY_IMPORT's is big-endian)
     public static let EE_PAIR_FRAG_HDR     = 2
 }
 // swiftlint:enable identifier_name
