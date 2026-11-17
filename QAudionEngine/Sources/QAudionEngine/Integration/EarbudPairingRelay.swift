@@ -186,8 +186,9 @@ public final class EarbudPairingRelay {
         // wait: when it runs out the call is cancelled, a write still queued leaves the gate's queue and is NOT
         // sent later, and a write that has already left the gate is not abandoned, because the earbud may hold
         // the frame and seal the pairing: its own result decides (the client bounds it with its per-operation
-        // timeout). So a pairing reported as failed here was never written, or the write itself failed, and
-        // the person is never told "failed" about a pairing the earbud sealed.
+        // timeout). The person is never told "failed" because of the time limit alone: a PAIR_FIN whose answer is
+        // lost after the write left the gate (link drop, the client's 45 s operation timeout) may still have been
+        // sealed by the earbud, and is then reported as failed.
         do {
             try await withCancellationAtDeadline(nanoseconds: finTimeoutNS) { [gatt] in
                 try await gatt.writePairFin(confirm)
