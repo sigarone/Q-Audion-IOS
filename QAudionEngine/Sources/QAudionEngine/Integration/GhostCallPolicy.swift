@@ -272,14 +272,16 @@ public enum GhostCallPolicy {
     }
 
     /// Whether the `call_cancelled` VoIP push ends the call this device holds: it names that call and nobody
-    /// answered it here. An answered call is never ended by a cancel push, and a cancel for any other call, or
-    /// with no call held, leaves the held call alone.
+    /// answered it here. An answered call is never ended by a cancel push, a cancel for any other call, or with
+    /// no call held, leaves the held call alone, and so does a call this device is in (`isInCall`: set for a
+    /// dialled call from its start and for an incoming one only once answered, never for a ring).
     public static func shouldEndHeldCallOnCancelPush(
         cancelCallId: UUID,
         activeCallKitId: UUID?,
-        callWasAnswered: Bool
+        callWasAnswered: Bool,
+        isInCall: Bool
     ) -> Bool {
         guard activeCallKitId == cancelCallId else { return false }
-        return !callWasAnswered
+        return !callWasAnswered && !isInCall
     }
 }

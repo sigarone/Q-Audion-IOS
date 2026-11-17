@@ -8158,10 +8158,13 @@ final class AppState: ObservableObject {
             // use the SAME id the server registered for this call.
             // Without this, answer/hangup would mint a brand-new UUID
             // and the server's call state machine would drop them.
-            if !callIdStr.isEmpty,
-               let provider = self.liveProvider,
-               let calling = provider.callingApi as? BCryptoCallingApiImpl {
-                calling.bindIncomingCallId(callIdStr)
+            // While another call is held, this one is dropped below (`differentCallActive`) and leaves the held
+            // call's id and setup state alone: the id gate of that call's `call_cancel` / `call_hangup` reads the
+            // bound id. It is bound here only when no other call is held; `.provisionNormally` below binds it
+            // when it was held back here and the other call is gone by then.
+            let bindHeldBack: Bool = self.activeCallKitId != nil && self.activeCallKitId != callUUID
+            if !bindHeldBack {
+                self.bindInboundCallId(callIdStr)
             }
             // R-EARBUD: the earbud-relay-v1 counterparty handshake is retired (it yields a key with
             // no signed OFFER_v6/ACCEPT_v6 behind it). The capability, an unsigned field the server
@@ -8214,7 +8217,9 @@ final class AppState: ObservableObject {
                     hasWebRtcController: self.webRtcController != nil
                 ) {
                 case .provisionNormally:
-                    break
+                    if bindHeldBack {
+                        self.bindInboundCallId(callIdStr)
+                    }
                 case .dropDuplicate:
                     if differentCallActive {
                         // Another call is held: this one is dropped, ids and the held call's state in the log.
@@ -10726,8 +10731,14 @@ final class AppState: ObservableObject {
 
     /// `source` says how the reason reached this device: only the authenticated media-leg control frame is trusted to
     /// change trust (a reason in a message the server relays in the clear only labels the call history).
+    ///
+    /// `onlyWhileHolding` is set only by the cancel push (`endHeldCallAfterCancelPush`): the teardown below waits for
+    /// the CallKit report of the end, and when this device holds another call by then, that call is not this one's to
+    /// end. Every other caller leaves it `nil` and tears down as before. `missedAlreadyRecorded` is `true` when the
+    /// cancel push already wrote the missed row, so the log does not say it was lost.
     private func handleRemoteCallHangup(
-        reasonString: String, viaServerCancel: Bool = false, source: HandshakeFailureSource = .relay
+        reasonString: String, viaServerCancel: Bool = false, source: HandshakeFailureSource = .relay,
+        onlyWhileHolding: UUID? = nil, missedAlreadyRecorded: Bool = false
     ) {
         let reason: CallEndReason
         switch reasonString {
@@ -10796,7 +10807,7 @@ final class AppState: ObservableObject {
         if wasRinging && !recordMissed {
             RTLog.info("call", "hangup-while-ringing missed=0 sibling=1 rsn=" + reasonString)
         }
-        if recordMissed && missedRecordId == nil {
+        if recordMissed && missedRecordId == nil && !missedAlreadyRecorded {
             RTLog.info("call", "WARN hangup-while-ringing but activeOutgoingRecordId=nil — missed call will not be recorded")
         }
         let uuid = self.activeCallKitId
@@ -10815,6 +10826,14 @@ final class AppState: ObservableObject {
                 await self.callKit?.reportCallEnded(uuid: uuid, reason: reason)
             }
             await MainActor.run {
+                // The cancel push's teardown ends the call it named only: another call registered since (a push for
+                // it ran in the gap) keeps its state, and the mark that this call ended by the server is dropped.
+                if let namedCallKitId = onlyWhileHolding, self.activeCallKitId != namedCallKitId {
+                    if self.serverEndedCallKitId == namedCallKitId { self.serverEndedCallKitId = nil }
+                    let skippedId8: String = String(namedCallKitId.uuidString.prefix(8))
+                    RTLog.info("call", "cancel push end=0 id=\(skippedId8) held=other")
+                    return
+                }
                 // `markMissed` answers `false` for a record that is not an unanswered INCOMING call (the caller's
                 // own outgoing record when the callee declined or hung up while it rang): that record id is kept
                 // here, so `endCall` below still stamps its end like any ended call.
@@ -18968,18 +18987,22 @@ final class AppState: ObservableObject {
             guard spec.uuid == payload.callId else { return }
             // W-GHOSTCALL — record the missed call while the ring flag is still up
             // (the later WS hangup would no longer see a ringing call).
-            self.recordMissedOnCancelPush(callId: payload.callId)
-            // The call this device holds is over: recorded like a remote hangup records it, so a ring that is
-            // still in the app is not handed to CallKit.
-            if let heldUuid = self.activeCallKitId, heldUuid == payload.callId {
-                self.recentlyEndedCallIds.recordEnded(heldUuid)
+            let missedRecorded: Bool = self.recordMissedOnCancelPush(callId: payload.callId)
+            // Only the call this device holds has a ring to end: a cancel for any other call leaves the ring of
+            // the held one alone.
+            if self.activeCallKitId == payload.callId {
+                // Recorded like a remote hangup records it, so a ring that is still in the app is not handed to
+                // CallKit; an answered call is not ended by this push.
+                if !self.callWasAnswered {
+                    self.recentlyEndedCallIds.recordEnded(payload.callId)
+                }
+                // Same local teardown a WS call_cancel / call_hangup would drive.
+                self.stopInAppRingtone()
+                self.incomingCallRingVisible = false
+                self.withdrawLeaveGroupAnswerPrompt()
             }
-            // Same local teardown a WS call_cancel / call_hangup would drive.
-            self.stopInAppRingtone()
-            self.incomingCallRingVisible = false
-            self.withdrawLeaveGroupAnswerPrompt()
             // The held call that nobody answered is over: the state it left is released like a WS cancel does.
-            self.endHeldCallAfterCancelPush(callId: payload.callId)
+            self.endHeldCallAfterCancelPush(callId: payload.callId, missedRecorded: missedRecorded)
         case .unparsed:
             break
         }
@@ -19059,15 +19082,16 @@ final class AppState: ObservableObject {
     /// `GhostCallPolicy.shouldRecordMissedOnCancelPush`). Must run BEFORE the push
     /// handler clears `incomingCallRingVisible`. Takes the record id so the WS
     /// hangup that may follow finds none and does not record it a second time.
+    /// Answers whether the row became missed here.
     @MainActor
-    private func recordMissedOnCancelPush(callId: UUID) {
+    private func recordMissedOnCancelPush(callId: UUID) -> Bool {
         let shouldRecord: Bool = GhostCallPolicy.shouldRecordMissedOnCancelPush(
             cancelCallId: callId,
             activeCallKitId: self.activeCallKitId,
             callWasAnswered: self.callWasAnswered,
             incomingRingVisible: self.incomingCallRingVisible
         )
-        guard shouldRecord, let recordId = self.activeOutgoingRecordId else { return }
+        guard shouldRecord, let recordId = self.activeOutgoingRecordId else { return false }
         // W-MISSEDBADGE: this push has no reason (a sibling that took the call elsewhere can reach it first, see
         // `GhostCallPolicy.shouldRecordMissedOnRemoteHangup`), and a record that did not become missed keeps its id so
         // the teardown closes it like any ended call.
@@ -19077,19 +19101,24 @@ final class AppState: ObservableObject {
         let markedFlag: String = marked ? "1" : "0"
         let missedLine: String = "cancelpush missed=" + markedFlag + " id=" + missedId8
         RTLog.info("call", missedLine)
+        return marked
     }
 
     /// The `call_cancelled` push names the call this device holds and nobody answered it here (see
     /// `GhostCallPolicy.shouldEndHeldCallOnCancelPush`): the call is over, and its state is released by the teardown
     /// a `call_cancel` / `call_hangup` runs (`handleRemoteCallHangup`). The server ended the call itself, so
     /// `endCall` announces nothing to it (`serverEndedCallKitId`). CallKit has already ended the ring through the
-    /// report of the push, and the WS message that may follow finds no call to end.
+    /// report of the push, and the WS message that may follow finds no call to end. The teardown waits for the CallKit
+    /// report of the end, so it runs only while the device still holds this call (`onlyWhileHolding`): a push for
+    /// another call that registered itself in the meantime is not torn down. `missedRecorded` says the push already
+    /// wrote the missed row.
     @MainActor
-    private func endHeldCallAfterCancelPush(callId: UUID) {
+    private func endHeldCallAfterCancelPush(callId: UUID, missedRecorded: Bool) {
         let endsHeldCall: Bool = GhostCallPolicy.shouldEndHeldCallOnCancelPush(
             cancelCallId: callId,
             activeCallKitId: self.activeCallKitId,
-            callWasAnswered: self.callWasAnswered
+            callWasAnswered: self.callWasAnswered,
+            isInCall: self.isInCall
         )
         guard endsHeldCall else { return }
         let endedId8: String = String(callId.uuidString.prefix(8))
@@ -19097,7 +19126,8 @@ final class AppState: ObservableObject {
         let endedLine: String = "cancel push end=1 id=\(endedId8) state=\(endedState)"
         RTLog.info("call", endedLine)
         self.serverEndedCallKitId = callId
-        self.handleRemoteCallHangup(reasonString: "timeout")
+        self.handleRemoteCallHangup(
+            reasonString: "timeout", onlyWhileHolding: callId, missedAlreadyRecorded: missedRecorded)
     }
 
     /// TRUST-6 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md, security audit backlog
@@ -22295,6 +22325,16 @@ final class AppState: ObservableObject {
             return bound.lowercased()
         }
         return activeCallKitId?.uuidString.lowercased()
+    }
+
+    /// W77: binds an inbound `call_id` on the calling impl, so the answer / hangup envelopes of that call carry the id
+    /// the server registered. An empty id binds nothing.
+    @MainActor
+    private func bindInboundCallId(_ callIdStr: String) {
+        guard !callIdStr.isEmpty,
+              let provider = self.liveProvider,
+              let calling = provider.callingApi as? BCryptoCallingApiImpl else { return }
+        calling.bindIncomingCallId(callIdStr)
     }
 
     /// W-MEDIAATACCEPT (option b) — G6 (spec §10/I9, T8): bridges a
