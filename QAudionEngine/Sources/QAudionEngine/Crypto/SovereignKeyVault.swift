@@ -192,8 +192,8 @@ public final class SovereignKeyVault {
         // biometric key protection is enabled, attach a `.userPresence`
         // access control; otherwise the plain class from
         // `KeychainAccessibilityPolicy` (W-KCAFTERUNLOCK). Existing items are
-        // re-protected via `migratePskProtection(enable:)`, not here, because
-        // SecItemUpdate cannot change an item's access-control class. The
+        // re-protected via `migratePskProtection(enable:)`, not here: it reads
+        // each value, deletes the item and adds it again with the access control. The
         // order of the call keys is the one entry that never takes the
         // access control (see `EntryProtection`).
         // D1: the key_class string (if any) goes into kSecAttrGeneric — a raw

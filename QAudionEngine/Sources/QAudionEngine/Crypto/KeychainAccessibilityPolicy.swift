@@ -127,7 +127,8 @@ public enum KeychainAccessibilityPolicy {
     ) -> AccessClass? {
         guard backgroundKeyAccessEnabled else { return nil }
         // A `.userPresence` item stays as it is: the access control IS the
-        // user's choice, and `SecItemUpdate` cannot rewrite one in place.
+        // user's choice, and an update of `kSecAttrAccessible` would replace it
+        // with a protection-class-only one.
         guard !requiresUserPresence else { return nil }
         let target = accessClass(for: category)
         guard target == .afterFirstUnlockThisDeviceOnly else { return nil }

@@ -77,7 +77,10 @@ enum KeychainAccessibilityMigration {
             return .leftForUser
         }
         // The same non-interactive context: should the item need the user after all, the update fails instead of
-        // asking.
+        // asking. Only this fresh, never-evaluated context may be passed here, never a shared or already evaluated
+        // one (e.g. `KeychainProtectionPolicy`'s session context): an update of `kSecAttrAccessible` replaces the
+        // item's access control with one that carries the protection class only, so on a user-presence item it must
+        // fail. The read-back below compares the class only and does not see the access control.
         var updateQuery = baseQuery
         updateQuery[kSecUseAuthenticationContext as String] = context
         let update: [String: Any] = [kSecAttrAccessible as String: cfTarget]
