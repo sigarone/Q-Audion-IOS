@@ -345,6 +345,33 @@ final class GhostCallPolicyTests: XCTestCase {
         XCTAssertFalse(recordsMissed(cancel: callId, active: callId, answered: true, ringVisible: false))
     }
 
+    // MARK: - shouldEndHeldCallOnCancelPush (the push ends the held call)
+
+    private func endsHeldCall(cancel: UUID, active: UUID?, answered: Bool = false) -> Bool {
+        Policy.shouldEndHeldCallOnCancelPush(
+            cancelCallId: cancel,
+            activeCallKitId: active,
+            callWasAnswered: answered)
+    }
+
+    /// The cancel push names the call this device holds and nobody answered it: the call is over.
+    func test_cancelPushEnd_heldUnansweredCall_isEnded() {
+        let callId = UUID()
+        XCTAssertTrue(endsHeldCall(cancel: callId, active: callId))
+    }
+
+    /// An answered call is never ended by a cancel push.
+    func test_cancelPushEnd_answeredCall_isNeverEnded() {
+        let callId = UUID()
+        XCTAssertFalse(endsHeldCall(cancel: callId, active: callId, answered: true))
+    }
+
+    /// A cancel for another call leaves the held call alone, and with no call held there is nothing to end.
+    func test_cancelPushEnd_otherCallOrNoCall_isNotEnded() {
+        XCTAssertFalse(endsHeldCall(cancel: UUID(), active: UUID()))
+        XCTAssertFalse(endsHeldCall(cancel: UUID(), active: nil))
+    }
+
     // MARK: - shouldIgnoreEndForStaleUuid (Reject on a stale ring during a live call)
 
     private func ignoresEnd(

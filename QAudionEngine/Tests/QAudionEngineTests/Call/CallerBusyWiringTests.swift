@@ -230,7 +230,9 @@ final class CallerBusyWiringTests: XCTestCase {
             try appCode(),
             from: "func endCall(notifyPeerInBand: Bool = true, outcome: CallerTerminalOutcome? = nil) {",
             to: "func promoteToGroupCall(newPeerIds:")
-        XCTAssertTrue(body.contains("let announcesToPeer: Bool = outcome?.sendsHangupToPeer ?? true"))
+        XCTAssertTrue(body.contains(
+            "let announcesToPeer: Bool = (outcome?.sendsHangupToPeer ?? true) && !endedByServer"),
+                      "a call the server ended itself announces nothing either")
         XCTAssertTrue(
             body.contains("if notifyPeerInBand && announcesToPeer { callService.sendControlHangup(reason: \"local_hangup\") }"),
             "the in-band control frame is gated by the outcome too")

@@ -3680,6 +3680,9 @@ final class AppState: ObservableObject {
     /// at once) to satisfy the PushKit mandate when the real uuid is already dead.
     /// Never answerable: `performAcceptIncoming` refuses them.
     private var ghostPlaceholderCallIds = RecentlyEndedCallLedger()
+    /// The call whose end came from the server (a cancel push named it): its teardown announces nothing to the
+    /// server. Compared with `activeCallKitId` when the teardown runs, so it never touches another call.
+    private var serverEndedCallKitId: UUID?
 
     /// call_accepted two-flag latch (WIRE_SPEC §3.5). W-ACCEPTLATCH (2026-10-03) —
     /// the local-handshake flag (set once the call_answer state-advance has run for
@@ -8213,7 +8216,17 @@ final class AppState: ObservableObject {
                 case .provisionNormally:
                     break
                 case .dropDuplicate:
-                    print("[AppState] call_incoming: dup dropped callId=\(callIdStr.prefix(8))… state=\(self.callState) sameProvisioned=\(sameCallProvisioned) otherActive=\(differentCallActive)")
+                    if differentCallActive {
+                        // Another call is held: this one is dropped, ids and the held call's state in the log.
+                        let heldDropId8: String = String(callIdStr.prefix(8))
+                        let heldDropUuid: String = self.activeCallKitId?.uuidString ?? ""
+                        let heldDropHeldId8: String = String(heldDropUuid.prefix(8)).lowercased()
+                        let heldDropState: String = self.callState.rawValue
+                        let heldDropLine: String = "dup dropped held=1 id=\(heldDropId8) call8=\(heldDropHeldId8) state=\(heldDropState)"
+                        RTLog.warn("call", heldDropLine)
+                    } else {
+                        print("[AppState] call_incoming: dup dropped callId=\(callIdStr.prefix(8))… state=\(self.callState) sameProvisioned=\(sameCallProvisioned) otherActive=\(differentCallActive)")
+                    }
                     return
                 case .rescueWebRtcOffer:
                     // Numeric-safe (ship-ios-logs.py's redactor is a positive
@@ -18965,6 +18978,8 @@ final class AppState: ObservableObject {
             self.stopInAppRingtone()
             self.incomingCallRingVisible = false
             self.withdrawLeaveGroupAnswerPrompt()
+            // The held call that nobody answered is over: the state it left is released like a WS cancel does.
+            self.endHeldCallAfterCancelPush(callId: payload.callId)
         case .unparsed:
             break
         }
@@ -19062,6 +19077,27 @@ final class AppState: ObservableObject {
         let markedFlag: String = marked ? "1" : "0"
         let missedLine: String = "cancelpush missed=" + markedFlag + " id=" + missedId8
         RTLog.info("call", missedLine)
+    }
+
+    /// The `call_cancelled` push names the call this device holds and nobody answered it here (see
+    /// `GhostCallPolicy.shouldEndHeldCallOnCancelPush`): the call is over, and its state is released by the teardown
+    /// a `call_cancel` / `call_hangup` runs (`handleRemoteCallHangup`). The server ended the call itself, so
+    /// `endCall` announces nothing to it (`serverEndedCallKitId`). CallKit has already ended the ring through the
+    /// report of the push, and the WS message that may follow finds no call to end.
+    @MainActor
+    private func endHeldCallAfterCancelPush(callId: UUID) {
+        let endsHeldCall: Bool = GhostCallPolicy.shouldEndHeldCallOnCancelPush(
+            cancelCallId: callId,
+            activeCallKitId: self.activeCallKitId,
+            callWasAnswered: self.callWasAnswered
+        )
+        guard endsHeldCall else { return }
+        let endedId8: String = String(callId.uuidString.prefix(8))
+        let endedState: String = self.callState.rawValue
+        let endedLine: String = "cancel push end=1 id=\(endedId8) state=\(endedState)"
+        RTLog.info("call", endedLine)
+        self.serverEndedCallKitId = callId
+        self.handleRemoteCallHangup(reasonString: "timeout")
     }
 
     /// TRUST-6 (CRYPTO_PROTOCOL_AUDIT_2026-09-01.md, security audit backlog
@@ -23676,7 +23712,10 @@ extension AppState {
         // `call_hangup` envelope, the opaque HANGUP (`local_hangup`) or a control frame would reach a callee that
         // is mid-call with someone else. Nothing at all goes to the peer for these two, as before this PR and as
         // Android (`hangup(reason = "busy", notifyPeer = false)` gates `sendHangup` on `notifyPeer`).
-        let announcesToPeer: Bool = outcome?.sendsHangupToPeer ?? true
+        // A call the server ended itself (a cancel push named it) is not announced to anyone either: the server
+        // already knows it is over.
+        let endedByServer: Bool = serverEndedCallKitId != nil && serverEndedCallKitId == activeCallKitId
+        let announcesToPeer: Bool = (outcome?.sendsHangupToPeer ?? true) && !endedByServer
         if notifyPeerInBand && announcesToPeer {
             callService.sendControlHangup(reason: "local_hangup")
         }
@@ -23953,6 +23992,7 @@ extension AppState {
         callContactId = nil
         incomingCallerName = ""
         activeCallKitId = nil
+        serverEndedCallKitId = nil
         answeredCallKitId = nil  // Bug A — re-arm the idempotent-answer guard for the next call
         incomingAudioStarted = false  // re-arm the deferred-answer consume for the next call
         // call_accepted latch + W-ANSWERBEFOREREADY finalized marker + the held early
