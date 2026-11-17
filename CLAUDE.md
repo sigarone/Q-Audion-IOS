@@ -386,7 +386,10 @@ client, `IOSEarbudGattProxy`, and it is `AppState.earbudGattProxy`: the KMS swee
 same instance by `SettingsScreen`) share it, and it owns the only CBCentralManager that connects to the earbud (the screen's
 own central only scans). It connects by CoreBluetooth identifier (`ensureConnected(identifier:timeout:)`); `isConnected` is
 true only once the service and its characteristics are discovered; every public operation runs in one `EarbudSerialGate`
-(a DIAG poll, a key import and a pairing never overlap on the single pending write/read). The sweep reaches the remembered
+(a DIAG poll, a key import and a pairing never overlap on the single pending write/read; a caller cancelled while it
+waits LEAVES the gate's queue and `run` throws CancellationError, so a PAIR_FIN that timed out behind another operation is
+never written late; callbacks of a peripheral that is no longer the current one are ignored, `EarbudLinkIdentity`, and a
+switch to another earbud fails the old link's pending operation at once). The sweep reaches the remembered
 earbud (`AppState.rememberEarbudIdentifier`) through `EarbudAckPopRelay.prepareLink`, only when a hw_only key is pending and
 no link is up, with a bounded wait and a 60 s cooldown after a failure. Wire framing is decided by two pure engine functions
 and pinned against a Swift model of the firmware's write handlers (`EarbudGattFramingTests`): KEY_IMPORT (c3) writes the
@@ -395,7 +398,8 @@ PAIR_BEGIN (c5) uses LITTLE-endian offsets (`EarbudPairGatt.pairBeginFrames`), a
 `maximumWriteValueLength(for: .withoutResponse)` (ATT_MTU - 3): the firmware refuses a write with a non-zero ATT offset, which
 is what a long write (the 512 B that `.withResponse` reports) becomes. DIAG (0x90) is READ-only in the firmware: it is
 polled every 2 s, never subscribed. FE-5 pairing waits, before PAIR_FIN, for a person to confirm six words derived from the
-pair_id (`EarbudPairTranscript.sasWords`, `EarbudSasPrompter`, 120 s timeout, `isConfirmed` has no default); a refusal or a
+pair_id (`EarbudPairTranscript.sasWords`, `EarbudSasPrompter`, 120 s timeout, `isConfirmed` has no default; the sheet's two buttons answer the prompt they show, `confirm(_:)` / `reject(_:)` take the
+`Prompt` and its per-question `token`, so a late tap cannot confirm the next question); a refusal or a
 timeout writes no PAIR_FIN and drops the link (the earbud keeps this attempt's PAIR_RESP until it disconnects). The words and
 the fingerprint are pinned by `earbud-pair-sas-v1-kat.json` (generator `scripts/kat/gen_earbud_pair_sas_kat.py`), shared with
 Android. Not done: `key_type == "sovereign"` rows are not routed to any relay (`KmsPollerService` only logs them;
