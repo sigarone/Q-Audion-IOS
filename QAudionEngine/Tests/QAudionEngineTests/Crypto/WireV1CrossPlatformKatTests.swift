@@ -8,14 +8,13 @@ import CLiboqs
 // against the shared cross-platform fixture.
 // swiftlint:disable identifier_name
 
-/// Cross-platform KAT gate: every vector here comes verbatim from
-/// bcrypto-server's `test/kat/wire_v1.0.0/` (the single source of truth all
-/// 3 clients must reproduce byte-for-byte — see that repo's
-/// test/kat/README.md and WIRE_SPEC.md §9). Unlike the pre-existing local
-/// KAT suites in this package, these assertions run the REAL CryptoKit /
-/// liboqs primitives against the server-generated ground truth, so a silent
-/// drift in this platform's implementation is caught here instead of first
-/// surfacing as a live call that can't complete key agreement.
+/// Cross-platform KAT gate: every vector here comes verbatim from the
+/// server's `wire_v1.0.0` KAT set (the single source of truth all 3 clients
+/// must reproduce byte-for-byte — see WIRE_SPEC.md §9). Unlike the
+/// pre-existing local KAT suites in this package, these assertions run the
+/// REAL CryptoKit / liboqs primitives against the server-generated ground
+/// truth, so a silent drift in this platform's implementation is caught here
+/// instead of first surfacing as a live call that can't complete key agreement.
 ///
 /// Scope note: unlike Android/Desktop, this file does NOT cover
 /// `canonical_cbor/sealed_sender_cert_v2.json` — `SenderCertV2`/sealed-sender
@@ -25,7 +24,7 @@ import CLiboqs
 ///
 /// ⚠️ Requires `swift test` (CryptoKit/liboqs) — authored on win32 which
 /// cannot run either. Every byte-construction here was hand-verified offline
-/// against the bcrypto-server Go reference and, for ML-KEM-1024, empirically
+/// against the server's Go reference and, for ML-KEM-1024, empirically
 /// cross-checked against BouncyCastle (Android) and noble-post-quantum
 /// (Desktop) using the SAME server-published seed — both independently
 /// reproduce the server's expected_ek_b64 for the raw 64-byte seed. The
@@ -158,9 +157,9 @@ final class WireV1CrossPlatformKatTests: XCTestCase {
     /// point (confirmed 2026-07-30; unlike Android/Desktop, no visibility
     /// change was made here since there is no local Xcode to compile-check
     /// a production-code edit blind). This test pins the wire format itself,
-    /// which is what the vector's own design intent covers (see
-    /// bcrypto-server's aead_nonce KAT header comment) — it does not
-    /// exercise iOS's internal counter plumbing.
+    /// which is what the vector's own design intent covers (see the
+    /// aead_nonce KAT's own header comment) — it does not exercise iOS's
+    /// internal counter plumbing.
     func testAeadNonceFormulaMatchesServerVectors() throws {
         // Filename is "aead-nonce-derive" not "derive" — see the x25519
         // comment above for why (SPM basename collision).

@@ -2,8 +2,7 @@ import SwiftUI
 import QAudionEngine
 
 /// Italian + design-token reskin of the engine's `VoiceEnrollmentView`.
-/// 1:1 visual + copy port of Android
-/// `qaudion-android-new/feature/feature-auth/.../VoiceEnrollmentScreen.kt`.
+/// 1:1 visual + copy port of the Android implementation of this screen.
 ///
 /// Drives the same `VoiceEnrollmentContainer` (the App-layer wrapper
 /// around the engine's audio capture pipeline) — only the presentation

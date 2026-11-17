@@ -31,8 +31,7 @@ import CryptoKit
 /// kdoc for the same discipline applied to entitlement tokens.
 ///
 /// ## Wire field names are this file's one unverified assumption
-/// bcrypto-server's TRUST-2 fix is being implemented by a separate agent in
-/// the same batch; this client cannot see its exact field names. The names
+/// The server decides the exact key names of the command envelope. The names
 /// below (`device_id`, `wipe_id`, `issued_at`, `nonce`, `signature`, all
 /// snake_case matching this file's existing WS envelope convention — e.g.
 /// `sender_device_id`, `server_ts_ms` elsewhere in `AppState.swift`) are a
@@ -48,7 +47,7 @@ import CryptoKit
 public final class WipeCommandVerifier: @unchecked Sendable {
 
     /// Domain-separation tag for the signed canonical bytes. MUST match
-    /// whatever literal bytes bcrypto-server signs with — see the wire-field
+    /// whatever literal bytes the server signs with — see the wire-field
     /// note above, same caveat applies to this constant.
     public static let domainTag = Data("qaudion-wipe-v1".utf8)
 
@@ -191,7 +190,7 @@ public final class WipeCommandVerifier: @unchecked Sendable {
     /// exactly like a `verify() == false`: refuse to wipe.
     ///
     /// See this file's header for the wire-field-name caveat: this is the
-    /// one place to update if bcrypto-server's real key names differ.
+    /// one place to update if the server's real key names differ.
     public static func parseWipeCommand(from data: [String: Any]) -> WipeCommand? {
         guard let deviceId = (data["device_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
               !deviceId.isEmpty else { return nil }

@@ -7,8 +7,7 @@ import QAudionEngine
 /// canonical envelope the server verifies with the actor's Ed25519
 /// identity key.
 ///
-/// Server contract (verified against
-/// `bcrypto-server/cmd/bcrypto-lite/groups_membership.go`, 2026-07-14):
+/// Server contract:
 ///   - ADD:    `POST   /api/v1/groups/{gid}/members`
 ///             body `{user_id, signed_envelope_b64, admin_signature_b64}`
 ///             envelope `t = "member_added"`, admin-only, 201 Created.
@@ -222,10 +221,9 @@ final class GroupMembershipApi {
     /// COMPLETE with its encrypted name (W-GRPNAME, 2026-08-02).
     ///
     /// Body is byte-identical to the Android/Desktop `createGroupRequest`
-    /// (`bcrypto-server/cmd/bcrypto-lite/groups.go` — `{group_id, members,
-    /// admins}`) plus the two optional metadata fields; the server assigns
-    /// `group_epoch = 1` and requires the caller to be present in BOTH
-    /// `members` and `admins`.
+    /// (`{group_id, members, admins}`) plus the two optional metadata
+    /// fields; the server assigns `group_epoch = 1` and requires the caller
+    /// to be present in BOTH `members` and `admins`.
     ///
     /// `metadataBlobB64` is the base64 of the ENCRYPTED (0xE4 wire) blob —
     /// byte-for-byte the same artefact `PUT …/metadata` takes, opaque to the
@@ -333,10 +331,9 @@ final class GroupMembershipApi {
     /// under the raw-hex placeholder name. That is the "the group comes
     /// back, renamed to a hex fragment" symptom.
     ///
-    /// Server contract (`bcrypto-server/cmd/bcrypto-lite/groups_membership.go`,
-    /// `handleLeaveGroup`): body `{signed_envelope_b64, leaver_signature_b64}`
-    /// — note the LEAVER field name, not `admin_signature_b64` like every
-    /// other endpoint here, because the signer is the subject rather than an
+    /// Server contract: body `{signed_envelope_b64, leaver_signature_b64}` —
+    /// note the LEAVER field name, not `admin_signature_b64` like every other
+    /// endpoint here, because the signer is the subject rather than an
     /// admin. The envelope must carry `t = "member_left"` with `uid` equal
     /// to the caller (the server rejects anything else 422). Reply is the
     /// usual `membershipResponse`.

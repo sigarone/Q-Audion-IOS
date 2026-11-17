@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// Stato di verifica del safety number. 1:1 port di
-/// `qaudion-android-new/core/core-ui/.../components/TrustVerificationCard.kt`
-/// (`SafetyNumberState`).
+/// Verification state of the safety number. 1:1 port of the Android
+/// `SafetyNumberState`.
 public enum TrustSafetyNumberState: Equatable {
     /// Calcolo trust ancora in corso (HKDF non completato).
     case unverified

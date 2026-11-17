@@ -4,11 +4,9 @@ import Foundation
 /// parity plan Fase E3. Pure decision helpers for the ICE-restart recovery
 /// machine, ported from Android's real, shipped implementation
 /// (`PeerConnectionHolder.restartIce` / `.handleRemoteOffer` +
-/// `CallController.notifyNetworkChanged` / `.iceFailedRecoveryJob`,
-/// qaudion-android-new). iOS had ZERO ICE-restart path before this (grep
-/// `restartIce` = 0 hits repo-wide) — a WiFi→cellular handoff mid-call had
-/// no recovery beyond WS-relay-per-frame fallback and whatever P2P pair
-/// happened to survive.
+/// `CallController.notifyNetworkChanged` / `.iceFailedRecoveryJob`).
+/// Without an ICE restart, a WiFi→cellular handoff mid-call has no recovery
+/// beyond WS-relay-per-frame fallback and whatever P2P pair happens to survive.
 ///
 /// These types contain NO WebRTC / PeerConnection state so the exact
 /// numbers and branches can be pinned by unit tests without a live call —
@@ -63,15 +61,12 @@ public enum RestartIceDecisions {
     /// W-ICERECOVERYCAP (2026-09-04) — total wall-clock budget for the
     /// escalation loop in `armIceRecoveryWatchdogIfNeeded` (the repeated
     /// `restartIce` retries once self-repair has already failed once).
-    /// Before this existed the loop had NO upper bound at all — it kept
-    /// retrying for as long as `lastIceConnectionState` stayed bad, which
-    /// is unbounded if the call is actually dead (peer already hung up,
-    /// PeerConnection never torn down locally) rather than merely
-    /// disconnected. Live incident 2026-09-03 (call a89bef42): the same
-    /// dead call_id kept getting restart offers for 2+ minutes, each
-    /// rejected by the server's W-STALEOFFER defense (bcrypto-lite
-    /// main.go) with its own `call_hangup` reply — proof the recovery was
-    /// pointless well before this budget's ceiling.
+    /// Without a cap the loop would keep retrying for as long as
+    /// `lastIceConnectionState` stays bad, which is unbounded if the call
+    /// is actually dead (peer already hung up, PeerConnection never torn
+    /// down locally) rather than merely disconnected. The server rejects a
+    /// restart offer for a dead call_id (its W-STALEOFFER defense) with its
+    /// own `call_hangup` reply, so retrying against a dead call is pointless.
     ///
     /// Sized like `MediaDeadDecisions.timeoutMs` (90s, this directory's
     /// other "give up on a phantom call" backstop) rather than derived

@@ -1,15 +1,15 @@
 import Foundation
 import QAudionEngine
 
-/// W-GRPRECEIPTOUTBOX (2026-09-15, audit
-/// reference_ios_full_audit_2026_09_15.md finding #5) — durable retry for
-/// group `group_msg_delivered`/`group_msg_read` receipts that a WS gap would
-/// otherwise drop forever. 1:1 already has this (`ChatOutboxStore
-/// .enqueueDeliveryReceipt`, GRDB-backed); group chat had nothing, so a
-/// receipt lost to a socket blip left the sender's tick stuck until the next
-/// unrelated event happened to re-sync it. UserDefaults-JSON persisted, same
-/// idiom as `GroupMessageStore` — receipts are small and low-volume, and
-/// additive-optional-field evolution needs no migration ceremony here either.
+/// W-GRPRECEIPTOUTBOX — durable retry for group
+/// `group_msg_delivered`/`group_msg_read` receipts that a WS gap would
+/// otherwise drop forever. Without it, a receipt lost to a socket blip would
+/// leave the sender's tick stuck until the next unrelated event happened to
+/// re-sync it (1:1 has the equivalent in
+/// `ChatOutboxStore.enqueueDeliveryReceipt`, GRDB-backed). UserDefaults-JSON
+/// persisted, same idiom as `GroupMessageStore` — receipts are small and
+/// low-volume, and additive-optional-field evolution needs no migration
+/// ceremony here either.
 ///
 /// Typing indicators are deliberately NOT covered: a typing signal delayed
 /// past a WS gap is stale by the time it could be resent, so queuing it would

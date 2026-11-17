@@ -1,8 +1,7 @@
 import Foundation
 
 /// Tracks the online status of a fixed set of contacts via the
-/// `presence_subscribe` / `presence_update` WebSocket flow defined in
-/// `bcrypto-server/internal/signaling/messages.go`.
+/// `presence_subscribe` / `presence_update` WebSocket flow of the server.
 ///
 /// Server contract:
 /// - Client sends `{ "type": "presence_subscribe", "data": { "user_ids": [...] } }`

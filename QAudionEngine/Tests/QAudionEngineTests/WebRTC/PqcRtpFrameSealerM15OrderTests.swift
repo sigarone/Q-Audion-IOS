@@ -44,7 +44,7 @@ final class PqcRtpFrameSealerM15OrderTests: XCTestCase {
         }
     }
 
-    // MARK: - the incident: an unsealed first frame, then sealed frames
+    // MARK: - an unsealed first frame, then sealed frames
 
     func testUnsealedFirstFrameThenSealedFramesAllDecode() throws {
         let (a, b) = try pair()

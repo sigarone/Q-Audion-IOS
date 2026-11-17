@@ -3,24 +3,15 @@ import Foundation
 /// MASVS-CRYPTO remediation (2026-08-20/21) — Swift port of Android's
 /// `feature/feature-call/domain/ReKeyScheduler.kt`.
 ///
-/// **UPDATE (2026-09-10) — the paragraph below is STALE, kept only as a
-/// dated record of the 2026-08-21 state; do not trust it for current
-/// behavior.** The FSM surgery it says was never attempted DID land (I3 §5,
-/// see `docs/security/I3_IOS_REKEY_DESIGN_2026-08-21.md`, cross-repo doc in
-/// `qaudion-android-new`): `AppState`'s `onReKeyTick` wiring drives a real
-/// mid-call PQC re-handshake via `QAudionCallIntegration.performPqcReKey`,
-/// and `QAudionCallIntegration`'s inbound-OFFER handler re-keys an
-/// already-`.active` session in place (`engine.initSession` again, skipping
-/// `engine.initialize()`) rather than throwing `invalidState`. Ticks are
-/// NOT merely logged — see `AppState.swift`'s `reKeyScheduler.onReKeyTick`
-/// closure for the actual call. This class itself does no I/O and touches
-/// no crypto material directly, only ever publishes `ReKeyTick` events for
-/// a caller to act on.
-///
-/// Original 2026-08-21 note, for history: "AppState currently logs every
-/// tick it receives instead of acting on it — a genuine new `.reKeying`
-/// state in `QAudionCallIntegration`'s FSM, or a parallel lightweight
-/// re-key primitive, needs a scoped follow-up." That follow-up is done.
+/// `AppState`'s `onReKeyTick` wiring drives a real mid-call PQC
+/// re-handshake via `QAudionCallIntegration.performPqcReKey`, and
+/// `QAudionCallIntegration`'s inbound-OFFER handler re-keys an
+/// already-`.active` session in place (`engine.initSession` again,
+/// skipping `engine.initialize()`) rather than throwing `invalidState`.
+/// Ticks are acted on, not merely logged: see `AppState.swift`'s
+/// `reKeyScheduler.onReKeyTick` closure for the actual call. This class
+/// itself does no I/O and touches no crypto material directly, only ever
+/// publishes `ReKeyTick` events for a caller to act on.
 ///
 /// The next re-key deadline is a function of the live Confidence Index C
 /// emitted by `ContactVoiceVerifier` (via `onScoreUpdated`, relayed through

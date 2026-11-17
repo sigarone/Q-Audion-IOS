@@ -184,8 +184,8 @@ final class CallHistoryStore: ObservableObject {
     ]
 }
 
-/// Schermo "Chiamate" — call history list. 1:1 port di Android
-/// `qaudion-android-new/feature/feature-call/.../CallHistoryScreen.kt`.
+/// Schermo "Chiamate" — call history list. 1:1 port of the Android
+/// implementation of this screen.
 ///
 /// Layout (top → bottom):
 ///   - TopBar "Chiamate" + trailing icone person.2 / dial.fill

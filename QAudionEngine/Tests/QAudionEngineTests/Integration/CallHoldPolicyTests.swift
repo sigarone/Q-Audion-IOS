@@ -2,9 +2,8 @@ import XCTest
 @testable import QAudionEngine
 
 /// W-CKHOLD (2026-09-02) — pins the pure local-video decision `AppState`
-/// acts on for B5 (`CXSetHeldCallAction`), without a live CallKit provider
-/// or capture session. Evidence: audit memory
-/// `reference_ios_stability_audit_2026_09_01`, P2.
+/// acts on for a system hold (`CXSetHeldCallAction`), without a live CallKit
+/// provider or capture session.
 final class CallHoldPolicyTests: XCTestCase {
 
     private typealias Policy = CallHoldPolicy

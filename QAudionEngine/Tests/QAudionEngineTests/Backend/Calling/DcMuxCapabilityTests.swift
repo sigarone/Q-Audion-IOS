@@ -28,10 +28,10 @@ import XCTest
 /// not there does not degrade a call, it kills it. Android's own historical
 /// version of that same failure — destroying the WS relay receive pump on a
 /// DataChannel upgrade — is what `dcMuxAdvertiseEnabled`'s doc comment cites
-/// as condition (b); as of `qaudion-android-new`'s current
-/// `CallTransportFactory.kt` (`ResilientFrameRelayTransport`) that specific
-/// failure mode is redesigned away, not merely avoided by luck: both receive
-/// pumps live for the whole call regardless of which leg is transmitting.
+/// as condition (b); in the current Android implementation
+/// (`ResilientFrameRelayTransport`) that specific failure mode is
+/// redesigned away, not merely avoided by luck: both receive pumps live for
+/// the whole call regardless of which leg is transmitting.
 ///
 /// No WebRTC import: every value tested is a pure constant or a pure function,
 /// so this runs on a CI machine without the WebRTC binary.
@@ -39,24 +39,17 @@ final class DcMuxCapabilityTests: XCTestCase {
 
     // MARK: - 1. the kill switch, and what it gates
 
-    /// 2026-08-25 — this test used to assert the switch ships OFF
-    /// unconditionally. Like the original, it still asserts a fixed value —
-    /// a unit test cannot itself re-derive "does production log evidence
-    /// exist" or "does today's Android source have this design" — but the
-    /// expected value flips to `true` because both preconditions the
-    /// original assertion message named have now been checked against real
-    /// evidence rather than assumed: (a) Phase 0 log evidence the
-    /// DataChannel opens and carries frames on a real Android<->iOS call —
-    /// call `532a3161` (2026-08-22 Loki correlation), dc=2717/ws=33; (b)
-    /// "the Android WS-receive-fallback companion change" — verified
-    /// present in `qaudion-android-new`'s `CallTransportFactory.kt`
-    /// (`ResilientFrameRelayTransport`: WS and DC receive pumps both live
-    /// for the whole call regardless of the active transmit leg) and pinned
-    /// there by `ResilientTransportLegSymmetryTest.kt`. Full citation trail
-    /// in `dcMuxAdvertiseEnabled`'s own doc comment. If a future change
-    /// flips the flag back to `false`, that means one of the two conditions
-    /// regressed — update this assertion AND investigate why, in that
-    /// order, same as any other kill-switch state change in this file.
+    /// Pins ``CallCapabilities/dcMuxAdvertiseEnabled`` to `true`. The tag is
+    /// advertised on the strength of two preconditions: (a) the DataChannel
+    /// opens and carries sealed audio frames between Android and iOS, and (b)
+    /// "the Android WS-receive-fallback companion change" — the Android
+    /// implementation (`ResilientFrameRelayTransport`) keeps both the WS and
+    /// DC receive pumps live for the whole call regardless of the active
+    /// transmit leg. A unit test cannot re-derive either of them, so it
+    /// asserts the switch's value. If a future change flips the flag back to
+    /// `false`, one of the two conditions regressed — update this assertion
+    /// AND investigate why, in that order. See `dcMuxAdvertiseEnabled`'s own
+    /// doc comment for the details.
     func testDcMuxAdvertiseKillSwitchMatchesItsDocumentedPreconditions() {
         XCTAssertTrue(
             CallCapabilities.dcMuxAdvertiseEnabled,

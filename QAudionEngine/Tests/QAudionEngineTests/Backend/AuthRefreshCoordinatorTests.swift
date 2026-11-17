@@ -1,8 +1,8 @@
 import XCTest
 @testable import QAudionEngine
 
-/// 2026-10-02 — one refresh single flight per process, compare-and-swap persistence, and
-/// observable healing (see the header of `AuthRefreshCoordinator.swift` for the incident).
+/// Covers the single-flight refresh per process, compare-and-swap persistence, and
+/// observable healing (see the header of `AuthRefreshCoordinator.swift` for the design).
 ///
 /// Everything here is in memory: an `InMemoryAuthCredentialStore` stands in for the
 /// Keychain and each test builds its own `AuthRefreshCoordinator`, so no test shares

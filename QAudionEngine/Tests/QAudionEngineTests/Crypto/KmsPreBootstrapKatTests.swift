@@ -10,8 +10,8 @@ import CryptoKit
 /// gap A2 / ADR-014a — `qa_kms_prebootstrap:1` envelope cross-platform
 /// verifier (iOS side).
 ///
-/// Loads `Resources/kat/kms-prebootstrap-kat.json` (vendored byte-copy of
-/// `qaudion-android-new/qaudion-engine/src/test/resources/kms-prebootstrap-kat.json`).
+/// Loads `Resources/kat/kms-prebootstrap-kat.json` (vendored byte-copy of the
+/// Android implementation's fixture of the same name).
 ///
 /// The vectors' OWN "notes" field says their ephemeral/session key
 /// material is RANDOM per generation run — they are NOT meant to be

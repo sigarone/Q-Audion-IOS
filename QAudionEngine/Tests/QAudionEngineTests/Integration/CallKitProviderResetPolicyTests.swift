@@ -4,7 +4,6 @@ import XCTest
 /// W-CKPCRESET (2026-09-02) — pins the pure decision `providerDidReset`
 /// acts on, without a live `CXProvider`/`RTCPeerConnection`. Same discipline
 /// as `CallKitWorkOffloadPolicyTests` / `RestartIceDecisionsTests`.
-/// Evidence: audit memory reference_ios_stability_audit_2026_09_01, P2.
 final class CallKitProviderResetPolicyTests: XCTestCase {
 
     private typealias Policy = CallKitProviderResetPolicy

@@ -17,33 +17,27 @@ import QAudionEngine
 ///   - `clear(for:)` runs whenever the user actually sends or cancels,
 ///     so an empty composer never leaves a dangling key behind.
 ///
-/// **Privacy — W-DRAFTATREST (2026-09-02).** Until this fix the trimmed
-/// text was written to `UserDefaults` as a plain string — user-typed, yes,
-/// but still full message content, and `UserDefaults` is included in an
-/// unencrypted local iTunes/Finder backup or iCloud device backup just
-/// like any other app file (audit memory
-/// reference_ios_stability_audit_2026_09_01, P2 "drafts plaintext in
-/// UserDefaults"). `ConversationStore` closed the identical gap for SENT
-/// messages back on 2026-08-02 (see `LocalStoreCipher`'s own header) by
-/// sealing the content with a device-held AES-256-GCM key before it ever
-/// reaches a row; drafts now go through the exact same `LocalStoreCipher`
-/// — no new crypto, same Keychain-held key, same `AfterFirstUnlockThis-
-/// DeviceOnly` accessibility class. What changes is only WHAT lands in
-/// `UserDefaults`: ciphertext instead of plaintext, so a backup captures a
-/// blob that a restore-to-new-device (or even a fresh restore on the same
-/// device, since the key is `ThisDeviceOnly`) can never open. A legacy
-/// unsealed row from before this fix still loads verbatim (`LocalStoreCipher
-/// .open` passes through anything without the seal marker) and is resealed
-/// on its very next `save`, so no in-flight draft is lost on upgrade.
+/// **Privacy — W-DRAFTATREST.** The trimmed text is sealed before it is
+/// written to `UserDefaults`: it is user-typed, but still full message
+/// content, and `UserDefaults` is included in an unencrypted local
+/// iTunes/Finder backup or iCloud device backup just like any other app
+/// file. `ConversationStore` seals the content of SENT messages with a
+/// device-held AES-256-GCM key before it ever reaches a row (see
+/// `LocalStoreCipher`'s own header); drafts go through the exact same
+/// `LocalStoreCipher` — no new crypto, same Keychain-held key, same
+/// `AfterFirstUnlockThisDeviceOnly` accessibility class. What lands in
+/// `UserDefaults` is ciphertext instead of plaintext, so a backup captures
+/// a blob that a restore-to-new-device (or even a fresh restore on the
+/// same device, since the key is `ThisDeviceOnly`) can never open. A legacy
+/// unsealed row still loads verbatim (`LocalStoreCipher.open` passes
+/// through anything without the seal marker) and is resealed on its very
+/// next `save`, so no existing draft is lost.
 ///
-/// `QAudionDatabase`'s SQLite store was the OTHER option named for this
-/// (drafts as a new table there, mirroring `messages`), but that file was
-/// touched hours earlier tonight for W-DBOPENRECOVER (the open/migration
-/// recovery ladder) and the instruction for this session is explicit: don't
-/// touch that just-fixed surface. `LocalStoreCipher` alone gets the actual
-/// goal — no plaintext draft content in a backup — without adding a
-/// migration, a GRDB record type, or a new SQLite dependency to the App
-/// target for a P2 item; see the session report for the explicit call-out.
+/// `QAudionDatabase`'s SQLite store was the OTHER option for this (drafts
+/// as a new table there, mirroring `messages`), but `LocalStoreCipher`
+/// alone gets the actual goal — no plaintext draft content in a backup —
+/// without adding a migration, a GRDB record type, or a new SQLite
+/// dependency to the App target.
 ///
 /// Drafts are wiped on full account reset (`DevResetScreen` clears the
 /// suite). For privacy-mode users we honour `appState.hideMessageContent`

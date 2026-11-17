@@ -4,8 +4,7 @@ import Foundation
 /// sets `CallKitProvider` keeps. Extracted from the provider so the sets are
 /// guarded by one lock and every check-then-act the provider needs is a
 /// single atomic call; before this they were plain `private var Set<UUID>`
-/// on an `@unchecked Sendable` type with no lock at all (see audit memory
-/// reference_ios_stability_audit_2026_09_01, P1 item 9).
+/// on an `@unchecked Sendable` type with no lock at all.
 ///
 /// Why a lock is needed and not just a main-thread assertion: not every
 /// access is on main. `CallKitProvider` is NOT `@MainActor`, so its `async`

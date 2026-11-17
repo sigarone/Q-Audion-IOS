@@ -22,8 +22,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// thread — and the PushKit+WS `dup=1` report below is two pool threads
     /// mutating the same Set at once. All three now live behind one NSLock in
     /// `CallKitCallLedger` (each set's own rationale is documented there);
-    /// every check-then-act below is a single atomic ledger call. See audit
-    /// memory reference_ios_stability_audit_2026_09_01, P1 item 9.
+    /// every check-then-act below is a single atomic ledger call.
     private let ledger = CallKitCallLedger()
 
     /// Where this type's diagnostics go. Set by the app to forward into the
@@ -34,10 +33,10 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// boundary the mesh runtime keeps.
     public var log: ((String) -> Void)?
     /// Fired when the user answers. Returns whether the app ACCEPTED the answer:
-    /// `false` = it refused a dead / placeholder call (W-GHOSTCALL, incident
-    /// e3acecd7), in which case the provider fails the native answer action and
-    /// skips the audio-session activation that normally follows, because there is
-    /// no call to activate it for. A nil handler counts as accepted (the
+    /// `false` = it refused a dead / placeholder call (W-GHOSTCALL), in which
+    /// case the provider fails the native answer action and skips the
+    /// audio-session activation that normally follows, because there is no
+    /// call to activate it for. A nil handler counts as accepted (the
     /// pre-existing behaviour).
     public var onAnswerCall: ((UUID) async -> Bool)?
     public var onEndCall: ((UUID) async -> Void)?
@@ -45,10 +44,9 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// W-CKHOLD (2026-09-02) — fired from `provider(_:perform:
     /// CXSetHeldCallAction)` when the SYSTEM (not our own UI) puts this
     /// call on hold or takes it off — another CallKit call becoming
-    /// active, or a Siri "hold my call" request. See B5, audit memory
-    /// reference_ios_stability_audit_2026_09_01, P2: until now this action
-    /// reached no delegate method at all, so CallKit's Hold button
-    /// silently failed (the action was never fulfilled).
+    /// active, or a Siri "hold my call" request. The handler is needed
+    /// because an action no delegate method handles is never fulfilled, so
+    /// CallKit's Hold button would silently fail.
     public var onHoldChanged: ((UUID, Bool) async -> Void)?
     /// W464 — fired when CallKit has activated the shared AVAudioSession.
     /// This is the ONLY safe moment to start `AVAudioEngine` (mic capture
@@ -671,31 +669,26 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
     /// `logSite` is cosmetic (keeps the two callers' log lines
     /// distinguishable); the retry/forward logic is identical either way.
     ///
-    /// W-RTCLOCKMIGRATE (2026-09-09) — this used to mutate the raw
-    /// `AVAudioSession.sharedInstance()` directly, then tell `RTCAudioSession`
-    /// about it after the fact via `audioSessionDidActivate` (the "outside"
+    /// W-RTCLOCKMIGRATE — this function activates the session through
+    /// `RTCAudioSession`'s own lock and proxies, not by mutating the raw
+    /// `AVAudioSession.sharedInstance()` and telling `RTCAudioSession` about
+    /// it afterward via `audioSessionDidActivate` (the "outside"
     /// notification). That channel is for genuinely-outside activation — its
     /// own header doc: "used to inform RTCAudioSession when the audio session
     /// activation state has changed outside of RTCAudioSession... when
     /// CallKit activates the audio session for the application." This
     /// function is OUR OWN app code doing the activating, not CallKit, so it
-    /// was using the wrong half of the API — and the header is explicit
-    /// about the right half: "Callers should not call setters on
-    /// AVAudioSession directly." `RTCAudioSession` tracks its own
-    /// `isActive`/`activationCount` ONLY through calls that go through its
-    /// own `lockForConfiguration`/`setCategory`/`setActive` proxies; a direct
+    /// uses the other half of the API — and the header is explicit about it:
+    /// "Callers should not call setters on AVAudioSession directly."
+    /// `RTCAudioSession` tracks its own `isActive`/`activationCount` ONLY
+    /// through calls that go through its own
+    /// `lockForConfiguration`/`setCategory`/`setActive` proxies; a direct
     /// `AVAudioSession.setActive(true)` is invisible to that bookkeeping
-    /// regardless of any notification sent afterward. This is exactly the
-    /// gap `reference_ios_callkit_webrtc_audio_activation_race_2026_09_08.md`
-    /// (session memory, written the night before tonight's audio-srtp work)
-    /// already named as the real fix and flagged as unimplemented: "the only
-    /// architecturally sound fix is migrating EVERY session mutation... the
-    /// app's own category/mode/buffer-duration calls AND the CallKit-
-    /// activation relay — through the wrapper's lock." Confirmed against the
-    /// actual pinned `webrtc-sdk/webrtc@m144_release` header (fetched, not
-    /// assumed) before writing this. `useManualAudio` is still never touched
-    /// — this is the automatic-mode-compatible half of the fix, not the
-    /// 1053/1056/1066 manual-mode regression class.
+    /// regardless of any notification sent afterward, so this function routes
+    /// its category and activation calls through the wrapper's lock. This
+    /// follows the pinned `webrtc-sdk/webrtc@m144_release` header.
+    /// `useManualAudio` is never touched: this is the
+    /// automatic-mode-compatible approach.
     ///
     /// W-SELFACTID (2026-09-27) — `uuid`: the CallKit uuid this activation is
     /// made for; the self-activation mark of a native-SRTP call is keyed by it
@@ -757,8 +750,7 @@ public final class CallKitProvider: NSObject, CallKitManaging, CXProviderDelegat
             try rtcSession.setCategory(.playAndRecord, mode: .voiceChat, options: audioOpts)
         } catch {
             // W-SIGSWALLOW (2026-09-01) — was `try?`: a refused category is
-            // the first link in a silent-call chain and left no line (audit
-            // memory reference_ios_stability_audit_2026_09_01, P1 item 7).
+            // the first link in a silent-call chain and left no line.
             // Flow unchanged; the setActive retry loop below still runs.
             print("[CallKitProvider] setCategory fail site=\(logSite) code=\((error as NSError).code) err=\(error.localizedDescription)")
         }

@@ -1,14 +1,12 @@
 import Foundation
 
-/// W-CKHOLD (2026-09-02) — pure decision for `CallKitProvider`'s B5 fix:
+/// W-CKHOLD — pure decision for `CallKitProvider`'s hold handling:
 /// whether local VIDEO should pause/resume when the SYSTEM places THIS
 /// call on or off hold (`CXSetHeldCallAction` — another CallKit call
 /// becoming active, or a Siri "hold my call" request; the SAME delegate
 /// callback also fires for the app's own in-app Hold button, since
 /// `CallKitManaging.setOnHold` requests the identical action via
-/// `CXCallController`). Evidence: audit memory
-/// `reference_ios_stability_audit_2026_09_01`, P2 — the action reached no
-/// delegate method at all before this, so a hold silently timed out.
+/// `CXCallController`).
 ///
 /// AUDIO is deliberately NOT decided here: `CallService.isOnHold` /
 /// `setOnHold(_:)` is already the app's real, shipped hold mechanism (it

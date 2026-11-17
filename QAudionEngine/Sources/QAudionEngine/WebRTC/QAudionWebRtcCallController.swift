@@ -1768,9 +1768,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     // (2026-08-25) — ICE-restart recovery machine. Parity plan Fase E3,
     // ported from Android's `PeerConnectionHolder.restartIce` /
     // `.handleRemoteOffer` + `CallController.notifyNetworkChanged` /
-    // `.iceFailedRecoveryJob` (qaudion-android-new). See
-    // `RestartIceDecisions` for the pure decision logic these methods
-    // drive.
+    // `.iceFailedRecoveryJob`. See `RestartIceDecisions` for the pure
+    // decision logic these methods drive.
 
     /// The ORIGINAL role of this call, fixed for its whole lifetime —
     /// `true` set by `startOutgoingCall`, `false` by `acceptIncomingCall`.
@@ -1879,8 +1878,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     // path). Here the risky edge is the OPPOSITE action — SKIPPING the
     // always-on WS-relay video send — so the debounce guards that instead,
     // and falling back to the relay (the safe direction) stays instant.
-    // See `AppState`'s `onOutboundFragment` wiring and
-    // reference_transport_fallback_audit_2026_08_26.md.
+    // See `AppState`'s `onOutboundFragment` wiring.
 
     /// Monotonic ms timestamp the CURRENT good-ICE streak started
     /// (`.connected`/`.completed`), or `nil` when ICE is not currently in a
@@ -3030,8 +3028,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             do {
                 try await callingApi.sendHangup(recipientId: rid)
             } catch {
-                // W-SIGSWALLOW (2026-09-01) — was `try?` (audit memory
-                // reference_ios_stability_audit_2026_09_01, P1 item 7).
+                // W-SIGSWALLOW — a failed send is logged, not swallowed.
                 // Delivery is parked inside the impl; this only surfaces it.
                 print("[WebRtcCallController] sigsend fail kind=call_hangup site=hangup err=\(error)")
             }
@@ -3237,17 +3234,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     // Parity plan Fase E3 (docs/interop/2026-08-25-cross-platform-parity-
     // plan.md), ported from Android's real, shipped implementation:
     // `PeerConnectionHolder.restartIce`/`.handleRemoteOffer` +
-    // `CallController.notifyNetworkChanged`/`.iceFailedRecoveryJob`
-    // (qaudion-android-new, graph-verified against
-    // feature/feature-call/.../data/webrtc/PeerConnectionHolder.kt and
-    // .../domain/CallController.kt). See `RestartIceDecisions` for the
-    // pure decision logic (self-repair window sizing, glare verdicts) —
-    // this section is the imperative wiring around it.
+    // `CallController.notifyNetworkChanged`/`.iceFailedRecoveryJob`. See
+    // `RestartIceDecisions` for the pure decision logic (self-repair window
+    // sizing, glare verdicts) — this section is the imperative wiring
+    // around it.
 
     /// W-PROACTIVEHANDOFF: numeric-safe encoding of an interface type for
-    /// `log?(...)` lines (this repo's redactor rule — see
-    /// `reference_ios_log_pipeline_limits` — blobs any non-numeric free
-    /// text token, so a raw `\(type)` interpolation would be silently
+    /// `log?(...)` lines (this repo's log redactor blobs any non-numeric
+    /// free text token, so a raw `\(type)` interpolation would be silently
     /// dropped before it ever reaches Loki; every other log line in this
     /// file already encodes enum/bool state as an Int for the same
     /// reason, e.g. `route tier=\(tier == .relay ? 1 : 0)` above).
@@ -4427,10 +4421,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
     }
 
-    /// W-CRYPTORQUEUE (this task) — the WebRTC-touching body of
-    /// `installAudioSrtpIfPossible`, always running on `cryptorAttachQueue`.
-    /// See that method's doc for why, and `cryptorAttachQueue`'s own doc for
-    /// the incident this closes.
+    /// W-CRYPTORQUEUE — the WebRTC-touching body of `installAudioSrtpIfPossible`,
+    /// always running on `cryptorAttachQueue`. See that method's doc for why,
+    /// and `cryptorAttachQueue`'s own doc for the root cause this closes.
     private func installAudioSrtpOnQueue(pc: QAudionPeerConnection, keys: (send: Data, recv: Data), retriesRemaining: Int) {
         // W-AUDIORXPOSTNEG (2026-08-28) — this call site is reached only
         // once `negotiated.useAudioSrtp` is confirmed, which means the SDP
@@ -5134,10 +5127,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     accessToken: accessToken,
                     pinnedSession: callingApi.pinnedUrlSession()
                 )
-                // W-SIGSWALLOW (2026-09-01) — was `try?`: a WSS-TURN bridge that
-                // failed to start silently left the call without its last-resort
-                // relay path and no line said so (audit memory
-                // reference_ios_stability_audit_2026_09_01, P1 item 7).
+                // W-SIGSWALLOW — a WSS-TURN bridge that fails to start is
+                // logged, not swallowed: the call then goes on without its
+                // last-resort relay path.
                 let bridgeResult: WssTurnBridge.BridgeResult?
                 do {
                     bridgeResult = try await bridge.start()

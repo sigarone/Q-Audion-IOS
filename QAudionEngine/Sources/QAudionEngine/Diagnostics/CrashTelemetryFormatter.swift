@@ -10,14 +10,13 @@ import Foundation
 /// own `Bundle`/`Date`/`Thread` reads) — this type never touches a file, a
 /// signal or a thread.
 ///
-/// Size discipline matches the server audit for `POST
-/// /api/v1/telemetry/batch` this task's spec is built on: the server's
+/// Size discipline for `POST /api/v1/telemetry/batch`: the server's
 /// per-record cap is 32 KiB and this client's own per-BATCH cap
 /// (`TelemetryService.maxBatchBytes`) is 16 KiB shared with every other
 /// buffered event (including the `app.launch` marker emitted moments
 /// before this one) — `maxTotalAttrsBytes` keeps one `app.crash` record
-/// far under both, with a wide margin, matching the bcrypto-server audit's
-/// own "~8 KB used, ~4x margin" estimate.
+/// far under both, with a wide margin (8 KiB, about 4x below the server's
+/// per-record cap).
 public enum CrashTelemetryFormatter {
 
     public static let kind: String = "app.crash"

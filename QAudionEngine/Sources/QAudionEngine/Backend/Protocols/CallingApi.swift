@@ -400,7 +400,7 @@ public extension CallingApi {
     }
 }
 
-/// Bcrypto-server `/api/v1/calling/relays` response shape.
+/// Server `/api/v1/calling/relays` response shape.
 /// Mirrors Android `RelayDto` / `RelaysResponse`:
 /// - `username` and `credential` are **optional** (STUN-only relays omit
 ///   them); previous iOS revs declared them non-optional, which made the
@@ -412,12 +412,11 @@ public struct RelayServer: Decodable, Equatable {
     public let username: String?
     public let credential: String?
     public let ttl: Int
-    /// W-RELAYGEO (2026-08-26, best-practices audit item 5) — optional
-    /// region/geo hint (e.g. `"eu-west"`, `"fi"`), matching whatever label
-    /// the relay-fleet operator assigns server-side. `nil` on every
-    /// deployment today: as of this change the server's relay-list model
-    /// (`bcrypto-server`) does NOT populate or even define this field yet —
-    /// this is the client's forward-compatible READ side only, added so
+    /// W-RELAYGEO — optional region/geo hint (e.g. `"eu-west"`, `"fi"`),
+    /// matching whatever label the relay-fleet operator assigns
+    /// server-side. `nil` on every deployment today: the server's
+    /// relay-list model does NOT populate or even define this field yet.
+    /// This is the client's forward-compatible READ side only, added so
     /// nothing breaks (and `RelayOrdering` can start using it for free) the
     /// moment the server starts sending one, without a second client
     /// release. Until then, `RelayOrdering` falls back entirely to the

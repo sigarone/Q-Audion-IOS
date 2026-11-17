@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// Small uppercase trust chip used in `ContactRow` and `ContactDetailScreen`
-/// (e.g. "PQC", "VOICE", "ENTERPRISE"). 1:1 port of Android trust pill from
-/// `qaudion-android-new/feature/feature-contacts/.../ContactsUi.kt`.
+/// (e.g. "PQC", "VOICE", "ENTERPRISE"). 1:1 port of the Android trust pill.
 ///
 /// Capsule, monospace, 1.2sp tracking. Foreground = `accent`, fill =
 /// `accent @ 0.18α`, border = `accent @ 0.55α`.

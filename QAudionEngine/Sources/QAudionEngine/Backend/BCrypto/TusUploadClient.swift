@@ -1,6 +1,6 @@
 import Foundation
 
-/// W443 — tus.io v1.0.0 resumable upload client for bcrypto-server.
+/// W443 — tus.io v1.0.0 resumable upload client for the server.
 ///
 /// Protocol overview (subset implemented here):
 ///   POST  {serverUrl}/api/v1/files/tus

@@ -24,17 +24,15 @@ public enum IceTerminationAction: Equatable, Sendable {
 /// decisions that were missing from this policy: what happens when the
 /// grace RUNS OUT, and whether an ICE `.failed` is really the end of the call.
 ///
-/// Evidence (audit memory reference_ios_stability_audit_2026_09_01, P1 item
-/// 10): at grace expiry iOS called `endCall()` — base 10 s
-/// (AppState.swift:14007-14019) and extended 50 s (:14056-14067) — although
-/// during that same grace the audio was ALREADY riding the WS relay
-/// per-frame (W-DCTXICEGATE, controller `sendAudioFrameData`; audio-srtp
-/// calls via the W-SRTPFALLBACK engage). Android in the same state
-/// downgrades to the WS relay (`downgradeToWsRelay("disconnected-after-grace")`,
-/// and `"FAILED"` on the terminal edge), keeps the ICE-restart loop running
-/// and only ends the call from its media-dead watchdog; Desktop swaps to the
-/// WS relay in place at grace expiry since 2026-09-01. iOS was the one
-/// platform that hung up on a working relay leg.
+/// Why a relay leg keeps the call alive: during the grace the audio is
+/// ALREADY riding the WS relay per-frame (W-DCTXICEGATE, controller
+/// `sendAudioFrameData`; audio-srtp calls via the W-SRTPFALLBACK engage), so
+/// ending the call at grace expiry (base 10 s, extended 50 s) would hang up
+/// on a working relay leg. Android in the same state downgrades to the WS
+/// relay (`downgradeToWsRelay("disconnected-after-grace")`, and `"FAILED"` on
+/// the terminal edge), keeps the ICE-restart loop running and only ends the
+/// call from its media-dead watchdog; Desktop swaps to the WS relay in place
+/// at grace expiry.
 ///
 /// Why ICE `.failed` is part of this and not only the grace timer: the
 /// controller arms its restart watchdog on `.failed` as well as

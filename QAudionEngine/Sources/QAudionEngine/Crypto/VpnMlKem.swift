@@ -29,7 +29,7 @@ public enum VpnMlKem {
     /// HKDF info label shared with the server. The PSK contract is:
     ///   PSK = HKDF-SHA256(IKM = sharedSecret, salt = <empty>,
     ///                     info = "bcrypto-wg-psk-v1", L = 32)
-    /// Must match bcrypto-server and the Android client byte-for-byte.
+    /// Must match the server and the Android client byte-for-byte.
     private static let hkdfInfo = Data("bcrypto-wg-psk-v1".utf8)
 
     /// Expected ML-KEM-1024 sizes (FIPS 203). Used only for defensive
@@ -119,7 +119,7 @@ public enum VpnMlKem {
     /// Split out from `derivePsk` so the HKDF step is unit-testable against a
     /// frozen cross-platform vector without exercising the KEM (the shared secret
     /// is 32 bytes regardless of parameter set). Matches `CallSessionKeyBroker`'s
-    /// CryptoKit HKDF usage and the bcrypto-server / Android / desktop byte-for-byte.
+    /// CryptoKit HKDF usage and the server / Android / desktop byte-for-byte.
     static func deriveWgPsk(fromSharedSecret sharedSecret: Data) -> Data {
         let psk = HKDF<SHA256>.deriveKey(
             inputKeyMaterial: SymmetricKey(data: sharedSecret),

@@ -2,9 +2,8 @@ import Foundation
 import CryptoKit
 @testable import QAudionEngine
 
-// An in-memory model of the server's parts protocol (Bcrypto-server internal/filesv2, commit f541653b), written by reading
-// handler.go, store.go, service.go, bulk.go, token.go, download.go and cleanup.go, and held to the real handlers by the
-// conformance transcript (FileV2TranscriptReplay.swift replays every scenario against it).
+// An in-memory model of the server's parts protocol, held to the real handlers by the conformance transcript
+// (FileV2TranscriptReplay.swift replays every scenario against it).
 //
 // It is a state machine over HTTP-shaped requests (FakeWireRequest) and answers (FakeWireResponse), with no thread and no
 // timer of its own: a request that the real server would hold (a stalled upload, a retry that waits for a busy part, a

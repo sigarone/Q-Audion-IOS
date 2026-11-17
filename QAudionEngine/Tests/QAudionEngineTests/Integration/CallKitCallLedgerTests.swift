@@ -297,8 +297,8 @@ final class CallKitCallLedgerTests: XCTestCase {
 
     // MARK: - beginReport / finishReport (W-GHOSTCALL single-flight)
 
-    /// Incident e3acecd7 03.221/03.222: two reports of the same uuid inside the
-    /// same millisecond. Only the first may be "the first report".
+    /// Two reports of the same uuid inside the same millisecond. Only the first
+    /// may be "the first report".
     func test_beginReport_firstCallerWins_secondIsADuplicate() {
         let ledger = CallKitCallLedger()
         let uuid = UUID()

@@ -1,8 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// Reusable circular avatar. 1:1 port of Android
-/// `qaudion-android-new/core/core-ui/.../components/AvatarImage.kt`.
+/// Reusable circular avatar. 1:1 port of the Android implementation of
+/// this component.
 ///
 /// Four rendering modes (in priority order):
 ///   0. `shortNumber` non-nil → shown verbatim inside the gradient circle

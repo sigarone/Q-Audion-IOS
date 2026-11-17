@@ -57,7 +57,7 @@ public enum HkdfLabels {
     /// prior 2-leg combine had NO ciphertext binding — schema :1, now
     /// superseded). MUST be byte-identical to firmware `LABEL_CT_BIND`,
     /// Android `HYBRID_CT_BIND_LABEL`, Desktop `HYBRID_CT_BIND`.
-    /// Spec: apps/qaudion-firmware/docs/CROSS_PLATFORM_HYBRID_KDF.md.
+    /// Spec: the firmware's cross-platform hybrid KDF document.
     public static let hybridCtBindV1: Data = Data("q-audion-ct-bind-v1".utf8)
 
     /// SAS v6 `info` prefix (WIRE_SPEC §4). The full info is

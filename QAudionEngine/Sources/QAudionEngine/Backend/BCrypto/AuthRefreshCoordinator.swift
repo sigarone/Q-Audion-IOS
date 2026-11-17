@@ -2,17 +2,14 @@ import Foundation
 
 // MARK: - Session recovery: one coordinator per process
 //
-// 2026-10-02 incident (iPhone, iOS 1.0.1201, signed out 14:37:38-16:53:13 UTC).
-//
-// Every REST call answered 401 for 2h16m, the socket never authenticated, and the
-// server logged 37 `/auth/refresh` rejections for the SAME refresh-token hash. That
-// token was dead (neither live nor a tombstone) because, earlier that morning, two
-// `/auth/refresh` calls carrying the same token had been in flight 49 ms apart: the
-// proactive refresh in the app layer called `accountApi.refreshToken` directly, outside
-// the REST client's single-flight, while a 401 cascade from another provider did the
-// same. The server rotated once, forgave the second and collapsed the coexisting live
-// tokens; the loser's token was deleted, and the loser was the one the client wrote to
-// the Keychain last.
+// Two `/auth/refresh` calls carrying the same refresh token must never be in flight at
+// the same time. The server rotates the token on the first call, forgives the second and
+// collapses the coexisting live tokens; the token of the losing call is deleted, and if it
+// is the one the client wrote to the Keychain last, the stored token is dead (neither live
+// nor a tombstone). Every REST call then answers 401 and the socket never authenticates.
+// Two such calls overlap when a proactive refresh in the app layer calls
+// `accountApi.refreshToken` directly, outside the REST client's single-flight, while a 401
+// cascade from another provider does the same.
 //
 // Two defects are fixed here, in the one place every refresh now goes through:
 //
@@ -59,11 +56,11 @@ import Foundation
 //      abandoned work completes, or `abandonedMarkerFactor` x the deadline at most). While the
 //      marker lives no new flight presents that token: it ends at once with the transient
 //      `flight_timeout` and no network call, because the abandoned request may still be on the
-//      wire and two presentations of one refresh token within seconds are what collapsed the
-//      session on 2026-10-02. The late result is still compare-and-swapped into the store and
-//      adopted by the next caller. And a cancelled (abandoned) flight writes NO shared state
-//      when it finally answers (dead-token memory, renew cooldown): only the compare-and-swap
-//      of a successful result, so a zombie can never undo what a newer flight established.
+//      wire and two presentations of one refresh token within seconds collapse the session. The
+//      late result is still compare-and-swapped into the store and adopted by the next caller.
+//      And a cancelled (abandoned) flight writes NO shared state when it finally answers
+//      (dead-token memory, renew cooldown): only the compare-and-swap of a successful result,
+//      so a zombie can never undo what a newer flight established.
 //      One exception, in the safe direction: a late refresher SUCCESS proves the server spent
 //      the token it was sent, so if that result cannot be stored (CAS throws, e.g. a locked
 //      Keychain) the sent token is still remembered as dead. A late REJECTION is not recorded.

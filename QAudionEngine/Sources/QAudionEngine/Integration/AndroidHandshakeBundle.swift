@@ -4,8 +4,7 @@ import Foundation
 ///
 /// ## Why this exists
 ///
-/// Android's `apps/qaudion-android-new/feature/feature-call/src/main/java/com/bcrypto/qaudion/
-/// feature/call/domain/PqcHandshake.kt` and Desktop's
+/// The Android implementation and Desktop's
 /// `apps/qaudion-desktop/src/main/calling/CallController.ts:handleAndroidBundle`
 /// speak a JSON wire format for the per-call PQC handshake that iOS's
 /// `QAudionCapabilityExchange` (QUAD binary) cannot consume.

@@ -4,12 +4,10 @@ import Foundation
 /// call-signaling ACTION fails: a setup envelope whose fast path finds no
 /// authenticated socket, or a CallKit answer transaction the system refuses.
 ///
-/// Background (audit memory reference_ios_stability_audit_2026_09_01, P1
-/// item 7): every call-signaling send in the app was fire-and-forget behind
-/// `try?` — `call_accepted`, `call_processing`/`call_ready`, `call_hangup`,
-/// ICE candidates, the CallKit answer, the PQC ACCEPT. A failure left no
-/// log line at all, which is exactly why the calls we could not explain
-/// from the logs could not be explained: the evidence was swallowed at the
+/// Call-signaling sends (`call_accepted`, `call_processing`/`call_ready`,
+/// `call_hangup`, ICE candidates, the CallKit answer, the PQC ACCEPT) must
+/// not be fire-and-forget behind `try?`: a failure that leaves no log line
+/// cannot be explained afterwards, because the evidence is swallowed at the
 /// send site. This file holds the two behaviors that CHANGE at runtime as
 /// a consequence (both compile-time kill switches, default = new behavior,
 /// same style as `CallCapabilities.longAudioSendEnabled` /

@@ -4,13 +4,12 @@ import Foundation
 /// active-screen-capture transition (`UIScreen.capturedDidChangeNotification`
 /// / `.isCaptured`) is worth a privacy log line.
 ///
-/// Q-Audion already logged a one-shot still screenshot
+/// Q-Audion logs a one-shot still screenshot
 /// (`UIApplication.userDidTakeScreenshotNotification`, see
-/// `QAudionApp.registerScreenshotObserver`) but had no equivalent for an
+/// `QAudionApp.registerScreenshotObserver`) and needs an equivalent for an
 /// ACTIVE recording session — Control Center screen recording, AirPlay/
 /// QuickTime device mirroring, or any other consumer Apple's own `isCaptured`
-/// documentation groups under "capture" (audit memory
-/// reference_ios_stability_audit_2026_09_01, P2 privacy-overlay item).
+/// documentation groups under "capture".
 /// `isCaptured` is a live, persistent flag, not a one-shot event like the
 /// screenshot notification, so the app-layer NotificationCenter handler
 /// needs an explicit rule for WHEN a transition is worth a log line — that

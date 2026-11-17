@@ -2,9 +2,9 @@ import XCTest
 @testable import QAudionEngine
 
 /// W-SIGSWALLOW (2026-09-01) — pins the failure-path contract for
-/// call-signaling sends (audit memory reference_ios_stability_audit_2026_09_01,
-/// P1 item 7). Same style as `RestartIceDecisionsTests`: the numbers and
-/// branches the live path relies on, without a socket or a CallKit provider.
+/// call-signaling sends. Same style as `RestartIceDecisionsTests`: the
+/// numbers and branches the live path relies on, without a socket or a
+/// CallKit provider.
 final class CallSignalingFailurePolicyTests: XCTestCase {
 
     // MARK: - Kill switches ship ON (the new behavior is the default)

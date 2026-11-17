@@ -2,7 +2,7 @@ import XCTest
 @testable import QAudionEngine
 
 /// W-GHOSTCALL (2026-09-25) — pins the memory the cancel-push handler and the
-/// answer path use to refuse a call that has already ended (incident e3acecd7).
+/// answer path use to refuse a call that has already ended.
 /// The clock is injected through `now:`, so no test sleeps. Same style as
 /// `CallKitCallLedgerTests`.
 final class RecentlyEndedCallLedgerTests: XCTestCase {

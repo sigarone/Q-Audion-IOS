@@ -5,7 +5,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Call state machine. `connecting` and `ringing` are finer-grained variants
     /// of `outgoingOffering` from the desktop CallController — they let the UI
     /// distinguish between "remote acked our offer" (processing) and "remote is
-    /// now ringing" (ready). See bcrypto-server pre-negotiation flow.
+    /// now ringing" (ready). See the server's pre-negotiation flow.
     public enum CallState: String {
         case idle
         case capabilitySent
@@ -53,30 +53,24 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `sessionInitializedByCall` above answers "have we EVER completed a
     /// handshake for this callId" — correct for the 30s pre-handshake
     /// timeout and the reconnect-replay window, but it cannot distinguish a
-    /// byte-identical OFFER *retransmit* (adversarial review 2026-08-21
-    /// corrected the original attribution here: Android's app layer is
-    /// single-shot for the first handshake — one OFFER, `HANDSHAKE_TIMEOUT`,
-    /// then hangup, no resend — and `performReKey` never retries a failed
-    /// round either, it just waits for the next periodic tick with a FRESH
-    /// keypair. The real source of a byte-identical redelivery is WS/push
-    /// message-layer redelivery, e.g. the documented "W-PUSHWAKE
-    /// buffered-offer redelivery" incident, call `c74487d2` — see this
-    /// file's own W-PQCENTRY comment above `onAndroidBundleReceived`. That
-    /// still MUST replay the same cached ACCEPT, never re-derive) from a
-    /// genuinely NEW OFFER on the SAME callId carrying fresh ML-KEM/X25519
-    /// public keys (a mid-call PQC
-    /// re-key — Android's `ReKeyScheduler`/`performReKey`, WIRE_SPEC §3: a
-    /// re-key OFFER is byte-identical in *shape* to the first handshake's,
-    /// the only way to tell them apart is the key material itself).
+    /// byte-identical OFFER *retransmit* (Android's app layer is single-shot
+    /// for the first handshake — one OFFER, `HANDSHAKE_TIMEOUT`, then hangup,
+    /// no resend — and `performReKey` never retries a failed round either, it
+    /// just waits for the next periodic tick with a FRESH keypair. A
+    /// byte-identical redelivery therefore comes from WS/push message-layer
+    /// redelivery, e.g. a buffered offer redelivered after a push wake
+    /// (W-PUSHWAKE). That still MUST replay the same cached ACCEPT, never
+    /// re-derive) from a genuinely NEW OFFER on the SAME callId carrying fresh
+    /// ML-KEM/X25519 public keys (a mid-call PQC re-key — Android's
+    /// `ReKeyScheduler`/`performReKey`, WIRE_SPEC §3: a re-key OFFER is
+    /// byte-identical in *shape* to the first handshake's, the only way to
+    /// tell them apart is the key material itself).
     /// Before this fix, every OFFER after the first for a given callId hit
     /// `sessionInitializedByCall`'s callId-only check and was silently
-    /// answered by replaying the STALE original ACCEPT, discarding the
-    /// re-key's new keys entirely and desyncing the session key from the
-    /// peer's. See `docs/security/I3_IOS_REKEY_DESIGN_2026-08-21.md` in the
-    /// qaudion-android-new repo (cross-repo doc, not in this repo) for the
-    /// full root-cause trace. Keyed by
-    /// "<lowercased callId>#<base64 SHA-256(pqcPub || x25519Pub)>", cleared
-    /// alongside `sessionInitializedByCall` at call teardown/reuse.
+    /// answered by replaying the STALE original ACCEPT, discarding the re-key's
+    /// new keys entirely and desyncing the session key from the peer's.
+    /// Keyed by "<lowercased callId>#<base64 SHA-256(pqcPub || x25519Pub)>",
+    /// cleared alongside `sessionInitializedByCall` at call teardown/reuse.
     private var processedOfferFingerprintsByCall: Set<String> = []
     /// ACCEPT wire bundle cached per entry in
     /// `processedOfferFingerprintsByCall`, so a retransmit of THAT SPECIFIC
@@ -2814,8 +2808,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // .sessionActive` is an explicit allowed transition — see
             // QAudionEngine.initSession's guard — and SessionManager
             // .initSession is a pure key-derivation + atomic swap, safe to
-            // re-run). See docs/security/I3_IOS_REKEY_DESIGN_2026-08-21.md
-            // in the qaudion-android-new repo (cross-repo doc).
+            // re-run).
             let (alreadyInit, isReKeyRound, boundToAnotherCall) = lock.withLock { () -> (Bool, Bool, Bool) in
                 // The binding is asserted where the OFFER is accepted: a sibling OFFER of this call whose first one
                 // failed (and gave the binding back) takes it again here, and an OFFER of another call is refused.
@@ -3112,9 +3105,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 // meaningless (and actively confusing to the caller's UI) once
                 // the call is already Active. Only send it on the first round;
                 // a re-key round must not re-announce "ringing" on an
-                // already-connected call. Found by adversarial review, not the
-                // original pass — see I3_IOS_REKEY_DESIGN_2026-08-21.md §8 in
-                // the qaudion-android-new repo (cross-repo doc).
+                // already-connected call.
                 if !callerId.isEmpty && !isReKeyRound {
                     sendCallReady?(callId, callerId)
                 }
@@ -4512,8 +4503,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// Byte-identical to firmware `qa_session_handshake_complete` (hybrid
     /// path), Android `HybridPqcKeyExchange.deriveSessionKey` and Desktop
     /// `deriveHybridSessionKey`. Pinned by
-    /// tools/kat/hybrid-combine/hybrid-combine-kat.json; spec in
-    /// apps/qaudion-firmware/docs/CROSS_PLATFORM_HYBRID_KDF.md.
+    /// tools/kat/hybrid-combine/hybrid-combine-kat.json; specified in the
+    /// firmware's cross-platform hybrid KDF document.
     ///
     ///   ct_bind = HMAC-SHA256("q-audion-ct-bind-v1", pqcCiphertext)  [32B]
     ///   ikm     = pqcSs(32) || x25519Ss(32)                          [64B]
@@ -5008,7 +4999,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `CallService`), and that same queue refills a playout node holding only
     /// 40 ms. Anything expensive added here is rendered as silence at the
     /// speaker. Analysis belongs on `rxAnalysisQueue` — see the
-    /// W-IOSAUDIOSTARVE note on that property for the measured incident.
+    /// W-IOSAUDIOSTARVE note on that property.
     public func processIncomingAudio(serializedFrame: Data) throws -> Data {
         let pcm = try engine.processIncomingAudio(serializedFrame: serializedFrame)
         enqueueForAnalysis(pcm)
@@ -5023,9 +5014,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// life — without this method every RX consumer it feeds
     /// (`guardianMode`, `contactVoiceVerifier`,
     /// `voiceAnalysis`, `spectrumExtractor`) would silently see zero frames.
-    /// See `NativeAudioPcmTap`'s own doc for the full incident this exists
-    /// to avoid (Android's real, shipped `W-AUDIOSRTPFEATUREPARITY`
-    /// incident, confirmed present on iOS by tracing this exact call chain).
+    /// See `NativeAudioPcmTap`'s own doc for why this method exists.
     ///
     /// Wired from `QAudionWebRtcCallController.onNativeAudioSrtpRxPcm` via
     /// `CallService`. `pcm` is already little-endian Int16 mono 48 kHz —

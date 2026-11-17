@@ -28,9 +28,8 @@ import Foundation
 /// contact has been authenticated in person before") is a SEPARATE, longer-lived
 /// concept — never let one render as if it were the other.
 ///
-/// This is the iOS port of the Android reference
-/// `apps/qaudion-android-new/qaudion-engine/src/main/java/com/bcrypto/qaudion/crypto/AssuranceState.kt`
-/// and Desktop's `src/main/calling/AssuranceState.ts` — all three MUST agree on the
+/// This is the iOS port of the Android reference implementation and of
+/// Desktop's `src/main/calling/AssuranceState.ts` — all three MUST agree on the
 /// shared cross-platform KAT vectors (`tools/kat/assurance-state/assurance-state-kat.json`,
 /// run by `AssuranceStateKatTests.swift`; the policy cases in `AssuranceStatePolicyTests.swift`).
 public enum AssuranceState: Equatable {

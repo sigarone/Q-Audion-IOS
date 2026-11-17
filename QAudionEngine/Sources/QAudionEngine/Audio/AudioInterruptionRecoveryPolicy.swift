@@ -1,15 +1,10 @@
 import Foundation
 
-/// W-AUDIORESUME + W-MEDIARESET + W-AUDIOBEACON (2026-09-01) — pure decision
-/// helpers for `AudioCapture`'s in-call audio-session lifecycle. Evidence:
-/// audit memory `reference_ios_stability_audit_2026_09_01`, P1 (1)/(2) —
-/// an iOS call lost audio in the background while the process stayed alive
-/// for 80 s and NOTHING in the shipped logs could say whether the engine was
-/// running, which route it was on, or when the mic last delivered a frame;
-/// `AudioCapture.handleInterruption` (`.ended` without `.shouldResume`)
-/// returned without ever trying to resume, and
-/// `AVAudioSession.mediaServicesWereResetNotification` was not observed at
-/// all (only a comment in `VideoCallPipeline.swift` mentioned it).
+/// W-AUDIORESUME + W-MEDIARESET + W-AUDIOBEACON — pure decision helpers for
+/// `AudioCapture`'s in-call audio-session lifecycle: resuming after an
+/// interruption that ends without `.shouldResume`, recovering from
+/// `AVAudioSession.mediaServicesWereResetNotification`, and the periodic
+/// engine-state beacon.
 ///
 /// These types contain NO AVFoundation / engine state so every number and
 /// branch below is pinned by `AudioInterruptionRecoveryPolicyTests` without

@@ -153,7 +153,7 @@ public final class BCryptoGroupCallManager: @unchecked Sendable {
     // id) — a different id space from any persisted chat `group_id`.
 
     /// call_reaction_recv — 1:1 call TARGETED reaction (Template A, mirrors
-    /// bcrypto-server's `group_call_signal` case). Registered on THIS
+    /// the server's `group_call_signal` case). Registered on THIS
     /// manager (not a 1:1-specific type) purely because it owns the shared
     /// `ws` instance for the app's whole persistent-socket lifetime — see
     /// `AppState.connectPersistentSocket`'s kdoc on why this manager is

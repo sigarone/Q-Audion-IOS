@@ -5,13 +5,12 @@ import XCTest
 /// has already ended.
 ///
 /// `CallKitProvider.provider(_:perform: CXStartCallAction)` fulfils the action and then spawns an unstructured `Task`
-/// that runs `activateAudioSession`. In the incident race (`call_busy` at +577 ms, CallKit's start fulfilled at about
-/// +691 ms) the busy teardown can reach `reportCallEnded` (and `consumeEndBalance`) BEFORE that Task's
-/// `setActive(true)` and `markAudioSelfActivated`. Before the fix the end balance had been decided without the
-/// activation and nothing ever paid it back: the shared `RTCAudioSession` stayed active with `activationCount` one too
-/// high (the W-DRAINACTIVATION class), and the late `onAudioSessionActivated` set `CallService.audioSessionActive =
-/// true` after `endCall` had cleared it, so the REDIAL (busy, then redial: the owner's scenario) started with the W464
-/// gate already satisfied.
+/// that runs `activateAudioSession`. When `call_busy` arrives before CallKit's start is fulfilled, the busy teardown
+/// can reach `reportCallEnded` (and `consumeEndBalance`) BEFORE that Task's `setActive(true)` and
+/// `markAudioSelfActivated`. The end balance has then been decided without the activation, so nothing would ever pay
+/// it back: the shared `RTCAudioSession` would stay active with `activationCount` one too high (the
+/// W-DRAINACTIVATION class), and the late `onAudioSessionActivated` would set `CallService.audioSessionActive = true`
+/// after `endCall` had cleared it, so a REDIAL (busy, then redial) would start with the W464 gate already satisfied.
 ///
 /// `CallKitProvider` is behind `#if canImport(CallKit) && os(iOS)` and owns a live `CXProvider`, so the ordering is
 /// pinned on the ledger (`markAudioSelfActivatedUnlessEnded`, the one atomic decision it makes) and replayed through a
@@ -30,7 +29,7 @@ final class CallKitLateActivationTests: XCTestCase {
         XCTAssertTrue(end.selfActivated, "the end of the call pays back its own activation")
     }
 
-    /// The incident order: the end report runs first. The activation is recognised as late, nothing is marked.
+    /// The late order: the end report runs first. The activation is recognised as late, nothing is marked.
     func testAnActivationAfterTheEndIsLateAndMarksNothing() {
         let ledger = CallKitCallLedger()
         let uuid = UUID()
@@ -175,7 +174,7 @@ final class CallKitLateActivationTests: XCTestCase {
         }
     }
 
-    // MARK: - the incident, replayed
+    // MARK: - busy first, then the late activation, replayed
 
     /// What the provider's success branch and `reportCallEnded` do to the shared audio session, and what the app side
     /// (`CallService.audioSessionActive`, the W464 gate) hears from the activation callback. Mirrors
@@ -212,7 +211,7 @@ final class CallKitLateActivationTests: XCTestCase {
         func reapOutstanding() { _ = ledger.drainOutstanding() }
     }
 
-    /// The incident: the busy teardown (report + teardown) runs, THEN the start action's Task activates the session.
+    /// Busy first: the busy teardown (report + teardown) runs, THEN the start action's Task activates the session.
     /// The session ends balanced, the app is told nothing, and the redial's W464 gate is not pre-satisfied.
     func testBusyThenLateActivationLeavesTheSessionBalancedAndTheRedialGateClosed() {
         let s = AudioSide()
@@ -264,7 +263,7 @@ final class CallKitLateActivationTests: XCTestCase {
         XCTAssertEqual(s.activationCallbacks, 1)
     }
 
-    /// Three busy dials of the incident, each with the late activation: nothing accumulates.
+    /// Three busy dials in a row, each with the late activation: nothing accumulates.
     func testThreeBusyDialsWithLateActivationsLeaveNoActivationBehind() {
         let s = AudioSide()
         for _ in 0..<3 {

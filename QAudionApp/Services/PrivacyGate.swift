@@ -71,9 +71,7 @@ public enum PrivacyGate {
         return readBoolWithDefault(keyMessagePreview, default: true)
     }
 
-    /// Default ON (W-PRIVACYDEFAULTON, 2026-09-02 — audit memory
-    /// reference_ios_stability_audit_2026_09_01, P2 "privacy overlay
-    /// default OFF"). When on, the app hides content from app-switcher
+    /// Default ON. When on, the app hides content from app-switcher
     /// snapshots, warns on a screenshot, and warns on an active screen
     /// recording (see `QAudionApp.registerScreenshotObserver` /
     /// `registerScreenRecordingObserver`). The safer default for a

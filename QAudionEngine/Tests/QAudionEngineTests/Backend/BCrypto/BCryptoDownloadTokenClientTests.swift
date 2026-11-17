@@ -2,7 +2,7 @@ import XCTest
 @testable import QAudionEngine
 
 /// Pure-codec tests for ``IssuedDownloadToken``. Network round-trip
-/// against a real bcrypto-server is exercised in the integration
+/// against a real server is exercised in the integration
 /// tests run on Codemagic with a staging endpoint.
 final class BCryptoDownloadTokenClientTests: XCTestCase {
 

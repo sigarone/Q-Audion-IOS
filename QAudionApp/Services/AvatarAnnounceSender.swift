@@ -2,8 +2,7 @@ import Foundation
 import CryptoKit
 import QAudionEngine
 
-/// E2EE avatar transport (see `docs/E2EE_AVATAR_TRANSPORT_DESIGN.md` in
-/// bcrypto-server) — sender side of the `qa_ctl:1` `avatar_announce`
+/// E2EE avatar transport — sender side of the `qa_ctl:1` `avatar_announce`
 /// envelope. Mirrors `ChatAttachAnnounceSender` (W355) almost exactly:
 /// same `AttachmentEncryption` primitive, same upload endpoint, same
 /// `qa_ctl` control-channel pattern riding an ordinary encrypted
@@ -14,8 +13,7 @@ import QAudionEngine
 /// first contact) loops over every currently-known peer and calls this
 /// once per peer, so each peer gets ciphertext encrypted under ITS OWN
 /// pairwise chain key — never one shared URL/blob every authenticated
-/// account could fetch (the plaintext-avatar gap this replaces, see the
-/// design doc §1).
+/// account could fetch.
 @MainActor
 final class AvatarAnnounceSender {
 

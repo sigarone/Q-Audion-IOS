@@ -556,11 +556,10 @@ public final class BCryptoRestClient {
     /// `POST /files/issue-token`, which this backs) exist ONLY on the
     /// node that actually stores the file. The general node selector
     /// (`ServerSelector`, app layer) can legitimately move
-    /// `config.serverUrl` to a DR/failover host (e.g. a Helsinki
-    /// dev/DR box) for calling/signaling reasons — that host has no
-    /// shared file storage and answers a tus create with 402
-    /// ("abbonamento file mancante"). Every other behaviour (401
-    /// refresh-and-retry, 402 mapping) is identical to
+    /// `config.serverUrl` to a DR/failover node for calling/signaling
+    /// reasons — that node has no shared file storage and answers a tus
+    /// create with 402 (file subscription missing). Every other
+    /// behaviour (401 refresh-and-retry, 402 mapping) is identical to
     /// `post(_:body:headers:)`; this only pins the base URL. Not
     /// `public` — every current caller (`BCryptoDownloadTokenClient`,
     /// `BCryptoStorageApiImpl`) lives in this module.

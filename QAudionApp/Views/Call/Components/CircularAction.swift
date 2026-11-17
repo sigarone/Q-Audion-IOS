@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Large round in-call action button. 1:1 port of Android
-/// `qaudion-android-new/feature/feature-call/.../components/CircularAction.kt`.
+/// Large round in-call action button. 1:1 port of the Android
+/// implementation of this component.
 ///
 /// Renders a circle of the requested diameter with the SF Symbol icon
 /// centred. Background is fully customisable so the same widget covers

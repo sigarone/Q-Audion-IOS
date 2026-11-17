@@ -12,11 +12,10 @@ import SwiftUI
 /// Driven by `TimelineView(.animation(paused: phase == .settled))` — when
 /// paused, SwiftUI does not invoke the closure at all, which is the direct
 /// SwiftUI analogue of Android's bounded `withFrameNanos` loop that exits
-/// for good once settled. No custom clock, no calibration/self-tuning: no
-/// iOS incident analogous to Android's A36 frame-skip has ever been
-/// measured, so there is nothing to calibrate against — see the design
-/// doc's "Bounded animation" section for why this is a deliberate scope
-/// reduction, not an oversight.
+/// for good once settled. No custom clock, no calibration/self-tuning: the
+/// animation is timed directly from the date SwiftUI passes to the closure.
+/// See the design doc's "Bounded animation" section for why this is a
+/// deliberate scope reduction, not an oversight.
 struct KeyExchangeRing: View {
     enum Phase: Equatable {
         case handshaking

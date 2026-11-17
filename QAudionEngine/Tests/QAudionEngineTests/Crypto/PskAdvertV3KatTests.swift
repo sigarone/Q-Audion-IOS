@@ -9,11 +9,11 @@ import CryptoKit
 
 /// Cross-platform KAT for `PskAdvertV3` (WIRE_SPEC §3.3.1).
 ///
-/// Golden source: `bcrypto-server/tools/kat/psk-advert-v3/psk-advert-v3-kat.json`,
-/// generated and self-verified by `tools/kat/gen_psk_advert_v3_kat.py`, which
-/// writes all six fleet copies in one run — including the byte-copy under
-/// `Crypto/Resources/` this test loads. Android (`PskAdvertV3KatTest.kt`) and
-/// Desktop (`pskAdvertV3.kat.spec.ts`) assert against the same file.
+/// Golden source: the server's `psk-advert-v3-kat.json`, generated and
+/// self-verified by its generator script, which writes all six fleet copies in
+/// one run — including the byte-copy under `Crypto/Resources/` this test
+/// loads. Android and Desktop (`pskAdvertV3.kat.spec.ts`) assert against the
+/// same file.
 ///
 /// If this fails, this platform's blinded advertisement diverges from the other
 /// two, and the visible symptom is NOT a crash: two peers who genuinely share a

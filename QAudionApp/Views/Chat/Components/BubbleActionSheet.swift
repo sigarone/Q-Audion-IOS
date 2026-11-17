@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Long-press action sheet for a chat bubble. 1:1 port of Android
-/// `qaudion-android-new/feature/feature-chat/.../components/BubbleActionSheet.kt`.
+/// Long-press action sheet for a chat bubble. 1:1 port of the Android
+/// implementation of this component.
 ///
 /// Layout (top → bottom):
 ///   - 6 fixed reaction emojis "👍 ❤️ 😂 😮 😢 🙏" + a disabled "+" stub

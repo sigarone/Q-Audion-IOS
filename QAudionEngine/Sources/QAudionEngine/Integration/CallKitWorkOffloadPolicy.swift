@@ -3,16 +3,15 @@ import Foundation
 /// W-CKMAINBLOCK (2026-09-02) — pure decisions for how CallKit-triggered
 /// audio-engine / camera work is scheduled relative to the main thread.
 ///
-/// Evidence: audit memory `reference_ios_stability_audit_2026_09_01`, P1 (8)
-/// — `CXProvider.setDelegate(self, queue: nil)` puts EVERY
-/// `CXProviderDelegate` callback on the MAIN queue (Apple docs,
-/// `setDelegate(_:queue:)`: "If nil, delegate methods are performed on the
-/// main queue"). That is ONE shared serial queue for every delegate method,
-/// so a later CallKit action (mute, end call, a second answer) is stuck
-/// behind whichever earlier callback is still running — a delegate-triggered
-/// call that blocks the main thread for long enough starves every
-/// subsequently-delivered CallKit action too, and long enough risks the
-/// system watchdog (0x8badf00d). Two concrete blocking points were found on
+/// `CXProvider.setDelegate(self, queue: nil)` puts EVERY `CXProviderDelegate`
+/// callback on the MAIN queue (Apple docs, `setDelegate(_:queue:)`:
+/// "If nil, delegate methods are performed on the main queue"). That is
+/// ONE shared serial queue for every delegate method, so a later CallKit
+/// action (mute, end call, a second answer) is stuck behind whichever
+/// earlier callback is still running — a delegate-triggered call that blocks
+/// the main thread for long enough starves every subsequently-delivered
+/// CallKit action too, and long enough risks the system watchdog
+/// (0x8badf00d). Two concrete blocking points were found on
 /// this exact call chain (`CallKitProvider` → `CallService`/
 /// `VideoCallPipeline` → `AudioCapture`/`AudioProcessingPipeline`):
 ///   - `setVoiceProcessingEnabled` observed to block (see

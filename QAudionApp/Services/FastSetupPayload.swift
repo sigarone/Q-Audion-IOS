@@ -4,12 +4,11 @@ import Foundation
 ///
 /// Wire format is **raw JSON encoded as the QR data** (NOT a `qaudion://...`
 /// URL — that was a mistake in the earlier `FastSetupQrCode` codec). The
-/// admin panel of `bcrypto-server` produces the QR string verbatim from the
+/// admin panel of the server produces the QR string verbatim from the
 /// JSON below.
 ///
-/// Source of truth: `qaudion-android-new` →
-/// `feature/feature-auth/navigation/AuthFlowViewModel.kt:384` (Kotlin
-/// `@Serializable data class FastSetupPayload`).
+/// Source of truth: the Android implementation (Kotlin `@Serializable
+/// data class FastSetupPayload`).
 ///
 /// Example payload as embedded in the QR:
 /// ```json
@@ -35,7 +34,7 @@ import Foundation
 /// **in cleartext inside the QR code**. Anyone who photographs / shoulder-
 /// surfs / screen-records the QR obtains a permanent credential. This
 /// is a protocol-level weakness that CANNOT be fixed client-side alone:
-/// the bcrypto-server admin panel emits this shape and the iOS client
+/// the server admin panel emits this shape and the iOS client
 /// must decode it byte-for-byte to stay wire-compatible with Android.
 ///
 /// REQUIRED SERVER-SIDE FOLLOW-UP (tracked, out of scope here):

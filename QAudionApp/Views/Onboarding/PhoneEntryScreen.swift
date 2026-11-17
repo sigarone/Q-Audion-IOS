@@ -1,8 +1,8 @@
 import SwiftUI
 import QAudionEngine
 
-/// Phone-entry screen — visual replica of Android
-/// `qaudion-android-new/feature/feature-auth/ui/PhoneEntryScreen.kt`.
+/// Phone-entry screen — visual replica of the Android implementation of
+/// this screen.
 ///
 /// 2026-07-29: the server now has a real SMS-OTP register/login flow
 /// (`POST /api/v1/auth/otp/request` + `/otp/verify`). This screen collects

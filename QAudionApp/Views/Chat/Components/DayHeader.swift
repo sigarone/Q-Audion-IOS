@@ -4,8 +4,7 @@ import SwiftUI
 /// centred capsule with the human-readable day label ("Oggi", "Ieri",
 /// "lun 15 gen", "Q-Audion · 12 mar 2024") between two faint hairlines.
 ///
-/// 1:1 visual port of Android
-/// `qaudion-android-new/feature/feature-chat/.../components/DayHeader.kt`.
+/// 1:1 visual port of the Android implementation of this component.
 ///
 /// Format rules (Italian, matching Android `DateUtils`):
 ///   - same calendar day as `now()` → "Oggi"

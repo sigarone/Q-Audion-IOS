@@ -5292,9 +5292,8 @@ final class CallService: @unchecked Sendable {
         // / attachAudioReceiverCryptor), so starting AudioCapture's
         // AVAudioEngine here too would open a SECOND mic/speaker path next
         // to it — exactly the resource contention this feature exists to
-        // avoid (Android's real, shipped incident: a second AudioRecord
-        // fighting the ADM for the mic, `channel.cc` never configuring
-        // `send=1`). W-SRTPFALLBACK below re-engages this path deliberately
+        // avoid (a second capture path competing with the ADM for the
+        // mic). W-SRTPFALLBACK below re-engages this path deliberately
         // during a native-audio-srtp ICE outage — `audioSrtpFallbackActive`
         // is the one escape hatch, checked here so the ONE chokepoint
         // decides for every caller (activateIncomingCallAudio,

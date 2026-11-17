@@ -4,8 +4,7 @@ import XCTest
 /// W-AUDIORESUME + W-MEDIARESET + W-AUDIOBEACON (2026-09-01) — pins the pure
 /// in-call audio lifecycle decisions `AudioCapture` acts on, without a live
 /// `AVAudioSession`. Same discipline as `RestartIceDecisionsTests` /
-/// `GroupDecoderMemoryPressureDecisionsTests`. Evidence for every branch:
-/// audit memory reference_ios_stability_audit_2026_09_01, P1 (1)/(2).
+/// `GroupDecoderMemoryPressureDecisionsTests`.
 final class AudioInterruptionRecoveryPolicyTests: XCTestCase {
 
     private typealias Policy = AudioInterruptionRecoveryPolicy

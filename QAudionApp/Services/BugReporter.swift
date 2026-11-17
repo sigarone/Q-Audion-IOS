@@ -368,10 +368,9 @@ public final class BugReporter: ObservableObject {
         // precedence over it. Behaviour-preserving, not a tuning change.
         request.timeoutInterval = 60
         do {
-            // W-AUXPIN (2026-09-01): cert-pinned session (same delegate/pins
-            // as the REST client) instead of URLSession.shared — this
-            // bearer-token GET had no pin at all (audit memory
-            // reference_ios_stability_audit_2026_09_01, P1 item 6).
+            // W-AUXPIN: cert-pinned session (same delegate/pins as the REST
+            // client) instead of URLSession.shared, so this bearer-token GET
+            // is pinned.
             let (data, response) = try await PinnedURLSession.auxiliary(for: serverUrl).data(for: request)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 let http = response as? HTTPURLResponse

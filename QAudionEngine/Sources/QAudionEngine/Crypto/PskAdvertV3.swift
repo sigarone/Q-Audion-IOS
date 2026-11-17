@@ -5,8 +5,8 @@ import CryptoKit
 ///
 /// Byte-exact contract, mirrored in Android `PskAdvertV3.kt` and Desktop
 /// `PskAdvertV3.ts`, pinned by `tools/kat/psk-advert-v3/psk-advert-v3-kat.json`.
-/// Edit the generator (`bcrypto-server/tools/kat/gen_psk_advert_v3_kat.py`),
-/// never the JSON — it writes all six copies in one run so they cannot drift.
+/// Edit the server's KAT generator, never the JSON — it writes all six
+/// copies in one run so they cannot drift.
 ///
 /// ## What this replaces, and why
 ///

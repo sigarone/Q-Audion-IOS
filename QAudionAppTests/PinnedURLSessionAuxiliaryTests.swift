@@ -7,8 +7,7 @@ import QAudionEngine
 /// bearer-token clients (telemetry, bug reporter, feedback, self-test) now
 /// use derives its pin set from the SAME `BackendConfig.pinned(serverUrl:)`
 /// the REST client uses, is cached per host, and is never `URLSession.shared`
-/// while the kill switch is on. See audit memory
-/// reference_ios_stability_audit_2026_09_01 (P1 item 6).
+/// while the kill switch is on.
 final class PinnedURLSessionAuxiliaryTests: XCTestCase {
 
     func testAuxiliaryFactoryUsesTheRestClientPinSetForTheVoipHost() throws {

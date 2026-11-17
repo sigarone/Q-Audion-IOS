@@ -8,9 +8,6 @@ import QAudionEngine
 /// of truth e l'UI non blocca mai sull'HTTP. Errori sono loggati ma
 /// l'operazione locale non viene mai annullata: al prossimo restart il
 /// `PendingGroupInviteStore.replay()` riprova.
-///
-/// Endpoint live in produzione (VPS 217.160.65.35) dal commit
-/// `f99e00c feat(track-b)` su `bcrypto-server`.
 @MainActor
 final class TrackBSyncService {
 

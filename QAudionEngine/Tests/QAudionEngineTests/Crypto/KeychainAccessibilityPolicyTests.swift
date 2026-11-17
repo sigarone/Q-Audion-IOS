@@ -7,12 +7,12 @@ import Security
 /// W-KCAFTERUNLOCK (2026-09-01) — pins the pure decision behind the Keychain
 /// accessibility class of every vault and the reading of -25308.
 ///
-/// Regression coverage for audit memory reference_ios_stability_audit_2026_09_01
-/// P1 item 5: identity / session PSKs / ratchet state were written
-/// `WhenUnlockedThisDeviceOnly`, a VoIP-push wake on a locked phone read them
-/// back as -25308, and every vault reported that as "absent". No Keychain is
-/// touched here, so this runs on the CI simulator; the real-Keychain half
-/// lives in `KeychainAccessibilityMigrationTests`.
+/// Regression coverage for the rule that identity / session PSKs / ratchet
+/// state are written `AfterFirstUnlockThisDeviceOnly`, so a VoIP-push wake on a
+/// locked phone can read them, and that a locked read (-25308) is never
+/// classified as "absent". No Keychain is touched here, so this runs on the CI
+/// simulator; the real-Keychain half lives in
+/// `KeychainAccessibilityMigrationTests`.
 final class KeychainAccessibilityPolicyTests: XCTestCase {
 
     private typealias Policy = KeychainAccessibilityPolicy

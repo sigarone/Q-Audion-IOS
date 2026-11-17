@@ -7,7 +7,7 @@ import QAudionEngine
 /// BCrypto WebSocket transport.
 ///
 /// **Wire format** (parity with `qaudion-desktop/.../MessageCrypto.ts` and
-/// `qaudion-android-new/.../MessageCrypto.kt`):
+/// the Android implementation of `MessageCrypto`):
 ///
 ///     salt(32) || nonce(12) || ciphertext(N) || tag(16)
 ///

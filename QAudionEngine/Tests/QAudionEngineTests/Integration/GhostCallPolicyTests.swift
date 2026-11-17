@@ -2,8 +2,8 @@ import XCTest
 @testable import QAudionEngine
 
 /// W-GHOSTCALL (2026-09-25) — pins the pure decisions of the ghost-call fix
-/// (incident e3acecd7: a `call_cancelled` VoIP push revived a call that had
-/// already ended, and the user's Answer started an in-call state with no call).
+/// (a `call_cancelled` VoIP push must not revive a call that has already ended,
+/// or the user's Answer would start an in-call state with no call).
 /// No live `CXProvider`, no `AppState`: every input is a plain value. Same
 /// discipline as `CallKitProviderResetPolicyTests`.
 final class GhostCallPolicyTests: XCTestCase {
@@ -23,7 +23,7 @@ final class GhostCallPolicyTests: XCTestCase {
         XCTAssertFalse(plan.isPlaceholder)
     }
 
-    /// The incident: the uuid is already dead, so it must never be reported
+    /// The call has already ended, so its uuid must never be reported
     /// again — a placeholder satisfies the PushKit mandate instead.
     func test_cancel_endedCall_reportsAFreshPlaceholder_neverTheEndedUuid() {
         let callId = UUID()
@@ -88,8 +88,8 @@ final class GhostCallPolicyTests: XCTestCase {
             .accept)
     }
 
-    /// Incident e3acecd7: the answer named a uuid that had just ended and
-    /// `activeCallKitId` was already nil.
+    /// The answer names a uuid that has just ended while `activeCallKitId`
+    /// is already nil.
     func test_answer_recentlyEndedUuid_isRefused() {
         let uuid = UUID()
         XCTAssertEqual(
@@ -138,8 +138,8 @@ final class GhostCallPolicyTests: XCTestCase {
         XCTAssertEqual(Policy.AnswerVerdict.refuseNotActive.logCode, 3)
     }
 
-    /// The whole incident through the two real ledgers: the call ends, the
-    /// ring UI is still on screen, the user taps Answer 1.28 s later.
+    /// The whole sequence through the two real ledgers: the call ends, the
+    /// ring UI is still on screen, and the user taps Answer a moment later.
     func test_answer_incidentSequence_endedCallThenAnswer() {
         var ended = RecentlyEndedCallLedger()
         var placeholders = RecentlyEndedCallLedger()
@@ -180,7 +180,7 @@ final class GhostCallPolicyTests: XCTestCase {
         XCTAssertEqual(Policy.answeredWithoutCallGraceSeconds, 3)
     }
 
-    /// The incident: answered, `callId=none`.
+    /// Answered, but with no peer (`callContactId` nil or empty).
     func test_watchdog_answeredButNoPeer_fires() {
         let uuid = UUID()
         XCTAssertTrue(Policy.isAnsweredWithoutCall(answeredCallKitId: uuid, expectedUuid: uuid, callContactId: nil))
@@ -265,8 +265,8 @@ final class GhostCallPolicyTests: XCTestCase {
         Policy.shouldRecordMissedOnRemoteHangup(wasRinging: ringing, reason: reason, viaServerCancel: viaCancel)
     }
 
-    /// The two reasons the server sends to the sibling devices of a callee, byte for byte
-    /// (`bcrypto-server` `cmd/bcrypto-lite/main.go`): a typo here would silently bring the false badge back.
+    /// The two reasons the server sends to the sibling devices of a callee, byte for byte:
+    /// a typo here would silently record a false missed call.
     func test_hangupMissed_siblingReasons_areTheServersTwoTokens() {
         XCTAssertEqual(Policy.siblingDeviceCancelReasons, ["answered_on_other_device", "declined_on_other_device"])
     }

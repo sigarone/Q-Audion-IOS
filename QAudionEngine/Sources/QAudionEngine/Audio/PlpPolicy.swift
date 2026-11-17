@@ -129,14 +129,13 @@ public enum PlpPolicy {
         }
     }
 
-    /// W-PLPRTTFLOOR (2026-09-15, best-practices audit
-    /// reference_ios_full_audit_2026_09_15.md, audio finding 3) — RTT never
-    /// fed any codec decision here before this. A high round-trip path
-    /// leaves no time for a reactive fix (this same `next()`'s own fast-up
-    /// branch, or a FEC/PLC recovery) to land before the gap it is reacting
-    /// to is already audible, so it should independently push toward more
-    /// conservative forward redundancy — same mechanism `minPct(for:
-    /// routeTier:)` already uses for a relay route, different signal.
+    /// W-PLPRTTFLOOR — RTT also feeds the floor `next()` never decays
+    /// below. A high round-trip path leaves no time for a reactive fix (this
+    /// same `next()`'s own fast-up branch, or a FEC/PLC recovery) to land
+    /// before the gap it is reacting to is already audible, so it
+    /// independently pushes toward more conservative forward redundancy —
+    /// same mechanism `minPct(for: routeTier:)` already uses for a relay
+    /// route, different signal.
     ///
     /// Threshold matches this app's own network-condition-simulator "high
     /// latency" preset (`NetworkConditionSimulator.highLatency`, 300 ms) and

@@ -176,11 +176,10 @@ public final class SovereignIdentityManager {
         return (try? readIdentity()) ?? nil
     }
 
-    /// W-KCAFTERUNLOCK (2026-09-01) — typed read. Audit memory
-    /// reference_ios_stability_audit_2026_09_01, P1 item 5: with the item on
-    /// `WhenUnlockedThisDeviceOnly` a PushKit wake on a locked phone read
-    /// -25308 here, and `loadIdentity()` reported it as `nil` — which
-    /// `ContactKeyExchange` answered by minting a NEW identity.
+    /// W-KCAFTERUNLOCK — typed read. A read while the device is locked fails
+    /// with -25308, and `loadIdentity()` reports that as `nil`; a caller that
+    /// answered `nil` by minting a NEW identity would overwrite the real one.
+    /// This read tells a locked Keychain apart from an absent identity.
     /// - Returns: the identity, or `nil` when none is stored.
     /// - Throws: `KeyVaultError.deviceLocked` when the item cannot be decrypted
     ///   because the device is locked (-25308) — it may well exist, retry after

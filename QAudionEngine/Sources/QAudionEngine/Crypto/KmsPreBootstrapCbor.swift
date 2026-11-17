@@ -5,11 +5,9 @@ import Foundation
 /// envelope map.
 ///
 /// Cross-platform contract: byte-for-byte equal to the Kotlin
-/// implementation `qaudion-android-new/qaudion-engine/.../crypto/KmsPreBootstrapCbor.kt`
-/// (itself byte-equal to the Desktop TypeScript port). Any drift here
-/// will break Android/Desktop <-> iOS interop for the ADR-014a
-/// KMS-prebootstrap envelope — the KAT JSON at
-/// `qaudion-android-new/qaudion-engine/src/test/resources/kms-prebootstrap-kat.json`
+/// implementation in the Android app (itself byte-equal to the Desktop
+/// TypeScript port). Any drift here will break Android/Desktop <-> iOS
+/// interop for the KMS-prebootstrap envelope — the KAT JSON
 /// (vendored into this target's test resources as
 /// `Resources/kat/kms-prebootstrap-kat.json`) is the authoritative
 /// interop fence — see `KmsPreBootstrapKatTests.swift`.
