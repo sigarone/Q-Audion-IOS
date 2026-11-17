@@ -12,17 +12,22 @@ import QAudionEngine
 /// requires cross-checking the iOS-derived UUIDs against the
 /// firmware-published canonical ones BEFORE relay — done here:
 ///
-///   service base : f2c0aaaa-bcc0-4001-8000-0000000000XX
+///   service      : f2c0aaaa-bcc0-4001-8000-000000000001 (QAUDION_SVC_UUID_VAL; slot 0x01, NOT 0x00)
 ///   KEY_IMPORT   : slot 0xc3 (write PoP-inputs + package fragments; read [status][slot])
 ///   ATTEST_POP   : slot 0xc1 (read the 32-byte qa-kms-pop-v1 SE PoP after import)
+///
+/// The strings are NOT written here: they are the `EarbudGattConstants` constants of
+/// IOSEarbudGattProxy.swift, the one definition of the earbud UUIDs in the app. This enum used to hold
+/// a copy of its own whose service UUID ended in 0x00, so `CoreBluetoothSovereignRelay` looked for a
+/// service the firmware does not have (serviceNotFound).
 ///
 /// NOTE: the plan-draft UUIDs (5a3e00c3 / 5a3e00c4) were derived from the
 /// QA-P3-BENCH *diagnostic* service base and are REJECTED — that is a
 /// different service. ATTEST_POP is 0xc1, not 0xc4.
 public enum QaudionEarbudGatt {
-    public static let serviceUUID    = "f2c0aaaa-bcc0-4001-8000-000000000000"
-    public static let keyImportUUID  = "f2c0aaaa-bcc0-4001-8000-0000000000c3"
-    public static let attestPopUUID  = "f2c0aaaa-bcc0-4001-8000-0000000000c1"
+    public static let serviceUUID    = EarbudGattConstants.SERVICE_UUID
+    public static let keyImportUUID  = EarbudGattConstants.KEY_IMPORT_UUID
+    public static let attestPopUUID  = EarbudGattConstants.ATTEST_POP_UUID
     /// Sovereign package fixed size (§3.3, == firmware KEYIMPORT_PKG_LEN).
     public static let sovereignPackageBytes = 1668
     /// KEY_IMPORT status bytes (firmware key_import_read [status][slot]).
