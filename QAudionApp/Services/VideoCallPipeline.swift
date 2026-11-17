@@ -324,7 +324,7 @@ public final class VideoCallPipeline: NSObject {
 
     public func stop() {
         guard isRunning else { return }
-        // No frame refused from here on rebuilds the encoder session.
+        // No frame refused from here on asks for a rebuild of the encoder session.
         encodeFailureGate.disarm()
         // Drop the WebRTC bridge callback before stopping the session so
         // no frames are pushed to a deallocated RTCVideoSource after teardown.

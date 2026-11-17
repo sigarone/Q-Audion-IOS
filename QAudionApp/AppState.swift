@@ -25239,12 +25239,34 @@ extension AppState {
         #else
         let capturer: WebRTCPixelBufferCapturer? = nil
         #endif
+        // The offer and the consent request above suspend: a start whose call ended meanwhile builds no pipeline and
+        // opens no capture.
+        guard shareCallIsLive(shareCallGeneration) else {
+            RTLog.info("call", "vcap capture end=1 why=3")
+            return
+        }
         // WS-HEVC leg (iOS↔iOS): make sure an encoding pipeline exists.
         // On a video call the camera pipeline is already up — we suspend its
         // camera feed below. On an audio call bring up an external-source
         // pipeline (no camera, no permission prompt).
+        var startedPipeline: VideoCallPipeline?
         if videoPipeline == nil {
-            await startVideoPipeline(for: peerId, sourceMode: .external)
+            startedPipeline = await startVideoPipeline(for: peerId, sourceMode: .external)
+        }
+        // The pipeline start suspends too: when the call ended meanwhile, the pipeline THIS start assigned is stopped,
+        // and only that one (a pipeline of another call is left alone).
+        guard shareCallIsLive(shareCallGeneration) else {
+            RTLog.info("call", "vcap capture end=1 why=3")
+            if let startedPipeline {
+                startedPipeline.stop()
+                if videoPipeline === startedPipeline {
+                    abrController?.stop()
+                    abrController = nil
+                    videoPipeline = nil
+                    videoNackCache = nil
+                }
+            }
+            return
         }
         // W-SCREENPROFILE — gate the WS-HEVC leg's resolution ladder off
         // for the duration of the share (bitrate/fps adaptation stay on).
@@ -25274,7 +25296,7 @@ extension AppState {
         do {
             try await screenShareController.start(into: capturer)
             // The call ended while the system prompt or the capture start was pending: the capture stops with it.
-            guard isInCall, callService.currentCallGeneration() == shareCallGeneration else {
+            guard shareCallIsLive(shareCallGeneration) else {
                 RTLog.info("call", "vcap capture end=1 why=2")
                 await screenShareController.stop()
                 return
@@ -25290,6 +25312,12 @@ extension AppState {
                 await self?.announceScreenShare(active: true)
             }
         } catch {
+            // The call that started this share is over: its end already ran `endScreenShareWithCall()`, so there is
+            // nothing to restore and no banner to raise.
+            guard shareCallIsLive(shareCallGeneration) else {
+                RTLog.info("call", "vcap capture end=1 why=2")
+                return
+            }
             // Restore the camera path if start failed so the call
             // doesn't get stuck without any video producer.
             videoPipeline?.onCapturedPixelBuffer = preScreenShareCameraClosure
@@ -25342,6 +25370,11 @@ extension AppState {
             await self?.announceScreenShare(active: false)
         }
         #endif
+    }
+
+    /// Whether the call a screen share started in is still the live one.
+    private func shareCallIsLive(_ generation: Int) -> Bool {
+        isInCall && callService.currentCallGeneration() == generation
     }
 
     /// The screen share ends with the call, whichever way the call ended (hang-up of either side, a failure, a system
