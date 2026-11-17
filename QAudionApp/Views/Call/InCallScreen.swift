@@ -2,7 +2,7 @@ import SwiftUI
 import QAudionEngine
 
 /// Active 1:1 call screen (audio, with optional video). Aligns with:
-///   - Android `qaudion-android-new/feature/feature-call/.../InCallScreen.kt`
+///   - The Android implementation of this screen
 ///   - Desktop `Q-Audion Desktop — Call Surface Variants` Stitch project
 ///   - Mobile Stitch mockup `Q-Audion Active Call` (project 15710203507549916868)
 ///

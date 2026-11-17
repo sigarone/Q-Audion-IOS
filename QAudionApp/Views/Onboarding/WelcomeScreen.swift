@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Onboarding landing screen. Visual + copy replica of the Android
-/// canonical source `qaudion-android-new/feature/feature-auth/ui/WelcomeScreen.kt`.
+/// Onboarding landing screen. Visual + copy replica of the canonical
+/// Android implementation of this screen.
 ///
 /// Dark editorial layout:
 ///   - top meta strap "Q-AUDION · SECURE COMMUNICATIONS"

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Incoming-call ringing screen. 1:1 visual port of Android
-/// `qaudion-android-new/feature/feature-call/.../IncomingCallScreen.kt`.
+/// Incoming-call ringing screen. 1:1 visual port of the Android
+/// implementation of this screen.
 ///
 /// Layout:
 ///   - "CHIAMATA IN ARRIVO" header (success, 2.0sp). It says only that a call

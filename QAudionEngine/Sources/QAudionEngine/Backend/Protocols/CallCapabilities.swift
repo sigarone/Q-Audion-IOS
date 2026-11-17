@@ -12,7 +12,7 @@ import Foundation
 /// bug — easy to catch in cross-platform smoke tests + the KAT corpus.
 ///
 /// **Design (option A in the cross-platform design):** capabilities live
-/// inside the existing call-setup envelope. The bcrypto-server is pure
+/// inside the existing call-setup envelope. The server is pure
 /// relay and never inspects them — agreement is a pure end-to-end
 /// concern. Old clients that predate this field send no `capabilities`
 /// key at all, which decodes to `nil` and is interpreted as "legacy peer".
@@ -123,14 +123,12 @@ public enum CallCapabilities {
     /// dc-mux failure; dc-mux carried every frame it was asked to carry when
     /// the path existed to use.)
     ///
-    /// **(b) "the Android WS-receive-fallback companion change."** Read
-    /// directly from `qaudion-android-new`'s current
-    /// `CallTransportFactory.kt` (2026-08-25) rather than assumed either way:
-    /// this already shipped, under the name `ResilientFrameRelayTransport`.
+    /// **(b) "the Android WS-receive-fallback companion change."** It already
+    /// shipped on Android, under the name `ResilientFrameRelayTransport`.
     /// Both the WS-relay receive pump and the DataChannel receive pump are
     /// built once in `start()` and stay subscribed for the entire call,
-    /// regardless of which leg is `active` for transmit — the file's own
-    /// kdoc: "a frame that arrives on the leg we are NOT sending on still
+    /// regardless of which leg is `active` for transmit — the transport's
+    /// own kdoc: "a frame that arrives on the leg we are NOT sending on still
     /// decodes and still plays. That is the whole point: which leg we
     /// transmit on must not decide what we can hear." This exact invariant is
     /// pinned by two dedicated regression tests in
@@ -222,258 +220,25 @@ public enum CallCapabilities {
     /// behaves exactly as it does today.
     public static let restartIceReqV1: String = "restart-ice-req-v1"
 
-    /// Kill switch for the native-RTP-audio path (``audioSrtpV1``). Ships
-    /// `false`. Compile-time only, exactly like ``longAudioSendEnabled``: no
-    /// runtime toggle, no remote config, no debug-menu entry reachable on a
-    /// user build. Flipping it changes only what THIS build advertises; a
-    /// call only uses the new path when the peer also advertises it, so
-    /// partial rollout across a fleet is always safe (the intersection is
-    /// symmetric).
+    /// Compile-time switch for the native-RTP-audio path (``audioSrtpV1``); it
+    /// is `true`. Like ``longAudioSendEnabled`` it is a constant, not a
+    /// setting: flipping it changes only what THIS build advertises. While it
+    /// is `true`, ``localCaps(earbudActive:sovereignOnly:earbudPaired:)``
+    /// advertises `audio-srtp-v1` (always withheld on an earbud call), and a
+    /// call uses the native path only when the peer advertises it too
+    /// (symmetric intersection). With a peer that does not, audio stays on
+    /// the custom sealed-audio path (DataChannel / WS relay).
     ///
-    /// Flipped to `true` 2026-08-26 on explicit user sign-off, mirroring
-    /// desktop's own DSK-C4 commit (`qaudion-desktop@1a505bc`) the same
-    /// evening. The PCM-tap-parity gate — the one precondition this
-    /// orchestrator checks before flipping any of these three platforms'
-    /// switches — closed with real, cited findings, not an open question:
-    /// ``NativeAudioPcmTap`` taps the remote SRTP track and feeds the exact
-    /// same `enqueueForAnalysis` choke point `processIncomingAudio` already
-    /// fed, so `VoiceAnalysisEngine`/`GuardianMode`/`ContactVoiceVerifier`
-    /// see no gap in coverage (full trace in the
-    /// IOS-C4b task report).
+    /// ``NativeAudioPcmTap`` taps the remote SRTP track and feeds the same
+    /// `enqueueForAnalysis` input as `processIncomingAudio`, so
+    /// `VoiceAnalysisEngine`, `GuardianMode` and `ContactVoiceVerifier` see
+    /// the remote audio on the native path as well.
     ///
-    /// FLIPPED BACK TO `false` 2026-09-09 (W-AUDIOSRTPOFF) — the "zero
-    /// live-call verification" risk this doc already carried forward from
-    /// 2026-08-26 never actually closed. In the 10 days since, this single
-    /// switch drove 30+ follow-up commits (native-mic mute gating, CallKit
-    /// activation relay added then reverted, manual-audio-mode tried for a
-    /// full day then reverted — see git log on this file and
-    /// `NativeAudioSessionGate.swift`'s own kdoc) and, on the same evening
-    /// this comment was written, three consecutive real iOS↔iOS test calls
-    /// each failed a DIFFERENT way with the latest fix already shipped:
-    /// uneven/jittery inbound RX, a total local mic-route failure
-    /// (`AVAudioSessionErrorCodeUnspecified`/'what', `inp=0`, both the
-    /// native path AND its manual-engine fallback), and a PQC handshake
-    /// that never left `.fallback` for a full 30s. Three different failure
-    /// shapes from the same subsystem, still occurring after the mute-gate
-    /// fix, is the "question the architecture, not the next patch" signal —
-    /// the pre-8/26 legacy DataChannel/WS-relay path is what every one of
-    /// tonight's calls actually recovered onto, and it worked. Re-enabling
-    /// this needs the live call-to-call verification the original comment
-    /// already said was required and never happened — not another point fix.
-    ///
-    /// FLIPPED BACK TO `true` 2026-09-09, same night, on explicit user
-    /// request — this IS that verification pass, not a repeat of the
-    /// original unverified rollout. Before flipping back, a best-practices
-    /// audit (`reference_audiosrtp_killswitch_decision_2026_09_09.md` and
-    /// its deep-dive workflow) landed 4 of its 7 fixes: handshake
-    /// round-trip timestamps (`QAudionCallIntegration.swift`, so a stuck
-    /// handshake now shows WHICH of 4 stages failed instead of only "30s,
-    /// nothing"), `teardownAudioStack()` no longer calls its own
-    /// `setActive(false)` racing CallKit's async `didDeactivate`
-    /// (`AudioCapture.stop(deactivateSession:)`, the exact pattern
-    /// documented elsewhere as causing "next call has no audio"), a route
-    /// availability check before every capture attempt instead of only
-    /// after the throw, and `packetsLost`/`jitter` added to the stats poll
-    /// so a bursty RX counter can finally be told apart from real loss.
-    /// Three items from that same audit remain open (route-change/
-    /// interruption-driven capfail retry instead of a flat timer;
-    /// `endCall()` still races `reportCallEnded` against
-    /// `callService.endCall()` instead of waiting for CallKit's
-    /// `didDeactivate`; the flat 15s/50s handshake deadlines are not yet
-    /// RTT-adaptive) — none of the three blocks this pass, they are the
-    /// next round if tonight's calls still show any of the original 3
-    /// failure shapes.
-    ///
-    /// FLIPPED BACK TO `false` 2026-09-09, same night, ~40 minutes after
-    /// the re-enable above — the verification pass caught a live repro of
-    /// exactly the pre-existing `W-DEADTXNET` shape (`engageAudioSrtpFallback`
-    /// kdoc below, first documented from call 4e6d4fa5 on 2026-09-07): the
-    /// native sender activates identically to a healthy call (same
-    /// IOS-C4b JSEP-rewire/cryptor-attach sequence, confirmed byte-for-byte
-    /// against a working call in the same log) but transmits zero packets
-    /// (`ptx=0`) for ~11s while RX grows normally, on a 16s call. The
-    /// `srtpDeadTxBeats`-driven fallback (line ~446 below) does catch it and
-    /// does hand off to the legacy path with real audio — but only at the
-    /// 11s mark, leaving a real call under ~15s with no outbound audio for
-    /// most or all of its length. This is a WebRTC audio-device-module-level
-    /// stall (the sender reports armed; the audio unit underneath doesn't
-    /// push frames), not something any of the 4 landed diagnostic fixes
-    /// touches — it needs its own investigation before another live
-    /// verification attempt, not a repeat of tonight's pass.
-    ///
-    /// FLIPPED BACK TO `true` 2026-09-09, same night — the investigation the
-    /// note above asked for landed: `CallKitProvider` now forwards CallKit's
-    /// own didActivate/didDeactivate into `RTCAudioSession`
-    /// (W-CKAUDIOFORWARD, `CallKitProvider.swift`), which automatic-mode
-    /// WebRTC had no other way to observe (no system notification exists
-    /// for "someone else called setActive" — only interruption/route-change
-    /// fire). `NativeAudioSessionGate`'s kdoc has the full comparison against
-    /// 1053/1056/1066: this is deliberately NOT that same attempt —
-    /// `useManualAudio` stays `false`, `isAudioEnabled` is never touched, so
-    /// the manual-mode-vs-app-owned-session conflict those three attempts
-    /// hit does not apply here. Still unverified live until the next real
-    /// call-to-call test.
-    ///
-    /// FLIPPED BACK TO `false` 2026-09-09, same night — two independent
-    /// fixes at the CallKit/AVAudioSession boundary (the forward above, then
-    /// a caller-side self-activation fix mirroring the answer-side one)
-    /// BOTH landed, BOTH executed and succeeded exactly as designed on the
-    /// next live test (`[CallKitProvider] start audio session ACTIVE
-    /// (attempt 0)` fires immediately, well before the sender even tries to
-    /// arm), and the identical dead-TX-on-the-call-that-follows-another
-    /// symptom reproduced anyway, this time with the caller/callee roles
-    /// swapped from the previous test. Session activation was never the
-    /// bottleneck — both hypotheses were wrong, disproven directly by log
-    /// evidence rather than assumed. Two clean, reasoned, individually
-    /// falsified fixes on the same mechanism is the "stop patching, question
-    /// the architecture" signal: whatever actually stalls the native audio
-    /// unit on a rapid second call lives inside WebRTC's own audio-device-
-    /// module lifecycle across successive calls, not at the CallKit
-    /// integration boundary either of tonight's fixes touched. Needs
-    /// instrumentation of WebRTC's own audio-unit start/stop sequence
-    /// across calls before another attempt — not a third guess at the same
-    /// boundary.
-    ///
-    /// FLIPPED BACK TO `true` 2026-09-09, same night — that instrumentation
-    /// landed. A deep audit (graphify-verified) traced the real mechanism:
-    /// `QAudionPeerConnectionFactory.createFactory()` mints a brand-new
-    /// native AudioDeviceModule/AudioUnit on every call, never reusing the
-    /// previous one, and `RTCPeerConnection.close()` returning is not proof
-    /// the prior call's AudioUnit has actually stopped (libwebrtc tears it
-    /// down on its own internal threads with zero completion signal exposed
-    /// to this app — confirmed absent, not assumed: this codebase has never
-    /// once checked an AudioUnit busy/cannot-do-in-current-context OSStatus).
-    /// `createFactory()` is now async and settles up to 1.5s if the previous
-    /// call's teardown was more recent than that (`QAudionPeerConnection
-    /// .close()` now calls `noteTeardownStarted()`) — the documented
-    /// production mitigation for this exact no-completion-signal race, per
-    /// public WebRTC/CoreAudio design docs and real-world VoIP SDK issue
-    /// reports (see `QAudionPeerConnectionFactory.swift`'s kdoc for sources).
-    /// The 1.5s figure itself is NOT sourced — cited practice tops out
-    /// around 500ms, disclosed as heuristic there too — extended here
-    /// because tonight's own reproductions showed TX starvation lasting far
-    /// longer than 500ms. Unverified live until the next real call-to-call
-    /// test; this is the third attempt at the actual mechanism (the first
-    /// two identified and fixed a different, real, but not load-bearing
-    /// bottleneck one layer up).
-    ///
-    /// FOURTH ATTEMPT, same session — a call to the 3-call v1.0.1124 test
-    /// above found a real signaling instability (`call_answer`/
-    /// `call_accepted` WS retransmits, "setup still pending") on the call
-    /// immediately BEFORE the one that broke, matching the user's own
-    /// hypothesis that a prior call's connection trouble is what poisons the
-    /// next one — not pure back-to-back timing (two calls with the same ~6s
-    /// gap, one healthy, one dead). That pointed at `RTCAudioSession`
-    /// (WebRTC's own AVAudioSession wrapper) specifically, since it is the
-    /// one object that persists across calls in this whole picture — and a
-    /// session memory from the night before this one
-    /// (`reference_ios_callkit_webrtc_audio_activation_race_2026_09_08.md`)
-    /// had ALREADY identified the exact fix and flagged it as never
-    /// implemented: this app's own session self-activation
-    /// (`CallKitProvider.activateAudioSession(logSite:)`) mutated the raw
-    /// `AVAudioSession` directly instead of through `RTCAudioSession`'s own
-    /// `lockForConfiguration`/`setCategory`/`setActive` — invisible to its
-    /// `isActive`/`activationCount` bookkeeping regardless of the
-    /// W-CKAUDIOFORWARD notification added earlier tonight, which is the
-    /// wrong channel for app-initiated (not CallKit-initiated) activation
-    /// per the pinned `webrtc-sdk/webrtc@m144_release` header's own doc.
-    /// Migrated now. Still `useManualAudio = false`. This is the specific,
-    /// previously-identified gap, not a fifth guess.
-    ///
-    /// FIFTH ATTEMPT, same session — the fourth's own live test showed the
-    /// bug: `RTCAudioSession.activationCount` climbed 1→3 across a
-    /// start-then-answer call pair on one device (should climb by exactly
-    /// +1 per balanced call). The fourth attempt added the locked
-    /// `setActive(true)` on activation but never added the matching
-    /// `setActive(false)` through the same counted API — `reportCallEnded`
-    /// now does, so every activate this app makes is balanced by a
-    /// deactivate at the one choke point every call-end path already
-    /// shares. This directly explains why the fault compounds and only a
-    /// full process restart clears it: an ever-climbing count never returns
-    /// to the balanced baseline a fresh call assumes.
-    ///
-    /// SIXTH fix, same investigation, then SEVENTH — the fifth's own double-
-    /// decrement guard (`ledger.forget`'s "was outstanding") turned out to
-    /// be watching the wrong signal, found by fetching `RTCAudioSession.mm`'s
-    /// actual implementation (not just the header) from the pinned
-    /// `webrtc-sdk/webrtc@m144_release` source: `audioSessionDidActivate:`/
-    /// `didDeactivate:` DO touch the same `activationCount` a locked
-    /// `setActive:` call does, confirming the counter is real and shared —
-    /// but `AppState.swift`'s W520 "single-dialer" foreground-answer path
-    /// deliberately never calls `reportIncomingCall`, so
-    /// `CallKitCallLedger.outstandingUUIDs` never has the answering side's
-    /// uuid at all in exactly the two-devices-foregrounded scenario every
-    /// test tonight used — the deactivate silently never fired there. New
-    /// guard (`CallKitCallLedger.audioSelfActivated`) tracks whether THIS
-    /// app's own locked activate ran, independent of CallKit's native-UI
-    /// ledger. See `CallKitCallLedger`'s kdoc and `reportCallEnded`'s for
-    /// the full trace of both the original bug and this one's own bug.
-    ///
-    /// EIGHTH — the sixth/seventh fix's own live retest (same session) showed
-    /// the answering side's `activationCount` now balances perfectly (2→0),
-    /// yet the audio-srtp TX/RX symptom itself was UNCHANGED: one side's
-    /// sender stayed dead the whole call, direction-flipped from the prior
-    /// test, with the dead-call gap now 22-25s — far past any brief async
-    /// race and past the 1.5s settle-wait from the third attempt. This
-    /// proved `RTCAudioSession`/CallKit activation bookkeeping was real and
-    /// worth fixing but NOT the load-bearing cause of the audio symptom.
-    /// Widened, best-practices-researched investigation (not a ninth guess
-    /// at the same boundary) found: `QAudionPeerConnectionFactory.
-    /// createFactory()` minted a brand-new native AudioDeviceModule/AudioUnit
-    /// on every call — the per-call teardown/recreate cycle itself repeats a
-    /// maintainer-acknowledged libwebrtc iOS audio-unit stop race (bug
-    /// webrtc:5993) once per call, and WebRTC's own upstream abandoned the
-    /// one structural fix that would have addressed it inside the library
-    /// (a 2021-2022 "separate audio units for playout & recording" change,
-    /// status ABANDONED). Sequential `RTCPeerConnection`s sharing one
-    /// long-lived factory is WebRTC's own documented normal usage, and this
-    /// app's per-call fresh-factory pattern was the actual anomaly, not an
-    /// inherent WebRTC limitation — confirmed by checking how the library's
-    /// own audio-session wrapper and its `useManualAudio`/`isAudioEnabled`
-    /// pair are designed (process-lifetime by construction). Fixed by making
-    /// `QAudionPeerConnectionFactory` build its factory+ADM ONCE per process
-    /// (`sharedFactory()`, replacing the old per-call `createFactory()`) —
-    /// see that class's own W-PERSISTENTFACTORY kdoc for the full mechanism
-    /// and for why `useManualAudio` deliberately stays `false`. This
-    /// capability flag itself did not need to move for this fix — the defect
-    /// was architectural, one layer below anything a flag flip could reach —
-    /// and stays `true` here, unverified live until the next real
-    /// call-to-call test, same discipline as every attempt above.
-    ///
-    /// FLIPPED BACK TO `false` 2026-09-10, per user request — the whole
-    /// audio-srtp-v1 subsystem got a real, verified fix chain tonight (RX
-    /// playout injector wiring, resample, comfort-noise overwrite-not-add)
-    /// and the asymmetric-no-audio defect this session is chasing STILL
-    /// reproduced afterward on both iOS and Android, including Android↔Android
-    /// where this tag never applies at all. That raises a real, untested
-    /// question: whether the same class of defect predates audio-srtp-v1
-    /// entirely and already existed on the legacy sealed-DataChannel/WS-relay
-    /// path. Flipping this off forces every iOS call back onto that legacy
-    /// path regardless of what the peer advertises (symmetric intersection —
-    /// the tag can't appear in the agreed set if iOS never offers it), which
-    /// is exactly what isolates the two hypotheses. Not a verdict either way;
-    /// a controlled test. Revert to `true` once this comparison is done.
-    ///
-    /// FLIPPED TO `true` PERMANENTLY, 2026-09-29/30 (W-SRTPALWAYSON, owner
-    /// decision) — after release 2 (M150) was verified on real calls: DTLS
-    /// 1.3 (`TLS_AES_256_GCM_SHA384`), SRTP `AEAD_AES_256_GCM`,
-    /// `X25519MLKEM768`, callee always the DTLS server, 0 handshake
-    /// failures, P2P host/host, the 60 ms / 32 kbps profile, FEC floor 10,
-    /// 0 crashes, the owner asked for this to become "the default setting
-    /// to use always in all software, removing the option to set it
-    /// manually everywhere, to prepare the store release." This is that
-    /// change: the compiled default flips to `true` and STAYS there — no
-    /// more flips expected, no more A/B comparison — and the runtime
-    /// override that used to let a Settings toggle disagree with this
-    /// constant has been retired from the UI (`CallsSettingsScreen`, see
-    /// its own history). Two levers remain, both deliberate: the remote
-    /// `calls.native_srtp_kill` field-trial switch (per call, fleet-wide,
-    /// see `FeatureFlags.swift`) and the local crash-streak safety net
-    /// (per device, automatic — see
-    /// ``registerNativeSrtpCrashAndMaybeAutoReset()``). Capability
-    /// negotiation is untouched: a peer on an older build that never
-    /// advertises ``audioSrtpV1`` still falls back to the custom
-    /// sealed-audio path automatically (symmetric intersection, unchanged).
+    /// Two other switches can turn the path off without changing this
+    /// constant: the remote `calls.native_srtp_kill` field-trial switch (per
+    /// call, fleet-wide; see `FeatureFlags.swift`) and the local crash-streak
+    /// safety net (per device, automatic; see
+    /// ``registerNativeSrtpCrashAndMaybeAutoReset(currentBuild:)``).
     public static let audioSrtpSendEnabled: Bool = true
 
     /// `call_upgrade_intent` receive-support tag (2026-07-07 cross-platform

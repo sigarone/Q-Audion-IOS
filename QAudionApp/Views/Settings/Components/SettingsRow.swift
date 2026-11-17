@@ -2,8 +2,7 @@ import SwiftUI
 
 /// Single navigation / action row used inside `SettingsScreen` and any
 /// other Settings sub-screen that adopts the design tokens. 1:1 port
-/// of Android `SettingsRow` from
-/// `qaudion-android-new/feature/feature-settings/.../SettingsUi.kt`.
+/// of the Android `SettingsRow` component.
 ///
 /// **Important** — this row is *presentational*. It does NOT wrap its
 /// content in a `Button`. Callers compose it themselves:

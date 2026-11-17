@@ -21,11 +21,7 @@ import WebRTC
 /// receives NO serialized DataChannel/WS frame at all (the peer sends real
 /// RTP, not sealed frames), so without an equivalent tap on the native path
 /// every one of those consumers silently sees zero frames for the call's
-/// whole life. This is Android's real, shipped, one-day-earlier incident
-/// (`CallCapabilities.kt:337-349`) — confirmed present on iOS by tracing
-/// the consumers of the Guardian tap to
-/// `QAudionCallIntegration.analyze(_:)`, which is reached ONLY from
-/// `processIncomingAudio`.
+/// whole life.
 ///
 /// `RTCAudioTrack.add(_:)` / `RTCAudioRenderer.render(pcmBuffer:)`
 /// are grep-verified against the REAL header at the exact pinned commit this

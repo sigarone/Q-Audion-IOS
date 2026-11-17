@@ -149,12 +149,10 @@ final class AccountSettingsContainer: ObservableObject {
                 let profile = try await provider.accountApi.getProfile()
                 await MainActor.run {
                     // W73: take phone_hash + extension from the SERVER
-                    // response, not the local placeholder. The
-                    // bcrypto-server `/profile` GET handler now returns
-                    // both fields (commit `feat(server): expose
-                    // extension+phone_hash on /profile`). For legacy
-                    // accounts where the server hasn't rolled out yet
-                    // these stay nil/0 and the UI shows "—".
+                    // response, not the local placeholder. The server's
+                    // `/profile` GET handler returns both fields. When
+                    // the server omits them they stay nil/0 and the UI
+                    // shows "—".
                     let extString: String?
                     if let ext = profile.dialExtension, ext > 0 {
                         extString = String(ext)

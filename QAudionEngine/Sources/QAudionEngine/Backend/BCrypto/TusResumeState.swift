@@ -19,11 +19,10 @@ import Security
 /// outbound message got as far as fileId X, for a source blob that looked
 /// like Y — is X still resumable, and is Y still trustworthy?"
 ///
-/// **Server-side retention.** `bcrypto-server`'s `storage.RetentionWorker`
-/// purges abandoned/incomplete TUS uploads 24h after creation (wired into
-/// `main()` — see `cmd/bcrypto-lite/main.go`). A resume attempt against a
-/// purged `fileId` legitimately 404s; callers must treat that as "no
-/// longer resumable, fall through to a fresh upload," never as a bug.
+/// **Server-side retention.** The server purges abandoned/incomplete TUS
+/// uploads 24h after creation. A resume attempt against a purged `fileId`
+/// legitimately 404s; callers must treat that as "no longer resumable, fall
+/// through to a fresh upload," never as a bug.
 ///
 /// **What this record intentionally does NOT track.** The exact byte
 /// offset is NOT persisted here — `HEAD` is always the authoritative

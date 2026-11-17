@@ -124,8 +124,8 @@ public enum CryptoConstants {
     /// JWTSecret-derived / zeros placeholders are REJECTED by the contract.
     ///
     /// Production identity (2026-08-20): "qa-kms-prod-server-v1", matching
-    /// bcrypto-server's config.production.toml `[kms] server_identity` and
-    /// the identical Android/Desktop/KmsServerIdentity.SERVER_IDENTITY
+    /// the server's production `[kms] server_identity` setting and the
+    /// identical Android/Desktop/KmsServerIdentity.SERVER_IDENTITY
     /// constants. The KAT/test identity ("qa-kms-test-server-2026-06-16",
     /// frozen by gen_kms_v2_kat.py) is a separate, permanently-frozen string
     /// used only to validate the vendored KAT vectors.

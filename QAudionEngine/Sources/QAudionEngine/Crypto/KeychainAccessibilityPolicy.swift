@@ -17,10 +17,7 @@ import Security
 /// those vaults collapsed that status into `nil` — the same answer as "never
 /// stored". A caller that regenerates on "never stored" could then mint a new
 /// identity or derive a fresh ratchet chain over the real one; a caller that
-/// just gives up drops the call. See audit memory
-/// reference_ios_stability_audit_2026_09_01 (P1 item 5:
-/// SovereignIdentityManager.swift:214, SovereignKeyVault.swift:160-163,
-/// KeychainRatchetVault.swift:6-9, QAudionKeyStore.swift:20).
+/// just gives up drops the call.
 ///
 /// RULE. Items a background wake needs are stored
 /// `AfterFirstUnlockThisDeviceOnly` — readable once the user has unlocked the

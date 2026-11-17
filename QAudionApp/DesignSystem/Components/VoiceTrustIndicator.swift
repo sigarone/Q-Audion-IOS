@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Traffic-light voice-trust indicator. 1:1 port di
-/// `qaudion-android-new/core/core-ui/.../components/VoiceTrustIndicator.kt`.
+/// Traffic-light voice-trust indicator. 1:1 port of the Android
+/// implementation of this component.
 ///
 /// Mappa un confidence index `[0.0, 1.0]` su 3 livelli:
 ///   - `index ≥ 0.80` → `.success` ("Voce verificata")

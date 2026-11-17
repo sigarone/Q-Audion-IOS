@@ -2,12 +2,9 @@ import Foundation
 
 /// Pure-Swift codec for the `qa_ctl:1` **attach_announce** envelope variant.
 ///
-/// Wave 3-3 of `glittery-sleeping-hejlsberg.md`. Companion to
-/// Desktop `src/main/messaging/ChatControlEnvelope.ts` (commit `d28686c` on
-/// Q-Audion-Desktop) and Android
-/// `feature/feature-chat/.../attachments/ChatControlEnvelope.kt` (commit
-/// `fddd6a18` on New-Q-Audion-Android). All three produce identical wire
-/// JSON for the same input.
+/// Companion to Desktop `src/main/messaging/ChatControlEnvelope.ts` and the
+/// Android implementation of the same envelope. All three produce identical
+/// wire JSON for the same input.
 ///
 /// **Wire form** (snake_case per WIRE_SPEC §3.6.3):
 /// ```json

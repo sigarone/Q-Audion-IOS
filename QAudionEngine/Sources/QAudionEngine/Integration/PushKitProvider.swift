@@ -50,16 +50,15 @@ public final class PushKitProvider {
     /// authenticated signaling WebSocket after this wakes the app. Public so
     /// unit tests can use it.
     ///
-    /// Wire shape mirrors bcrypto-server's EXISTING `opaque_wakeup` pattern
-    /// for messages (`internal/push/fcm.go`'s `SendOpaquePush`: `type`,
-    /// `kind`, `shash`, `ts` — same field names, `kind` there is presumably
-    /// "message"/similar, here `"call"`). That pattern is FCM/WNS-only today
-    /// (`internal/push/apns.go` has no `opaque_wakeup` sender at all — iOS
-    /// currently has no push-driven message wake path whatsoever, messages
-    /// rely entirely on the persistent WS) — there is no existing iOS
-    /// opaque-wakeup precedent to literally copy, so the field names are
-    /// carried over from the FCM/WNS shape instead, as the closest real
-    /// cross-platform contract to stay consistent with.
+    /// Wire shape mirrors the server's existing `opaque_wakeup` pattern for
+    /// messages (`type`, `kind`, `shash`, `ts` — same field names, with `kind`
+    /// set to `"call"` here). That pattern is FCM/WNS-only today (the server's
+    /// APNs path has no `opaque_wakeup` sender at all — iOS currently has no
+    /// push-driven message wake path whatsoever, messages rely entirely on the
+    /// persistent WS) — there is no existing iOS opaque-wakeup precedent to
+    /// literally copy, so the field names are carried over from the FCM/WNS
+    /// shape instead, as the closest real cross-platform contract to
+    /// stay consistent with.
     public struct OpaqueCallWakeupPayload: Equatable, Sendable {
         /// `kind` field, always "call" for anything this type parses
         /// (guaranteed by `parseOpaqueCallWakeup`'s own gate).

@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// 23 Material 3 color roles, port 1:1 of Android `qaudionDarkScheme` /
-/// `qaudionLightScheme` from
-/// `qaudion-android-new/core/core-ui/.../theme/QAudionColors.kt`.
+/// `qaudionLightScheme`.
 ///
 /// SwiftUI has no built-in equivalent of Material's full ColorScheme, so we
 /// model it as a plain immutable struct exposed via `@Environment`. Every

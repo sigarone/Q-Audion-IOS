@@ -60,7 +60,7 @@ final class CallTeardownLatchTests: XCTestCase {
         XCTAssertNotNil(latch.begin())
     }
 
-    // MARK: - the incident sequence, replayed
+    // MARK: - redial and busy sequences
 
     /// The `AppState` pieces that matter: the accept latch, the teardown latch, `startCall`'s commit point
     /// (`beginOutgoing` + `newCallAdmitted`) and `endCall`'s guard, plus the busy handler's "hangup in flight" test.
@@ -142,7 +142,8 @@ final class CallTeardownLatchTests: XCTestCase {
         XCTAssertFalse(c.teardown.inFlight)
     }
 
-    /// The three dials of the incident (24 s apart, so no overlap): each busy runs its teardown and shows its outcome.
+    /// Three consecutive dials, each guard window closed before the next dial (so no overlap): each busy runs its
+    /// teardown and shows its outcome.
     func testEveryBusyOfConsecutiveDialsRunsItsOwnTeardown() {
         let c = Caller()
         var expected = 0

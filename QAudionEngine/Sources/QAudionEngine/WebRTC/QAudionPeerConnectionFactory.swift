@@ -137,10 +137,7 @@ public final class QAudionPeerConnectionFactory: @unchecked Sendable {
     /// verified swap of the CONSTRUCTOR PATH, not of the audio backend
     /// itself. `bypassVoiceProcessing: false` preserves hardware Voice-
     /// Processing-I/O (AEC+NS+AGC) on that path exactly as this class's own
-    /// top-of-file doc has always promised ("hardware AEC + NS"). See
-    /// `project_ios_native_capture_tap_adm_choice_2026_09_08.md` (session
-    /// memory) for the full source-level verification this comment
-    /// summarizes.
+    /// top-of-file doc has always promised ("hardware AEC + NS").
     ///
     /// W-PERSISTENTFACTORY (2026-09-09) — this factory (and the native
     /// AudioDeviceModule/AudioUnit underneath it) is now built ONCE per

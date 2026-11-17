@@ -3,8 +3,8 @@ import CoreImage.CIFilterBuiltins
 import CryptoKit
 import QAudionEngine
 
-/// "Collega nuovo dispositivo" screen. 1:1 port di Android
-/// `qaudion-android-new/feature/feature-settings/.../LinkNewDeviceScreen.kt`.
+/// "Collega nuovo dispositivo" screen. 1:1 port of the Android
+/// implementation of this screen.
 ///
 /// Genera una keypair X25519 efimera lato iOS (CryptoKit
 /// `Curve25519.KeyAgreement.PrivateKey`), encoda la pubkey in un payload

@@ -202,10 +202,9 @@ extension SigsumPolicy {
     ///    ready for that key once it exists). **Only the domain owner
     ///    (bcrypto.com) can publish this DNS record** — it is not something
     ///    any client-side code change can do.
-    /// 2. **Server-side submitter.** A separate agent in the batch that
-    ///    produced this file is building the bcrypto-server component that
+    /// 2. **Server-side submitter.** The server still needs a component that
     ///    actually submits identity bindings to this log and returns
-    ///    `SigsumProofBundle`s to clients; this file cannot see that work.
+    ///    `SigsumProofBundle`s to clients.
     ///
     /// Fetched VERBATIM from `gh api
     /// repos/sigsum/sigsum-go/contents/pkg/policy/builtin/sigsum-generic-2025-1.builtin-policy`

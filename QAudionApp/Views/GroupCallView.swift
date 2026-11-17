@@ -1427,18 +1427,16 @@ class GroupCallViewModel: ObservableObject {
                 DispatchQueue.main.async {
                     guard let self = self else { return }
                     self.selfVideoTrack = track
-                    // W-GRPSELFGRID (2026-07-20): route our own live camera
-                    // into the SAME grid tile every remote participant
-                    // renders through, instead of leaving that tile's
-                    // `videoTrack` permanently nil and showing the live feed
-                    // only in a disconnected floating PiP (see `GroupCallView.
-                    // body`'s removed self-preview overlay for the incident
-                    // this closes). Mirrors Android's `GroupCallScreen.
-                    // ParticipantTile` call site exactly: `videoTrack = if
-                    // (uid == selfId) localVideoTrack else remoteVideoTracks[uid]`.
-                    // `track` is nil-able (camera can also turn back off
-                    // mid-call), so this both attaches AND clears in lockstep
-                    // with `selfVideoTrack` above.
+                    // W-GRPSELFGRID: route our own live camera into the SAME
+                    // grid tile every remote participant renders through, so
+                    // that tile's `videoTrack` carries the live feed and no
+                    // separate floating PiP is needed. Mirrors Android's
+                    // `GroupCallScreen.ParticipantTile` call site exactly:
+                    // `videoTrack = if (uid == selfId) localVideoTrack else
+                    // remoteVideoTracks[uid]`. `track` is nil-able (camera
+                    // can also turn back off mid-call), so this both
+                    // attaches AND clears in lockstep with `selfVideoTrack`
+                    // above.
                     if let idx = self.participants.firstIndex(where: { $0.id == self.selfUserId }) {
                         self.participants[idx].videoTrack = track
                     }
@@ -1741,14 +1739,12 @@ class GroupCallViewModel: ObservableObject {
         // by a camera that stopped publishing for a reason other than this call.
         let target = !isVideoEnabled
         guard let controller = controller else {
-            // W-GRPVIDEOTELEM (2026-09-30): no controller bound at all
-            // (legacy preview path, or a tap racing view teardown) — the
-            // ONE early exit `GroupCallController.setVideoEnabled` can
-            // never itself observe, so it has to be logged right here or
-            // it leaves no trace anywhere. Tonight's group-call incident
-            // (call cd87caee) showed exactly this: no toggle-related log
-            // line at all, so a missed tap was indistinguishable from a
-            // lost one.
+            // W-GRPVIDEOTELEM: no controller bound at all (legacy preview
+            // path, or a tap racing view teardown) — the ONE early exit
+            // `GroupCallController.setVideoEnabled` can never itself
+            // observe, so it has to be logged right here or it leaves no
+            // trace anywhere; otherwise a missed tap would be
+            // indistinguishable from a lost one.
             RTLog.warn("call", "call.media.video_toggle stage=no_controller code=0 target=\(target ? 1 : 0)")
             return
         }
@@ -1762,19 +1758,14 @@ class GroupCallViewModel: ObservableObject {
     }
 
     func endCall() {
-        // W-GRPEND-CREATOR (2026-07-20, live incident): this used to call
-        // endCallForAll() UNCONDITIONALLY — every iOS participant's red
-        // hang-up button terminated the call for the whole roster (live
-        // repro: a non-creator iPad hung up and the 5-way call died for
-        // everyone). Android's "Termina" and Desktop's hang-up both send
-        // group_call_leave; iOS was the only platform sending
-        // group_call_end. Hang-up now LEAVES (server also gates end on the
-        // creator since the same incident, downgrading a non-creator's end
-        // to leave — this client fix makes the intent explicit rather than
-        // relying on the server downgrade). The one exception is the creator
-        // that is the last one in the call: nobody is left to keep it up for,
-        // so it ends it (`GroupExitPolicy`, the same exit as the system's End
-        // and the lone-call backstop).
+        // Hang-up LEAVES the group call rather than ending it for the whole
+        // roster, as Android's "Termina" and Desktop's hang-up do (both send
+        // group_call_leave). The server also gates end on the creator,
+        // downgrading a non-creator's end to leave; leaving from the client
+        // makes the intent explicit rather than relying on that downgrade.
+        // The one exception is the creator that is the last one in the call:
+        // nobody is left to keep it up for, so it ends it (`GroupExitPolicy`,
+        // the same exit as the system's End and the lone-call backstop).
         if let controller = controller {
             controller.leaveOrEnd()
         } else {

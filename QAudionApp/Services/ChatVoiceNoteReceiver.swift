@@ -68,16 +68,14 @@ final class ChatVoiceNoteReceiver {
             throw Error.downloadFailed(String(localized: "attachment.detail.not_authenticated", defaultValue: "non autenticato", comment: "Reason inside an attachment error (lower case, it follows a colon): the user is not signed in."))
         }
 
-        // UPLOAD-401 FIX (2026-07-03) / 2026-08-07 parity — use the
-        // refresher-wired provider builder instead of a bare
+        // Use the refresher-wired provider builder instead of a bare
         // BCryptoBackendProvider(config: .pinned(serverUrl:accessToken:)).
         // The bare form carries no refresh token and never wires the
-        // Ed25519 device-renew fallback, so once the access token expired
+        // Ed25519 device-renew fallback, so once the access token expires
         // mid-session every voice-note download (and every retry) would
         // 401 permanently with no self-heal. ChatAttachAnnounceReceiver
-        // (the cross-platform sibling of this file) already got this fix
-        // in 2026-07-03; this legacy iPhone-only qfile-v3 path did not.
-        // See AppState.makeUploadProvider's doc for the full incident.
+        // (the cross-platform sibling of this file) uses the same builder.
+        // See AppState.makeUploadProvider's doc.
         let provider = appState.makeUploadProvider()
 
         // Capture the claim in the closure so FileTransfer.download's

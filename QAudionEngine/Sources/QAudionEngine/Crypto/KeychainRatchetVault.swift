@@ -42,12 +42,11 @@ public final class KeychainRatchetVault: RatchetVault, @unchecked Sendable {
         return (try? loadChecked(epochId: epochId, peerId: peerId)) ?? nil
     }
 
-    /// W-KCAFTERUNLOCK (2026-09-01) — `RatchetVault.loadChecked`: same read,
-    /// but a locked Keychain (-25308) throws `VaultError.deviceLocked` instead
-    /// of answering nil. `MessageRatchet.ensureSession` reads through THIS so
-    /// it can never derive-and-persist a fresh chain over a snapshot it merely
-    /// could not decrypt yet (audit memory
-    /// reference_ios_stability_audit_2026_09_01, P1 item 5).
+    /// W-KCAFTERUNLOCK — `RatchetVault.loadChecked`: same read, but a locked
+    /// Keychain (-25308) throws `VaultError.deviceLocked` instead of
+    /// answering nil. `MessageRatchet.ensureSession` reads through THIS so it
+    /// can never derive-and-persist a fresh chain over a snapshot it merely
+    /// could not decrypt yet.
     public func loadChecked(epochId: String, peerId: String) throws -> RatchetSnapshot? {
         let blob = try readBlobChecked(service: Self.service, account: Self.account(epochId: epochId, peerId: peerId))
         guard let blob = blob else { return nil }

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Risk level capsule. 1:1 port di
-/// `qaudion-android-new/core/core-ui/.../components/RiskPill.kt`.
+/// Risk level capsule. 1:1 port of the Android implementation of this
+/// component.
 ///
 /// Tre livelli di rischio mutuamente esclusivi:
 ///   - `.low`     → `extras.riskLow` (verde) — "RISCHIO BASSO"

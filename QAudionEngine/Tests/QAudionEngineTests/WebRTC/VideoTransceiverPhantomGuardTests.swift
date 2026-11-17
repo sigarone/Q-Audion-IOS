@@ -3,10 +3,9 @@ import XCTest
 
 /// CALLEE-UPGRADE-PURPLE FIX (2026-07-01) — tests for the pure phantom-video
 /// decision `VideoTransceiverPhantomGuard.shouldIgnorePhantomVideoTransceiver`.
-/// Mirrors the Android suite for `shouldIgnorePhantomVideoTransceiver`
-/// (qaudion-android-new 39ea0e5f, PeerConnectionHolderTest.kt), adapted to the
-/// iOS 4-parameter signature (no cached-transceiver identity and no
-/// local-mirror shape on iOS — the single choke point is
+/// Mirrors the Android app's suite for `shouldIgnorePhantomVideoTransceiver`,
+/// adapted to the iOS 4-parameter signature (no cached-transceiver identity
+/// and no local-mirror shape on iOS — the single choke point is
 /// `didAdd rtpReceiver` in QAudionPeerConnection).
 ///
 /// No WebRTC import needed: the decision is deliberately RTC-type-free so it

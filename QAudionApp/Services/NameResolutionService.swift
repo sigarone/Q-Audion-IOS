@@ -478,12 +478,10 @@ final class NameResolutionService: @unchecked Sendable {
                 return true
             }()
             guard (placeholderOk || refreshOk), s.displayName != resolved else { return }
-            // W-NAMEOVERWRITE-DIAG (2026-08-04): same incident as Phase 1's
-            // twin log above — see enrichFromCallProfile. mayOverwrite
-            // SHOULD block this once a real rename is stored; log the
-            // before/after + WHY it was allowed (placeholder / bare
-            // extension / chat-activity refresh) so the next occurrence
-            // proves whether this is the actual culprit instead of guessing.
+            // W-NAMEOVERWRITE-DIAG: twin of Phase 1's log above (see
+            // enrichFromCallProfile). Logs the before/after value + WHY the
+            // overwrite was allowed (placeholder / bare extension /
+            // chat-activity refresh).
             let why = refreshOk ? "chat-activity-refresh"
                 : DisplayName.isPlaceholderName(s.displayName) ? "placeholder" : "bare-extension"
             RTLog.warn("NameResolve", "apply() upsert id=\(id.prefix(8)) before=\"\(s.displayName)\" after=\"\(resolved)\" reason=\(why)")

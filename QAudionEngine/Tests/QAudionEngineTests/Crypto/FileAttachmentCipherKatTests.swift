@@ -4,14 +4,11 @@ import CryptoKit
 
 /// SEC-WIREUNIFY (2026-08-03) — pins `FileAttachmentCipher` and
 /// `FileAttachmentAnnounce` (the iOS side of the `qa_fa_announce:1`
-/// cross-platform port) against REAL hex output captured from Android's
-/// own running implementation via `FileAttachmentCrossPlatformKatGeneratorTest.kt`
-/// (`qaudion-android-new/qaudion-engine/src/test/java/com/bcrypto/qaudion/
-/// file/FileAttachmentCrossPlatformKatGeneratorTest.kt`, run
-/// 2026-08-03T08:14:47Z). Every hex literal below was extracted verbatim
-/// from that run's JUnit XML — not hand-derived — so a byte mismatch here
-/// means the iOS port diverges from Android's actual wire behavior, not a
-/// theoretical spec misread.
+/// cross-platform port) against REAL hex output captured from Android's own
+/// running implementation via its cross-platform KAT generator test. Every
+/// hex literal below was extracted verbatim from that generator's output —
+/// not hand-derived — so a byte mismatch here means the iOS port diverges
+/// from Android's actual wire behavior, not a theoretical spec misread.
 final class FileAttachmentCipherKatTests: XCTestCase {
 
     private func fromHex(_ hex: String) -> Data {

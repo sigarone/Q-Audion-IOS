@@ -4,7 +4,7 @@ import CryptoKit
 /// Pairwise first-contact PSK negotiation — Desktop/Android parity.
 ///
 /// Mirrors `qaudion-desktop/src/main/calling/ContactKeyExchange.ts`
-/// and `qaudion-android-new/.../crypto/ContactKeyExchange.kt`.
+/// and the Android implementation.
 ///
 ///   PSK = HKDF-SHA256(
 ///           ikm  = X25519_ECDH(my_priv, peer_pub),
@@ -86,11 +86,10 @@ public final class ContactKeyExchange: @unchecked Sendable {
         // On next `initiate` (immediately after this guard), myX25519PublicKey
         // will return the new key.
         if myX25519PublicKey() == nil {
-            // W-KCAFTERUNLOCK (2026-09-01) — a locked Keychain (-25308) also
-            // reads as nil here, and this branch used to answer it by minting
-            // a NEW identity and writing it over the real one. A locked device
-            // is not a missing identity: bail out as transient instead (audit
-            // memory reference_ios_stability_audit_2026_09_01, P1 item 5).
+            // W-KCAFTERUNLOCK — a locked Keychain (-25308) also reads as nil
+            // here. A locked device is not a missing identity, so this branch
+            // must not mint a NEW identity and write it over the real one:
+            // it bails out as transient instead.
             // W-SIGNERBOOT — the read-or-create is now one serialised step shared
             // with the handshake signer (`SovereignIdentityBootstrap`), so two
             // racing callers can never mint two identities.

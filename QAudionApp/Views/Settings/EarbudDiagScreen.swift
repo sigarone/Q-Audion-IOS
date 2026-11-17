@@ -16,12 +16,11 @@ import QAudionEngine
 //   heap (free / total bytes), PDM/TDM status, CPU%, CRACEN AEAD ops,
 //   Axon pipeline state, BLE connection state.
 //
-// The BLE service/characteristic UUIDs must match the earbud firmware
-// (qaudion-firmware gatt_server / qaudion_service_uuid). Until the iOS
-// BLE client is wired to the real firmware UUIDs the screen operates
-// in "scan only" mode and surfaces whatever advertisement data is
-// visible — same fallback state as the Android implementation before
-// pairing.
+// The BLE service/characteristic UUIDs must match the ones the earbud
+// firmware's GATT server exposes. Until the iOS BLE client is wired to
+// the real firmware UUIDs the screen operates in "scan only" mode and
+// surfaces whatever advertisement data is visible — same fallback state
+// as the Android implementation before pairing.
 //
 // This file follows CLAUDE.md §16 (no AppState parameter type) and
 // SWIFT6_PATTERNS §13 (all closures extracted to named methods).
@@ -121,9 +120,9 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
     private var prevAeadOps: UInt32? = nil
     private var prevAeadOpsAt: TimeInterval = 0
 
-    // Q-Audion GATT service and DIAG characteristic UUIDs — canonical values from
-    // qaudion-firmware/nspe/src/transport/qaudion_gatt.c (QAUDION_SVC_UUID_VAL /
-    // QAUDION_CH_DIAG_UUID_VAL, slot 0x90).
+    // Q-Audion GATT service and DIAG characteristic UUIDs — the canonical values
+    // defined by the firmware (QAUDION_SVC_UUID_VAL / QAUDION_CH_DIAG_UUID_VAL,
+    // slot 0x90).
     // nonisolated(unsafe): these are constants (never mutated) accessed from
     // CBCentralManager/CBPeripheralDelegate callbacks which are nonisolated.
     // Swift 6 strict-concurrency requires explicit opt-in for @MainActor statics

@@ -630,12 +630,10 @@ jobs:
         run: |
           set -e
           # Marketing version from tag (strip leading "v" + any "-suffix").
-          # Refuse to fall back to a hard-coded "1.0.0" -- historical
-          # incident 2026-05-07: a workflow_dispatch run with no `tag`
-          # input produced TestFlight build "1.0.0 (54)" which polluted
-          # the version timeline alongside proper 1.0.4xx builds and
-          # had to be expired manually. Hard-fail here so the operator
-          # gets an actionable error before the build runs.
+          # Refuse to fall back to a hard-coded "1.0.0": a workflow_dispatch
+          # run with no `tag` input would otherwise upload a bogus version
+          # to TestFlight. Hard-fail here so the operator gets an actionable
+          # error before the build runs.
           GIT_TAG="${GITHUB_REF#refs/tags/}"
           if [ -z "$GIT_TAG" ] || [ "$GIT_TAG" = "$GITHUB_REF" ]; then
             GIT_TAG="$TAG_INPUT"

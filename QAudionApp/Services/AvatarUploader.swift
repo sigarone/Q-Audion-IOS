@@ -2,8 +2,7 @@ import Foundation
 import UIKit
 import QAudionEngine
 
-/// E2EE avatar transport (2026-07-30, see
-/// `docs/E2EE_AVATAR_TRANSPORT_DESIGN.md` in bcrypto-server).
+/// E2EE avatar transport.
 ///
 /// FIX (avatar plaintext exposure): this used to upload the plaintext
 /// JPEG to the generic `/api/v1/files/upload` endpoint and set the

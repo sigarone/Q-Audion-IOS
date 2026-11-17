@@ -2,8 +2,7 @@ import SwiftUI
 
 /// Section header used inside the new `SettingsScreen` root and any
 /// page that mimics it (ProfileScreen, KeyManagementScreen, etc.).
-/// 1:1 port of Android `SettingsSectionHeader` from
-/// `qaudion-android-new/feature/feature-settings/.../SettingsUi.kt`.
+/// 1:1 port of the Android `SettingsSectionHeader` component.
 ///
 /// Visual:
 ///   - uppercase text, monospace `labelSmall`, 1.5sp tracking

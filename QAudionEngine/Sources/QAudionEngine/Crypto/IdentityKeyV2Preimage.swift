@@ -4,9 +4,8 @@ import CryptoKit
 /// ADR-014a §2.1 — canonical preimage for the `self_sig_b64` field carried
 /// in a v2 identity bundle (`GET /api/v1/users/{id}/identity-key`).
 ///
-/// Direct port of Android
-/// `qaudion-android-new/core/core-data/.../security/IdentityKeyV2Preimage.kt`
-/// (that file is the authoritative layout spec). Cross-platform contract:
+/// Direct port of the Android implementation of this preimage (that
+/// implementation is the authoritative layout spec). Cross-platform contract:
 /// this layout MUST be byte-equal to the server
 /// `internal/store/identity_bundles.go::buildBundlePreimage` and Desktop's
 /// `IdentityBundleCodec.ts::buildBundleSigPreimage`. Diverging from any of

@@ -7,7 +7,7 @@ import Foundation
 ///
 /// Mirror of Android KmsServerIdentity.kt. All 5 surfaces compute the same 32 bytes.
 /// Production identity (2026-08-20): "qa-kms-prod-server-v1", matching
-/// bcrypto-server's config.production.toml `[kms] server_identity` and the
+/// the server's production `[kms] server_identity` setting and the
 /// identical Android/Desktop constants. The KAT/test identity
 /// ("qa-kms-test-server-2026-06-16", frozen by gen_kms_v2_kat.py) stays
 /// frozen forever for KAT reproducibility — it is a different string from

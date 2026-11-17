@@ -4,12 +4,11 @@ import Foundation
 /// message outbox (the drainer itself is `ChatOutboxDrain` in the app
 /// target; the persisted queue is `ChatOutboxStore` next to this file).
 ///
-/// Why this exists (audit memory reference_ios_stability_audit_2026_09_01,
-/// P1 item 3): a 1:1 text send was one in-memory `Task` — wait ≤5 s for the
-/// socket (`ChatMessageSendService.sendEncrypted`), ≤5 s more inside
-/// `BCryptoMessageApiImpl.sendMessage`, then `wsUnavailable` → the row
-/// flipped to `.failed` and only a manual tap retried it. A process kill in
-/// that window left the row `.sending` forever, and nothing ever swept it.
+/// Why this exists: a 1:1 text send is otherwise one in-memory `Task` — wait
+/// ≤5 s for the socket (`ChatMessageSendService.sendEncrypted`), ≤5 s more
+/// inside `BCryptoMessageApiImpl.sendMessage`, then `wsUnavailable` → the
+/// row flips to `.failed` and only a manual tap retries it. A process kill in
+/// that window leaves the row `.sending` forever, and nothing ever sweeps it.
 /// The generic fix is a transactional outbox: the row IS the record of
 /// intent (its text is the only payload), and a drainer re-seals that text at
 /// transmit time (2026-09-19: bytes sealed earlier can be stranded by a

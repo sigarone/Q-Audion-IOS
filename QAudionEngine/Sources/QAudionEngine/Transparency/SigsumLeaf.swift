@@ -6,8 +6,7 @@ import CryptoKit
 /// cross-signing ... removes the server from this decision for TOFU peers")
 /// — the identity-binding preimage that a Q-Audion Sigsum log entry logs.
 ///
-/// Direct byte-for-byte port of Android
-/// `qaudion-android-new/qaudion-engine/.../transparency/SigsumProof.computeLeaf`
+/// Direct byte-for-byte port of Android `SigsumProof.computeLeaf`
 /// (ADR-026 §4.2) — that layout is confirmed correct and is NOT changed
 /// here. What Android's `SigsumProof.kt` got wrong is everything AFTER this
 /// step: it never turns this value into a real Sigsum `tree_leaf`

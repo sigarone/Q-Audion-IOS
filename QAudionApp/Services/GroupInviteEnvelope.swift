@@ -6,9 +6,9 @@ import Foundation
 /// **Cross-platform alignment (verified 2026-05-02):**
 /// - Desktop (`GroupMembershipService.ts`) ships `t` tokens **without**
 ///   the `group_` prefix: `member_added`, `member_removed`, `member_left`.
-/// - Android (qaudion-android-new) onboards via QR code +
-///   `POST /api/v1/groups/:id/join` REST. Only `sender_key_init` /
-///   `sender_key_rotate` qa_grp envelopes are recognised over 1:1.
+/// - Android onboards via QR code + `POST /api/v1/groups/:id/join` REST.
+///   Only `sender_key_init` / `sender_key_rotate` qa_grp envelopes are
+///   recognised over 1:1.
 /// - iOS (W399) originally shipped its own prefixed wire (`group_invite`,
 ///   `group_member_added`, `group_member_removed`, `group_invite_decline`)
 ///   that did not interoperate with either Desktop or Android.

@@ -4,11 +4,9 @@ import QAudionEngine
 @MainActor
 final class ChatContainer: ObservableObject {
 
-    /// Reason codes 1:1 con Android `SendMessageUseCase.Outcome.Failed`
-    /// (vedi `qaudion-android-new/feature/feature-chat/.../SendMessageUseCase.kt`).
-    /// Mappato a stringhe Italian per UI feedback via QAudionSnackbar.
-    /// `Error`-conforming (branch claude/ble-mesh-cleanroom-spike added
-    /// this): `ChatMessageSendService.encryptForWire` returns
+    /// Reason codes 1:1 with Android `SendMessageUseCase.Outcome.Failed`.
+    /// Mapped to Italian strings for UI feedback via QAudionSnackbar.
+    /// `Error`-conforming: `ChatMessageSendService.encryptForWire` returns
     /// `Result<Data, SendFailureReason>`, and `Result`'s `Failure`
     /// generic parameter requires `Failure: Error` — a plain
     /// `Equatable`-only enum does not satisfy that on its own.
@@ -448,8 +446,8 @@ final class ChatContainer: ObservableObject {
         // W71: real WS send pipeline. The MessageCrypto wire format
         // (salt||nonce||ciphertext||tag with HKDF-SHA256-derived key and
         // AES-256-GCM AAD = "msg:{sender}:{peer}:{msgId}") is parity with
-        // qaudion-desktop and qaudion-android-new. Fallback PSK kicks in
-        // for unpaired contacts so the wire still flows.
+        // the Desktop and Android apps. Fallback PSK kicks in for unpaired
+        // contacts so the wire still flows.
         if let sender = sendService {
             // W-MSGOUTBOX (2026-09-01) — claim the row for this live attempt
             // so `ChatOutboxDrain` (kicked by any WS re-auth in the meantime)

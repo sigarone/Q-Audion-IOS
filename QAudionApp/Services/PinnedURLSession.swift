@@ -25,9 +25,7 @@ enum PinnedURLSession {
     /// `BackendConfig.pinned(serverUrl:)` → `BCryptoRestClient`), but cached
     /// process-wide per host by `PinnedSessionCache`, so call sites that used
     /// to do `URLSession.shared.data(for:)` per request can swap in this
-    /// one-liner without leaking a URLSession per call. Those four clients
-    /// were the only bearer-token traffic to the VoIP host with NO pin
-    /// (audit memory reference_ios_stability_audit_2026_09_01, P1 item 6).
+    /// one-liner without leaking a URLSession per call.
     /// `PinnedSessionPolicy.auxiliaryClientsUsePinnedSession == false`
     /// restores `URLSession.shared` (the pre-W-AUXPIN behaviour) everywhere.
     static func auxiliary(for serverUrl: String) -> URLSession {

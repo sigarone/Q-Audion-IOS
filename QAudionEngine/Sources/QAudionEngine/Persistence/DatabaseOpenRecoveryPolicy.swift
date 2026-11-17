@@ -2,11 +2,10 @@ import Foundation
 
 /// W-DBOPENRECOVER (2026-09-01) — pure decision logic for what
 /// `QAudionDatabase` does when the local SQLite file cannot be opened or
-/// migrated (audit memory reference_ios_stability_audit_2026_09_01, P0:
-/// `QAudionDatabase.swift:67-68` trapped with `fatalError` on ANY error, so
-/// a corrupt file or a full disk was a crash loop at every launch with no
+/// migrated. Without a recovery path any error would trap with `fatalError`,
+/// so a corrupt file or a full disk would crash-loop at every launch with no
 /// way out — the store is a process-wide singleton reached by ~30 call
-/// sites, none of which could intercept it).
+/// sites, none of which could intercept it.
 ///
 /// Contains NO GRDB / SQLite / FileManager state so every branch below can
 /// be pinned by unit tests without a database — same discipline as

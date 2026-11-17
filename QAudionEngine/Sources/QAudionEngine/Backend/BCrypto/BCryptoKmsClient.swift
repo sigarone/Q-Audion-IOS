@@ -405,9 +405,7 @@ public final class BCryptoKmsClient {
     /// (ML-KEM-1024) and X25519 long-term public legs plus the self-
     /// signature over them. Mirrors Android
     /// `KmsPreBootstrapSender.ResolvedPeerIdentity` /
-    /// `parseAndVerifyIdentityKey` (`feature-chat/.../KmsPreBootstrapSender.kt`
-    /// L203-302) and the server response shape (`bcrypto-server`
-    /// `cmd/bcrypto-lite/users_identity_key.go` `bundlePayload()` L252-269).
+    /// `parseAndVerifyIdentityKey` and the server's response shape.
     ///
     /// Returns `nil` on 404 (peer hasn't published), transport error, or a
     /// pre-v2/legacy response missing `ik_pq_pub_b64` (no PQ leg — a
@@ -501,8 +499,7 @@ public final class BCryptoKmsClient {
     /// One-time prekey DTO — `GET /api/v1/identity/{uuid}/prekey/next`
     /// (ADR-014a §2.3 step 2 / §4.1 sig preimage). Mirrors Android's prekey
     /// DTO (`BCryptoApi.kt` / `KmsPreBootstrapSender.fetchAndVerifyPrekey`)
-    /// and the server handler `handleFetchNextPrekey`
-    /// (`bcrypto-server/cmd/bcrypto-lite/prekeys.go` L272-341).
+    /// and the server handler `handleFetchNextPrekey`.
     public struct OneTimePrekeyDTO {
         public let prekeyId: UInt32
         public let pqPub: Data        // ~1568B ML-KEM-1024 public key

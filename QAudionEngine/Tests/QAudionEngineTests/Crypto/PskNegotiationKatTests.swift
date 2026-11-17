@@ -16,7 +16,7 @@ import XCTest
 /// WIRE_SPEC §3.3.
 ///
 /// Sister tests:
-///   apps/qaudion-android-new/.../PskNegotiationKatTest.kt
+///   the Android implementation's PSK negotiation KAT test
 ///   apps/qaudion-desktop/test/PskNegotiation.kat.spec.ts
 final class PskNegotiationKatTests: XCTestCase {
 

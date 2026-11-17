@@ -18,9 +18,8 @@ import CryptoKit
 /// verdict also feeds `AssuranceState`. `N` stays capped at ≤1 everywhere and nothing here
 /// reads or writes `PskMix` mixing state.
 ///
-/// This is the iOS port of the Android reference
-/// `apps/qaudion-android-new/qaudion-engine/src/main/java/com/bcrypto/qaudion/crypto/KeyConfirmation.kt`
-/// and Desktop's `src/main/calling/KeyConfirmation.ts` — all three MUST reproduce the
+/// This is the iOS port of the Android reference implementation and of
+/// Desktop's `src/main/calling/KeyConfirmation.ts` — all three MUST reproduce the
 /// shared cross-platform KAT vectors byte-for-byte (`KeyConfirmationKatTests.swift`).
 ///
 /// **Deliberately self-contained.** `advEnc`/`lp` are re-implemented here rather than

@@ -7,16 +7,13 @@ import WebRTC
 
 /// IOS-C4b / PCM-TAP PARITY — tests for `NativeAudioPcmTap.int16LEData`, the
 /// pure(-ish) conversion function feeding the native-audio-srtp voice-
-/// analysis/spectrum pipeline (see that type's own doc for the full
-/// incident: two same-day "BUGFIX" comments on 2026-08-26 that fixed a real
-/// `AVAudioConverter` misuse but only for a bit-depth/channel-only
-/// conversion, then a third fix on 2026-08-27 for the case that actually
-/// matters on a real device — a genuine SAMPLE-RATE change, which the real,
-/// `gh api`-verified WebRTC ObjC renderer adapter
-/// (`sdk/objc/api/RTCAudioRendererAdapter.mm`) hits routinely: it always
-/// hands `render(pcmBuffer:)` Int16 interleaved PCM, but at whatever
-/// `sample_rate` the ADM is actually running — commonly 24 kHz on the
-/// iPhone's built-in earpiece route, not 48 kHz).
+/// analysis/spectrum pipeline. It must handle a bit-depth/channel-only
+/// conversion as well as a genuine SAMPLE-RATE change, which is the routine
+/// case on a real device: the WebRTC ObjC renderer adapter
+/// (`sdk/objc/api/RTCAudioRendererAdapter.mm`) always hands
+/// `render(pcmBuffer:)` Int16 interleaved PCM, but at whatever `sample_rate`
+/// the ADM is actually running — commonly 24 kHz on the iPhone's built-in
+/// earpiece route, not 48 kHz.
 ///
 /// No `RTCAudioRenderer`/live WebRTC track needed here — `int16LEData` is a
 /// `static func` operating purely on `AVAudioPCMBuffer`/`AVAudioConverter`

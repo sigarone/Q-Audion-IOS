@@ -7,12 +7,11 @@ import Foundation
 ///
 /// `AppState.startCall` asks CallKit for the outgoing call in a `Task`. `startOutgoingCall` returns only after the
 /// `CXStartCallAction` round trip, and `activeCallKitId` is assigned from its result, AFTER that `await`. A
-/// `call_busy` / `call_peer_offline` can land before it: in the 10:43 incident of 2026-10-03 the server's busy
-/// arrived 577 ms after the dial and the CallKit start was fulfilled at about 691 ms. `AppState.endCall` then finds
-/// `activeCallKitId == nil` and reports nothing to CallKit; the late assignment re-creates the very orphan the
-/// teardown exists to close (iOS keeps one call group open, the next `CXStartCallAction` fails with
-/// `maximumCallGroupsReached`, code 7), and a call that is `.idle` and not in flight is never reaped by the
-/// teardown's own reaper because that sits inside the `activeCallKitId` branch.
+/// `call_busy` / `call_peer_offline` can land before it: the server's busy may arrive before the CallKit start is
+/// fulfilled. `AppState.endCall` then finds `activeCallKitId == nil` and reports nothing to CallKit; the late
+/// assignment re-creates the very orphan the teardown exists to close (iOS keeps one call group open, the next
+/// `CXStartCallAction` fails with `maximumCallGroupsReached`, code 7), and a call that is `.idle` and not in
+/// flight is never reaped by the teardown's own reaper because that sits inside the `activeCallKitId` branch.
 ///
 /// ## The decision
 ///

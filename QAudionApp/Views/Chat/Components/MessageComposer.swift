@@ -1,8 +1,8 @@
 import SwiftUI
 import QAudionEngine
 
-/// Chat input bar. 1:1 port of Android
-/// `qaudion-android-new/feature/feature-chat/.../components/MessageComposer.kt`.
+/// Chat input bar. 1:1 port of the Android implementation of this
+/// component.
 ///
 /// Vertically composed:
 ///   1. **Edit banner** (visible when `editingTarget != nil`) — amber pill

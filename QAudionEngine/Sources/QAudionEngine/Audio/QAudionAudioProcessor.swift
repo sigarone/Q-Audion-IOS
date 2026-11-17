@@ -79,16 +79,14 @@ public final class QAudionAudioProcessor {
                 lastRxSeq = seq
             }
         }
-        // W-JBDEADCODE (2026-09-15, best-practices audit
-        // reference_ios_full_audit_2026_09_15.md, audio structural note) —
-        // this used to round-trip `opusFrame` through `jitterBuffer.push`
-        // then an immediate `jitterBuffer.pop`, a provable no-op: nothing
-        // else ever calls `push`/`pop` on this instance (the real playout
-        // jitter buffering lives in `PlayoutJitterBuffer`, wired at the
-        // `AudioCapture` layer, not here), so every push landed on an empty
-        // queue and every pop handed back the exact frame just pushed.
-        // `jitterBuffer` stays for `generateComfortNoise()` below, which
-        // needs its `frameDurationMs`, not its queue.
+        // `opusFrame` is not round-tripped through `jitterBuffer.push` and an
+        // immediate `jitterBuffer.pop`, which would be a provable no-op:
+        // nothing else ever calls `push`/`pop` on this instance (the real
+        // playout jitter buffering lives in `PlayoutJitterBuffer`, wired at
+        // the `AudioCapture` layer, not here), so every push would land on an
+        // empty queue and every pop would hand back the exact frame just
+        // pushed. `jitterBuffer` stays for `generateComfortNoise()` below,
+        // which needs its `frameDurationMs`, not its queue.
         //
         // W-PADOVERFLOW (2026-08-10) — a zero-length body is the fleet's
         // "this packet carries no audio" convention (see `OpusCodec.fallbackEncode`

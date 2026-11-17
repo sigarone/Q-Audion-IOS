@@ -57,12 +57,12 @@ public struct VoiceEnrollmentViewModel: ViewModelProtocol {
         }
     }
 
-    /// Italian short phrases — matches Android's 3-phrase design
-    /// (`qaudion-android-new` VoiceEnrollmentScreen: "qaudion seven alpha" /
-    /// "seven alpha qaudion" / "alpha qaudion seven"), translated so the
-    /// spoken language matches the rest of this app's Italian UI. Replaces
-    /// the former 5 hardcoded ENGLISH placeholder sentences, which never
-    /// matched the surrounding Italian screen copy.
+    /// Italian short phrases — matches Android's 3-phrase design (the Android
+    /// voice-enrollment screen: "qaudion seven alpha" / "seven alpha qaudion"
+    /// / "alpha qaudion seven"), translated so the spoken language matches the
+    /// rest of this app's Italian UI. Replaces the former 5 hardcoded ENGLISH
+    /// placeholder sentences, which never matched the surrounding Italian
+    /// screen copy.
     public static let mock = VoiceEnrollmentViewModel(
         prompts: [
             "qaudion sette alpha",

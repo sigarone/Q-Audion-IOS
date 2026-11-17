@@ -804,7 +804,7 @@ struct SettingsScreen: View {
 
             // W503: earbud BLE diagnostics — 1:1 port of Android EarbudDiagScreen.kt.
             // Shows heap/CPU/CRACEN/PDM/TDM/Axon metrics from connected Q-Audion
-            // earbuds. GATT service UUID wired to qaudion-firmware constants.
+            // earbuds. GATT service UUID wired to the firmware constants.
             // Only in a build with the earbud stack too (QAUDION_EARBUD): the screen
             // is compiled out without it, so the row must be as well.
             #if QAUDION_EARBUD

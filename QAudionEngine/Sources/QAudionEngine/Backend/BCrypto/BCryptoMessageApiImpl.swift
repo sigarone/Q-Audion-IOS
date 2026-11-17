@@ -5,8 +5,8 @@ public enum BCryptoMessageError: Error {
 }
 
 /// Wire-format adapter between the high-level `MessageApi` protocol and the
-/// `bcrypto-server` signaling envelopes (see `internal/signaling/messages.go`
-/// `MsgSendData`, `MsgDeliveredData`, `MsgReadData`, `MsgTypingData`).
+/// server's signaling envelopes (`MsgSendData`, `MsgDeliveredData`,
+/// `MsgReadData`, `MsgTypingData`).
 ///
 /// **HISTORY**: previous revisions of this file used camelCase field names
 /// (`recipientId`, `content`, `messageId`, `isTyping`) which the Go server

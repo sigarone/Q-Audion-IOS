@@ -3,13 +3,12 @@ import XCTest
 
 /// The stdout/stderr tee must never re-capture the sink's own writes.
 ///
-/// CI incident 2026-10-04: the app-test host of `ios-ci.yml` ran with `OS_ACTIVITY_DT_MODE`, so every `Logger`
-/// line of the sink's OSLog mirror was echoed to stderr, which is the tee's pipe. The tee recorded the echo as a new
-/// line, the record mirrored it again, and every pass nested one more `[runtime] [stdout]` level and was cut into more
-/// lines by the 4096-byte reads: the job log reached 3.3 GB and the host was starved long enough to fail a 50 ms
-/// deadline test after 502 s. The tests here pin both defences (the tee's lines are never mirrored; the echo of the
-/// sink's own mirror is dropped before it is recorded) on the pure functions and end to end in this very host
-/// process, which is attached to the tee exactly like the app.
+/// When the process runs with `OS_ACTIVITY_DT_MODE` (as the CI app-test host does), every `Logger` line of the
+/// sink's OSLog mirror is echoed to stderr, which is the tee's pipe. Without a defence the tee would record the echo
+/// as a new line, the record would mirror it again, and every pass would nest one more `[runtime] [stdout]` level and
+/// be cut into more lines by the 4096-byte reads, so the sink's ring would grow without end. The tests here pin both
+/// defences (the tee's lines are never mirrored; the echo of the sink's own mirror is dropped before it is recorded)
+/// on the pure functions and end to end in this very host process, which is attached to the tee exactly like the app.
 @MainActor
 final class RuntimeLogSinkTeeTests: XCTestCase {
 
@@ -37,8 +36,8 @@ final class RuntimeLogSinkTeeTests: XCTestCase {
         XCTAssertFalse(StdoutTeeLines.isOwnOSLogMirror("XCTestOutputBarrier 2026-10-04 12:11:05 no process and no category"))
     }
 
-    /// A line that was already re-captured once starts with the same echo prefix, so even the nested form of the
-    /// incident is dropped, whatever its depth.
+    /// A line that was already re-captured once starts with the same echo prefix, so the nested form of the echo is
+    /// dropped too, whatever its depth.
     func test_aLineThatWasAlreadyRecapturedOnce_isStillRecognised() {
         let nested = "2026-10-04 02:11:05.431858+0000 QAudionApp[6733:26267] [runtime] [stdout] "
             + "2026-10-04 <ip>.328185+0000 QAudionApp<ip> [runtime] [call] engine created"
@@ -122,9 +121,9 @@ final class RuntimeLogSinkTeeTests: XCTestCase {
         RuntimeLogSink.shared.snapshotEntries.filter { $0.message.contains(marker) }
     }
 
-    /// The regression the incident was: a recorded line came back through the tee and was recorded again, on every
-    /// pass, without end. After a pause that is long next to one pass, the ring has grown by the lines recorded here
-    /// plus a handful (the test runner's own lines, an echo or two) and not by hundreds.
+    /// The regression guarded against here: a recorded line comes back through the tee and is recorded again, on
+    /// every pass, without end. After a pause that is long next to one pass, the ring has grown by the lines recorded
+    /// here plus a handful (the test runner's own lines, an echo or two) and not by hundreds.
     func test_recordedLines_doNotMakeTheRingGrowWithoutEnd() async throws {
         RuntimeLogSink.shared.attachStdoutTee()
         let before = lastSeq()

@@ -338,9 +338,9 @@ public final class AudioProcessingPipeline {
     private var lastTapSampleRate: Double = 0
     private var lastTapChannels: Int = 0
     private var engineRestartsThisCall: Int = 0
-    // W-AUDIODEATH (2026-07-24) — see the note* functions below for why each
-    // exists. All three answer the question the live incident could not:
-    // "was the audio engine actually alive, and did we silently bin frames?"
+    // W-AUDIODEATH — see the note* functions below for why each exists. All
+    // three answer the question "was the audio engine actually alive, and did
+    // we silently bin frames?"
     private var engineRestartFailuresThisCall: Int = 0
     private var playoutDroppedThisCall: Int = 0
     private var engineRunningAtEndThisCall: Bool = false

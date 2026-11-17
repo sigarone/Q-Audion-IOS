@@ -72,28 +72,23 @@ final class ServerSelector {
     }
 
     /// Hosts the client trusts as VoIP nodes. Every selection + failover path only
-    /// ever targets these — never an attacker-injected host. fi1.bcrypto.com (the
-    /// Helsinki failover node) is already pinned by `CertPinningDelegate`, so this
-    /// is the app-layer allowlist that mirrors Android FAILOVER_HOSTS / Desktop
+    /// ever targets these — never an attacker-injected host. The failover node is
+    /// already pinned by `CertPinningDelegate`, so this is the
+    /// app-layer allowlist that mirrors Android FAILOVER_HOSTS / Desktop
     /// PINNED_HOSTNAMES.
     ///
-    /// W-NODRFAILOVER (2026-07-23) — fi1.bcrypto.com is a dev/build box + DR
-    /// snapshot replica: in NORMAL operation (no human-declared disaster) it
-    /// runs its own separate database with no real-time user-data sync. A
-    /// client CAN legitimately need it as a last resort (that's the whole
-    /// point of a DR node), but connectivity alone (200s, WS auth) cannot
-    /// prove it actually knows THIS user — root-caused on device e1f5690b
-    /// (call 9c490c46, 2026-07-23): a refresh-token 401 blip tripped
-    /// `onNodeStalled`, the client failed over here, authenticated fine (the
-    /// JWT signing secret is shared across nodes), and was stuck for hours
-    /// because nothing ever checked whether the node had a row for the user
-    /// at all ("identity key mirror failed: user not found"). Removing fi-1
-    /// from this list entirely (the first fix attempt) closed the trap but
-    /// also closed the legitimate "fi-1 becomes real during a declared de-1
-    /// outage" recovery path — wrong tradeoff. The right fix is
-    /// `candidateServesCurrentUser`: keep fi-1 trusted, but verify function
-    /// (does this node actually know me), not just connectivity, before
-    /// ever committing to a candidate. See its doc comment.
+    /// The failover node is a disaster-recovery replica: in NORMAL operation
+    /// (no human-declared disaster) it runs its own separate database with no
+    /// real-time user-data sync. A client CAN legitimately need it as a last
+    /// resort, but connectivity alone (200s, WS auth) cannot prove it actually
+    /// knows THIS user: the JWT signing secret is shared across nodes, so
+    /// authentication succeeds even when the node has no row for the user.
+    /// Dropping it from this list entirely would avoid that trap but also
+    /// close the legitimate recovery path where the failover node becomes the
+    /// live node during a declared outage of the primary. Instead,
+    /// `candidateServesCurrentUser` keeps it trusted but verifies function
+    /// (does this node actually know me), not just connectivity, before ever
+    /// committing to a candidate. See its doc comment.
     private let trustedHosts: Set<String> = ["voip.bcrypto.com", "fi1.bcrypto.com"]
 
     /// Hardcoded TRUSTED-HOSTNAME fallback node list. Used ONLY when the live
@@ -156,26 +151,23 @@ final class ServerSelector {
         return best.wssUrl
     }
 
-    /// W-NODESERVES (2026-07-23) — walk `ranked` (best RTT first) and return
-    /// the first candidate that ALSO actually serves the current user, not
-    /// merely the first that answers a health probe.
+    /// Walk `ranked` (best RTT first) and return the first candidate that ALSO
+    /// actually serves the current user, not merely the first that answers a
+    /// health probe.
     ///
     /// THE GAP THIS CLOSES. A trusted node can be perfectly reachable (200 on
     /// /health, valid TLS, valid WS auth — the JWT signing secret is shared
     /// fleet-wide) while running on a completely different database that has
-    /// never heard of this account. Root-caused 2026-07-23 on fi1.bcrypto.com
-    /// (a dev/build box that is ALSO a legitimate DR node once a human
-    /// activates it — see `deployments/dr-replication/README.md` on
-    /// bcrypto-server): every connectivity check above passed, the client
-    /// believed it was fully connected, and every call silently died for
-    /// hours because nothing checked whether the node actually knew the
-    /// user. Removing the DR node from the trusted set entirely (the first
-    /// fix attempt) closed the trap but also closed the legitimate "fi-1
-    /// becomes real during a declared de-1 outage" recovery path. Verifying
-    /// FUNCTION, not just connectivity, keeps the DR node usable when it is
-    /// genuinely serving the user (declared DR mode: identical user data,
-    /// same signing secret, real reads) while refusing it the instant it
-    /// answers but doesn't actually know who we are.
+    /// never heard of this account. The failover node is such a node outside a
+    /// declared disaster: every connectivity check above passes and the client
+    /// would believe it is fully connected, yet every call fails because the
+    /// node does not know the user. Removing the failover node from the trusted
+    /// set would close that trap but also close the legitimate recovery path
+    /// where it becomes the live node during a declared outage of the primary.
+    /// Verifying FUNCTION, not just connectivity, keeps the failover node
+    /// usable when it is genuinely serving the user (declared DR mode:
+    /// identical user data, same signing secret, real reads) while refusing it
+    /// the instant it answers but doesn't actually know who we are.
     private func pickVerified(from ranked: [NodeProbe], provider: BCryptoBackendProvider) async -> NodeProbe? {
         for candidate in ranked {
             if await candidateServesCurrentUser(httpsUrl: candidate.url, provider: provider) {
@@ -290,12 +282,11 @@ final class ServerSelector {
         let load: Double
     }
 
-    /// W-AUXPIN (2026-09-02) — the `URLSessionDelegate` a candidate/primary
-    /// probe should use so its TLS validation matches every other pinned
-    /// request to this host (audit reference_ios_stability_audit_2026_09_01,
-    /// P1 item 6 / B11: these probes ran on a plain `URLSessionConfiguration
-    /// .ephemeral` session with no delegate at all — one of them (line ~197)
-    /// even carries the user's bearer token).
+    /// W-AUXPIN — the `URLSessionDelegate` a candidate/primary probe should
+    /// use so its TLS validation matches every other pinned request to this
+    /// host. Without it these probes would run on a plain
+    /// `URLSessionConfiguration.ephemeral` session with no delegate at all,
+    /// and one of them carries the user's bearer token.
     ///
     /// Deliberately reuses `PinnedURLSession.auxiliary(for:)`'s DELEGATE
     /// only, not the session it returns: that cached session carries

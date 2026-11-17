@@ -2,15 +2,12 @@ import Foundation
 
 /// Pure-Swift codec for the `qa_ctl:1` **avatar_announce** envelope variant.
 ///
-/// E2EE avatar transport (see
-/// `docs/E2EE_AVATAR_TRANSPORT_DESIGN.md` in bcrypto-server) — mirrors
-/// `AttachAnnounceEnvelope` exactly (same `qa_ctl:1` control-channel
-/// pattern, same per-peer AttachmentEncryption ciphertext-on-the-
-/// existing-file-upload-endpoint transport), so an avatar update rides
-/// the same encrypted `msg_send` path as any attachment. The server
-/// never sees the plaintext avatar and never serves it to anyone who
-/// hasn't done a real pairwise key exchange with the sender — see the
-/// design doc's §1 for the plaintext-avatar-serving gap this replaces.
+/// E2EE avatar transport — mirrors `AttachAnnounceEnvelope` exactly (same
+/// `qa_ctl:1` control-channel pattern, same per-peer AttachmentEncryption
+/// ciphertext-on-the-existing-file-upload-endpoint transport), so an avatar
+/// update rides the same encrypted `msg_send` path as any attachment. The
+/// server never sees the plaintext avatar and never serves it to anyone who
+/// hasn't done a real pairwise key exchange with the sender.
 ///
 /// **Wire form** (snake_case, mirrors `attach_announce`):
 /// ```json

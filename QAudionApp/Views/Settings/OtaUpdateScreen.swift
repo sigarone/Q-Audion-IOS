@@ -178,8 +178,8 @@ final class OtaUpdateContainer: ObservableObject {
 
 }
 
-/// Schermo "Aggiornamento firmato OTA". 1:1 visual port di Android
-/// `qaudion-android-new/feature/feature-settings/.../OtaUpdateScreen.kt`.
+/// "Signed OTA update" screen. 1:1 visual port of the Android
+/// implementation of this screen.
 struct OtaUpdateScreen: View {
     @StateObject private var container = OtaUpdateContainer()
     @EnvironmentObject private var appState: AppState

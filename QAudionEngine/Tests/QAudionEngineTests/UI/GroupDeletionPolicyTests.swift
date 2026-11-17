@@ -63,9 +63,9 @@ final class GroupDeletionPolicyTests: XCTestCase {
         XCTAssertEqual(classifyGroupLeave(succeeded: true, httpStatus: 200), .left)
     }
 
-    /// Since the W-GRPGHOST server fix (bcrypto-server 54c9f5d) leaving a
-    /// group you already left answers 200 with no membership change. That is
-    /// success, and the client must not special-case it into an error.
+    /// Leaving a group you already left answers 200 with no membership
+    /// change. That is success, and the client must not special-case it into
+    /// an error.
     func testAnAlreadyLeftGroupAnsweringTwoHundredIsSuccess() {
         XCTAssertEqual(classifyGroupLeave(succeeded: true, httpStatus: 200), .left)
     }

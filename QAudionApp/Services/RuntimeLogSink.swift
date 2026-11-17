@@ -296,14 +296,14 @@ public final class RuntimeLogSink: ObservableObject {
     ///      with tag "stdout" so the buffer + diagnostic dump capture
     ///      every line that any code path emits.
     ///
-    /// **The sink never re-captures its own writes** (CI incident 2026-10-04: a 3.3 GB job log, the test host
-    /// starved for minutes): the sink's `Logger` mirror of a recorded line is echoed to stderr by a process that
-    /// runs with `OS_ACTIVITY_DT_MODE` (every `xcodebuild test` run, a run from Xcode), and stderr is this pipe,
-    /// so every recorded line came back as a new `[runtime] [stdout] ...` line, one level deeper on every pass,
-    /// cut at 4096-byte reads into more lines than before. Two independent defences: the tee records its lines
-    /// with `Origin.stdoutTee` (never mirrored), and it drops the echo of the sink's own mirror before it records
-    /// anything (`StdoutTeeLines.isOwnOSLogMirror`, on the raw line). Lines are assembled across reads
-    /// (`StdoutTeeLines.Assembler`), so a line cut at the end of a read is judged as one line.
+    /// **The sink never re-captures its own writes:** the sink's `Logger` mirror of a recorded line is echoed to
+    /// stderr by a process that runs with `OS_ACTIVITY_DT_MODE` (every `xcodebuild test` run, a run from Xcode), and
+    /// stderr is this pipe, so without a guard every recorded line would come back as a new `[runtime] [stdout] ...`
+    /// line, one level deeper on every pass. Two independent defences: the tee records its lines with
+    /// `Origin.stdoutTee` (never mirrored), and it drops the echo of the sink's own mirror instead of recording
+    /// it, since recording it would mirror it to OSLog again and loop (`StdoutTeeLines.isOwnOSLogMirror`, on the
+    /// raw line). Lines are assembled across reads (`StdoutTeeLines.Assembler`), so a line cut at the end of a
+    /// read is judged as one line.
     ///
     /// **Cost:** ≈ 4KB transient buffer per read, one background
     /// dispatch source per process. No measurable overhead at typical
@@ -461,9 +461,9 @@ enum StdoutTeeLines {
             + NSRegularExpression.escapedPattern(for: osLogCategory) + #"\](?: |$)"#)
 
     /// True for a line that is the console echo of the sink's OWN OSLog mirror. The tee must drop it: recording it
-    /// would write it to OSLog again (the loop of the 2026-10-04 CI incident) or, with the mirror off, duplicate
-    /// every `RTLog` line in the ring. Judged on the RAW line, before `LogRedactor` rewrites the time and the
-    /// `[pid:tid]` of its prefix. Only the head of the line (its first 160 UTF-16 units) is looked at.
+    /// would write it to OSLog again (a feedback loop) or, with the mirror off, duplicate every `RTLog` line in the
+    /// ring. Judged on the RAW line, before `LogRedactor` rewrites the time and the `[pid:tid]` of its prefix. Only the
+    /// head of the line (its first 160 UTF-16 units) is looked at.
     static func isOwnOSLogMirror(_ line: String) -> Bool {
         guard let regex = ownMirrorPrefix else { return false }
         let head = NSRange(location: 0, length: min(line.utf16.count, 160))

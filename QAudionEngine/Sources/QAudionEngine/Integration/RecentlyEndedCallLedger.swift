@@ -4,18 +4,15 @@ import Foundation
 /// already told CallKit are over, so a late signal about the same call cannot
 /// bring it back to life.
 ///
-/// Live incident (call e3acecd7, 2026-09-23 15:04): the caller hung up over the
-/// WebSocket (`opaquehang rx`, `reportCallEnded` + `endCall` in the same
-/// millisecond) and the server still sent its `call_cancelled` VoIP push. The
-/// push handler reported the SAME uuid to CallKit again (`callkit report ok=1
-/// dup=0`: CallKit had already dropped it, so this was a brand-new ring), the
-/// user tapped Answer 1.9 s after the real hangup, and the app entered an
-/// in-call state with no call id for 6.6 s. Nothing on the device remembered
-/// that the uuid was dead: `activeCallKitId` had already been cleared by
-/// `endCall`, and CallKit is a poor witness because a ring UI can outlive
-/// `reportCall(with:endedAt:)` (the Answer in e3acecd7 arrived 1.3 s after the
-/// uuid was reported again). `e3acecd7` is the first 8 hex digits of that call's
-/// id, as the device logs print them; it is not a commit hash. Times are UTC.
+/// The case it covers: the caller hangs up over the WebSocket,
+/// `reportCallEnded` + `endCall` run in the same millisecond, and the
+/// server's `call_cancelled` VoIP push can still follow. If the push handler
+/// reported the SAME uuid to CallKit again, CallKit (which had already
+/// dropped it) would show a brand-new ring, and an Answer on that ring would
+/// put the app in an in-call state with no call id. Nothing on the device
+/// remembers that the uuid is dead: `activeCallKitId` has already been
+/// cleared by `endCall`, and CallKit is a poor witness because a ring UI can
+/// outlive `reportCall(with:endedAt:)`.
 ///
 /// This type is that memory. It is deliberately dumb: a bounded uuid -> end time
 /// map with a TTL. `AppState` fills it at the two places a call ends (`endCall`,
@@ -30,14 +27,13 @@ import Foundation
 /// as a `now:` argument on every call (defaulting to `Date()`), so tests never
 /// sleep.
 ///
-/// TTL 120 s: the gap measured in e3acecd7 between the real hangup and the
-/// re-report was 0.6 s, so this is deliberately generous, yet short enough that
-/// the memory does not outlive any plausible reuse of a uuid. The wall clock is
-/// used, not uptime: an app suspended for an hour must find its old entries
-/// expired. If the clock is stepped backwards an entry simply stays "recent" for
-/// longer, which is the safe direction (the consequence is a placeholder report
-/// instead of a real one, never a refused genuine call — a genuine call has a
-/// fresh uuid).
+/// TTL 120 s: deliberately generous, so a late signal still finds the entry,
+/// yet short enough that the memory does not outlive any plausible reuse of a
+/// uuid. The wall clock is used, not uptime: an app suspended for an hour
+/// must find its old entries expired. If the clock is stepped backwards an
+/// entry simply stays "recent" for longer, which is the safe direction (the
+/// consequence is a placeholder report instead of a real one, never a refused
+/// genuine call — a genuine call has a fresh uuid).
 public struct RecentlyEndedCallLedger: Sendable {
 
     /// How long an ended uuid is remembered.

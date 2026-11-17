@@ -1,8 +1,8 @@
 import SwiftUI
 import QAudionEngine
 
-/// Sectioned chat list. 1:1 visual + behavioural port of Android
-/// `qaudion-android-new/feature/feature-chat/.../ChatListScreen.kt`.
+/// Sectioned chat list. 1:1 visual + behavioural port of the Android
+/// implementation of this screen.
 ///
 /// Sections render in this order (each only appears if it has content):
 ///   1. `adminBanner`  — pinned banner from the operator. Background
@@ -93,20 +93,12 @@ struct ChatListScreen: View {
     /// `disconnectedBannerGraceSec`, not on the raw state transition.
     @State private var showDisconnectedBanner = false
     @State private var disconnectedBannerTask: Task<Void, Never>?
-    /// W-WSCONNECTINGDEBOUNCE (2026-09-12) — same principle extended to
-    /// `.connecting`, which W-WSBANNERDEBOUNCE deliberately left ungated
-    /// ("informational, not alarming, still shows immediately" — see the
-    /// superseded comment this change replaces below). Live evidence
-    /// (2026-09-12, user-reported): a phone lock/unlock is exactly the
-    /// "closes the WS, reconnects in 1-2s" blip this file already
-    /// documented for the disconnected case — the connecting banner was
-    /// flashing on every one of those, many times a day, for something
-    /// that resolves on its own before a human could act on it anyway.
-    /// Server + device evidence the same day (12h Loki sample, 2026-09-12)
-    /// found zero stuck-in-connecting watchdog fires and no call/message
-    /// loss correlated with these blips — confirming this is a display-only
-    /// fix, not a connectivity one; see the audit memory file this change
-    /// cites in its own commit for the full evidence trail.
+    /// W-WSCONNECTINGDEBOUNCE — same principle as W-WSBANNERDEBOUNCE, applied
+    /// to `.connecting`: the "Riconnessione in corso…" banner only appears
+    /// once `.connecting` has held for `connectingBannerGraceSec`, so the
+    /// brief "closes the WS, reconnects in 1-2s" cycle of a phone lock/unlock
+    /// never paints it. The gate is display-only: it delays the banner and
+    /// does not change how the connection behaves.
     @State private var showConnectingBanner = false
     @State private var connectingBannerTask: Task<Void, Never>?
     /// Whether the recovery reminder applies to this account

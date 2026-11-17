@@ -1,8 +1,8 @@
 import SwiftUI
 import QAudionEngine
 
-/// Add-or-edit contact form. 1:1 visual port of Android
-/// `qaudion-android-new/feature/feature-contacts/.../ContactEditorScreen.kt`.
+/// Add-or-edit contact form. 1:1 visual port of the Android implementation
+/// of this screen.
 ///
 /// Fields:
 ///   - Display name (required, mode-agnostic)
