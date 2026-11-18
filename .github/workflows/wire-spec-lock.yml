@@ -44,7 +44,7 @@ jobs:
       - name: Verify WIRE_SPEC.md and docs/EARBUD_V6_ENDPOINT.md match the canonical hashes
         run: |
           EXPECTED=079f5e1e8bb53af6370a76ea5a8f0b357b569c074ac0e78f481fc89cfe095fb9
-          EXPECTED_EARBUD_EP=f45162866bc7f1f79440184e3fc1c5a66ec42bbe0eed637b99050f17b3fe0e8c
+          EXPECTED_EARBUD_EP=575be5ffcbd5da341b9a2a90f5da0e867243b3234d134634dc94f825c492b869
           status=0
           check() {
             ACTUAL=$(sha256sum "$1" | cut -d' ' -f1)
