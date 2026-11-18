@@ -187,25 +187,44 @@ private struct CallDockCell: View {
     private var diameter: CGFloat { isEnd ? CallControlDock.endCircleSize : CallControlDock.circleSize }
 
     var body: some View {
-        Button(action: tap) {
-            VStack(spacing: 3) {
-                circleView
-                Text(item.label)
-                    .qaudionScaledFont(size: 11, weight: .medium, family: .label, maxSize: .xLarge)
-                    .foregroundStyle(scheme.onSurfaceVariant)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .dynamicTypeSize(...DynamicTypeSize.xxLarge)
+        if item.usesRoutePicker {
+            routePickerCell
+        } else {
+            Button(action: tap) {
+                cellContent
+                    .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, alignment: .top)
-            .contentShape(Rectangle())
-            .opacity(item.isDisabled ? 0.38 : 1.0)
+            .buttonStyle(CallDockPressStyle())
+            .disabled(item.isDisabled)
+            .accessibilityLabel(item.accessibilityLabel)
+            .accessibilityValue(item.accessibilityValue)
+            .accessibilityHint(item.isLocked ? CallControlText.unavailableHint : "")
         }
-        .buttonStyle(CallDockPressStyle())
-        .disabled(item.isDisabled)
-        .accessibilityLabel(item.accessibilityLabel)
-        .accessibilityValue(item.accessibilityValue)
-        .accessibilityHint(item.isLocked ? CallControlText.unavailableHint : "")
+    }
+
+    private var cellContent: some View {
+        VStack(spacing: 3) {
+            circleView
+            Text(item.label)
+                .qaudionScaledFont(size: 11, weight: .medium, family: .label, maxSize: .xLarge)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .dynamicTypeSize(...DynamicTypeSize.xxLarge)
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+        .opacity(item.isDisabled ? 0.38 : 1.0)
+    }
+
+    /// The audio cell of the group call: the system route picker covers the cell and is the control (touch and
+    /// VoiceOver alike); the drawing under it is not read.
+    private var routePickerCell: some View {
+        cellContent
+            .accessibilityHidden(true)
+            .overlay {
+                SystemRoutePickerOverlay(accessibilityLabel: item.accessibilityLabel,
+                                         accessibilityValue: item.accessibilityValue)
+            }
     }
 
     private var circleView: some View {
@@ -216,13 +235,6 @@ private struct CallDockCell: View {
                 Image(systemName: item.icon)
                     .qaudionScaledFont(size: diameter * 0.40, weight: .semibold, maxSize: .xLarge)
                     .foregroundStyle(item.iconColor)
-            }
-            .overlay {
-                if item.usesRoutePicker {
-                    SystemRoutePickerOverlay()
-                        .clipShape(Circle())
-                        .accessibilityHidden(true)
-                }
             }
             .overlay(alignment: .topTrailing) {
                 badgeView
@@ -270,10 +282,6 @@ private struct CallDockCell: View {
     }
 
     private func tap() {
-        if item.usesRoutePicker {
-            SystemRoutePicker.present()
-            return
-        }
         if item.isLocked {
             item.onLockedAction()
             return
@@ -410,12 +418,18 @@ enum CallDockItems {
             action: action)
     }
 
-    static func share(_ style: CallDockStyle, sharing: Bool, action: @escaping () -> Void) -> CallDockItem {
+    /// The share control. Its texts use the words the system shows for the capture of this OS version: a screen
+    /// recording below iOS 27 (the in-app recorder), a share from iOS 27 (the system capture).
+    static func share(_ style: CallDockStyle, sharing: Bool,
+                      recordingWords: Bool = ScreenShareLifecycle.usesRecordingWords(kind: ScreenShareLifecycle.currentKind()),
+                      action: @escaping () -> Void) -> CallDockItem {
         return CallDockItem(
             kind: .share,
             icon: sharing ? "arrow.up.forward.app.fill" : "arrow.up.forward.app",
-            label: CallControlText.share,
-            accessibilityLabel: sharing ? CallControlText.shareA11yOff : CallControlText.shareA11yOn,
+            label: recordingWords ? CallControlText.shareRecord : CallControlText.share,
+            accessibilityLabel: recordingWords
+                ? (sharing ? CallControlText.shareA11yOffRecord : CallControlText.shareA11yOnRecord)
+                : (sharing ? CallControlText.shareA11yOff : CallControlText.shareA11yOn),
             background: sharing ? style.extras.success : style.scheme.surfaceVariant,
             iconColor: sharing ? style.extras.onSuccess : style.scheme.onSurface,
             action: action)
@@ -512,6 +526,9 @@ enum CallControlText {
     static var share: String {
         String(localized: "call.control.share", defaultValue: "Condividi", comment: "Name under the screen sharing button of the call controls.")
     }
+    static var shareRecord: String {
+        String(localized: "call.control.share_record", defaultValue: "Registra", comment: "Name under the screen sharing button of the call controls on iOS versions where the system shows the capture as a screen recording.")
+    }
     static var add: String {
         String(localized: "call.control.add", defaultValue: "Aggiungi", comment: "Name under the add participant button of the call controls.")
     }
@@ -578,6 +595,12 @@ enum CallControlText {
     }
     static var shareA11yOff: String {
         String(localized: "call.control.share_a11y_off", defaultValue: "Interrompi condivisione schermo", comment: "VoiceOver label of the screen sharing button while sharing (tapping stops).")
+    }
+    static var shareA11yOnRecord: String {
+        String(localized: "call.control.share_a11y_on_record", defaultValue: "Registra schermo", comment: "VoiceOver label of the screen sharing button while not sharing, on iOS versions where the system shows the capture as a screen recording (tapping starts it).")
+    }
+    static var shareA11yOffRecord: String {
+        String(localized: "call.control.share_a11y_off_record", defaultValue: "Interrompi registrazione schermo", comment: "VoiceOver label of the screen sharing button while sharing, on iOS versions where the system shows the capture as a screen recording (tapping stops it).")
     }
     static var addA11y: String {
         String(localized: "call.control.add_a11y", defaultValue: "Aggiungi partecipante", comment: "VoiceOver label of the add participant button of the call controls.")

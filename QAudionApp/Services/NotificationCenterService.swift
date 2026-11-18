@@ -233,6 +233,13 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
+        // While this device shares its screen a banner that would name a person shows the name of the app and a
+        // fixed text instead.
+        if category == .messageDelivered || category == .missedCall, NotifyPreferences().isSharingScreen() {
+            let neutral = NotificationContentBuilder.sharingBanner(isMissedCall: category == .missedCall, bundle: .main)
+            content.title = neutral.title
+            content.body = neutral.body
+        }
         // W405: gate the chime on the in-app sound toggle. Setting
         // `sound = nil` makes APNs deliver a silent notification.
         // W-MISSEDQUIET: and never for a missed call that arrives while a call is in flight (it can be delivered with
@@ -287,7 +294,7 @@ final class NotificationCenterService: NSObject, UNUserNotificationCenterDelegat
         let content = UNMutableNotificationContent()
         // W-L10N-BATCH1 (2026-09-08) — UNMutableNotificationContent.title/
         // body are plain String, not LocalizedStringKey; explicit lookup.
-        content.title = callerName.isEmpty
+        content.title = callerName.isEmpty || NotifyPreferences().isSharingScreen()
             ? String(localized: "notification.incoming_call.title", defaultValue: "Chiamata in arrivo", comment: "Local notification title when the caller name is unknown")
             : callerName
         if groupCall {

@@ -6,6 +6,14 @@ struct NotifyPreferences {
 
     static let appGroupId = "group.com.bcrypto.qaudion.notify"
     static let keySiriDonations = "qaudion.notify.siri_donations_enabled"
+    /// Seconds since 1970 until which the app says this device is sharing its screen. The app renews it while the
+    /// share runs and clears it when the share ends; the extension trusts it only while it lies in the future and
+    /// within one lease from now, so a share that was never cleared (the app died) stops hiding names by itself.
+    static let keyShareLeaseUntil = "qaudion.notify.share_lease_until"
+    /// How long one lease lasts.
+    static let shareLeaseSeconds: TimeInterval = 45
+    /// How often the app renews the lease while sharing.
+    static let shareLeaseRenewSeconds: TimeInterval = 15
     /// Group identifier of every interaction the extension donates, followed by the local conversation hash.
     static let donationGroupPrefix = "qaudion.notify."
 
@@ -24,4 +32,21 @@ struct NotifyPreferences {
     }
 
     static func donationGroupIdentifier(thread: String) -> String { donationGroupPrefix + thread }
+
+    /// The app: this device shares its screen (a lease of `shareLeaseSeconds` from `now`), or it does not (cleared).
+    func setSharingScreen(_ sharing: Bool, now: Date = Date()) {
+        if sharing {
+            defaults.set(now.timeIntervalSince1970 + Self.shareLeaseSeconds, forKey: Self.keyShareLeaseUntil)
+        } else {
+            defaults.removeObject(forKey: Self.keyShareLeaseUntil)
+        }
+    }
+
+    /// Whether this device is sharing its screen right now: the lease lies in the future, and not further away than
+    /// one lease (a value from a clock that was set back is not believed).
+    func isSharingScreen(now: Date = Date()) -> Bool {
+        let until = defaults.double(forKey: Self.keyShareLeaseUntil)
+        let current = now.timeIntervalSince1970
+        return until > current && until <= current + Self.shareLeaseSeconds + 5
+    }
 }

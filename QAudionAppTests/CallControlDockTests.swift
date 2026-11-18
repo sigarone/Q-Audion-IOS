@@ -201,6 +201,31 @@ final class CallControlDockTests: XCTestCase {
         XCTAssertFalse(CallDockItems.audio(style, speakerOn: true, action: {}).usesRoutePicker)
     }
 
+    /// No code path presses a control of a system picker for the person: the route picker is the control, under the
+    /// finger and for VoiceOver, and nothing in the app sends actions to a subview of it.
+    func testNoCodePathPressesAControlOfASystemPicker() throws {
+        let root = try sourceURL("QAudionApp/Views/Call/Components/CallAudioRoute.swift")
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let enumerator = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+        var checked = 0
+        for case let url as URL in enumerator where url.pathExtension == "swift" {
+            let text = try String(contentsOf: url, encoding: .utf8)
+            checked += 1
+            XCTAssertFalse(text.contains("sendActions"), "\(url.lastPathComponent) sends actions to a control")
+            XCTAssertFalse(text.contains("SystemRoutePicker.present"), "\(url.lastPathComponent) opens the route picker for the person")
+            XCTAssertFalse(text.contains("as UIButton in"), "\(url.lastPathComponent) looks up a button inside a view")
+        }
+        XCTAssertGreaterThan(checked, 100)
+    }
+
+    func testTheRoutePickerIsTheAccessibilityElementOfTheGroupAudioCell() throws {
+        let route = try source("QAudionApp/Views/Call/Components/CallAudioRoute.swift")
+        XCTAssertTrue(route.contains("picker.isAccessibilityElement = true"))
+        XCTAssertTrue(route.contains("picker.accessibilityLabel = accessibilityLabel"))
+        let dock = try source("QAudionApp/Views/Call/Components/CallControlDock.swift")
+        XCTAssertTrue(dock.contains("SystemRoutePickerOverlay(accessibilityLabel: item.accessibilityLabel"))
+    }
+
     // MARK: - The screens
 
     func testEveryCallScreenDrawsTheSharedDock() throws {

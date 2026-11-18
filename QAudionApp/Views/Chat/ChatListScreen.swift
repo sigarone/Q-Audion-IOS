@@ -1143,7 +1143,7 @@ struct ChatListScreen: View {
         }
     }
 
-    private static let listLockOwner = "chat_list"
+    private static let listLockOwner = ScreenshotLockService.chatListOwner
 
     /// True while a row of this list stands for a protected conversation, so the list itself must be kept out of captures.
     private var listShowsProtectedPreview: Bool {

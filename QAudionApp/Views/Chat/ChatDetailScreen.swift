@@ -1400,20 +1400,13 @@ struct ChatDetailScreen: View {
     private func handleScreenAppear() {
         // Lock screenshots unless the peer has explicitly granted permission.
         // Protected = lock on and no grant by the peer, or a conversation timer (self-destructing content).
-        let protected = ChatProtectionPolicy.isProtected(
-            lockEnabled: screenshotLockEnabled(),
-            peerGranted: container.screenshotGrantedByPeer,
-            ephemeralTimerSeconds: container.viewModel.conversation.ephemeralTimerSeconds,
-            selfDestructingMessage: container.viewModel.messages.contains(where: ChatProtectionPolicy.isSelfDestructing))
-        if protected {
-            ScreenshotLockService.lock(owner: "chat_detail")
-        } else {
-            ScreenshotLockService.unlock(owner: "chat_detail")
-        }
+        container.screenshotLockTracking = true
+        container.syncScreenshotLock()
     }
 
     private func handleScreenDisappear() {
-        ScreenshotLockService.unlock(owner: "chat_detail")
+        container.screenshotLockTracking = false
+        ScreenshotLockService.unlock(owner: ScreenshotLockService.chatDetailOwner)
     }
 
     /// A screenshot taken inside a protected chat: tell the user (local notice only, nothing is sent to the peer).

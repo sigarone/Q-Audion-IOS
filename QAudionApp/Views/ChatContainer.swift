@@ -48,7 +48,9 @@ final class ChatContainer: ObservableObject {
         }
     }
 
-    @Published private(set) var viewModel: ChatViewModel
+    @Published private(set) var viewModel: ChatViewModel {
+        didSet { if screenshotLockTracking, PrivacyShield.ownShareActive { syncScreenshotLock() } }
+    }
     @Published var composerText: String = ""
 
     @Published private(set) var failedMessageId: UUID? = nil
@@ -68,7 +70,27 @@ final class ChatContainer: ObservableObject {
     private var fileV2Retry: [UUID: FileV2RetrySource] = [:]
     /// When true, the NEXT message sent will be flagged as view-once.
     /// Mirrors conversation.screenshotGrantedByPeer for reactive UI.
-    @Published private(set) var screenshotGrantedByPeer: Bool? = nil
+    @Published private(set) var screenshotGrantedByPeer: Bool? = nil {
+        didSet { if screenshotLockTracking, PrivacyShield.ownShareActive { syncScreenshotLock() } }
+    }
+    /// True while the chat screen is on screen. While this device shares its screen, a change of the data that turns
+    /// the chat into a protected one (a timer, a self-destructing message, a withdrawn grant) takes the lock in the
+    /// same pass that applies it, before the view reads the new data.
+    var screenshotLockTracking = false
+
+    /// Takes or releases the chat lock for the current data.
+    func syncScreenshotLock() {
+        let protected = ChatProtectionPolicy.isProtected(
+            lockEnabled: ChatProtectionPolicy.lockPreferenceEnabled(),
+            peerGranted: screenshotGrantedByPeer,
+            ephemeralTimerSeconds: viewModel.conversation.ephemeralTimerSeconds,
+            selfDestructingMessage: viewModel.messages.contains(where: ChatProtectionPolicy.isSelfDestructing))
+        if protected {
+            ScreenshotLockService.lock(owner: ScreenshotLockService.chatDetailOwner)
+        } else {
+            ScreenshotLockService.unlock(owner: ScreenshotLockService.chatDetailOwner)
+        }
+    }
     /// True while the peer's ss_req is awaiting a live approve/deny answer.
     /// Transient, in-memory only — matches Android's incomingScreenshotRequest
     /// StateFlow (never DB-persisted, never a chat message).

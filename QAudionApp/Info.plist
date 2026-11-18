@@ -46,6 +46,9 @@
 	<string>dev</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- The share of the whole screen on iOS 27 (system capture). The text is localised in InfoPlist.xcstrings. -->
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Q-Audion captures your screen only when you choose to share it in a call. What is captured is end-to-end encrypted and goes only to the person on the call. You can stop at any time from the system indicator.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Q-Audion uses your microphone for end-to-end encrypted voice and video calls, for voice messages in chats, and to record your voice for Voice-as-Key.</string>
 	<key>NFCReaderUsageDescription</key>
@@ -181,6 +184,9 @@
 		<!-- A live location share keeps sending while the screen is off (When In Use, with the system location indicator). The
 		     background session is enabled only while a share runs (LocationService.beginLiveSampling). -->
 		<string>location</string>
+		<!-- The system capture of the screen share (iOS 27) keeps delivering frames while the app is in the background; it
+		     runs only while a share is on, with the system indicator. -->
+		<string>screen-capture</string>
 	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>

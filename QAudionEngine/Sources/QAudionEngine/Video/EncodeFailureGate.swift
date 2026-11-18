@@ -57,6 +57,13 @@ public final class EncodeFailureGate: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Whether a refused frame may ask for a rebuild right now.
+    public var isArmed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return armed
+    }
+
     /// A frame was refused: whether to rebuild the session and whether to log.
     public func noteFailure(_ failure: Error, nowMs: Int64) -> Decision {
         var wantsRebuild = false
@@ -72,6 +79,17 @@ public final class EncodeFailureGate: @unchecked Sendable {
                 break
             }
         }
+        return decide(wantsRebuild: wantsRebuild, nowMs: nowMs)
+    }
+
+    /// A frame was refused by an encoder that reports only its own result code, not the VideoToolbox status. A refusal
+    /// that `rebuildable` marks asks for a rebuild under the same interval and episode rules; any other refusal only
+    /// counts for the log.
+    public func noteRefusal(rebuildable: Bool, nowMs: Int64) -> Decision {
+        return decide(wantsRebuild: rebuildable, nowMs: nowMs)
+    }
+
+    private func decide(wantsRebuild: Bool, nowMs: Int64) -> Decision {
         lock.lock()
         defer { lock.unlock() }
         let log = !inEpisode

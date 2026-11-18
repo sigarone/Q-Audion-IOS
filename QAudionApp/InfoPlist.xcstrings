@@ -43,6 +43,48 @@
         }
       }
     },
+    "NSScreenCaptureUsageDescription": {
+      "extractionState": "manual",
+      "comment": "Screen capture: sharing the whole screen with the person on a call (iOS 27 system capture)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion cattura lo schermo solo quando scegli di condividerlo in una chiamata. Ciò che viene catturato è cifrato end-to-end e arriva solo alla persona in chiamata. Puoi interrompere in qualsiasi momento dall'indicatore di sistema."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion captures your screen only when you choose to share it in a call. What is captured is end-to-end encrypted and goes only to the person on the call. You can stop at any time from the system indicator."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion captura la pantalla solo cuando eliges compartirla en una llamada. Lo capturado se cifra de extremo a extremo y llega únicamente a la otra persona de la llamada. Puedes detenerlo en cualquier momento desde el indicador del sistema."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion capture l'écran uniquement lorsque tu choisis de le partager pendant un appel. Ce qui est capturé est chiffré de bout en bout et n'arrive qu'à ton interlocuteur. Tu peux arrêter à tout moment depuis l'indicateur du système."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Q-Audion nimmt Ihren Bildschirm nur auf, wenn Sie ihn in einem Anruf teilen. Das Aufgenommene wird Ende-zu-Ende-verschlüsselt und geht nur an die Person im Anruf. Sie können jederzeit über die Systemanzeige beenden."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Q-Audion captura sua tela somente quando você escolhe compartilhá-la em uma chamada. O que é capturado tem criptografia de ponta a ponta e vai apenas para a pessoa na chamada. Você pode parar a qualquer momento pelo indicador do sistema."
+          }
+        }
+      }
+    },
     "NFCReaderUsageDescription": {
       "extractionState": "manual",
       "comment": "NFC: in-person contact pairing with an Android phone",
