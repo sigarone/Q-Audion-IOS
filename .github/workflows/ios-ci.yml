@@ -13,6 +13,8 @@
 #                                 (flag scripts, or flag app: the source gates read the app sources)
 #   signing-key-macos             macOS, seconds: the signing key check on the runner image's OpenSSL  (flag signing)
 #   swiftlint-qaudionapp-print-check   Linux: the print() ban in QAudionApp (always)
+#   public-text                   Linux, seconds: the comments, commit messages, title and body that a pull request adds
+#                                 name no internal reference (scripts/ci/check_public_text.py); pull requests only
 #   swiftlint-report              Linux, report only, on push to main and on a manual run
 #   secret-scan-report            Linux, report only (gitleaks over the whole history, about 20 s), on every run: the
 #                                 repository is public, so a committed secret is reported before the merge
@@ -1419,6 +1421,10 @@ jobs:
   #     the run of another pull request or a different tree reuse nothing; the decision of the job `plan`
   #     (scripts/ci/ios-ci-plan.sh) and the wiring between this workflow and the gate (scripts/ci/check_ci_wiring.py)
   #     are tested the same way.
+  #   * the text check of pull requests (scripts/ci/check_public_text.py, run by the job `public-text`): its self-tests
+  #     run here, on a throwaway git repository: each rule has a text it blocks and a text it lets through, the lines
+  #     a pull request did not add and the lines it removed are never read, and the names kept as hashes are the
+  #     listed ones.
   #   * the log filter (scripts/ship-ios-logs.py and, for the server side, scripts/ship-server-logs.py): every
   #     scripts/test_ship_ios_*.py, every scripts/test_ship_server_*.py and the fuzz scripts/test_ship_redactor_fuzz.py.
   #     The filter lets through only the lines of a known vocabulary and drops the rest without any error, so a change
@@ -1471,6 +1477,9 @@ jobs:
         run: |
           python3 -I scripts/ci/check_release_notes.py
           python3 -I scripts/ci/test_check_release_notes.py
+
+      - name: Public text check, self-tests
+        run: python3 -I scripts/ci/test_check_public_text.py
 
       - name: Hard-coded Italian text, source gate and its tests
         run: |
@@ -1576,6 +1585,49 @@ jobs:
         if: ${{ env.SCRIPTS_CHANGED == 'true' }}
         continue-on-error: true
         run: sh scripts/ci/test-openssl-signing-calls.sh
+
+  # The text that a pull request adds to this public repository: the comments of the lines it adds, its commit
+  # messages, its title and its body say what the code does and point to no internal note, finding or plan code, other
+  # repository or host of the project, real call or past event (scripts/ci/check_public_text.py; the rules are one
+  # table at its top). Pull requests only: a push to main or a manual run has no pull request to read, so the job is
+  # skipped there, and `result` counts a skipped job as passed. It is not part of `plan`: a failure of the plan means
+  # "run everything", this job means "block". Linux, seconds, no secrets. The title and the body are read from the API
+  # when the job runs (a re-run after an edit of the title sees the edit); the event payload is the fallback.
+  public-text:
+    name: Public text check
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          # The whole history: the check needs the base and the head commit and the commits between them.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Title and body of the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if ! gh api "repos/${REPO}/pulls/${PR}" > "$RUNNER_TEMP/pr.json"; then
+            echo "::warning::could not read the pull request: using the title and body of the event"
+            cp "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/pr.json"
+          fi
+
+      - name: Check what the pull request adds
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 -I scripts/ci/check_public_text.py --base "$BASE_SHA" --head "$HEAD_SHA" --pr-json "$RUNNER_TEMP/pr.json"
 
   # SwiftLint over QAudionApp: the one rule that is active there, a ban on new bare print() calls (2026-08-21, MASVS-CODE
   # I8), with .swiftlint-qaudionapp.yml (only_rules: [] + one custom rule) instead of widening the main .swiftlint.yml,
@@ -1692,7 +1744,7 @@ jobs:
   result:
     name: iOS CI result
     if: ${{ always() }}
-    needs: [plan, reuse, ios-simulator-tests, app-build-and-tests, share-variant-build, vpn-variant-build, earbud-variant-build, release-config-build, signing-key-macos, gates, swiftlint-qaudionapp-print-check]
+    needs: [plan, reuse, ios-simulator-tests, app-build-and-tests, share-variant-build, vpn-variant-build, earbud-variant-build, release-config-build, signing-key-macos, gates, public-text, swiftlint-qaudionapp-print-check]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
