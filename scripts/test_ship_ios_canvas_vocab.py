@@ -43,14 +43,20 @@ LINES = [
     "canvas hosted=1",
     "canvas hosted=0 why=1",
     "capcover shown=1",
-    "capcover shown=1 own=1",
     "capcover shown=0",
+    "canvas hosted=0 own=1 display=0",
+    "canvas hosted=1 own=1 display=0",
+    "canvas hosted=1 own=1 display=1",
+    "canvas hosted=1 own=0 display=0",
+    "canvas hosted=0 own=2 display=0",
+    "canvas hosted=1 own=2 display=1",
 ]
 
 # The "call" lines of the screen share (AppState.swift) and of the encoder session (VideoCallPipeline.swift).
 CALL_LINES = [
     "vcap capture end=1 why=1",
     "vcap capture end=1 why=2",
+    "vcap capture end=1 why=4",
     "vcap encfail st=-12903 ask=1 rec=1 code=0",
     "vcap encfail st=-12903 ask=1 rec=0 code=-12908",
 ]

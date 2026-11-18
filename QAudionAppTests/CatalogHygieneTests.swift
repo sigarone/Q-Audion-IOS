@@ -53,7 +53,7 @@ final class CatalogHygieneTests: XCTestCase {
     func testRemovedDeadKeysStayGone() throws {
         let strings = try strings()
         for gone in ["MODO", "TX FRAME CIFRATI", "video.diag.codec_cipher", "nfc.peer_name", "Chiudi banner SAS",
-                     "account_notice.password_changed.title"] {
+                     "account_notice.password_changed.title", "privacy.share_cover", "privacy.share_cover.stop"] {
             XCTAssertNil(strings[gone], "\(gone) is unused and should not come back")
         }
     }

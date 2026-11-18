@@ -127,86 +127,44 @@
         }
       }
     },
-    "privacy.share_cover": {
+    "privacy.share_hidden": {
       "extractionState": "manual",
-      "comment": "Full-screen notice shown instead of a protected screen while this device is sharing its screen in a call.",
+      "comment": "Full-screen notice shown instead of a screen with secret content while this device shares its screen in a call.",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Condivisione schermo attiva: contenuto protetto nascosto"
+            "value": "Nascosto durante la condivisione dello schermo"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Screen sharing active: protected content hidden"
+            "value": "Hidden while the screen is being shared"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bildschirmfreigabe aktiv: geschützter Inhalt ausgeblendet"
+            "value": "Während der Bildschirmfreigabe ausgeblendet"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pantalla compartida: contenido protegido oculto"
+            "value": "Oculto mientras se comparte la pantalla"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Partage d’écran actif : contenu protégé masqué"
+            "value": "Masqué pendant le partage d’écran"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Compartilhamento de tela ativo: conteúdo protegido oculto"
-          }
-        }
-      }
-    },
-    "privacy.share_cover.stop": {
-      "extractionState": "manual",
-      "comment": "Button on the full-screen notice shown while this device is sharing its screen in a call: stops the screen share.",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Interrompi condivisione"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stop sharing"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Freigabe beenden"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dejar de compartir"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Arrêter le partage"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Parar compartilhamento"
+            "value": "Oculto durante o compartilhamento de tela"
           }
         }
       }

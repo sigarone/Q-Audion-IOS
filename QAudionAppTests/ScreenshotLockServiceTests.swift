@@ -2,7 +2,9 @@ import XCTest
 @testable import QAudionApp
 
 /// The secure container: the topmost view's layer lives inside the secure text field's canvas while the lock is held
-/// (so captures come out black), the view tree is untouched, and the lock is released with the last owner.
+/// (so captures come out black), the view tree is untouched, and the lock is released with the last owner. While this
+/// device shares its own screen only the screens that hold a secret stay hosted, and everything is hosted again when
+/// the share is over or another display shows the screen.
 ///
 /// Wired into CI: on the include list of `QAudionApp/project-apptests.yml` and in the `-only-testing` list of
 /// `.github/workflows/ios-ci.yml`.
@@ -20,7 +22,9 @@ final class ScreenshotLockServiceTests: XCTestCase {
     override func tearDown() {
         ScreenshotLockService.unlock(owner: "a")
         ScreenshotLockService.unlock(owner: "b")
+        for owner in ScreenshotLockService.secretOwners { ScreenshotLockService.unlock(owner: owner) }
         ScreenshotLockService.unlock()
+        PrivacyShield.setOwnShareActive(false)
         super.tearDown()
     }
 
@@ -85,25 +89,285 @@ final class ScreenshotLockServiceTests: XCTestCase {
         XCTAssertFalse(ScreenshotLockService.isLocked)
     }
 
-    func test_captureCoverOnlyWhileCapturedAndLocked() {
-        XCTAssertTrue(PrivacyShield.shouldCoverCapture(isCaptured: true, lockHeld: true))
-        XCTAssertFalse(PrivacyShield.shouldCoverCapture(isCaptured: true, lockHeld: false))
-        XCTAssertFalse(PrivacyShield.shouldCoverCapture(isCaptured: false, lockHeld: true))
+    func test_protectionDecisionTable() {
+        for isCaptured in [false, true] {
+            for lockHeld in [false, true] {
+                for secretHeld in [false, true] where !secretHeld || lockHeld {
+                    // No own share, or another display shows the screen as well: the cover needs a capture and a held
+                    // lock, the canvas needs a held lock.
+                    for (ownShareActive, externalDisplay) in [(false, false), (false, true), (true, true)] {
+                        XCTAssertEqual(
+                            PrivacyShield.protection(isCaptured: isCaptured, lockHeld: lockHeld, secretHeld: secretHeld,
+                                                     ownShareActive: ownShareActive, externalDisplay: externalDisplay),
+                            PrivacyShield.Protection(cover: isCaptured && lockHeld, canvas: lockHeld, shareNotice: false))
+                    }
+                    // The own share alone: only a screen that holds a secret keeps the canvas, and the cover with the
+                    // share notice, whatever the capture flag says.
+                    XCTAssertEqual(
+                        PrivacyShield.protection(isCaptured: isCaptured, lockHeld: lockHeld, secretHeld: secretHeld,
+                                                 ownShareActive: true, externalDisplay: false),
+                        PrivacyShield.Protection(cover: secretHeld, canvas: secretHeld, shareNotice: secretHeld))
+                }
+            }
+        }
     }
 
-    func test_captureCoverModeKeepsTheStopControlForTheOwnShareOnly() {
-        for ownShare in [false, true] {
-            XCTAssertEqual(PrivacyShield.captureCoverMode(isCaptured: false, lockHeld: true, ownShareActive: ownShare), .absent)
-            XCTAssertEqual(PrivacyShield.captureCoverMode(isCaptured: true, lockHeld: false, ownShareActive: ownShare), .absent)
-            XCTAssertEqual(PrivacyShield.captureCoverMode(isCaptured: false, lockHeld: false, ownShareActive: ownShare), .absent)
+    func test_secretOwners() {
+        // Each owner with its decision: the screens that show secret material or the content of other people stay
+        // protected while this device shares its screen; the call screens, which show the person's own data, are
+        // shared.
+        for owner in [ScreenshotLockService.recoveryOwner, ScreenshotLockService.deviceLinkOwner,
+                      ScreenshotLockService.pairingOwner, ScreenshotLockService.chatDetailOwner,
+                      ScreenshotLockService.groupChatOwner, ScreenshotLockService.chatListOwner] {
+            XCTAssertTrue(ScreenshotLockService.secretOwners.contains(owner), owner)
         }
-        XCTAssertEqual(PrivacyShield.captureCoverMode(isCaptured: true, lockHeld: true, ownShareActive: false), .notice)
-        XCTAssertEqual(PrivacyShield.captureCoverMode(isCaptured: true, lockHeld: true, ownShareActive: true), .noticeWithStop)
+        XCTAssertEqual(ScreenshotLockService.secretOwners.count, 6)
+        for owner in ["call", "call_video", "call_group", "a", "legacy"] {
+            XCTAssertFalse(ScreenshotLockService.secretOwners.contains(owner), owner)
+        }
+        let (window, _) = makeWindow()
+        ScreenshotLockService.lock(owner: "a", in: window)
+        XCTAssertFalse(ScreenshotLockService.isSecretHeld)
+        ScreenshotLockService.lock(owner: ScreenshotLockService.pairingOwner, in: window)
+        XCTAssertTrue(ScreenshotLockService.isSecretHeld)
+        ScreenshotLockService.unlock(owner: ScreenshotLockService.pairingOwner)
+        XCTAssertFalse(ScreenshotLockService.isSecretHeld)
+    }
+
+    func test_ownShareIsOffAtLaunch() {
+        XCTAssertFalse(PrivacyShield.ownShareActive)
+    }
+
+    func test_ownShareUnhostsTheContentAndKeepsTheOwner() {
+        let (window, _) = makeWindow()
+        let layers = contentLayers(window)
+        ScreenshotLockService.lock(owner: "a", in: window)
+        XCTAssertTrue(ScreenshotLockService.isHostedInSecureCanvas)
+
+        PrivacyShield.setOwnShareActive(true)
+
+        XCTAssertTrue(PrivacyShield.ownShareActive)
+        XCTAssertFalse(ScreenshotLockService.isLocked)
+        XCTAssertFalse(ScreenshotLockService.isHostedInSecureCanvas)
+        XCTAssertTrue(ScreenshotLockService.isHeld, "the owner stays registered")
+        XCTAssertEqual(contentLayers(window).count, layers.count)
+        for layer in layers {
+            XCTAssertTrue(layer.superlayer === window.layer, "the window content is back in the window")
+        }
+        XCTAssertFalse((window.layer.sublayers ?? []).contains(where: { $0.delegate is UITextField }), "a secure field is left in the window")
+    }
+
+    func test_nothingIsHostedWhileTheOwnShareRuns_andEverythingIsWhenItEnds() {
+        let (window, controller) = makeWindow()
+        PrivacyShield.setOwnShareActive(true)
+
+        ScreenshotLockService.lock(owner: "a", in: window)
+        controller.present(UIViewController(), animated: false)
+        ScreenshotLockService.revalidate()
+
+        XCTAssertFalse(ScreenshotLockService.isLocked)
+        XCTAssertFalse(contentLayers(window).isEmpty, "the content stays visible to the share")
+
+        PrivacyShield.setOwnShareActive(false)
+
+        XCTAssertTrue(ScreenshotLockService.isLocked)
+        XCTAssertTrue(ScreenshotLockService.isHostedInSecureCanvas)
+        XCTAssertTrue(contentLayers(window).isEmpty, "a window layer is outside the secure canvas")
+    }
+
+    /// The share is stopped from the call screen or from the system.
+    func test_stop_putsTheCanvasBackForTheScreenThatHoldsTheLock() {
+        let (window, _) = makeWindow()
+        ScreenshotLockService.lock(owner: "a", in: window)
+        PrivacyShield.setOwnShareActive(true)
+
+        PrivacyShield.setOwnShareActive(false)
+
+        XCTAssertFalse(PrivacyShield.ownShareActive)
+        XCTAssertTrue(ScreenshotLockService.isLocked)
+        XCTAssertTrue(contentLayers(window).isEmpty, "a window layer is outside the secure canvas")
+    }
+
+    /// The capture fails right after it started, while another screen takes the lock.
+    func test_failure_putsTheCanvasBackForAScreenThatLockedDuringTheShare() {
+        let (window, _) = makeWindow()
+        PrivacyShield.setOwnShareActive(true)
+        ScreenshotLockService.lock(owner: "b", in: window)
+
+        PrivacyShield.setOwnShareActive(false)
+
+        XCTAssertTrue(ScreenshotLockService.isLocked)
+        XCTAssertTrue(contentLayers(window).isEmpty, "a window layer is outside the secure canvas")
+    }
+
+    /// The call ends: its screen releases its lock while the share ends; the other screen stays protected.
+    func test_callEnd_hostsOnlyWhatStillHoldsTheLock() {
+        let (window, _) = makeWindow()
+        ScreenshotLockService.lock(owner: "a", in: window)
+        ScreenshotLockService.lock(owner: "b", in: window)
+        PrivacyShield.setOwnShareActive(true)
+        ScreenshotLockService.unlock(owner: "a")
+
+        PrivacyShield.setOwnShareActive(false)
+
+        XCTAssertTrue(ScreenshotLockService.isHeld)
+        XCTAssertTrue(ScreenshotLockService.isLocked)
+        ScreenshotLockService.unlock(owner: "b")
+        XCTAssertFalse(ScreenshotLockService.isHeld)
+        XCTAssertFalse(ScreenshotLockService.isLocked)
+    }
+
+    func test_aScreenThatHoldsASecretStaysHostedWhileTheOwnShareRuns() {
+        let (window, _) = makeWindow()
+        let layers = contentLayers(window)
+        ScreenshotLockService.lock(owner: "a", in: window)
+        ScreenshotLockService.lock(owner: "recovery", in: window)
+
+        PrivacyShield.setOwnShareActive(true)
+
+        XCTAssertTrue(ScreenshotLockService.isHostedInSecureCanvas)
+        XCTAssertTrue(contentLayers(window).isEmpty, "a window layer is outside the secure canvas")
+
+        // The secret screen goes away: the screens left are shared.
+        ScreenshotLockService.unlock(owner: "recovery")
+        XCTAssertFalse(ScreenshotLockService.isLocked)
+        for layer in layers {
+            XCTAssertTrue(layer.superlayer === window.layer, "the window content is back in the window")
+        }
+
+        // A secret screen comes up during the share: it is hosted at once.
+        ScreenshotLockService.lock(owner: ScreenshotLockService.pairingOwner, in: window)
+        XCTAssertTrue(ScreenshotLockService.isHostedInSecureCanvas)
+        XCTAssertTrue(contentLayers(window).isEmpty, "a window layer is outside the secure canvas")
+
+        // The share is over: every screen that holds the lock stays hosted.
+        PrivacyShield.setOwnShareActive(false)
+        XCTAssertTrue(ScreenshotLockService.isHostedInSecureCanvas)
+        ScreenshotLockService.unlock(owner: ScreenshotLockService.pairingOwner)
+        XCTAssertTrue(ScreenshotLockService.isHostedInSecureCanvas, "owner a still holds the lock")
+    }
+
+    /// Whichever secret screen takes the lock while the share runs, the window layers are inside the canvas when the
+    /// call returns: nothing is drawn unprotected in between.
+    func test_everySecretOwnerHostsTheWindowLayersBeforeLockReturns() {
+        for owner in ScreenshotLockService.secretOwners.sorted() {
+            let (window, _) = makeWindow()
+            PrivacyShield.setOwnShareActive(true)
+            ScreenshotLockService.lock(owner: owner, in: window)
+
+            XCTAssertTrue(contentLayers(window).isEmpty, "\(owner): a window layer is outside the secure canvas")
+            XCTAssertTrue(ScreenshotLockService.isHostedInSecureCanvas, owner)
+            ScreenshotLockService.unlock(owner: owner)
+            PrivacyShield.setOwnShareActive(false)
+        }
+    }
+
+    /// A 1:1 chat that holds the lock (the peer has not granted screenshots, or a timer), a group chat and the chat
+    /// list stay hosted while the share runs, with the same notice as the other secret screens.
+    func test_theChatsAndTheChatListStayHostedWhileTheOwnShareRuns() {
+        for owner in [ScreenshotLockService.chatDetailOwner, ScreenshotLockService.groupChatOwner,
+                      ScreenshotLockService.chatListOwner] {
+            let (window, _) = makeWindow()
+            let layers = contentLayers(window)
+            ScreenshotLockService.lock(owner: "a", in: window)
+            PrivacyShield.setOwnShareActive(true)
+            XCTAssertFalse(ScreenshotLockService.isLocked, owner)
+
+            ScreenshotLockService.lock(owner: owner, in: window)
+            XCTAssertTrue(ScreenshotLockService.isSecretHeld, owner)
+            XCTAssertTrue(ScreenshotLockService.isHostedInSecureCanvas, owner)
+            XCTAssertTrue(contentLayers(window).isEmpty, "a window layer is outside the secure canvas: \(owner)")
+            XCTAssertEqual(PrivacyShield.currentProtection(isCaptured: false),
+                           PrivacyShield.Protection(cover: true, canvas: true, shareNotice: true), owner)
+
+            ScreenshotLockService.unlock(owner: owner)
+            XCTAssertFalse(ScreenshotLockService.isLocked, owner)
+            for layer in layers {
+                XCTAssertTrue(layer.superlayer === window.layer, "the window content is back in the window: \(owner)")
+            }
+            PrivacyShield.setOwnShareActive(false)
+            ScreenshotLockService.unlock(owner: "a")
+        }
+    }
+
+    func test_theShareLiftsTheProtectionOnlyForAConfirmedCaptureThatStartedOverNothingElse() {
+        for running in [false, true] {
+            for confirmed in [false, true] {
+                for before in [false, true] {
+                    XCTAssertEqual(
+                        PrivacyShield.liftsProtection(shareRunning: running, captureConfirmed: confirmed,
+                                                      captureBeforeShare: before),
+                        running && confirmed && !before)
+                }
+            }
+        }
+    }
+
+    /// The screen was already captured when the share started: the share lifts nothing, for any screen, and the
+    /// protection is the one of a recording.
+    func test_aCaptureThatWasRunningBeforeTheShareKeepsTheFullProtection() {
+        let (window, _) = makeWindow()
+        let layers = contentLayers(window)
+        ScreenshotLockService.lock(owner: "a", in: window)
+
+        PrivacyShield.setOwnShareActive(PrivacyShield.liftsProtection(
+            shareRunning: true, captureConfirmed: true, captureBeforeShare: true))
+
+        XCTAssertFalse(PrivacyShield.ownShareActive)
+        XCTAssertTrue(ScreenshotLockService.isHostedInSecureCanvas)
+        XCTAssertTrue(contentLayers(window).isEmpty, "a window layer is outside the secure canvas")
+        XCTAssertEqual(PrivacyShield.currentProtection(isCaptured: true),
+                       PrivacyShield.Protection(cover: true, canvas: true, shareNotice: false))
+
+        // The same share over nothing else lifts it for this screen.
+        PrivacyShield.setOwnShareActive(PrivacyShield.liftsProtection(
+            shareRunning: true, captureConfirmed: true, captureBeforeShare: false))
+        XCTAssertFalse(ScreenshotLockService.isLocked)
+        for layer in layers {
+            XCTAssertTrue(layer.superlayer === window.layer, "the window content is back in the window")
+        }
+    }
+
+    func test_aLockReleasedDuringTheOwnShareLeavesNothingToHost() {
+        let (window, _) = makeWindow()
+        let layers = contentLayers(window)
+        ScreenshotLockService.lock(owner: "a", in: window)
+        PrivacyShield.setOwnShareActive(true)
+        ScreenshotLockService.unlock(owner: "a")
+
+        PrivacyShield.setOwnShareActive(false)
+
+        XCTAssertFalse(ScreenshotLockService.isHeld)
+        XCTAssertFalse(ScreenshotLockService.isLocked)
+        for layer in layers {
+            XCTAssertTrue(layer.superlayer === window.layer)
+        }
+    }
+
+    func test_ownShareCanStartAndEndRepeatedly() {
+        let (window, _) = makeWindow()
+        ScreenshotLockService.lock(owner: "a", in: window)
+        for _ in 0..<3 {
+            PrivacyShield.setOwnShareActive(true)
+            PrivacyShield.setOwnShareActive(true)
+            XCTAssertFalse(ScreenshotLockService.isLocked)
+            PrivacyShield.setOwnShareActive(false)
+            PrivacyShield.setOwnShareActive(false)
+            XCTAssertTrue(ScreenshotLockService.isLocked)
+            XCTAssertTrue(contentLayers(window).isEmpty, "a window layer is outside the secure canvas")
+        }
     }
 
     func test_snapshotBlurWhenLockHeldOrSettingOn() {
         XCTAssertTrue(PrivacyShield.shouldBlurSnapshot(lockHeld: true, protectionSetting: false))
         XCTAssertTrue(PrivacyShield.shouldBlurSnapshot(lockHeld: false, protectionSetting: true))
         XCTAssertFalse(PrivacyShield.shouldBlurSnapshot(lockHeld: false, protectionSetting: false))
+    }
+
+    func test_snapshotBlurStillFollowsTheHeldLockWhileTheOwnShareRuns() {
+        let (window, _) = makeWindow()
+        ScreenshotLockService.lock(owner: "a", in: window)
+        PrivacyShield.setOwnShareActive(true)
+        XCTAssertTrue(PrivacyShield.shouldBlurSnapshot(lockHeld: ScreenshotLockService.isHeld, protectionSetting: false))
     }
 }

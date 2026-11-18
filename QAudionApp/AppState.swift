@@ -2466,8 +2466,9 @@ final class AppState: ObservableObject {
     // be restored when the user stops sharing.
     @Published public private(set) var isScreenSharing: Bool = false {
         didSet {
-            // The capture cover carries a stop control while this device's own share is what is captured.
-            if oldValue != isScreenSharing { PrivacyShield.refreshCaptureCover() }
+            #if os(iOS)
+            if oldValue != isScreenSharing { syncOwnShareProtection() }
+            #endif
         }
     }
 
@@ -2711,6 +2712,12 @@ final class AppState: ObservableObject {
     private var preScreenShareCameraClosure: ((CVPixelBuffer, Int64) -> Void)?
     /// True while `startScreenShare()` waits for the capture to start (the system prompt is up).
     private var screenShareStartInFlight = false
+    /// True while `stopScreenShare()` winds the capture down, so a second stop (from the system, from the call screen)
+    /// does not run the same steps again.
+    private var screenShareStopInFlight = false
+    /// True when the screen was already captured (a recording, a mirror) or shown on another display right before the
+    /// capture of the current share was started: the protection of the screens stays up for that whole share.
+    private var shareStartedOverCapture = false
     #endif
     /// W396: responder-side QAudionCallIntegration. Lazy-created on
     /// inbound `call_incoming` BEFORE the user accepts on CallKit so
@@ -25236,8 +25243,13 @@ extension AppState {
         screenShareController.onFrame = { [weak self] pixelBuffer, ts in
             self?.videoPipeline?.submitExternalFrame(pixelBuffer, presentationTimeNs: ts)
         }
+        // The protection of the screens is lifted once the capture is confirmed running, and it is back as soon as the
+        // capture ends, whichever way it ends.
+        screenShareController.onConfirmed = { [weak self] in self?.syncOwnShareProtection() }
+        screenShareController.onEnded = { [weak self] in self?.screenShareCaptureEnded() }
         screenShareStartInFlight = true
         defer { screenShareStartInFlight = false }
+        shareStartedOverCapture = PrivacyShield.sampleCaptureBeforeShare()
         do {
             try await screenShareController.start(into: capturer)
             // The call ended while the system prompt or the capture start was pending: the capture stops with it.
@@ -25246,6 +25258,8 @@ extension AppState {
                 await screenShareController.stop()
                 return
             }
+            // The capture ended between the answer of the recorder and here: the share does not start.
+            if !screenShareController.isRunning { throw ScreenShareController.ScreenShareError.notRunning }
             isScreenSharing = true
             RTLog.info("call", "startScreenShare: ReplayKit capture live (camera untouched)")
             // W538: fire-and-forget peer announce so cross-platform
@@ -25268,6 +25282,9 @@ extension AppState {
             videoPipeline?.onCapturedPixelBuffer = preScreenShareCameraClosure
             videoPipeline?.externalFeedActive = false
             screenShareController.onFrame = nil
+            screenShareController.onConfirmed = nil
+            screenShareController.onEnded = nil
+            PrivacyShield.setOwnShareActive(false)
             preScreenShareCameraClosure = nil
             let msg: String = error.localizedDescription
             RTLog.warn("call", "startScreenShare failed: " + msg)
@@ -25278,7 +25295,12 @@ extension AppState {
 
     public func stopScreenShare() async {
         #if os(iOS)
-        guard isScreenSharing else { return }
+        guard isScreenSharing, !screenShareStopInFlight else { return }
+        screenShareStopInFlight = true
+        defer { screenShareStopInFlight = false }
+        // The protection of the screens is back before the capture is wound down, so it does not depend on how long
+        // the recorder takes to stop.
+        PrivacyShield.setOwnShareActive(false)
         await screenShareController.stop()
         // Restore the camera path so VideoCallPipeline frames once
         // again flow to the WebRTC capturer.
@@ -25317,6 +25339,35 @@ extension AppState {
         #endif
     }
 
+    /// The protection of the screens is lifted while this device's own share is on and its capture is confirmed running
+    /// (a frame arrived), unless the screen was already captured when the share started. It is back as soon as either
+    /// stops being true.
+    private func syncOwnShareProtection() {
+        #if os(iOS)
+        PrivacyShield.setOwnShareActive(PrivacyShield.liftsProtection(
+            shareRunning: isScreenSharing, captureConfirmed: screenShareController.isConfirmed,
+            captureBeforeShare: shareStartedOverCapture))
+        #endif
+    }
+
+    /// The capture ended without a stop from this app: an error, the system ended it, or nothing is captured any more.
+    /// The protection is back first, whatever state the share is in; then the share is torn down. A start that is still
+    /// waiting for the capture learns of the end from the controller and fails.
+    private func screenShareCaptureEnded() {
+        #if os(iOS)
+        RTLog.info("call", "vcap capture end=1 why=4")
+        PrivacyShield.setOwnShareActive(false)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if self.isScreenSharing {
+                await self.stopScreenShare()
+            } else {
+                await self.screenShareController.stop()
+            }
+        }
+        #endif
+    }
+
     /// Whether the call a screen share started in is still the live one.
     private func shareCallIsLive(_ generation: Int) -> Bool {
         isInCall && callService.currentCallGeneration() == generation
@@ -25329,9 +25380,12 @@ extension AppState {
         #if os(iOS)
         guard isScreenSharing || screenShareStartInFlight else { return }
         RTLog.info("call", "vcap capture end=1 why=1")
+        PrivacyShield.setOwnShareActive(false)
         isScreenSharing = false
         preScreenShareCameraClosure = nil
         screenShareController.onFrame = nil
+        screenShareController.onConfirmed = nil
+        screenShareController.onEnded = nil
         videoPipeline?.externalFeedActive = false
         abrController?.isScreenSharing = false
         Task { @MainActor [weak self] in

@@ -18,6 +18,10 @@ import UIKit
 /// private canvas cannot be found, a window-level secure field is used instead
 /// and one log line says so.
 ///
+/// While this device shares its own screen in a call (`PrivacyShield.ownShareActive`), the content is not hosted unless
+/// a screen that holds a secret is up (`secretOwners`), so the share shows the real screen; the owners stay registered
+/// and the content is hosted again when the share is over or another display shows the screen.
+///
 /// SECURITY H-18: the screenshot-lock preference
 /// (`qaudion.chat.screenshot_lock_enabled`) defaults to `true`. This service
 /// holds no default-read of the preference itself.
@@ -67,6 +71,23 @@ public enum ScreenshotLockService {
     /// Identifier of the cover views of PrivacyShield: they must stay visible to a recording, so they are not hosted.
     static let shieldIdentifier = "qa.privacy.shield"
 
+    // Owner keys of the screens that take the lock.
+    static let recoveryOwner = "recovery"
+    static let deviceLinkOwner = "device_link"
+    static let pairingOwner = "pairing"
+    static let chatDetailOwner = "chat_detail"
+    static let groupChatOwner = "group_chat"
+    static let chatListOwner = "chat_list"
+
+    /// The owners that stay protected while this device shares its own screen, because their screen shows secret
+    /// material or content of other people: the recovery words, the QR and codes that link a new device, the codes of
+    /// the in-person contact pairing, a 1:1 chat (held only while the peer has not granted screenshots or the chat
+    /// carries a timer or self-destructing messages), the group chats, and the chat list while a row stands for a
+    /// protected conversation. Every other owner (`call`, `call_video`, `call_group`) is a screen of the person's own
+    /// data, which the person shares on purpose.
+    static let secretOwners: Set<String> = [recoveryOwner, deviceLinkOwner, pairingOwner,
+                                            chatDetailOwner, groupChatOwner, chatListOwner]
+
     /// Lock under one owner key. Idempotent per owner.
     public static func lock(owner: String = "legacy", in window: UIWindow? = nil) {
         owners.insert(owner)
@@ -74,10 +95,10 @@ public enum ScreenshotLockService {
         install(in: window ?? keyWindow())
     }
 
-    /// Unlock one owner key; the protection is removed when no owner is left.
+    /// Unlock one owner key; the protection is removed when nothing is left that needs it.
     public static func unlock(owner: String = "legacy") {
         owners.remove(owner)
-        guard owners.isEmpty else { return }
+        guard !PrivacyShield.currentProtection(isCaptured: false).canvas else { return }
         uninstallAll()
     }
 
@@ -88,6 +109,25 @@ public enum ScreenshotLockService {
 
     /// True when content is inside the secure canvas (not just the fallback field).
     public static var isHostedInSecureCanvas: Bool { hosted.contains(where: { $0.layer != nil }) }
+
+    /// True while at least one screen holds the lock, whether or not the content is hosted at the moment (it is not
+    /// while this device shares its own screen).
+    public static var isHeld: Bool { !owners.isEmpty }
+
+    /// True while a screen that holds a secret is up (`secretOwners`).
+    public static var isSecretHeld: Bool { !owners.isDisjoint(with: secretOwners) }
+
+    /// Applies the protection that `PrivacyShield` wants for the state of the app. When the canvas is not wanted (this
+    /// device shares its own screen and no secret screen is up), every hosted layer goes back to its place in the
+    /// window, in its original order, and nothing is hosted; the owners stay registered. When it is wanted, every
+    /// screen that holds the lock is hosted again in the same run loop pass.
+    static func protectionDidChange() {
+        if PrivacyShield.currentProtection(isCaptured: false).canvas {
+            revalidate()
+        } else if !hosted.isEmpty || windowFallback != nil {
+            uninstallAll()
+        }
+    }
 
     /// Remove the protection for one capture and hand back what to restore.
     static func suspendAll() -> Set<String> {
@@ -113,9 +153,11 @@ public enum ScreenshotLockService {
     /// Hosts every content layer of `window`. Internal so a test can drive it with its own window.
     static func install(in window: UIWindow?) {
         guard let window, !installing else { return }
+        lastWindow = window
+        // The window to host again when the canvas is wanted again is remembered; nothing is hosted until then.
+        guard PrivacyShield.currentProtection(isCaptured: false).canvas else { return }
         installing = true
         defer { installing = false }
-        lastWindow = window
         startWatchdog()
         observeWindow(window)
         // Layers that went away are forgotten.

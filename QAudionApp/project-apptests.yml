@@ -45,6 +45,7 @@ targets:
           - BugReporterRetryQueueTests.swift
           - CatalogHygieneTests.swift
           - ScreenshotLockServiceTests.swift
+          - ScreenShareControllerTests.swift
           - PeerDiagResponderTests.swift
           - ChatVoiceNoteSenderMaxUsesTests.swift
           - CallCloseReasonRedactionTests.swift
