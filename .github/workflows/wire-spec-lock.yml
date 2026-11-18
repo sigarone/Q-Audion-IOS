@@ -43,8 +43,8 @@ jobs:
       - uses: actions/checkout@v6
       - name: Verify WIRE_SPEC.md and docs/EARBUD_V6_ENDPOINT.md match the canonical hashes
         run: |
-          EXPECTED=6a01ab50a8b49b19d9e46fc32d6ea087f927476332c20b9b3c7c9bbcd2ae4e0c
-          EXPECTED_EARBUD_EP=0829cd70890f9544f4585a1b008da2a385708c0c6da8259b751b2d510d8ec0fd
+          EXPECTED=079f5e1e8bb53af6370a76ea5a8f0b357b569c074ac0e78f481fc89cfe095fb9
+          EXPECTED_EARBUD_EP=f45162866bc7f1f79440184e3fc1c5a66ec42bbe0eed637b99050f17b3fe0e8c
           status=0
           check() {
             ACTUAL=$(sha256sum "$1" | cut -d' ' -f1)

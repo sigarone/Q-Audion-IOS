@@ -4,8 +4,8 @@ Status: Accepted by the owner 2026-11-17 (revision 2 + decisions). The accepted 
 adversarial review of revision 1 (§16 lists every issue raised and what was done with it), with the owner's decisions
 on the open points recorded and made normative (§14). This file is revision 4 of that text: revision 3 recorded the
 first round of decisions, revision 4 records the second round of the same evening and answers the open questions of
-the reviewers and of the KAT generator (§14, §17.2), with the fixes of the review of its first text (§17.2 rows 40 to
-52). §17 lists every change of both revisions and carries no rule.
+the reviewers and of the KAT generator (§14, §17.2), with the fixes of the reviews of its first three texts (§17.2
+rows 40 to 52, 54 to 66 and 68 to 75). §17 lists every change of both revisions and carries no rule.
 Docs only: nothing in this file changes behaviour until the WIRE_SPEC text of
 Appendix A and Appendix B has landed byte-identical in every locked copy together with this file (§13.3) and the KAT
 file of §13 is generated and pinned. Implementation work on the earbud call path starts from phase 0 of §12.1, after
@@ -466,23 +466,35 @@ The server runs these checks in order. The first that fails answers with its sta
 `{"error":"<code>"}` (the server's existing error shape, `jsonErr`, `cmd/bcrypto-lite/main.go:4771-4775`) and changes
 nothing:
 
-1. Strict decoding, 400 `endpoint_body_invalid`. The body is one JSON object, decoded under the strict RFC 8259 rule
-   of WIRE_SPEC §3.1 (D27), with exactly the eleven members above, each once. Member names are compared byte for byte
-   with those names, so an unknown member, a duplicate member name and a name that differs from one of them only in
-   case are all refused (a case-insensitive decoder, such as Go's `encoding/json` used alone, does not meet this
-   rule). `version` is the integer 1 and `kind` the string `earbud`; `host_device_id` meets §3.3; the base64 values
-   pass the canonical rule of PQC §2.3 and decode to the stated lengths; `created_ms` is an integer in
-   `[1, 2^53 − 1]` and `build_profile` and `board` integers in `[0, 255]`, written without sign, fraction or exponent.
-2. Caller, 403. The authenticated device (the device of the bearer token) MUST NOT be revoked, `device_revoked` (the
-   authentication layer may refuse such a request earlier, as it refuses every request of a revoked device), and MUST
-   be `host_device_id`, `endpoint_host_mismatch`.
+1. Strict decoding, 400 `endpoint_body_invalid`. The body is one JSON object, decoded under the strict RFC 8259 rule of
+   WIRE_SPEC §3.1 (D27), with exactly the eleven members above, each once. It contains no backslash byte (`0x5C`)
+   anywhere (§17.2 row 66): no value of this body needs a JSON escape, because `version`, `created_ms`, `build_profile`
+   and `board` are decimal integers, `kind` is the fixed token `earbud`, the base64 values use the standard alphabet of
+   RFC 4648 section 4, whose `/` JSON never requires to be escaped, and the server's device ids are UUIDv4 strings
+   (`internal/pqsig/pqsig.go:29-31`). A body with any backslash, so also one with a `\/` or a `\u` escape, is refused; a
+   host writes this body without any escape (an encoder that writes `/` as `\/` cannot be used for it), and a
+   `host_device_id` that could only be written with an escape (one that contains `"`, `\` or a control character, which
+   §3.3 does not exclude) cannot be published. Member names are compared as raw bytes, the bytes between their quotes,
+   with those names, so an unknown member, a duplicate member name and a name that differs from one of them only in case
+   are all refused (a case-insensitive decoder, such as Go's `encoding/json` used alone, does not meet this rule).
+   `version` is the integer 1 and `kind` the string `earbud`; `host_device_id` meets §3.3; the base64 values pass the
+   canonical rule of PQC §2.3 and decode to the stated lengths; `created_ms` is an integer in `[1, 2^53 − 1]` and
+   `build_profile` and `board` integers in `[0, 255]`, written without sign, fraction or exponent.
+2. Caller, 403. The bearer token MUST name a device of the account: a token without a device id gets `device_required`
+   (§17.2 row 65). That device MUST NOT be revoked, `device_revoked` (the authentication layer may refuse such a request
+   earlier, as it refuses every request of a revoked device), and MUST be `host_device_id`, `endpoint_host_mismatch`.
+   The not-revoked condition is checked again inside the one store transaction that runs checks 7 to 10 and writes the
+   record, so the check and the write are atomic: a revocation of the device that commits between the two cannot let the
+   record through.
 3. Host key, 409 `endpoint_host_key_mismatch`: the stored per-device identity bundle of `host_device_id` has
    `ed25519_pub` equal to `host_ed25519_pub_b64`.
 4. Keys, 400 `endpoint_key_invalid`: both keys pass rules 1 and 2 of the uniform Ed25519 rule.
 5. Signatures, 400 `endpoint_sig_invalid`: the server rebuilds the EPC from the body and the account UUID and verifies
    `cert` under the host key and `pop` under EK (uniform Ed25519 rule).
-6. Earbud: 412 `earbud_not_attested` when `earbud_id_b64` was never attested; 409 `earbud_other_account` when
-   `earbud-attest` bound it to another account.
+6. Earbud: 412 `earbud_not_attested` when `earbud_id_b64` was never attested or its attestation is revoked (the
+   attestation row carries `revoked_at`, `internal/store/types.go:246-253`; a revoked attestation is refused like a
+   missing one, before the account it names is looked at, §17.2 row 64); 409 `earbud_other_account` when `earbud-attest`
+   bound it to another account.
 7. Revoked key, 410 `endpoint_revoked`: EK has a tombstone in any account, this one or another, or its SHA-256 is in
    the set of revoked keys that account deletion keeps (below).
 8. Key of another account, 409 `endpoint_key_taken`: EK has a live record (below) in another account. A tombstone of
@@ -492,34 +504,58 @@ nothing:
    endpoint (one per host device, §3.2), so one earbud enrolled by four phones uses one endpoint of the budget.
 10. Tombstone cap, 409 `endpoint_tombstone_limit`: the account holds `EP_MAX_TOMBSTONES_PER_USER = 32` tombstones or
     more and the registration would add a live record (a `(hostDeviceId, endpointId)` that has none); a registration
-    that replaces an existing live record is not refused by this check.
+    that replaces an existing live record is not refused by this check. A re-enrolment (below) adds the record of a
+    new endpoint and is checked like every registration that adds one, against the tombstones that the account holds
+    before it (§17.2 row 69): the tombstones that the re-enrolment creates itself, by revoking the old EK, never
+    refuse it, and an account that already holds 32 tombstones cannot re-enrol an earbud, as it cannot register any
+    new endpoint.
 
-A live record is a record that is neither revoked nor removed (both below) and whose host device is neither revoked
-nor deleted. The limits count live records only: an endpoint counts toward `EP_MAX_ENDPOINTS_PER_USER` while it has a
-live record, tombstones count against neither limit, and a record for an existing `(hostDeviceId, endpointId)`
-replaces it and is never counted twice. The per-user budget of live records is therefore at most 4 × 4 = 16, and one
-host device holds at most one live record per endpoint, so at most 4: the `endpoints` member of one device (below) has
-at most 4 live entries and the `?all=1` shape at most 16 live entries in all. A new record for the same
-`(hostDeviceId, earbudId)` with a different EK revokes the previous one (re-enrolment after a reset). On success the
-server stores the validated fields, never the request text, and answers 200 with `{"endpoint_id": "<id>"}`; every list
-entry it serves later is its own serialization of the stored fields. Each accepted record queues a Sigsum leaf
+A live record is a record that is neither revoked nor removed (both below) and whose host device is neither revoked nor
+deleted. The limits count live records only: an endpoint counts toward `EP_MAX_ENDPOINTS_PER_USER` while it has a live
+record, tombstones count against neither limit, and a record for an existing `(hostDeviceId, endpointId)` replaces it
+and is never counted twice. The per-user budget of live records is therefore at most 4 × 4 = 16, and one host device
+holds at most one live record per endpoint, so at most 4: the `endpoints` member of one device (below) has at most 4
+live entries and the `?all=1` shape at most 16 live entries in all. A new record for an earbud that has a live record
+in the account under a different EK, from any host device, revokes that old EK as a whole (re-enrolment after a
+reset, below), so the live records of an account name at most one EK per earbud. On success the server stores the
+validated fields, never the request text, and answers 200 with `{"endpoint_id": "<id>"}`; every list entry it serves
+later is its own serialization of the stored fields. Each accepted record queues a Sigsum leaf
 `SHA-256("qaudion-kt-endpoint-v1\x20" ‖ uuid16 ‖ hostEdPub[32] ‖ epEdPub[32] ‖ be64(created_ms))`, through the same
 worker as the identity leaves; a submission failure never affects the publish.
 
+Re-enrolment (clarification, conservative reading, the owner may override, §17.2 rows 57, 69 and 75). A registration
+whose `earbud_id_b64` equals that of a live record of the account, of any host device, and whose EK differs from that
+record's is a re-enrolment of the earbud under a new EK (after a factory reset, §3.8); the publishing host device need
+not hold that record, or any record of the earbud. It revokes the old EK as a whole: every record of the old EK in the
+account, of every host device (the live ones and those hidden with a revoked or deleted host device), becomes a
+tombstone, exactly as `DELETE` of the old endpoint would make it (Revocation, below), so check 7 refuses the old EK in
+every account from then on. The revocation, checks 7 to 10 and the write of the new record are one store transaction:
+the limits of check 9 are counted after the revocation and the tombstone cap of check 10 before it, so the tombstones
+that the revocation creates never refuse the re-enrolment, and a refusal by any check changes nothing, so the old EK
+then stays live. The re-enrolment writes the record of the publishing host device only: every other host device of the
+earbud enrols again (the reset erased the earbud's host table, §3.8) and publishes its own record of the new EK. What
+peers see (§3.7): a bundle signed with the old EK finds a tombstone in the list of every host device that had listed it
+and gets step 4 (a) (`identity_key_mismatch`, `ep=revoked`, "This earbud was removed by its owner.", an endpoint pin of
+the old EK deleted); a bundle signed with the new EK is `ep=listed` through the host device that published it, shown
+with the neutral notice of step 8; through another host device that has enrolled again and not yet published its
+record, it is unlisted and accepted only inside the young-endpoint window of step 4 (c) (`ep=unlisted`, not pinned),
+its `created` being the time of that new enrolment.
+
 Revocation. `DELETE /api/v1/users/me/endpoints/{endpointId}` from any non-revoked device of the account
-(403 `device_revoked` otherwise) revokes every record of that endpoint and answers 204; 404 `endpoint_not_found` when
+(caller rule below) revokes every record of that endpoint and answers 204; 404 `endpoint_not_found` when
 the account has no record of it; an endpoint that is already revoked answers 204 and nothing changes. Revocation is
 never refused because of a limit or of the tombstone cap. It is permanent: each record becomes a tombstone
 `{endpoint_id, endpoint_ed25519_pub_b64, host_ed25519_pub_b64, created_ms, revoked_ms}` that is listed for ever (about
 150 bytes each; it is never deleted, so a revoked key can never become valid again by the certificate alone), and the
-same EK can never be registered again, by this account or by any other (check 7). Check 10 stops new live records
-once the account holds 32 tombstones; revocation stays open, so the tombstones of the records still live at that
-point can be added beyond 32.
+same EK can never be registered again, by this account or by any other (check 7). Check 10 stops every registration
+that adds a live record, a re-enrolment included, once the account holds 32 tombstones, so from then on no record is
+added to the account; revocation stays open, so the tombstones can grow beyond 32 by the records that exist at that
+point (live, or hidden with a revoked or deleted host device), each of which becomes at most one tombstone.
 
 Per-host removal, for a lost or replaced host phone.
 `DELETE /api/v1/users/me/endpoints/{endpointId}/hosts/{hostDeviceId}` (`hostDeviceId` as one RFC 3986 path segment,
-percent-encoded from its exact UTF-8 bytes) from any non-revoked device of the account (403 `device_revoked`
-otherwise) removes the live record of that host device for that endpoint WITHOUT a
+percent-encoded from its exact UTF-8 bytes) from any non-revoked device of the account (caller rule
+below) removes the live record of that host device for that endpoint WITHOUT a
 tombstone and answers 204: EK stays valid for the other hosts and may be registered again by a host device, the
 removed one included. 410 `endpoint_revoked` when the account holds a tombstone of that endpoint, checked first, so a
 revoked endpoint answers 410 whatever the host device named (a tombstone is never removed); otherwise 404
@@ -537,12 +573,31 @@ user also revokes that device, after which check 2 refuses its publications. The
 the earbud's owner removes it with `UNENROLL` from another enrolled host (confirm gesture, §3.8, §4.5); until then that
 host, if it still holds HK and reaches the earbud, can open an EPL session.
 
+Caller rule of both `DELETE` routes (clarification, conservative reading, the owner may override, §17.2 row 65), checked
+before anything else of the request: the bearer token MUST name a device of the account, 403 `device_required` when it
+carries no device id, and that device MUST NOT be revoked, 403 `device_revoked`. The not-revoked condition is checked
+again inside the store transaction that makes the change, so the check and the write are atomic, as for a publication
+(check 2).
+
 Account deletion, erasure rule. When an account is deleted the server first revokes every endpoint of the account that
 has a live record, then erases every endpoint record, certificate, proof of possession and tombstone of the account.
 Of the whole endpoint store of the account it keeps only the SHA-256 of each revoked EK: 32 bytes each, stored with no
 account identifier, host key, device id, time or any other field, in a set that is never deleted. Check 7 refuses an
 EK whose SHA-256 is in that set, so a revoked EK can never be registered again by any account. Leaves already
 submitted to the Sigsum log are outside the server's store and are not affected.
+
+Two more rules of the account deletion (clarifications, conservative reading, the owner may override, §17.2 rows 62 and
+63). The erasure also covers the server's KMS audit log (bucket `kms_audit_log`, `InsertKMSAuditLog`,
+`internal/store/bbolt.go:74`, `:3266-3276`), where the server writes a row for each endpoint event of an account, with
+the endpoint id as its key id: `earbud_endpoint_registered` (an accepted publication), `earbud_endpoint_revoked` (a
+revocation, by `DELETE` or by a re-enrolment) and `earbud_endpoint_host_removed` (a per-host removal). Every such row of
+the account is deleted, because the endpoint id is the first 16 bytes of `SHA-256(EK)` and would link the kept hash of a
+revoked EK to the account. And the deletion releases the attestation binding of every earbud attested to the account
+(the `earbud-attest` row of §3.2, which `PutEarbudAttestKey`, `internal/store/bbolt.go:5522-5546`, holds against every
+other account): a live attestation is deleted, so another account can attest that earbud and then publish its endpoint
+(check 6 no longer answers 409 `earbud_other_account`; the earbud itself refuses an enrolment under another account
+until it is reset, §3.4 step 5); a revoked attestation keeps its revocation and loses the account id, so check 6 keeps
+refusing that earbud for every account (412 `earbud_not_attested`).
 
 Fetch: the payload of a device bundle (`bundlePayload`, `users_identity_key.go:390-420`) gains the member `endpoints`
 only when that device has live endpoint records or tombstones, in all three fetch shapes (default, `?device_id=`,
@@ -558,13 +613,17 @@ only when that device has live endpoint records or tombstones, in all three fetc
 ```
 
 A tombstone appears in the same list with `revoked_ms > 0` and without the certificate members. The list is sent
-complete (no paging); with the limits and the tombstone cap above it stays small. Phase 2 adds the ML-DSA members of
+complete (no paging); with the limits and the tombstone cap above it stays small: a device has at most 4 live
+entries, and the tombstones of the account stop growing once it holds 32, apart from those of the records that exist
+at that point (Revocation, above). Phase 2 adds the ML-DSA members of
 §3.9 to an entry. EK is never part of the device key set returned by `?all=1`: a peer that only knows the device set
 must not take EK for a device key (iOS would re-pin to it, `HandshakeSigningPolicy.swift:42`, `:199`).
 
 The phase-2 publication `POST /api/v1/users/me/endpoints/{endpointId}/mldsa` (§3.9) follows the same rules: strict
-decoding of its body (check 1, with the seven members of §3.9), a caller that is not revoked and is the host device of a
-live record of that endpoint (403 `device_revoked`, `endpoint_host_mismatch`), and the error body above.
+decoding of its body (check 1, with the seven members of §3.9, all of them base64 values or integers, so the
+no-backslash rule applies as it stands), a caller whose token names a device (403 `device_required`) that is not revoked
+and is the host device of a live record of that endpoint (403 `device_revoked`, `endpoint_host_mismatch`), the
+not-revoked check and the write in one store transaction, and the error body above.
 
 Operational requirements of the server:
 
@@ -696,8 +755,12 @@ those of WIRE_SPEC §4, computed by the earbud on the other side.
 - Replacement earbud: a new enrolment, a new EK, a new record. Peers see a new endpoint of an authenticated host
   (§3.7 step 8).
 - Factory reset: a physical gesture defined by the firmware (proposed: hold the button for 10 s while powering on,
-  §9.14) destroys EK (`psa_destroy_key`), the host table, the hw_only PSKs, the bonds and every call state in NVS. An ERASEALL of a bench unit (APPROTECT recovery) has the same effect. The next enrolment
-  generates a new EK, and the server revokes the old record when the new one arrives (§3.6).
+  §9.14) destroys EK (`psa_destroy_key`), the host table, the hw_only PSKs, the bonds and every call state in NVS. An
+  ERASEALL of a bench unit (APPROTECT recovery) has the same effect. The next enrolment generates a new EK; when a
+  host device of the account publishes a record of the new EK, whether or not it held a record of the old one, the
+  server revokes the old EK as a whole, every record of it in the account (§3.6, Re-enrolment), unless the account
+  already holds 32 tombstones (§3.6 check 10: the publication is then refused and the old EK stays live), and every
+  other host of the earbud enrols again and publishes its own record.
 - Host reinstall (new HK): the earbud answers `enrol_only`; the bond of the phone still exists, so the host app asks
   the user to open pairing mode with a long press (§3.4 step 3 (b)) and then confirm with the confirm gesture. The
   new record supersedes the old one, and the old HK entry is removed from the earbud with `UNENROLL`.
@@ -920,17 +983,54 @@ enrolCode = SHA-256("qaudion-epl-enrol-code-v1" ‖ th)[0]   four 2-bit symbols,
 
 - At most one outstanding request per request type. Each call-plane response carries the `callHandle` and the round of
   its request.
-- Idempotent retries. For every call-plane request the earbud keeps the last response per `(callHandle, request type,
-  round)` until the context moves past that step (the next request of a later step of the same round, the next round,
-  or `CALL_END`). A request byte-identical to the one that produced the cached response gets the cached response again,
-  without recomputation and without a new random value; a different body for the same `(callHandle, request type,
-  round)` gets `bad_state`, except a `PEER_ACCEPT` for a round whose first `PEER_ACCEPT` was answered ok (the round is
-  bound), which gets `already_bound`. This is what makes a request lost to a link drop (§5.10) safe to resend: for
-  example a lost `ACCEPT_BOUND` is reproduced exactly, `B` included. Once a cached response was released (the
-  context moved past its step), the earbud never recomputes it: a later request of that step gets `bad_state`,
-  byte-identical or not, except a `PEER_ACCEPT` for a bound round, which gets `already_bound` (for example a
-  `PEER_ACCEPT` of round 1 that arrives after `KCMAC_VERIFIED` of round 1 erased the cached `ACCEPT_BOUND` and
-  `sasNonce`, §6.7).
+- Idempotent retries and the order of checks (§17.2 row 54). The steps of a round are, for the caller, `OFFER_PREP`,
+  `OFFER_FINAL`, `PEER_ACCEPT`, then `KCMAC_VERIFIED` or `ROUND_DROP`; for the callee, `PEER_OFFER`, `ACCEPT_FINAL`,
+  `REVEAL` (round 1 only), then `KCMAC_VERIFIED` or `ROUND_DROP`. `OFFER_PREP` and `PEER_OFFER` open a round, and the
+  current round of a context is the round of the last `OFFER_PREP` or `PEER_OFFER` that the earbud answered ok; until
+  the earbud has answered one ok the context has no current round (§17.2 row 74): rule 3 below then refuses an
+  `OFFER_PREP` or `PEER_OFFER` that is not of round 1, and every `OFFER_FINAL`, `PEER_ACCEPT` and `ACCEPT_FINAL` gets
+  `bad_state` by rule 4, its round not being open. The earbud caches its response per `(callHandle, request type,
+  round)` when it answered the request ok, and when it refused a `PEER_ACCEPT` by the request's own checks (rule 5
+  below; the round's `PEER_ACCEPT` is then answered, R-COMMIT-BIND, §17.2 row 72). Every other refusal changes nothing
+  and is not cached, a `PEER_ACCEPT` refused by the checks of the channel and the context (`not_owner` for one from
+  another host's session) or by rules 3 and 4 included, and the same request is judged again when it comes again: an
+  `OFFER_PREP` refused with `spacing` is answered ok when it comes again once the spacing rule allows it (§13.1
+  `timedFlows`). A cached response
+  is released when the context moves past its step: when the earbud caches a response to a later step of the same round,
+  when it answers ok the `OFFER_PREP` or `PEER_OFFER` of a later round, at `CALL_END` and when the context is erased. A
+  released response is erased (§6.7) and never recomputed. A request first passes the checks of the channel and the
+  context (`not_authenticated`; `malformed` when it is too short to carry `h` and `round`; `bad_state` for an `h` with
+  no context and for a request of the other role, such as an `OFFER_PREP` in a callee context; `not_owner`). Then, for
+  `OFFER_PREP`, `OFFER_FINAL`, `PEER_ACCEPT`, `PEER_OFFER` and `ACCEPT_FINAL`, the first of these rules that applies
+  gives the answer:
+  1. Cached response. The request is byte-identical to the one that produced a response that the earbud still caches for
+     its `(callHandle, request type, round)`: that response again, without recomputation and without a new random value,
+     whatever the state of the round. This is what makes a request lost to a link drop (§5.10) safe to resend: a lost
+     `ACCEPT_BOUND` is reproduced exactly, `B` included, and so is a lost `ACCEPT_SIGNED`, although its round already
+     has its keys.
+  2. `already_bound`. A `PEER_ACCEPT` of a bound round (one whose first `PEER_ACCEPT` was answered ok), with another
+     body while the cached `ACCEPT_BOUND` exists or with any body after it was released, for example a byte-identical
+     `PEER_ACCEPT` of round 1 after `KCMAC_VERIFIED` of round 1 erased the cached `ACCEPT_BOUND` and `sasNonce` (§6.7).
+     The earbud keeps the bound mark of the current round and of the round that was current before it, and of no older
+     round (§17.2 row 73): a `PEER_ACCEPT` of an older round is not of a bound round for this rule and gets
+     `round_rule` by rule 3.
+  3. `round_rule`, the order of rounds. An `OFFER_PREP` or `PEER_OFFER` of a context that has no current round is not
+     of round 1; an `OFFER_PREP` or `PEER_OFFER` is of a round not greater than the current round, which covers every
+     repeat of the request that opened the current round that rule 1 did not answer; an `OFFER_FINAL`, `PEER_ACCEPT` or
+     `ACCEPT_FINAL` is of a round below the current round; or the round is above 2^31 − 1.
+  4. `bad_state`, the state of the round. An `OFFER_FINAL`, `PEER_ACCEPT` or `ACCEPT_FINAL` of the current round whose
+     step already has a response in that round, released or cached for another body (an `OFFER_FINAL` after the round's
+     `PEER_ACCEPT`, an `OFFER_FINAL` with another body while its `OFFER_SIGNED` is cached, a `PEER_ACCEPT` with another
+     body after a first one refused by its own checks), or whose preceding step was not answered ok; one of a round
+     above the current round, which is not open; a rekey `OFFER_PREP` of a call that negotiated `rekeyChainV1` while
+     there is no chain base (§5.4, caller step 1).
+  5. The request's own checks, by increasing code (`malformed` first, the `sasCommit` and `roundEcho` rules of
+     `round_rule` among them), except that the codes of the computation, `crypto_failure` and `resource`, come last:
+     they arise only once every other check has passed.
+- `KCMAC_VERIFIED` and `ROUND_DROP` get rule 1 of the order above and then their own rule, not rules 2 to 4: they may
+  name any round that is armed and undecided, below the current round included; any other round gets `bad_state`
+  (`KCMAC_ACK` status `0x01`, an `ERROR` for `ROUND_DROP`), and a `KCMAC_VERIFIED` whose MAC is not the round's expected
+  MAC gets `KCMAC_ACK` status `0x02`. `REVEAL` gets rule 1 and then the rules of §5.3 step 7.
 - `EPL_RESPONSE_TIMEOUT` is 5 s for every request, and 10 s for a request whose response carries an ML-DSA signature
   (phase 2), measured by the host from the moment the request was written to the channel. The host treats an expired
   request as failed (§5.11) unless the link dropped meanwhile, in which case it resends after the resume (§5.10).
@@ -959,22 +1059,22 @@ Status and error codes, one table for every response `status` byte and every `ER
 | Code | Name | Meaning |
 |---|---|---|
 | `0x00` | ok | |
-| `0x01` | bad_state | message not allowed in the current call or round state |
+| `0x01` | bad_state | message not allowed in the current call or round state: an `h` with no context (a context never created or already erased, §6.7) and a request of the other role, by the checks of the channel and the context; rule 4 of the order of checks above, for `OFFER_PREP`, `OFFER_FINAL`, `PEER_ACCEPT`, `PEER_OFFER` and `ACCEPT_FINAL`; and a `KCMAC_VERIFIED` or `ROUND_DROP` for a round that is not armed and undecided, by their own rule |
 | `0x02` | malformed | a field has the wrong length, an `LP` overruns, CAPSX or advEnc does not parse, the earbud's own advEnc has more than 64 entries or a non-zero role byte |
 | `0x03` | required_tag_missing | CAPSX of the earbud's own bundle lacks `capsBindV1`, `earbudEpV1`, `innerSealV2` or `rekeyChainV1`, or lacks `sigHybridV1` while a `hybKeyId` is supplied (phase 1) or on phase-2 firmware |
 | `0x04` | forbidden_tag | CAPSX of the earbud's own bundle contains `frameKeyV6` or `innerAudioAadV1`, or contains `sigHybridV1` without a `hybKeyId` on phase-1 firmware |
-| `0x05` | round_rule | first round not 1, round not greater than the last accepted one, `sasCommit` present or absent against WIRE_SPEC §3.1, round above 2^31 − 1, a `PEER_ACCEPT` whose `roundEcho` differs from its `round` |
+| `0x05` | round_rule | the order of rounds, rule 3 of the order of checks above: an `OFFER_PREP` or `PEER_OFFER` not of round 1 in a context that has no current round, an `OFFER_PREP` or `PEER_OFFER` of a round not greater than the current round, an `OFFER_FINAL`, `PEER_ACCEPT` or `ACCEPT_FINAL` of a round below it, a round above 2^31 − 1; and, among the request's own checks (rule 5), `sasCommit` present or absent against WIRE_SPEC §3.1 and a `PEER_ACCEPT` whose `roundEcho` differs from its `round` |
 | `0x06` | rekey_nonce_mismatch | `rekeyNonce` differs from the call's |
 | `0x07` | dtls_fp_changed | the own fingerprint supplied differs from the call's, or the peer's fingerprint differs from the one pinned in round 1 |
 | `0x08` | chain_base | PQC B13 refusal of a `PEER_OFFER`: `chainBase` missing, `≥ E`, or naming a round whose `ck` this earbud does not hold (never derived, or erased by the retention rule of PQC B13); the answer is the round's `PEER_OFFER_OK` with this status, and the earbud keeps nothing of the round |
 | `0x09` | too_many_rounds | more than `EP_MAX_STAGED = 8` rounds armed and undecided |
-| `0x0A` | spacing | `OFFER_PREP` of a rekey round received less than 5 s after the earbud answered the previous `OFFER_SIGNED` ok, or while the earbud's previous own round is undecided (neither confirmed by `KCMAC_VERIFIED` nor dropped by `ROUND_DROP`) (PQC §2.6 R-OFFERSPACING). Only `OFFER_PREP` gets this code: an `OFFER_FINAL` that follows an `OFFER_EPH` ok is never refused with it. In a call that negotiated `rekeyChainV1` the base rule of §5.4 (caller, step 1) is checked first: an `OFFER_PREP` of a rekey round that arrives before `KCMAC_VERIFIED` of round 1 gets `bad_state`, never `spacing`, although round 1 is then undecided, as the D12 gate of PQC B13 runs before any rate limit |
+| `0x0A` | spacing | `OFFER_PREP` of a rekey round received less than 5 s after the earbud answered the previous `OFFER_SIGNED` ok, or while the earbud's previous own round is undecided (neither confirmed by `KCMAC_VERIFIED` nor dropped by `ROUND_DROP`) (PQC §2.6 R-OFFERSPACING). Only `OFFER_PREP` gets this code: an `OFFER_FINAL` that follows an `OFFER_EPH` ok is never refused with it. In a call that negotiated `rekeyChainV1` the base rule of §5.4 (caller, step 1) is checked first: an `OFFER_PREP` of a rekey round that arrives before `KCMAC_VERIFIED` of round 1 gets `bad_state`, never `spacing`, although round 1 is then undecided, as the D12 gate of PQC B13 runs before any rate limit (rule 4 before rule 5 of the order of checks above) |
 | `0x0B` | crypto_failure | key generation, encapsulation or decapsulation failed, or an X25519 output is all zero |
 | `0x0C` | (reserved) | was `peer_key_changed` of the revision-1 peer pin table, removed (§5.9) |
 | `0x0D` | busy | another call context is active, a confirm window is open, a cellular call is ringing or active (enrolment), or another host owns the ring (§9.13) |
 | `0x0E` | unsupported | a feature this firmware does not implement (for example a hw_only PSK reference before phase 1b) |
 | `0x0F` | offer_binding_mismatch | the ACCEPT's `offerBinding` is not the hash of the OFFER this earbud signed |
-| `0x10` | already_bound | a second `PEER_ACCEPT` for a round that is bound, with a body that differs from the first (a byte-identical one gets the cached `ACCEPT_BOUND` while that cache exists, a different one after a refused first `PEER_ACCEPT` gets `bad_state`), and every `PEER_ACCEPT` for a bound round after its cached `ACCEPT_BOUND` was released, byte-identical or not |
+| `0x10` | already_bound | rule 2 of the order of checks above, before `round_rule`: a `PEER_ACCEPT` for a round that is bound, with a body that differs from the first while its `ACCEPT_BOUND` is cached (a byte-identical one gets the cached `ACCEPT_BOUND`, rule 1; a different one after a first `PEER_ACCEPT` refused by its own checks gets `bad_state`, the round not being bound), and every `PEER_ACCEPT` for a bound round after its cached `ACCEPT_BOUND` was released, byte-identical or not; the earbud keeps the bound mark of the current round and of the round before it only (rule 2) |
 | `0x11` | not_authenticated | channel state does not allow the message |
 | `0x12` | unknown_type | |
 | `0x13` | resource | out of memory or time for this request |
@@ -1236,9 +1336,12 @@ rest:
 - CAPS9: the earbud forces `sframeV1` and `vkeyV1` to `0x00`; it cannot check the seven other bytes (§2.4).
 - `dtlsFpSelf` is fixed at `CALL_BEGIN` for the call; the peer's fingerprint is pinned at round 1 and compared in every
   later round (WIRE_SPEC §3.8.2 step 5, R-CERT).
-- Round rules of WIRE_SPEC §3.1 and §3.7: first OFFER of a call has round 1 and a 32-byte `sasCommit`, later rounds
-  are strictly increasing and carry none; the ACCEPT echoes the round and `rekeyNonce` (a `PEER_ACCEPT` whose
-  `roundEcho` differs from its `round` gets `round_rule`); `offerBindingEcho` equals the earbud's `offerBinding`.
+- Round rules of WIRE_SPEC §3.1 and §3.7: first OFFER of a call has round 1 and a 32-byte `sasCommit`, later rounds are
+  strictly increasing and carry none; the ACCEPT echoes the round and `rekeyNonce` (a `PEER_ACCEPT` whose `roundEcho`
+  differs from its `round` gets `round_rule`); `offerBindingEcho` equals the earbud's `offerBinding`. The earbud applies
+  them, with every other check of a request of a round, in the order of checks of §4.4: a cached response first, then
+  `already_bound`, `round_rule` for the order of rounds, `bad_state` for the state of the round, and last the request's
+  own checks.
 - Values the earbud cannot check (the peer's CAPSX and EXTX, `relaySS`, `RELAYX`, the PSK bytes, the selected
   fingerprint string): a wrong value only changes keys or MACs that the remote peer computes from the real wire bytes,
   so the round fails its KCMAC (`kcmac_mismatch`) or the host's own outer layer fails. None of them can make the earbud
@@ -1334,9 +1437,15 @@ sends encoded silence until both are released.
 
 ### 5.4 Rekey rounds
 
-Only the caller offers (PQC §2.6 R-OFFERER). The host's rekey scheduler decides when; the earbud enforces the spacing
-of R-OFFERSPACING (one own round undecided at a time, at least 5 s between OFFERs), checked at `OFFER_PREP` only
-(code `spacing`, §4.4).
+Only the caller offers (PQC §2.6 R-OFFERER). The host's rekey scheduler decides when; the earbud enforces the spacing of
+R-OFFERSPACING (one own round undecided at a time, at least 5 s between OFFERs), checked at `OFFER_PREP` only (code
+`spacing`, §4.4). Every request of a rekey round is checked in the order of §4.4. In the current round, a request of a
+step that already has a response that rule 1 does not reproduce (released, or cached for another body) gets
+`round_rule` when it is the round's `OFFER_PREP` or `PEER_OFFER` and `bad_state` otherwise; every `OFFER_PREP`,
+`OFFER_FINAL`, `PEER_ACCEPT`, `PEER_OFFER` and `ACCEPT_FINAL` of a round below the current round gets `round_rule`
+(§17.2 row 68); in both cases a `PEER_ACCEPT` of a bound round gets `already_bound` instead (rule 2, which knows the
+bound mark of the current round and of the round before it only). `KCMAC_VERIFIED` and `ROUND_DROP` follow their own
+rule (§4.4).
 
 Caller (earbud side offers round E + 1):
 
@@ -1479,7 +1588,7 @@ outside phases 1 and 2 and returns only with a new owner decision.
   session (§4.3) and sends `CALL_RESUME`; the earbud accepts it only from the session whose `hostEdPub` owns the
   context (`not_owner` otherwise). `RESUME_RESULT` ok resumes audio with the same keys and counters (the inner
   counters never reset, PQC B2). A request that was outstanding at the drop is resent unchanged and answered from the
-  cache of §4.4.
+  cache of §4.4 (one whose refusal left nothing is judged again, §4.4).
 - After the grace the earbud erases the call (§6.7). A later `CALL_RESUME` gets `bad_state`, and the host ends the call
   with the local, non-security reason `endpoint_lost`.
 - Meanwhile the remote peer hears nothing and may show "Peer not audible" (WIRE_SPEC §16.6); its watchdogs are not
@@ -1501,8 +1610,9 @@ outside phases 1 and 2 and returns only with a new owner decision.
 | Link lost | §5.10 |
 | Inner layer failing (`EVENT` INNER_FAIL) | §7.11 |
 
-A host never retries a request with changed inputs inside the same round; a retried request is byte-identical and
-gets the cached response (§4.4).
+A host never retries a request with changed inputs inside the same round; a retried request is byte-identical: it gets
+the cached response when the earbud has one, and a request whose refusal left nothing (every refusal but that of a
+`PEER_ACCEPT` by its own checks) is judged again (§4.4).
 
 ### 5.12 Phase 1b: hw_only PSKs held in the earbud
 
@@ -2142,14 +2252,20 @@ traces of §13.1.
 
 Classification of a press. A press is classified at its release, by its duration: under 500 ms short, 500 ms to under
 2 s medium (ignored), 2 s to under 3 s long, 3 s or more a hold (the confirm gesture inside a confirm window, a long
-press elsewhere). Nothing acts when a threshold is reached during a press, except the factory reset, which acts when
-the button has been held 10 s during power-on. A double press is two short presses whose second starts at most
-400 ms after the first one's release (`DOUBLE_PRESS_GAP = 400 ms`). In a state where the table gives the double press
-a meaning (an EP context) a short press acts only when 400 ms have passed after its release without a second press,
-that is 400 ms after its release; in every other state it acts at its release. When a second press starts within the
-400 ms and is not short (medium, long or a hold), the first press does not act at all, and the second press is
-classified and acts by itself, as if it were alone. A confirm gesture counts only when it starts after the prompt and is
-released before the confirm window ends; a hold still in progress when the window ends gives `no_press`.
+press elsewhere). Nothing acts when a threshold is reached during a press, except the factory reset, which acts when the
+button has been held 10 s during power-on. A double press is two short presses whose second starts at most 400 ms after
+the first one's release (`DOUBLE_PRESS_GAP = 400 ms`); it acts at the release of its second press. Clarification,
+conservative reading, the owner may override (§17.2 row 58): a short press waits for a possible second press only where
+the table gives the double press a meaning, that is in its two EP-context rows (an EP context waiting for its capture
+press, and an EP context with `captureArmed` true); there it acts 400 ms after its release when no second press started
+in that gap. In every other state (a confirm window, EP ringing, a cellular call, idle) a short press acts at its
+release and never waits. The rule for a second press that starts within the gap and is not short (medium, long or a
+hold) applies only where a short press waits, in an EP context: the first press does not act at all, and the second
+press is classified and acts by itself, as if it were alone. In every state, a press that starts within
+`DOUBLE_PRESS_GAP` after the release of the last press of a press sequence that acted (a short press, a double press, a
+long press, a hold or a confirm gesture, whichever row consumed it) is ignored: it is not classified, does nothing and
+starts no sequence; a press that starts later is a new press. A confirm gesture counts only when it starts after the
+prompt and is released before the confirm window ends; a hold still in progress when the window ends gives `no_press`.
 
 ---
 
@@ -2342,11 +2458,11 @@ the phase-0 size spike replaces. The 942,080 B ceiling is the MCUboot slot limit
 did not re-derive it.
 
 The phase-0 self-test image (§12.1; the bench overlay with `config/phase0.conf`, which adds the KMU EK and the KMU
-known-answer check, the timings and the L2CAP test server) has about 1.4 KB of headroom, measured, revision 4: 1,452 B
-at `934e22a` (signed image 940,628 B, `docs/PHASE0_DK_RUNBOOK.md` §2) and 1,436 to 1,452 B in the builds of
-`feat/ep-phase0` since. That is too little for ML-DSA-87, so the ML-DSA timing runs in a second phase-0 image built
-without LE Audio and LC3. The phase-0 test code is never part of an EP image (`CONFIG_QA_PHASE0_TESTS` is refused
-outside the bench test images), so this headroom does not bound phase 1.
+known-answer check, the timings and the L2CAP test server) has about 1.4 KB of headroom (1,436 B measured at `86293ad`:
+signed image 940,644 B under the 942,080 B ceiling, `~/vol/ep0-artifacts/BUILD_INFO.txt`, Appendix C). That is too
+little for ML-DSA-87, so the ML-DSA timing runs in a second phase-0 image built without LE Audio and LC3. The phase-0
+test code is never part of an EP image (`CONFIG_QA_PHASE0_TESTS` is refused outside the bench test images), so this
+headroom does not bound phase 1.
 
 Cuts, cheapest first (sizes from the spike's symbol tables unless marked): bench INF logging restricted to the EP
 modules, measured at 10,144 B (`1b759cc`); the 23,216 B that revision 3 assumed is the whole difference between the
@@ -2411,9 +2527,9 @@ and of the host is a fixed input of the vector.
 | `messages` | the inputs of `flows` | byte-exact bodies of every call-plane message of §4.5 for those inputs, the `EVENT` STATE and CELLULAR values and a DIAG record (§4.5), and the refusal layouts of §4.4 |
 | `flows` | per call: ML-KEM seeds `(d, z)` and encapsulation randomness per round, X25519 scalars of both sides, EK and peer seeds, `sasNonce`, `rekeyNonce`, `relayKem` secrets, DTLS fingerprints, PSK, CAPS9 (the seven host bytes of §2.4), CAPSX and EXTX of both bundles, a mixed-case `callId` in every case, the M-15 case (c) included (§6.6: the M-15 export uses the exact `callId`, every other derivation `callIdL`) | per round: OFFER_v6, ACCEPT_v6, both `sigV6`, the JSON bundle the host emits as a parsed object (§5.5), `offerBinding`, `acceptBinding`, `sessionKey_E`, `ck_E`, `K_kc`, `kc_transcript` and `kc_transcript_x`, both MACs, SAS-KDF, words and `B` in round 1, every `EXPORT` value, two inner envelopes per direction (earbud TX 20 ms / 120 B, peer TX 60 ms / 256 B) |
 | `flows` cases | (a) earbud caller and phone callee: rounds 1 to 3 with `rekeyChainV1`, `relayKemV1` and `relayRotV1`, a v3 PSK selected, host-anchored `sigHybridV1`; (b) phone caller and earbud callee, same depth, no PSK, no ML-DSA on the host; (c) a peer without `innerSealV2` (legacy inner seal with B1, M-15 export); (d) earbud to earbud; (e) a peer OFFER with `dualCurve` answered by an ACCEPT without `ciphertext.dualCurve` (accepted); (f) a peer OFFER with 255 adverts | as above |
-| `timedFlows` | the `flows` cases with a monotonic fake clock: event times of requests, records, button edges and link drops | the expected state, message and timer outcome at each step: R-OFFERSPACING (5 s, refused at `OFFER_PREP`, §4.4), the previous inner slot erased 30 s after the current round confirmed, the link grace (5, 8 and 15 s, with a drop during round 1 and a resend answered from the cache), the setup timeout (120 s), the `UNAUTH` timeouts (5 s), the confirm window (30 s, a press before the prompt ignored, a 3 s hold after it accepted, a short press cancelling), the 180 s enrolment window, the ring owner (90 s), the INNER_FAIL threshold with the event bytes (`fails`, `windowMs`, §4.5) and one event for several failures at the same instant, the 15 and 30 s KCMAC windows and the 15 s REVEAL window as seen by the host, the gesture table of §9.14 for every state (the capture-press rows included) with the classification at release and the 400 ms double-press gap, and the answer-press window of §7.10 (10 s) |
+| `timedFlows` | the `flows` cases with a monotonic fake clock: event times of requests, records, button edges and link drops | the expected state, message and timer outcome at each step: R-OFFERSPACING (5 s, refused at `OFFER_PREP`, §4.4), the previous inner slot erased 30 s after the current round confirmed, the link grace (5, 8 and 15 s, with a drop during round 1 and a resend answered from the cache), the setup timeout (120 s), the `UNAUTH` timeouts (5 s), the confirm window (30 s, a press before the prompt ignored, a 3 s hold after it accepted, a short press cancelling), the 180 s enrolment window, the ring owner (90 s), the INNER_FAIL threshold with the event bytes (`fails`, `windowMs`, §4.5) and one event for several failures at the same instant, the 15 and 30 s KCMAC windows and the 15 s REVEAL window as seen by the host, the gesture table of §9.14 for every state (the capture-press rows included) with the classification at release, the 400 ms double-press gap, a double press acting at the release of its second press, a short press that waits for a second press only in an EP context, and a press that starts within 400 ms after the release of a press sequence that acted (ignored, in an EP context and when idle), and the answer-press window of §7.10 (10 s) |
 | `capturePress` | per case, on a `flows` context with a monotonic fake clock: ring and answer-press times with the ring owner's host key, `CALL_BEGIN` times and roles, press edges with their start times and durations (short, double, long), `MEDIA_CTRL` GATE, TX_PAUSE, TX_RESUME, MIC_MUTE and MIC_UNMUTE, a link drop and `CALL_RESUME`, a `CALL_END` followed by a new `CALL_BEGIN` | the sequence of `EVENT` CAPTURE records (state, reason), the instants at which the earbud feeds the microphone to the encoder and plays the start cue and the 60 s cue, and the `EVENT` BUTTON records (none for a capture press). Cases: no press (silence, reason `0x02`, still silence after 60 s); a short press after `CALL_BEGIN_OK` with no second press (captures 400 ms after its release, `DOUBLE_PRESS_GAP` of §9.14, when the gate is open); a short press followed within 400 ms by a long press (does not arm; the long press is exported); a press while the gate is closed (reason `0x01`, capture at the gate opening) and while muted (reason `0x04`); every `MEDIA_CTRL` command sent without a press (no capture); a double and a long press (never arm); an idle press before `CALL_BEGIN` (does not arm); an answer press 9.9 s before `CALL_BEGIN` (arms) and 10.1 s before (does not); an answer press followed by a `CALL_BEGIN` of another host key or with role caller (does not arm, memory cleared); one answer press used by one context only; an answer on the phone's screen (waits); a second context after `CALL_END` (waits again); link drop and resume (stays armed, state re-reported); a mute of more than 60 s followed by an unmute (start cue at the unmute, the 60 s cue counted from it, §7.10) |
-| `negative` | per case | expected status code of §4.4: round rule, `rekeyNonce` changed, fingerprint changed, `offerBinding` echo wrong, all-zero X25519, required tag missing, `frameKeyV6` present, `sigHybridV1` without `hybKeyId`, a second `PEER_ACCEPT` with a different body after a bound round (`already_bound`) and after a refused one (`bad_state`), a byte-identical `PEER_ACCEPT` of round 1 after `KCMAC_VERIFIED` released its cached `ACCEPT_BOUND` (`already_bound`), a `PEER_ACCEPT` whose `roundEcho` differs (`round_rule`), `chain_base` (also for a base below E whose `ck` the B13 retention erased), spacing, a rekey `OFFER_PREP` before `KCMAC_VERIFIED` of round 1 in a `rekeyChainV1` call (`bad_state`, not `spacing`), ninth staged round, own advEnc with 65 entries or a non-zero role byte, a rekey `CAPSX_own` different from round 1, a message from a non-owner host, `ENROLL_BEGIN` without a fresh bond or window, a retried request with a changed body; each response in the refusal layout of §4.4 |
+| `negative` | per case | expected status code of §4.4: round rule, `rekeyNonce` changed, fingerprint changed, `offerBinding` echo wrong, all-zero X25519, required tag missing, `frameKeyV6` present, `sigHybridV1` without `hybKeyId`, a second `PEER_ACCEPT` with a different body after a bound round (`already_bound`) and after one refused by its own checks (`bad_state`), a byte-identical `PEER_ACCEPT` of round 1 after `KCMAC_VERIFIED` released its cached `ACCEPT_BOUND` (`already_bound`), a `PEER_ACCEPT` whose `roundEcho` differs (`round_rule`), `chain_base` (also for a base below E whose `ck` the B13 retention erased), spacing, a rekey `OFFER_PREP` before `KCMAC_VERIFIED` of round 1 in a `rekeyChainV1` call (`bad_state`, not `spacing`), ninth staged round, own advEnc with 65 entries or a non-zero role byte, a rekey `CAPSX_own` different from round 1, a message from a non-owner host, `ENROLL_BEGIN` without a fresh bond or window, an `OFFER_FINAL` of round 1 retried with a changed body while its `OFFER_SIGNED` is cached (`bad_state`); one case for each boundary of the order of checks of §4.4, each pinning one code: a byte-identical `PEER_ACCEPT` of round 1 and a byte-identical rekey `ACCEPT_FINAL` while their responses are cached (the cached responses by rule 1, for the `PEER_ACCEPT` before rule 2), a `PEER_ACCEPT` of a bound round 2 after the `OFFER_PREP` of round 3 was answered ok (`already_bound`, rule 2 before rule 3), a byte-identical `PEER_OFFER` of round 2 after its `ACCEPT_FINAL` was answered ok in a callee `rekeyChainV1` call and a byte-identical `OFFER_PREP` of round E after its `OFFER_FINAL` was answered ok in a caller one (`round_rule`, rule 3 before rule 4), a `PEER_OFFER` of round 2 with another body while its `PEER_OFFER_OK` is cached (`round_rule`), an `ACCEPT_FINAL` of round 2 after the `PEER_OFFER` of round 3 was answered ok and a byte-identical `OFFER_FINAL` of round E after the `OFFER_PREP` of round E + 1 was answered ok (`round_rule`, a request of a round below the current one), an `OFFER_PREP` of round E with another body while its `OFFER_EPH` is cached (`round_rule`), a byte-identical `PEER_ACCEPT` of a bound round 2 after the `OFFER_PREP` of round 4 was answered ok (`round_rule`: the earbud keeps no bound mark of round 2 any more), an `OFFER_FINAL` and a `PEER_ACCEPT` of round 1 before any `OFFER_PREP` of the context was answered ok (`bad_state`: no current round), a `PEER_ACCEPT` from a non-owner host (`not_owner`) and one sent before its round's `OFFER_SIGNED` was answered (`bad_state`), each followed by the owner's `PEER_ACCEPT` after `OFFER_SIGNED`, answered ok (neither refusal is cached), a byte-identical `OFFER_FINAL` of round 1 after the `PEER_ACCEPT` of round 1 was answered ok and a byte-identical `ACCEPT_FINAL` of round 2 after its `KCMAC_VERIFIED` (`bad_state`), an `OFFER_FINAL` of round 1 with another body whose `CAPSX_own` lacks `rekeyChainV1`, sent while its `OFFER_SIGNED` is cached (`bad_state`, rule 4 before rule 5), a `PEER_OFFER` with both its `rekeyNonce` and its fingerprint changed (`rekey_nonce_mismatch`, the lower code of rule 5), and an `OFFER_PREP` refused with `spacing` and sent again byte-identical once the spacing rule allows it (ok: the refusal was not cached); each response in the refusal layout of §4.4 |
 | `innerRx` | envelopes of wire size 30 to 284 B (`0x04`) and 41 to 295 B (legacy), one byte outside each range, 20, 40 and 60 ms Opus frames, `trueLen = 0` and a `trueLen` larger than the block | the opened blocks and the decode or concealment decision (§7.5) |
 | `profileRx` | a sequence of 20 ms / 120 B envelopes at 50 per second from an earbud peer, both envelope types, with a loss, a duplicate and a reordered frame, every frame before its playout time | the frames each receiver opens, and the decoded sequence: each counter once, in counter order, the missing one concealed, a legacy duplicate opened twice and decoded once (§7.5); consumed by every receiver (Android, iOS, Desktop, the web app and the firmware) |
 | `kmuKnownAnswer` | EK seeds and messages from the sections below | for each message, its Ed25519 signature by EK: every message of the five kinds EK signs (§3.1) that this file contains, that is the `AUTH_E` of every `eplSession` vector in which the earbud holds EK (the authenticated sessions and the `enrol_only` session with EK), the pop message `"qaudion-endpoint-pop-v1" ‖ SHA-256(EPC)` of every `epc` vector, every `OFFER_v6` and `ACCEPT_v6` the earbud signs in `flows`, every hybrid `sigEd` message of `flows` and `hybridEp` and, in phase 2, the `xcEd` message of `epXcert`; the set the KMU known-answer check of §3.1 signs |
@@ -2553,7 +2669,7 @@ column points:
 | Values of revision 3 | Confirmed: `ANSWER_PRESS_WINDOW = 10 s`; HTTP 409 for a registration over the endpoint or host limits; the `EVENT` CAPTURE reason order `0x02`, `0x01`, `0x03`, `0x04`; a host does not open an EP call when `capsBits` bit 12 is 0; the firmware CI fails when an EP symbol is linked into an authoritative or production image | §0, §3.6, §4.5, §7.10, §8.3, §10.1 |
 | Refusing `EP_AUTH` | Result `0x02` or `0x03` carries 96 zero bytes in place of `epEdPub ‖ sigE`: a refusing `EP_AUTH` carries neither EK nor a signature, and the earbud signs nothing for a host it has not authenticated (EK itself is public and stays in `EP_INFO`, §8.2; wording scoped to `EP_AUTH` by §17.2 row 40). An unknown platform byte is refused with `0x03` and the channel is closed; every `hostProto` other than `0x0002`, `0x0001` included, is refused with `0x03` | §4.3 |
 | `sender_device_id` | The envelope that carried an endpoint bundle MUST carry `sender_device_id`, equal to `hostDeviceId`; absent or different, media are held as for any R-EP-VERIFY failure | §3.7 step 2 |
-| Server endpoint records | (a) only the host device publishes, and not while revoked (403 with a named code); (b) per-host removal without a tombstone, for a lost or replaced host phone, by any non-revoked device of the account; the records of a revoked or deleted host device are not counted toward `EP_MAX_HOSTS` and not listed; (c) `EP_MAX_TOMBSTONES_PER_USER = 32`, a new registration beyond it refused with 409, revocation always allowed; (d) account deletion erases the account's endpoint records, certificates and tombstones and keeps only the SHA-256 of each revoked EK, with no link to the account, so a revoked EK can never be registered again; (e) the per-device identity bundles in the DR and failover export, and no rollback of the primary below the first binary that stores endpoint records; (f) strict decoding of the publish body, stored fields and the server's own serialization | §3.6, §3.8 |
+| Server endpoint records | (a) only the host device publishes, and not while revoked (403 with a named code); (b) per-host removal without a tombstone, for a lost or replaced host phone, by any non-revoked device of the account; the records of a revoked or deleted host device are not counted toward `EP_MAX_HOSTS` and not listed as live entries, while their tombstones stay listed; (c) `EP_MAX_TOMBSTONES_PER_USER = 32`, a new registration beyond it refused with 409 (one that adds a live record, a re-enrolment included, §3.6 check 10), revocation always allowed; (d) account deletion erases the account's endpoint records, certificates and tombstones and keeps only the SHA-256 of each revoked EK, with no link to the account, so a revoked EK can never be registered again; (e) the per-device identity bundles in the DR and failover export, and no rollback of the primary below the first binary that stores endpoint records; (f) strict decoding of the publish body, stored fields and the server's own serialization | §3.6, §3.8 |
 | OD-5, cost | LE Audio and the cellular passthrough stay as decided; their measured cost is 141,628 B of flash and 26,348 B of RAM | §12.2, §12.3 |
 
 The reviewers' open questions and the open points of the KAT generator (`tools/kat/earbud-ep-v1/README.md`, TODO-1 to
@@ -2596,6 +2712,8 @@ text allowed two (§17.2); the owner may override any of them.
 | Review of revision 1 (2026-11-17) | §16 |
 | Reviews of revision 3 and the KAT open points TODO-1 to TODO-19 (2026-11-17) | §17.2 |
 | Review of the first revision-4 text `641bf74` | §17.2 rows 40 to 52 |
+| Review of the second revision-4 text `f5f631a` | §17.2 rows 54 to 66 |
+| Review of the third revision-4 text `1667bd9` | §17.2 rows 68 to 75 |
 
 ---
 
@@ -2659,7 +2777,7 @@ no rule of its own.
 | 8 | MCUboot anti-rollback: the software version check now, the hardware OTP counter later with the factory flow; the limit of the software check is stated | §1.1, §8.3, §14, Appendix C |
 | 9 | Appendix A and Appendix B are the text that landed in `WIRE_SPEC.md`: the headings and the introductory sentences say so, the fenced text is unchanged. Appendix B replaced lines 1686 to 1729 of the baseline `WIRE_SPEC.md` (the section up to the sentence ending "(audit D10-3)."), not 1686 to 1731: line 1731 is the `---` separator before §8, which stays | Appendix A, Appendix B |
 | 10 | The lock job text of the Android, iOS and Desktop copies says "four repos" where the server and web copies say "five" (today's workflows); every copy says six after the landing. The web client's lock also covers `desktop.pin.json` and `spec/IMPLEMENTS.json` (`scripts/check-spec.mjs`), and the iOS engine tests read the `EXPECTED=` line | §13.3, Appendix C |
-| 11 | Landing in the server repository: `WIRE_SPEC.md` after Appendix A, the consequential edits and Appendix B had sha256 `d59b321bbe1f6d298483aa23bd251899aadf17482e52256590a861de1da25092` at revision 3; after revision 4 and its review fixes it has sha256 `6a01ab50a8b49b19d9e46fc32d6ea087f927476332c20b9b3c7c9bbcd2ae4e0c` (§17.2 row 53); the two `PQC_HARDENING_V1.md` pointer sentences are added; `.github/workflows/wire-spec-lock.yml` checks `WIRE_SPEC.md` (the line `EXPECTED=`) and this file (the line `EXPECTED_EARBUD_EP=`) and lists both in its trigger paths; `.gitattributes` keeps this file at LF | §13.3, Appendix A, Appendix B |
+| 11 | Landing in the server repository: `WIRE_SPEC.md` after Appendix A, the consequential edits and Appendix B had sha256 `d59b321bbe1f6d298483aa23bd251899aadf17482e52256590a861de1da25092` at revision 3; after revision 4 and the fixes of its first review it had sha256 `6a01ab50a8b49b19d9e46fc32d6ea087f927476332c20b9b3c7c9bbcd2ae4e0c` (§17.2 row 53), and after the fixes of its second review it has sha256 `079f5e1e8bb53af6370a76ea5a8f0b357b569c074ac0e78f481fc89cfe095fb9` (§17.2 row 67), which the fixes of its third review leave unchanged (§17.2 row 76); the two `PQC_HARDENING_V1.md` pointer sentences are added; `.github/workflows/wire-spec-lock.yml` checks `WIRE_SPEC.md` (the line `EXPECTED=`) and this file (the line `EXPECTED_EARBUD_EP=`) and lists both in its trigger paths; `.gitattributes` keeps this file at LF | §13.3, Appendix A, Appendix B |
 
 ### 17.2 Revision 4
 
@@ -2677,6 +2795,12 @@ text of Appendix A and Appendix B follows the WIRE_SPEC changes of the rows that
 review of the first revision-4 text (`641bf74`): its six findings and those of its questions that were plain
 inconsistencies of the text; they change no byte format, KDF, transcript, domain string, message type, status code
 or capability bit, and where they amend an earlier row of this table they say so.
+Rows 54 to 66 answer the review of the second revision-4 text (`f5f631a`): its three findings and the clarifications
+that the server and the KAT generator implement; they change no byte format, KDF, transcript, domain string, message
+type, status code or capability bit either, and a row that amends an earlier row says so. Rows 68 to 75 answer the
+review of the third revision-4 text (`1667bd9`): its four findings and those of its questions that were plain
+inconsistencies of the text; they change no byte format, KDF, transcript, domain string, message type, status code
+or capability bit, and a row that amends an earlier row says so. Rows 53, 67 and 76 are the lock rows.
 
 | # | Change | Where |
 |---|---|---|
@@ -2685,11 +2809,11 @@ or capability bit, and where they amend an earlier row of this table they say so
 | 3 | Owner decision: the host decision table, `0x01` or lower refuse, `0x02` without `EP_INFO` no endpoint (DIAG, attestation, key import, FE-5 pairing and PSK_LIST only, no EPL, no EP call), `0x02` with `EP_INFO` an endpoint per `EP_INFO`; the same table in WIRE_SPEC §7 "Phone obligations"; KAT `epInfo` decision vectors and acceptance item 18 | §8.1, §8.3, §9.3, §9.9, §13.1, §13.4, WIRE_SPEC §7 (Appendix B) |
 | 4 | Clarification, conservative reading, the owner may override: the rows the decision did not name. An absent, unreadable or not one-byte PROTOCOL_VERSION is refused as `0x01`; a value above `0x02` is refused ("Update the Q-Audion app"); a firmware version below the host's minimum, `capsBits` bit 12 clear or a downgrade makes the earbud "no endpoint"; the decision is made at every connection and again after Service Changed | §8.1, §8.3, WIRE_SPEC §7 (Appendix B) |
 | 5 | Owner confirmation of the values chosen in revision 3, unchanged: `ANSWER_PRESS_WINDOW = 10 s`; HTTP 409 for a registration over the endpoint or host limits (now with the code `endpoint_limit`); the `EVENT` CAPTURE reason order `0x02`, `0x01`, `0x03`, `0x04`; a host does not open an EP call when `capsBits` bit 12 is 0; the firmware CI check against EP symbols in authoritative and production images | §0, §3.6, §4.5, §7.10, §8.3, §10.1, §14, §17.1 row 7 |
-| 6 | Owner decision: a refusing `EP_AUTH` (`0x02`, `0x03`) carries 96 zero bytes for `epEdPub ‖ sigE`, so it carries neither EK nor a signature and the earbud signs nothing for a host it has not authenticated (scoped to `EP_AUTH` by row 40: EK stays in `EP_INFO`); the revision-3 sentence that could be read as "EK whenever the earbud holds it" is replaced; an unknown platform byte is refused with `0x03` and the channel closed; every `hostProto` other than `0x0002`, `0x0001` included, is refused with `0x03`; result `0x03` reads "protocol version or platform not supported" (KAT TODO-3, TODO-4); WIRE_SPEC §7 says that a refused host gets no key and no signature | §4.3, §13.1, WIRE_SPEC §7 (Appendix B) |
+| 6 | Owner decision: a refusing `EP_AUTH` (`0x02`, `0x03`) carries 96 zero bytes for `epEdPub ‖ sigE`, so it carries neither EK nor a signature and the earbud signs nothing for a host it has not authenticated (scoped to `EP_AUTH` by row 40: EK stays in `EP_INFO`); the revision-3 sentence that could be read as "EK whenever the earbud holds it" is replaced; an unknown platform byte is refused with `0x03` and the channel closed; every `hostProto` other than `0x0002`, `0x0001` included, is refused with `0x03`; result `0x03` reads "protocol version or platform not supported" (KAT TODO-3, TODO-4); WIRE_SPEC §7 says that a refusing `EP_AUTH` carries no key and no signature | §4.3, §13.1, WIRE_SPEC §7 (Appendix B) |
 | 7 | Clarification, conservative reading, the owner may override: the earbud checks `hostProto` and `platform` when `HOST_HELLO` arrives and sends the refusing `EP_AUTH` `0x03` in place of `EP_HELLO`, so a refused host gets no `EP_INFO`, nonce or ephemeral key; a host ignores the 96 bytes of a refusing `EP_AUTH` | §4.3 |
 | 8 | Owner decision: the envelope that carried an endpoint bundle MUST carry `sender_device_id`, equal to `hostDeviceId`; the sentence of §3.7 step 2 that made the check conditional ("If the envelope ... has a `sender_device_id`") is replaced; absent or different fails step 2 (`identity_key_mismatch`, `ep=cert_invalid`, media held). WIRE_SPEC §3.7.3 already said it unconditionally and is unchanged on this point | §3.7 step 2, §13.1 |
 | 9 | Owner decision (server, a): only the host device publishes, and not while revoked, 403 `endpoint_host_mismatch` or `device_revoked`. Clarification, conservative reading, the owner may override: the order of the checks and the codes of the checks that revision 3 left unnamed (400 `endpoint_body_invalid`, `endpoint_key_invalid`, `endpoint_sig_invalid`; 409 `endpoint_host_key_mismatch`, `earbud_other_account`, `endpoint_key_taken`, `endpoint_limit`, `endpoint_tombstone_limit`; 410 `endpoint_revoked`; 412 `earbud_not_attested`; 404 `endpoint_not_found`), the error body `{"error":"<code>"}`, 200 on a publish and 204 on a deletion, the same caller rule for the phase-2 `mldsa` publication, and a host that retries a failed publication only after a network or 5xx failure, never after a 4xx answer | §3.4 step 9, §3.6 |
-| 10 | Owner decision (server, b): per-host removal `DELETE .../endpoints/{endpointId}/hosts/{hostDeviceId}` by any non-revoked device of the account, without a tombstone; the records of a revoked or deleted host device are not counted toward `EP_MAX_HOSTS` and are not listed; what peers see afterwards (unlisted, step 4 (c)) and the earbud owner's `UNENROLL`; the lost-host case of §3.8 rewritten. Clarification, conservative reading, the owner may override: the definition of a live record, an endpoint counted toward `EP_MAX_ENDPOINTS_PER_USER` only while it has one, a restored device not bringing its hidden records back, and the publication-lag window stated as a limit | §3.6, §3.8 |
+| 10 | Owner decision (server, b): per-host removal `DELETE .../endpoints/{endpointId}/hosts/{hostDeviceId}` by any non-revoked device of the account, without a tombstone; the records of a revoked or deleted host device are not counted toward `EP_MAX_HOSTS` and are not listed as live entries (their tombstones stay listed, row 47); what peers see afterwards (unlisted, step 4 (c)) and the earbud owner's `UNENROLL`; the lost-host case of §3.8 rewritten. Clarification, conservative reading, the owner may override: the definition of a live record, an endpoint counted toward `EP_MAX_ENDPOINTS_PER_USER` only while it has one, a restored device not bringing its hidden records back, and the publication-lag window stated as a limit | §3.6, §3.8 |
 | 11 | Owner decision (server, c): `EP_MAX_TOMBSTONES_PER_USER = 32`; at 32 tombstones a new registration is refused with 409 `endpoint_tombstone_limit`; revocation is never refused. Clarification, conservative reading, the owner may override: the cap applies to a registration that adds a live record, not to the replacement of an existing one | §0, §3.6 |
 | 12 | Owner decision (server, d): account deletion erases the account's endpoint records, certificates, proofs of possession and tombstones and keeps only the SHA-256 of each revoked EK, with no link to the account, so a revoked EK can never be registered again by any account (check 7). Clarification, conservative reading, the owner may override: the deletion first revokes the account's live endpoints, so every EK the account published enters that set | §3.6 |
 | 13 | Owner decision (server, e): the per-device identity bundles are part of the DR and failover export, and the primary is never rolled back below the first binary that stores endpoint records, with the evidence at `c1790e7` (`bbolt.go:4629-4670`, the `?device_id=` fall-through of `users_identity_key.go:476-485`). Clarification, conservative reading, the owner may override: the export also carries the endpoint stores, the revoked-key set and the device revocation records (`revoked_keys`) that the per-host rule reads | §3.6, Appendix C |
@@ -2715,7 +2839,7 @@ or capability bit, and where they amend an earlier row of this table they say so
 | 33 | Clarification, conservative reading, the owner may override (KAT TODO-19): `chain_base` also when the retention rule of PQC B13 erased `ck_B`; the refusal is the round's `PEER_OFFER_OK` with that status and the earbud keeps nothing of the round | §4.4, §13.1 |
 | 34 | Question 4 of the review: the `kmuKnownAnswer` set is named (the `AUTH_E` of every session with EK, the `enrol_only` one included, every EPC pop, every `OFFER_v6` and `ACCEPT_v6` the earbud signs, every hybrid `sigEd` message, the phase-2 `xcEd`) and §3.1 points to it (revision 3 named a section `eplAuth` that does not exist); the M-15 export uses the exact `callId` while `kOut` uses `callIdL`, and every `flows` case, the M-15 case (c) included, uses a mixed-case `callId`; the Python verifier keeps `tools/kat/earbud-ep-v1/verify_ep_v1.py`, is required and is run by server CI | §3.1, §6.6, §13.1, §13.4 item 11 |
 | 35 | Question 5 of the review: the phase-0 DK image alone keeps its KMU test keys (slots 124 to 127) and PSA test keys; `nrfutil device recover` is required before any other image is flashed on that board | §3.1, §13.1, §13.4 item 11 |
-| 36 | Question 6 of the review, measured on NCS v3.3.5 at `74a43d2` and `feat/ep-phase0`: LC3 and the LE Audio host cost 141,628 B of flash and 26,348 B of RAM (revision 3: 48 KB and 14.5 KB); the bench INF-log restriction frees 10,144 B (revision 3: up to 23,216 B); the phase-0 image has about 1.4 KB of headroom (1,452 B at `934e22a`, 1,436 to 1,452 B in later builds) under the 942,080 B ceiling; the flash table gains the rows with the measured credit and the conclusions follow (phase 1 fits the bench with 9.5 to 13.5 KB, phase 2 by 2 to 6 KB); OD-5 stands as decided at the measured cost | §10.1, §12.2, §12.3, §14 |
+| 36 | Question 6 of the review, measured on NCS v3.3.5 at `74a43d2` and `feat/ep-phase0`: LC3 and the LE Audio host cost 141,628 B of flash and 26,348 B of RAM (revision 3: 48 KB and 14.5 KB); the bench INF-log restriction frees 10,144 B (revision 3: up to 23,216 B); the phase-0 image has about 1.4 KB of headroom (1,436 B measured at `86293ad`) under the 942,080 B ceiling; the flash table gains the rows with the measured credit and the conclusions follow (phase 1 fits the bench with 9.5 to 13.5 KB, phase 2 by 2 to 6 KB); OD-5 stands as decided at the measured cost | §10.1, §12.2, §12.3, §14 |
 | 37 | Question 7 of the review: the change log at the end of WIRE_SPEC gains the entry `Latest: 2026-11-17` for revisions 3 and 4 of this document, and the previous `Latest:` line becomes `Previous:` | WIRE_SPEC footer, Appendix A |
 | 38 | Consistency of WIRE_SPEC with §13.3: its list of mirror copies names the six locked repositories (it named four) | WIRE_SPEC head, Appendix A |
 | 39 | Appendix A and Appendix B carry the revision-4 text of WIRE_SPEC §3.7.3 and §7 (rows 2, 3, 4, 6, 15, 16, 18, 19, 23, 40, 49); Appendix A lists the revision-4 consequential edits (the §6 sentence, the head, the footer); Appendix C gains the evidence read for revision 4 | Appendix A, Appendix B, Appendix C |
@@ -2726,13 +2850,36 @@ or capability bit, and where they amend an earlier row of this table they say so
 | 44 | Review of `641bf74`, finding 5 and the double-press question. Clarification, conservative reading, the owner may override: in an EP context a capture press acts, and capture can start, `DOUBLE_PRESS_GAP` (400 ms) after the short press's release when no second press started in that gap; the `capturePress` case that said "captures at once" says so, and §7.10 rule 2 names the instant. When a second press starts within the gap and is not short (medium, long or a hold), the first press does not act at all and the second is classified and acts by itself; a `capturePress` case pins a short press followed by a long press. Amends row 26 | §7.10 rule 2, §9.14, §13.1 (`capturePress`) |
 | 45 | Review of `641bf74`, finding 6: what the host of a no-endpoint earbud may use is the same list everywhere, the list of §8.1 and WIRE_SPEC §7 (DIAG, attestation, KEY_IMPORT, FE-5 pairing, PSK_LIST); §0, §14 and row 3 said "attestation, key import and pairing" and §8.3 "diagnostics, attestation and the KMS relay"; row 3 is corrected in place | §0, §8.3, §14 |
 | 46 | Review of `641bf74`, question on a second `PEER_ACCEPT`. Clarification, conservative reading, the owner may override: once a cached response was released (the context moved past its step) the earbud never recomputes it; a later request of that step gets `bad_state`, byte-identical or not, and a `PEER_ACCEPT` for a bound round gets `already_bound`, for example a byte-identical `PEER_ACCEPT` of round 1 after `KCMAC_VERIFIED` erased the cached `ACCEPT_BOUND` and `sasNonce`. The text promised a cached response that no longer existed. Amends row 30 | §4.4, code `0x10`, §13.1 (`negative`) |
-| 47 | Review of `641bf74`, questions on the per-host removal. Clarification, conservative reading, the owner may override: a per-host `DELETE` for an endpoint that has a tombstone in the account answers 410 `endpoint_revoked`, checked before 404; the records of a revoked or deleted host device are hidden only as live entries, and the tombstones of such a device stay listed like every tombstone (they were "never listed" in one sentence and "listed for ever" in another) | §3.6 |
+| 47 | Review of `641bf74`, questions on the per-host removal. Clarification, conservative reading, the owner may override: a per-host `DELETE` for an endpoint that has a tombstone in the account answers 410 `endpoint_revoked`, checked before 404; the records of a revoked or deleted host device are hidden only as live entries, and the tombstones of such a device stay listed like every tombstone (they were "never listed" in one sentence and "listed for ever" in another). Amends row 10 | §3.6 |
 | 48 | Review of `641bf74`, question on publication retries (a gap of the flow). Clarification, the owner may override: check 6 refuses an earbud that was never attested and §3.4 never attested it, so before its first publication for an earbud the host runs the existing earbud attestation (`POST /api/v1/device/earbud-attest`, `cmd/bcrypto-lite/main.go:12843`); a 4xx answer is never retried automatically, and the same record is published again only after its cause was removed (an attestation for 412 `earbud_not_attested`, the user's removal of an endpoint or a host record for 409 `endpoint_limit`); every other 4xx answer stays final for that record. Amends row 9 | §3.4 step 9 |
 | 49 | Review of `641bf74`, question on the first read: on iOS the first encrypted read is `PROTOCOL_VERSION`, which §9.3 reads first (§9.2 said `EP_INFO`). Clarification, conservative reading, the owner may override: "unreadable" in the first row of the host decision means a read that fails on a link encrypted under a completed bond; a read that fails because the bond is not complete is a bonding failure, after which the host uses no characteristic and decides again once bonded, and it never shows "Earbud firmware too old" for it; WIRE_SPEC §7 says the same; an unreadable `EP_INFO` counts as an invalid record (§8.2). Amends row 4 | §8.1, §8.2, §9.2, WIRE_SPEC §7 and footer (Appendix B) |
 | 50 | Review of `641bf74`, question on the phase-0 test keys: §3.1 names every key that the phase-0 image keeps, from `docs/PHASE0_DK_RUNBOOK.md` at `86293ad`: the phase-0 EK in KMU slots 120 and 121, the known-answer keys in slots 124 to 127 and the persistent PSA ids `0x100` to `0x103`, `0x200` and `0x7000` (it named slots 124 to 127 only). Amends row 35 | §3.1, Appendix C |
 | 51 | Review of `641bf74`, question on the LC3 and LE Audio cost: the measurement log is named. The figure of 141,628 B of flash and 26,348 B of RAM is the difference between two builds of the phase-0 image at `201188a`, with and without LE Audio and LC3 and both without ML-DSA (`~/vol/ep0-logs/fin-p0.build.log`, `fin-p0c.build.log`, Appendix C); revision 4 named `74a43d2` and `934e22a` as the commits and cited the `86293ad` artifacts, whose two phase-0 images differ by 132,948 B and 10,956 B because the second also adds ML-DSA-87. The figure, the conclusions and OD-5 are unchanged; the commit is corrected. Amends row 36 | §12.2, the baseline table, Appendix C |
 | 52 | Review of `641bf74`, cosmetic points: the baseline table gives the firmware `main` after PR #5 (`235b994`) and the head of `feat/ep-phase0` on 2026-11-18 (`86293ad`); the `vconfKey_E` row of §6.6 escapes the vertical bar of its label, which GitHub rendered as an extra cell | head, §6.6 |
 | 53 | Lock: `WIRE_SPEC.md` after revision 4 and the review fixes of rows 40 to 52 has sha256 `6a01ab50a8b49b19d9e46fc32d6ea087f927476332c20b9b3c7c9bbcd2ae4e0c`, recorded in §17.1 row 11; `EXPECTED` and `EXPECTED_EARBUD_EP` of `.github/workflows/wire-spec-lock.yml` are updated (this file cannot quote its own hash); `.gitattributes` is unchanged | §13.3, §17.1 row 11 |
+| 54 | Review of `f5f631a`, finding 1 (precedence). Clarification, conservative reading, the owner may override: one order of checks for the requests of a round (§4.4). After the checks of the channel and the context: (1) a request byte-identical to the one that produced a response still cached gets that response; (2) `already_bound` for a `PEER_ACCEPT` of a bound round; (3) `round_rule` for the order of rounds: the first `OFFER_PREP` or `PEER_OFFER` not of round 1, an `OFFER_PREP` or `PEER_OFFER` of a round not greater than the current round (the round of the last `OFFER_PREP` or `PEER_OFFER` answered ok), an `OFFER_FINAL`, `PEER_ACCEPT` or `ACCEPT_FINAL` of a round below it, a round above 2^31 − 1; (4) `bad_state` for a step that the current round has passed or not reached, and for a rekey `OFFER_PREP` without a chain base in a `rekeyChainV1` call; (5) the request's own checks by increasing code, `crypto_failure` and `resource` last. `KCMAC_VERIFIED` and `ROUND_DROP` get rule 1 and then name any armed, undecided round. The cached response comes first, not last as the review suggested, so that a lost `ACCEPT_SIGNED` is still reproduced after its round has keys. Only an ok response and a `PEER_ACCEPT` refused by its own checks are cached (row 72): every other refusal leaves nothing and the same request is judged again, as the `timedFlows` trace that accepts an `OFFER_PREP` after its `spacing` refusal already reads it. The review's two examples, a byte-identical `PEER_OFFER` of round 2 after its `ACCEPT_FINAL` and a byte-identical `OFFER_PREP` of round E after its `OFFER_FINAL`, get `round_rule`, and so does every other repeat of the `OFFER_PREP` or `PEER_OFFER` that opened the current round when rule 1 does not answer it: one with another body while its `OFFER_EPH` or `PEER_OFFER_OK` is cached, which got `bad_state` as "a different body for the same `(callHandle, request type, round)`", and one with any body, byte-identical or not, after that response was released, which got `bad_state` by row 46 (row 70); so does every request of a round below the current one other than a `PEER_ACCEPT` of a bound round, which got `bad_state` by row 46; every other case keeps its code, those of rows 30 and 42 included. §4.6, §5.4, §5.10 and §5.11 refer to the order, and §13.1 `negative` gains one case per boundary. Amends row 46 | §4.4, §4.6, §5.4, §5.10, §5.11, §13.1 (`negative`) |
+| 55 | Review of `f5f631a`, finding 2: the server decision (b) in §14 and row 10 said that the records of a revoked or deleted host device are "not listed", while §3.6 hides them only as live entries and keeps their tombstones listed (row 47). §14 (b) and row 10 now say "not listed as live entries", with their tombstones still listed; row 10 is corrected in place, and row 47 says that it amends row 10 | §14, §17.2 rows 10 and 47 |
+| 56 | Review of `f5f631a`, finding 3: row 6 said "WIRE_SPEC §7 says that a refused host gets no key and no signature", although row 40 had scoped that rule to `EP_AUTH`; it now says that a refusing `EP_AUTH` carries no key and no signature, as §4.3 and WIRE_SPEC §7 do. Row 6 is corrected in place | §17.2 row 6 |
+| 57 | Clarification, conservative reading, the owner may override (server, the re-enrolment sentence of §3.6, which said only that the new record revokes "the previous one"): a registration that re-enrols an earbud under a different EK (the `earbud_id_b64` of a live record of the account, of any host device, row 75) revokes the old EK as a whole: every record of the old EK in the account, of every host device, becomes a tombstone as by `DELETE` of that endpoint, so check 7 refuses the old EK in every account; the revocation, checks 7 to 10 and the write are one transaction, the limits are counted after the revocation and a refusal changes nothing; the tombstones that the re-enrolment creates never refuse it, as check 10 counts those that the account holds before it (row 69); the other host devices of the earbud enrol again and publish their own records of the new EK; what peers see is stated (the old EK `ep=revoked` at every host that listed it, the new EK `ep=listed` through its publisher and `ep=unlisted` inside the young window through a host that has not yet published) | §3.6 (check 10, Re-enrolment), §3.8 |
+| 58 | Clarification, conservative reading, the owner may override (§9.14, the double press): a double press acts at the release of its second press; a short press waits for a possible second press only in an EP context (the two EP-context rows of the table), and only there does the rule that the first press does not act apply to a second press that is not short; in a confirm window, while ringing, during a cellular call and when idle a short press acts at its release; in every state a press that starts within `DOUBLE_PRESS_GAP` after the release of a press sequence that acted is ignored. `timedFlows` gains the cases. Amends rows 26 and 44 | §9.14, §13.1 (`timedFlows`) |
+| 59 | Clarification, the owner may override (Appendix C, the `.config` comparison of the two LC3 builds): the two files differ in 78 assignment lines; the raw files differ in 206 lines, the other 128 being `# ... is not set` comments, other comment lines and blank lines, which have no effect (re-counted on helsinki) | Appendix C |
+| 60 | Clarification, conservative reading, the owner may override (the phase-0 headroom): the only figure that an artifact reproduces is 1,436 B (`~/vol/ep0-artifacts/BUILD_INFO.txt`, the build of `86293ad`: signed image 940,644 B under the 942,080 B ceiling), the smallest figure that revision 4 gave; §12.2, row 36 and Appendix C now say about 1.4 KB, 1,436 B measured at `86293ad`, and cite no other figure for that image. Row 36 is corrected in place | §12.2, §17.2 row 36, Appendix C |
+| 61 | Clarification, the owner may override (WIRE_SPEC, the number of copies, checked against the `main` checkouts of the six repositories on helsinki on 2026-11-18): the §5 row of the handshake v6 KAT said "byte-identical in the four repos"; that was true on 2026-10-02 and is kept with that date, and the row adds that the web app has carried the same bytes since 2026-10-17 (also under `vendor/server-kat/` and pinned in `server-kat.pin.json` since 2026-11-07), so five repositories carry the file today, the firmware to follow (§13.2). The review note of 2026-07-24 at the end of WIRE_SPEC §8 said that every code reference to WIRE_SPEC §3.5 "means" the acceptance gate and that "All four copies are now byte-identical": it now says "meant" and that the four copies of that date were made byte-identical, and points to the head of WIRE_SPEC for today's list. WIRE_SPEC §3.7.3 and §7 are unchanged, so the fenced text of Appendix A and Appendix B is unchanged; the change log gains the line `Latest: 2026-11-18`, the 2026-11-17 line becomes `Previous:`, and Appendix A's list of consequential edits records both changes | WIRE_SPEC §5, §8 and footer, Appendix A |
+| 62 | Clarification, conservative reading, the owner may override (server, decision (d)): the erasure at account deletion also covers the KMS audit log, in which the server writes a row for each endpoint event (`earbud_endpoint_registered`, `earbud_endpoint_revoked`, `earbud_endpoint_host_removed`) keyed by the endpoint id: every such row of the account is deleted, because the endpoint id is the first 16 bytes of `SHA-256(EK)` and would link the kept hash of a revoked EK to the account | §3.6, Appendix C |
+| 63 | Clarification, conservative reading, the owner may override (server, decision (d)): account deletion releases the attestation binding of every earbud attested to the account: a live attestation is deleted, so another account can attest the earbud and then publish it (check 6 no longer answers 409 `earbud_other_account`); a revoked attestation keeps its revocation without the account id and stays refused by check 6 for every account | §3.6, Appendix C |
+| 64 | Clarification, conservative reading, the owner may override (server, check 6): an earbud whose attestation was revoked is refused like one that was never attested, 412 `earbud_not_attested`, whichever account the attestation named | §3.6 check 6, Appendix C |
+| 65 | Clarification, conservative reading, the owner may override (server, the caller of a write): `POST /api/v1/users/me/endpoints`, the phase-2 `mldsa` publication and both `DELETE` routes require a bearer token that names a device of the account, 403 `device_required` for a token without a device id, the first of the caller checks; on all of them the not-revoked check of the caller and the write are one store transaction | §3.6 (check 2, Revocation, per-host removal, the caller rule of the `DELETE` routes, the `mldsa` publication) |
+| 66 | Clarification, conservative reading, the owner may override (server, check 1): the publish body contains no backslash byte. No member value needs an escape (decimal integers, the fixed token `earbud`, base64 in the standard alphabet of PQC §2.3, whose `/` JSON does not require to escape, and the server's UUIDv4 device ids), so a body with any backslash, `\/` and `\u` escapes included, gets 400 `endpoint_body_invalid`, a host writes the body without escapes, and a device id that could only be written with an escape (`"`, `\` or a control character, which §3.3 does not exclude) cannot be published; member names are compared as raw bytes. The body's base64 is the standard alphabet, not base64url, and `host_device_id` is any UTF-8 that §3.3 allows: the rule covers both | §3.6 check 1, the `mldsa` publication, Appendix C |
+| 67 | Lock: `WIRE_SPEC.md` after rows 54 to 66 (row 61 changes it; §3.7.3 and §7 are unchanged) has sha256 `079f5e1e8bb53af6370a76ea5a8f0b357b569c074ac0e78f481fc89cfe095fb9`, recorded in §17.1 row 11; `EXPECTED` and `EXPECTED_EARBUD_EP` of `.github/workflows/wire-spec-lock.yml` are updated (this file cannot quote its own hash); the head, §15 and the introduction of this table name rows 54 to 66, and Appendix C gains the evidence read for them. Amends row 53, whose hash is that of the text before these rows | head, §13.3, §15, §17.1 row 11, Appendix C |
+| 68 | Review of `1667bd9`, finding 1 (precedence, §5.4): §5.4 said that a repeat of a step that its round had passed, once the response of that step was released, got `round_rule` for the round's `OFFER_PREP` or `PEER_OFFER` and `bad_state` otherwise, in every round, while rule 3 of §4.4, the `negative` case "an `ACCEPT_FINAL` of round 2 after the `PEER_OFFER` of round 3" of §13.1 and row 54 give `round_rule` to every request of a round below the current round: a byte-identical `ACCEPT_FINAL` of round 2 after the `PEER_OFFER` of round 3 got `0x05` by one text and `0x01` by the other, and so did a byte-identical `OFFER_FINAL` of round E after the `OFFER_PREP` of round E + 1. §5.4 now limits that sentence to the current round and says that every `OFFER_PREP`, `OFFER_FINAL`, `PEER_ACCEPT`, `PEER_OFFER` and `ACCEPT_FINAL` of a round below it gets `round_rule`, a `PEER_ACCEPT` of a bound round getting `already_bound` in both cases, and that `KCMAC_VERIFIED` and `ROUND_DROP` keep their own rule. §4.4 is unchanged on this point, and §13.1 `negative` gains the caller's case | §5.4, §13.1 (`negative`) |
+| 69 | Review of `1667bd9`, finding 2. Clarification, conservative reading, the owner may override (server, check 10 and the re-enrolment): row 57 exempted a re-enrolment from the tombstone cap as a replacement, so one host device could publish again and again under fresh EKs (a software EK passes check 5, the pop being by EK and the cert by HK), each publication a re-enrolment that added tombstones without bound, which `DELETE` followed by a publication cannot do, check 10 refusing that publication. Check 10 now counts the tombstones that the account holds before the re-enrolment: the tombstones that the re-enrolment creates itself never refuse it, but an account that already holds 32 tombstones cannot re-enrol an earbud, as it cannot register any new endpoint (owner decision (c)). The revocation and fetch paragraphs of §3.6, which the exemption made false, now say that once the account holds 32 tombstones no record is added to it, so its tombstones grow beyond 32 only by the records that exist at that point; §3.8 and §14 (c) name the re-enrolment. The server branch `feat/endpoint-records` (`bde2598`) already counts the cap before the re-enrolment. Amends row 57, which is corrected in place | §3.6 (check 10, Re-enrolment, Revocation, Fetch), §3.8, §14, §17.2 row 57, Appendix C |
+| 70 | Review of `1667bd9`, finding 3: row 54's list of the codes that changed was incomplete. Besides the cases it named, `round_rule` replaced `bad_state` for an `OFFER_PREP` of the current round with another body while its `OFFER_EPH` is cached (the text of `f5f631a` gave `bad_state` to "a different body for the same `(callHandle, request type, round)`") and for the `OFFER_PREP` or `PEER_OFFER` that opened the current round, sent again with any body after its response was released (row 46). Row 54 is corrected in place and §13.1 `negative` gains the `OFFER_PREP` case; no rule changes | §13.1 (`negative`), §17.2 row 54 |
+| 71 | Review of `1667bd9`, finding 4: the `0x01` row of the code table said that `bad_state` comes from rule 4 of the order of checks; it also comes from the checks of the channel and the context (an `h` with no context, a request of the other role) and from the own rule of `KCMAC_VERIFIED` and `ROUND_DROP` (a round that is not armed and undecided). The row now names all three; no code changes | §4.4 code `0x01` |
+| 72 | Review of `1667bd9`, question on the refused `PEER_ACCEPT`. Clarification, conservative reading, the owner may override: the earbud caches a refused `PEER_ACCEPT` only when the request's own checks (rule 5) refused it. One refused by the checks of the channel and the context, such as a `PEER_ACCEPT` of another host's session (`not_owner`, §9.13), or by rules 3 and 4, such as one sent before its round's `OFFER_SIGNED` was answered, leaves nothing, so the owner's real `PEER_ACCEPT` is still judged on its own (read literally, §4.4 let such a refusal take the round's `PEER_ACCEPT` and gave the real one `bad_state`). §4.4, code `0x10`, §5.11 and §13.1 `negative` say so. Amends rows 30 and 54, and row 54 is corrected in place | §4.4, code `0x10`, §5.11, §13.1 (`negative`), §17.2 row 54 |
+| 73 | Review of `1667bd9`, question on the memory that rule 2 needs. Clarification, conservative reading, the owner may override: rule 2 read the bound state of every past round of the call, which the earbud does not keep (PQC B13 and B14, `EP_MAX_STAGED`); the earbud keeps the bound mark of the current round and of the round that was current before it, and of no older round, so a `PEER_ACCEPT` of an older round gets `round_rule` by rule 3. The `negative` case of row 54 (a `PEER_ACCEPT` of a bound round 2 after the `OFFER_PREP` of round 3, `already_bound`) keeps its code, and a new case pins an older round | §4.4 rule 2, code `0x10`, §5.4, §13.1 (`negative`) |
+| 74 | Review of `1667bd9`, question on the first requests of a context. Clarification, conservative reading, the owner may override: the current round was not defined before the earbud had answered an `OFFER_PREP` or `PEER_OFFER` of the context ok. Until then the context has no current round: rule 3 refuses an `OFFER_PREP` or `PEER_OFFER` that is not of round 1 (rule 3 and code `0x05` now name "a context that has no current round" where they said "the first", which did not say whether a refused first request counts), and every `OFFER_FINAL`, `PEER_ACCEPT` and `ACCEPT_FINAL` gets `bad_state` by rule 4, its round not being open. Amends row 54 | §4.4 (rule 3, code `0x05`), §13.1 (`negative`) |
+| 75 | Review of `1667bd9`, question on the publication that triggers a re-enrolment. Clarification, conservative reading, the owner may override: §3.6 made a re-enrolment of a publication with the `host_device_id` and `earbud_id_b64` of a live record of the account, while §3.8 said that the server revokes the old EK when "its host" publishes the new record, whichever host device publishes first after the reset. A re-enrolment is now a publication whose `earbud_id_b64` is that of a live record of the account under another EK, of any host device: the publishing host device need not hold a record of the earbud, so the live records of an account name at most one EK per earbud, and a host device that enrols the reset earbud first does not leave the destroyed EK live at the other host devices. This adds no power: any device of the account may already revoke the endpoint with `DELETE`. The server branch `feat/endpoint-records` (`bde2598`) already reads it so. Amends row 57, which is corrected in place | §3.6 (the limits paragraph, Re-enrolment), §3.8, §17.2 row 57, Appendix C |
+| 76 | Lock: rows 68 to 75 do not touch `WIRE_SPEC.md`, so it keeps the sha256 `079f5e1e8bb53af6370a76ea5a8f0b357b569c074ac0e78f481fc89cfe095fb9` of row 67, recorded in §17.1 row 11, and the fenced text of Appendix A and Appendix B is unchanged; `EXPECTED` of `.github/workflows/wire-spec-lock.yml` keeps its value and `EXPECTED_EARBUD_EP` is updated (this file cannot quote its own hash); the head, §15 and the introduction of this table name rows 68 to 75, and Appendix C gains the evidence read for them | head, §15, §17.1 row 11, Appendix C |
 
 ---
 
@@ -2830,9 +2977,21 @@ Consequential edits in the same lock change, exact sentences:
   updated spec", and the list of mirror copies becomes "Mirror copies live at the root of six repositories,
   byte-identical and checked by `.github/workflows/wire-spec-lock.yml` in each:" followed by `bcrypto-server` (this
   file), `qaudion-android-new`, `qaudion-desktop`, `qaudion-ios`, `qaudion-webapp` and `qaudion-firmware`, one per line.
-- Change log at the end (revision 4, §17.2 row 37): a new first line `Latest: 2026-11-17 (hardware earbud as a v6 call
-  endpoint, docs/EARBUD_V6_ENDPOINT.md revisions 3 and 4, ...)` that summarises §3.7.3, §3.1, §1.1, §6 and §7 as
-  landed, and the line that began `Latest: 2026-11-13` begins `Previous: 2026-11-13`.
+- §5, the row "Cross-platform KAT vectors — handshake v6", and the review note of 2026-07-24 at the end of §8 (revision
+  4, §17.2 row 61): "2026-10-02: `handshake-sig-v6-kat.json`, byte-identical in the four repos, sha256 pinned in each
+  (server: `tools/kat/katpin_test.go`)." becomes "2026-10-02: `handshake-sig-v6-kat.json`, byte-identical in the four
+  repos of that date (server, Android, iOS, Desktop), sha256 pinned in each (server: `tools/kat/katpin_test.go`); since
+  2026-10-17 the web app carries the same bytes as well (vendored at `vendor/qaudion-desktop/test/kat/` and, since
+  2026-11-07, at `vendor/server-kat/tools/kat/handshake-sig-v6/`, pinned in `server-kat.pin.json`), so on 2026-11-18
+  five repos carry it byte-identical; the firmware is to carry it with its pin (`docs/EARBUD_V6_ENDPOINT.md` §13.2).";
+  in the note, "in all four repos means the acceptance gate" becomes "in all four repos meant the acceptance gate", and
+  "All four copies are now byte-identical and CI-enforced." becomes "The four copies of that date were made
+  byte-identical and CI-enforced; the list of today's copies is at the head of this file."
+- Change log at the end (revision 4, §17.2 rows 37 and 61): a line
+  `Latest: 2026-11-17 (hardware earbud as a v6 call endpoint, docs/EARBUD_V6_ENDPOINT.md revisions 3 and 4, ...)` that
+  summarises §3.7.3, §3.1, §1.1, §6 and §7 as landed, and the line that began `Latest: 2026-11-13` begins
+  `Previous: 2026-11-13`; then a new first line `Latest: 2026-11-18 (...)` for the two corrections of the item above,
+  after which the 2026-11-17 line begins `Previous: 2026-11-17`.
 
 ---
 
@@ -2967,6 +3126,8 @@ Every statement about existing code in this document rests on these reads (refs 
 | Revision 4: the server's error body | server `c1790e7` `cmd/bcrypto-lite/main.go:4771-4775` (`jsonErr`, `{"error": msg}`) |
 | Revision 4: the server stamps `sender_device_id` on live and replayed `opaque_message` | server `WIRE_SPEC.md` §3.7.4, R-COMMIT-KCMAC-DEVICE, its "Server fact" item |
 | Revision 4: DIAG record layout | firmware `74a43d2` `firmware/nspe/src/transport/qaudion_gatt.c:211-248` (`struct qaudion_diag_pkt`), `:1336` (`diag_read`) |
-| Revision 4: bench INF-log credit, phase-0 headroom, phase-0 test keys and `nrfutil device recover` | firmware `feat/ep-phase0`: commit `1b759cc` (928,708 B against 918,564 B of FLASH, 10,144 B freed), commit `934e22a` and `docs/PHASE0_DK_RUNBOOK.md` §1 (the phase-0 EK in KMU slot 120, two 16-byte slots, handle `0x7fff3078`; KMU slots 124 and 126 for the known-answer seeds; re-read at `86293ad`, whose §7 lists the persistent PSA ids `0x100` to `0x103`, `0x200` and `0x7000`), §2 (signed image 940,628 B, 1,452 B below 942,080 B), §4 (`nrfutil device recover` before any image other than a phase-0 one); helsinki `~/vol/ep0-artifacts/BUILD_INFO.txt` (a later build of the branch: 1,436 B) |
-| Revision 4: LC3 and LE Audio host cost | two NCS v3.3.5 builds of the phase-0 image (`config/prj.conf`, `config/bench_dev.conf`, `config/phase0.conf`) of `feat/ep-phase0` at `201188a`, on 2026-11-17 at 19:22 and 19:28 UTC: helsinki `~/vol/ep0-logs/fin-p0.build.log` (application FLASH 936,652 B, RAM 497,244 B; `CONFIG_BT_AUDIO=y`, `CONFIG_LIBLC3=y`) and `~/vol/ep0-logs/fin-p0c.build.log` (FLASH 795,024 B, RAM 470,896 B; both unset, `CONFIG_QA_PHASE0_MLDSA` unset in both), a difference of 141,628 B and 26,348 B. Their `.config` files (`~/vol/fwbuild/ep0-fin-p0/firmware/zephyr/.config`, `~/vol/fwbuild/ep0-fin-p0c/...`) differ in 78 lines, all of them `CONFIG_LIBLC3` or Bluetooth symbols of the LE Audio host and its dependants (extended advertising, event buffer sizes). The phase-0 sizes are those that `~/vol/ep0-artifacts-201188a/BUILD_INFO.txt` records for `201188a`. Revision 4 cited `74a43d2`, `934e22a` and `~/vol/ep0-artifacts/BUILD_INFO.txt` (`86293ad`), whose `lm20b-phase0` and `lm20b-phase0-mldsa` images differ by 132,948 B and 10,956 B only, because the second also adds ML-DSA-87 (at `201188a`, `fin-p0m.build.log` against `fin-p0c.build.log`: 8,728 B of flash, 15,400 B of RAM) |
+| Revision 4: bench INF-log credit, phase-0 headroom, phase-0 test keys and `nrfutil device recover` | firmware `feat/ep-phase0`: commit `1b759cc` (928,708 B against 918,564 B of FLASH, 10,144 B freed), commit `934e22a` and `docs/PHASE0_DK_RUNBOOK.md` §1 (the phase-0 EK in KMU slot 120, two 16-byte slots, handle `0x7fff3078`; KMU slots 124 and 126 for the known-answer seeds; re-read at `86293ad`, whose §7 lists the persistent PSA ids `0x100` to `0x103`, `0x200` and `0x7000`), §4 (`nrfutil device recover` before any image other than a phase-0 one); the phase-0 headroom: helsinki `~/vol/ep0-artifacts/BUILD_INFO.txt`, the build of `86293ad` on 2026-11-17 at 22:39 UTC (`lm20b-phase0`: signed image 940,644 B, 1,436 B below the 942,080 B ceiling), the only headroom figure of that image that an artifact reproduces |
+| Revision 4: LC3 and LE Audio host cost | two NCS v3.3.5 builds of the phase-0 image (`config/prj.conf`, `config/bench_dev.conf`, `config/phase0.conf`) of `feat/ep-phase0` at `201188a`, on 2026-11-17 at 19:22 and 19:28 UTC: helsinki `~/vol/ep0-logs/fin-p0.build.log` (application FLASH 936,652 B, RAM 497,244 B; `CONFIG_BT_AUDIO=y`, `CONFIG_LIBLC3=y`) and `~/vol/ep0-logs/fin-p0c.build.log` (FLASH 795,024 B, RAM 470,896 B; both unset, `CONFIG_QA_PHASE0_MLDSA` unset in both), a difference of 141,628 B and 26,348 B. Their `.config` files (`~/vol/fwbuild/ep0-fin-p0/firmware/zephyr/.config`, `~/vol/fwbuild/ep0-fin-p0c/...`) differ in 78 assignment lines, all of them `CONFIG_LIBLC3` or Bluetooth symbols of the LE Audio host and its dependants (extended advertising, event buffer sizes); the raw files differ in 206 lines, the other 128 being lines without effect (118 `# CONFIG_... is not set` comments, 8 other comment lines of menu headings and 2 blank lines). The phase-0 sizes are those that `~/vol/ep0-artifacts-201188a/BUILD_INFO.txt` records for `201188a`. Revision 4 cited `74a43d2`, `934e22a` and `~/vol/ep0-artifacts/BUILD_INFO.txt` (`86293ad`), whose `lm20b-phase0` and `lm20b-phase0-mldsa` images differ by 132,948 B and 10,956 B only, because the second also adds ML-DSA-87 (at `201188a`, `fin-p0m.build.log` against `fin-p0c.build.log`: 8,728 B of flash, 15,400 B of RAM) |
 | Revision 4: the open points TODO-1 to TODO-19 | server branch `kat/earbud-ep-v1` `e7cde5d` `tools/kat/earbud-ep-v1/README.md` (section "Open points", the list TODO-1 to TODO-19) |
+| Review of `f5f631a` (§17.2 rows 54 to 66): device ids, the attestation row, the KMS audit log, the base64 alphabet, the copies of `WIRE_SPEC.md` and of the handshake v6 KAT | server `c1790e7` `internal/pqsig/pqsig.go:29-31` (device ids issued as UUIDv4 strings), `internal/store/types.go:246-253` (`EarbudAttestKey`, `revoked_at`), `internal/store/bbolt.go:5522-5546` (`PutEarbudAttestKey`: another account refused with `ErrEarbudConflict`, a revoked row refused), `:74` and `:3266-3276` (`kms_audit_log`, `InsertKMSAuditLog`), `internal/store/types.go:730-738` (`KMSAuditEntry`), `docs/PQC_HARDENING_V1.md:247-248` (canonical base64 in the standard alphabet); the `main` checkouts on helsinki on 2026-11-18, server `1553dd7`, Android `a0462e1e`, iOS `2e1c1801`, Desktop `2904583`, web `master` `308b89d`, firmware `235b994`: `WIRE_SPEC.md` at `7a12b308...` in the first five and none in the firmware; `handshake-sig-v6-kat.json` at `6151ad3b...` in the first five (web: `vendor/qaudion-desktop/test/kat/`, vendored on 2026-10-03 at `dd86f73` with the bytes of server `7f2c191` and at `6151ad3b...` since `86f8d71` of 2026-10-17, and `vendor/server-kat/tools/kat/handshake-sig-v6/` since `d3d78ba` of 2026-11-07, pinned in `server-kat.pin.json`); the two `.config` files of the LC3 comparison re-counted (78 assignment lines, 206 raw lines) |
+| Review of `1667bd9` (§17.2 rows 68 to 75): the tombstone cap of a re-enrolment and the publication that triggers one | server branch `feat/endpoint-records` `bde2598` `internal/store/endpoints.go:446-453` (`tombstonesBefore`, counted before the re-enrolment), `:455-478` (the live records of the earbud under another key, from any host device of the account, each key revoked as a whole by `revokeEndpointTx`), `:504-507` (check 10: `!replacing && tombstonesBefore >= EPMaxTombstonesPerUser`); the reviewer's model of check 10, helsinki `~/vol/rev-r6gate/tools/tomb_model.py` (200 tombstones after 200 re-enrolments under the exemption of row 57, the 33rd refused when the cap is counted before the re-enrolment) |
