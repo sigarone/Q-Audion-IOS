@@ -155,4 +155,86 @@ final class NotificationContentBuilderTests: XCTestCase {
         XCTAssertTrue(id.hasPrefix("qaudion.notify."))
         XCTAssertTrue(id.hasSuffix(thread))
     }
+
+    // MARK: - While this device shares its screen
+
+    func testWhileSharingTheBannerNamesNobodyAndCarriesNoThreadOfTheConversation() {
+        let content = generic()
+        NotificationContentBuilder.applyWhileSharing(plan(group: "g1", rubrica: rubrica()), to: content,
+                                                     settings: on, body: "New message")
+        XCTAssertEqual(content.title, "Q-Audion")
+        XCTAssertEqual(content.body, "New message")
+        XCTAssertEqual(content.threadIdentifier, "messages", "the thread of the conversation is not set")
+        let shown = [content.title, content.body, content.subtitle, content.threadIdentifier].joined(separator: "|")
+        XCTAssertFalse(shown.contains("Anna"))
+        XCTAssertFalse(shown.contains("Famiglia"))
+        let info = content.userInfo as? [String: String] ?? [:]
+        XCTAssertEqual(info[NotificationContentBuilder.enrichedKey], "1", "the app still clears it")
+        XCTAssertEqual(NotificationContentBuilder.conversationTarget(userInfo: info)?.id, "g1", "a tap still opens it")
+    }
+
+    func testWhileSharingAMutedConversationStaysSilent() {
+        let content = generic()
+        NotificationContentBuilder.applyWhileSharing(plan(sender: "s2", rubrica: rubrica()), to: content,
+                                                     settings: on, body: "b")
+        XCTAssertNil(content.sound)
+        XCTAssertEqual(content.title, "Q-Audion")
+    }
+
+    func testTheBannersOfTheAppWhileSharingHaveTheAppNameAndAFixedText() {
+        let message = NotificationContentBuilder.sharingBanner(isMissedCall: false, bundle: .main)
+        let missed = NotificationContentBuilder.sharingBanner(isMissedCall: true, bundle: .main)
+        XCTAssertEqual(message.title, "Q-Audion")
+        XCTAssertEqual(missed.title, "Q-Audion")
+        XCTAssertEqual(message.body, NotificationContentBuilder.newMessageBody(bundle: .main))
+        XCTAssertNotEqual(message.body, missed.body)
+    }
+
+    func testTheSharingLeaseHidesNamesOnlyWhileItIsValid() {
+        let prefs = freshPreferences()
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertFalse(prefs.isSharingScreen(now: now), "nothing hidden when nobody shares")
+
+        prefs.setSharingScreen(true, now: now)
+        XCTAssertTrue(prefs.isSharingScreen(now: now))
+        XCTAssertTrue(prefs.isSharingScreen(now: now.addingTimeInterval(NotifyPreferences.shareLeaseSeconds - 1)))
+        XCTAssertFalse(prefs.isSharingScreen(now: now.addingTimeInterval(NotifyPreferences.shareLeaseSeconds + 1)),
+                       "a share that was never cleared stops hiding names by itself")
+
+        prefs.setSharingScreen(false, now: now)
+        XCTAssertFalse(prefs.isSharingScreen(now: now))
+    }
+
+    func testALeaseFromAClockThatWasSetBackIsNotBelieved() {
+        let prefs = freshPreferences()
+        let later = Date(timeIntervalSince1970: 2_000_000)
+        prefs.setSharingScreen(true, now: later)
+        XCTAssertFalse(prefs.isSharingScreen(now: Date(timeIntervalSince1970: 1_000_000)))
+    }
+
+    func testTheLeaseControllerWritesOnStartAndClearsOnEnd() {
+        let prefs = freshPreferences()
+        let lease = ShareNotificationLease(preferences: prefs, renewEvery: 0.05)
+        lease.begin()
+        XCTAssertTrue(prefs.isSharingScreen())
+        lease.end()
+        XCTAssertFalse(prefs.isSharingScreen())
+        // Ending twice, or at launch with nothing running, is harmless.
+        lease.end()
+        XCTAssertFalse(prefs.isSharingScreen())
+    }
+
+    func testTheLeaseIsRenewedWhileTheShareRunsAndNotAfterTheEnd() {
+        let prefs = freshPreferences()
+        let lease = ShareNotificationLease(preferences: prefs, renewEvery: 0.05)
+        lease.begin()
+        // Something removes the lease; the running share writes it again.
+        prefs.setSharingScreen(false)
+        Thread.sleep(forTimeInterval: 0.25)
+        XCTAssertTrue(prefs.isSharingScreen(), "renewed while the share runs")
+
+        lease.end()
+        Thread.sleep(forTimeInterval: 0.25)
+        XCTAssertFalse(prefs.isSharingScreen(), "no renewal after the end")
+    }
 }

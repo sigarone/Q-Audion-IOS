@@ -60,37 +60,31 @@ enum CallAudioRoute: Equatable, Sendable {
 /// loudspeaker (the app re-asserts it as the remote audio starts), so the button does not toggle the earpiece: it opens the
 /// system list of outputs and leaves the choice, and the audio session, to the system.
 ///
-/// An invisible `AVRoutePickerView` sits over the button; a touch lands on it and opens the list. VoiceOver activates the
-/// button itself, which asks the same picker to open.
+/// An invisible `AVRoutePickerView` covers the whole cell and is the control the person uses: a touch lands on it and the
+/// system opens the list. It is also the accessibility element of the cell, with the cell's label and value, so
+/// VoiceOver focuses it and a double tap is delivered to it by the system like a touch. The app never presses a control
+/// of the picker for the person.
 struct SystemRoutePickerOverlay: UIViewRepresentable {
+    let accessibilityLabel: String
+    let accessibilityValue: String
+
     func makeUIView(context: Context) -> AVRoutePickerView {
         let picker = AVRoutePickerView()
         picker.backgroundColor = .clear
         picker.tintColor = .clear
         picker.activeTintColor = .clear
-        SystemRoutePicker.register(picker)
+        configure(picker)
         return picker
     }
 
     func updateUIView(_ uiView: AVRoutePickerView, context: Context) {
-        SystemRoutePicker.register(uiView)
-    }
-}
-
-@MainActor
-enum SystemRoutePicker {
-    private static weak var current: AVRoutePickerView?
-
-    static func register(_ picker: AVRoutePickerView) {
-        current = picker
+        configure(uiView)
     }
 
-    /// Opens the list of outputs (the same as a touch on the picker).
-    static func present() {
-        guard let picker = current else { return }
-        for case let button as UIButton in picker.subviews {
-            button.sendActions(for: .touchUpInside)
-            return
-        }
+    private func configure(_ picker: AVRoutePickerView) {
+        picker.isAccessibilityElement = true
+        picker.accessibilityLabel = accessibilityLabel
+        picker.accessibilityValue = accessibilityValue
+        picker.accessibilityTraits = .button
     }
 }

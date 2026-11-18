@@ -54,6 +54,34 @@ enum NotificationContentBuilder {
         }
     }
 
+    /// The alert while this device shares its screen: no name, no photo and no thread of the conversation, so the
+    /// banner names nobody. The title stays the generic one, the body is the fixed text, and the sound follows the mute
+    /// of the conversation. The markers the app reads (to clear the alert, to open the conversation) are kept.
+    static func applyWhileSharing(_ plan: NotifyContentPlan, to content: UNMutableNotificationContent,
+                                  settings: MessageSoundSettings, body: String) {
+        content.body = body
+        var info = content.userInfo
+        info[enrichedKey] = "1"
+        info[conversationKey] = plan.conversationKey
+        content.userInfo = info
+        if plan.muted {
+            content.sound = nil
+            if #available(iOS 15.0, *) { content.interruptionLevel = .passive }
+        } else {
+            content.sound = MessageSoundPolicy.sound(for: settings, quietNow: false).notificationSound
+        }
+    }
+
+    /// The texts of a banner of the app that would name a person (a message, a missed call) while this device shares
+    /// its screen: the name of the app and a fixed text.
+    static func sharingBanner(isMissedCall: Bool, bundle: Bundle) -> (title: String, body: String) {
+        let body = isMissedCall
+            ? String(localized: "notification.call.missed.title", defaultValue: "Chiamata persa", bundle: bundle,
+                     comment: "Title of the local notification posted for a missed call.")
+            : newMessageBody(bundle: bundle)
+        return ("Q-Audion", body)
+    }
+
     /// The conversation a rewritten notification belongs to, from its userInfo.
     static func conversationTarget(userInfo: [String: String]) -> (isGroup: Bool, id: String)? {
         guard let key = userInfo[conversationKey], key.count > 2 else { return nil }

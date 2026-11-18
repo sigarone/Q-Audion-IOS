@@ -1,10 +1,67 @@
 #if os(iOS)
 import Foundation
 import ReplayKit
+import UIKit
 import CoreMedia
 import CoreVideo
 import QAudionEngine
 import os
+
+/// What the controller reads from the system recorder, kept apart so a test can drive the controller without ReplayKit.
+@MainActor
+protocol ScreenCaptureBackend: AnyObject {
+    var isAvailable: Bool { get }
+    var isRecording: Bool { get }
+    /// Video samples only, no microphone and no camera.
+    func prepare()
+    /// Starts the capture. `onEvent` runs on the recorder's own queue for every video sample and for every error;
+    /// `completion` runs once the start has been answered.
+    func startCapture(onEvent: @escaping @Sendable (ScreenCaptureEvent) -> Void,
+                      completion: @escaping @Sendable (Error?) -> Void)
+    /// Stops the capture. `completion` runs once the stop has been answered, with the code of the error the system
+    /// answered with (0 when it answered without one).
+    func stopCapture(completion: @escaping @Sendable (Int) -> Void)
+}
+
+enum ScreenCaptureEvent {
+    case video(CMSampleBuffer)
+    case failed(Error)
+}
+
+/// The system recorder.
+@MainActor
+final class RPScreenRecorderBackend: ScreenCaptureBackend {
+    var isAvailable: Bool { RPScreenRecorder.shared().isAvailable }
+    var isRecording: Bool { RPScreenRecorder.shared().isRecording }
+
+    func prepare() {
+        let recorder = RPScreenRecorder.shared()
+        // The microphone hook is off: only video frames are wanted here. Audio for the call flows through the call's
+        // audio session, independent of ReplayKit. The camera preview overlay stays off too.
+        recorder.isMicrophoneEnabled = false
+        recorder.isCameraEnabled = false
+    }
+
+    func startCapture(onEvent: @escaping @Sendable (ScreenCaptureEvent) -> Void,
+                      completion: @escaping @Sendable (Error?) -> Void) {
+        RPScreenRecorder.shared().startCapture(
+            handler: { sampleBuffer, bufferType, error in
+                if let error = error {
+                    onEvent(.failed(error))
+                    return
+                }
+                // Only the video frames matter; audio sample buffers that slip through are ignored.
+                guard bufferType == .video else { return }
+                onEvent(.video(sampleBuffer))
+            },
+            completionHandler: { error in completion(error) }
+        )
+    }
+
+    func stopCapture(completion: @escaping @Sendable (Int) -> Void) {
+        RPScreenRecorder.shared().stopCapture(handler: { error in completion(ScreenShareLifecycle.errorCode(error)) })
+    }
+}
 
 /// W533 — In-app screen capture via ReplayKit's `RPScreenRecorder`,
 /// piped into the existing WebRTC video sender used by camera calls.
@@ -54,8 +111,11 @@ import os
 ///    into the same RTCVideoSource).
 /// 4. AppState.stopScreenShare() → ScreenShareController.stop() +
 ///    restore the camera-frame closure.
+///
+/// The capture is confirmed when its first frame arrives (`onConfirmed`). A capture that ends on its own is reported
+/// once (`onEnded`), or makes `start` throw when it ends while it is starting. `ScreenShareLiveness` holds the rules.
 @MainActor
-public final class ScreenShareController {
+public final class ScreenShareController: ScreenFrameSource {
 
     public enum ScreenShareError: Error, LocalizedError {
         case recorderUnavailable
@@ -77,35 +137,25 @@ public final class ScreenShareController {
         }
     }
 
-    /// True when an active capture is sending frames to `targetCapturer`.
-    public private(set) var isRunning: Bool = false
+    var kind: ScreenFrameSourceKind { .inApp }
 
-    /// Weak so the controller doesn't extend the lifetime of the
-    /// WebRTC capturer (which is owned by the QAudionWebRtcCallController).
-    private weak var targetCapturer: WebRTCPixelBufferCapturer?
+    /// True when an active capture is sending frames to the sink.
+    public var isRunning: Bool { liveness.phase == .running }
 
-    /// media-consent v1 — secondary frame sink for the WS-HEVC transport
-    /// (iOS↔iOS peers receive video as `video_frame` envelopes, not WebRTC
-    /// RTP). AppState points this at `VideoCallPipeline.submitExternalFrame`
-    /// so an audio-only screen share reaches iOS peers too.
-    ///
-    /// AppState assigns/clears this from MainActor (`startScreenShare` /
-    /// `stopScreenShare` / the start-failure path), while `dispatchVideoSample`
-    /// reads it from RPScreenRecorder's private capture queue — a genuine
-    /// cross-context race on the property itself (the pipeline entry point
-    /// being thread-safe only covers the closure *body*, not this storage).
-    /// An `OSAllocatedUnfairLock`-backed accessor serialises get/set instead
-    /// of relying on ReplayKit's stop-ordering, matching the
-    /// `refreshLock`/`OSAllocatedUnfairLock` pattern used elsewhere
-    /// (e.g. `BCryptoRestClient`).
-    private let onFrameLock = OSAllocatedUnfairLock<((CVPixelBuffer, Int64) -> Void)?>(initialState: nil)
+    /// True once the running capture has delivered its first frame.
+    public var isConfirmed: Bool { liveness.phase == .running && liveness.confirmed }
 
-    /// `nonisolated` because the lock above is the actual synchronization
-    /// mechanism now — `dispatchVideoSample` reads this from RPScreenRecorder's
-    /// private capture queue and must not be forced through a MainActor hop.
+    /// The two places a frame goes: the WebRTC capturer (held weakly, the call owns it) and the WS-HEVC sink that
+    /// AppState points at `VideoCallPipeline.submitExternalFrame` so an audio-only screen share reaches iOS peers too.
+    /// Frames arrive on RPScreenRecorder's private capture queue while AppState sets the sink from the main actor,
+    /// so both places and the closed flag sit under one lock, and a frame that arrives after a stop goes nowhere.
+    private let sink = ScreenFrameSink()
+
+    /// `nonisolated` because the sink's lock is the synchronization: the capture queue must not be forced through a
+    /// main actor hop.
     public nonisolated var onFrame: ((CVPixelBuffer, Int64) -> Void)? {
-        get { onFrameLock.withLock { $0 } }
-        set { onFrameLock.withLock { $0 = newValue } }
+        get { sink.onFrame }
+        set { sink.onFrame = newValue }
     }
 
     /// First sample timestamp anchor — used to produce monotonically
@@ -114,110 +164,232 @@ public final class ScreenShareController {
     /// pick one that won't wrap or clash with Date()-based ones.
     private var startReferenceCmTime: CMTime?
 
-    public init() {}
+    /// Called once, on the main actor, when the running capture ends without a call to `stop()`: ReplayKit reported an
+    /// error, the system recorder is no longer recording (the user ended it from the system), or nothing captures the
+    /// screen any more. A capture that ends while it is still starting makes `start` throw instead. Cleared by `stop()`.
+    public var onEnded: (() -> Void)?
+
+    /// Called once, on the main actor, when the first frame of the running capture has arrived. Cleared by `stop()`.
+    public var onConfirmed: (() -> Void)?
+
+    private let backend: ScreenCaptureBackend
+    private let now: () -> TimeInterval
+    /// The longest the recorder is waited for when it is asked to stop.
+    private let stopTimeout: TimeInterval
+    /// How long, after the recorder answered a stop, it is looked at to see that it is no longer recording.
+    private let verifyWait: TimeInterval
+    /// The OS major version that decides whether the in-app recorder may be used at all; 0 for no limit (a test).
+    private let osMajor: Int
+    private var liveness = ScreenShareLiveness()
+    private var tickTimer: Timer?
+    private var isStopping = false
+    /// The code of the error that ended the capture without a stop from the app, 0 when there was none.
+    private var endErrorCode = 0
+    private(set) var lastStopReport: ScreenCaptureStopReport?
+
+    /// How often the recorder is looked at while the capture runs.
+    private static let tickInterval: TimeInterval = 0.25
+
+    /// The answer recorded for a stop that the recorder never answered.
+    static let unansweredStopCode = -2
+
+    public convenience init() {
+        self.init(backend: RPScreenRecorderBackend(), now: { ProcessInfo.processInfo.systemUptime },
+                  osMajor: ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
+    }
+
+    init(backend: ScreenCaptureBackend, now: @escaping () -> TimeInterval, stopTimeout: TimeInterval = 2,
+         verifyWait: TimeInterval = 0.6, osMajor: Int = 0) {
+        self.backend = backend
+        self.now = now
+        self.stopTimeout = stopTimeout
+        self.verifyWait = verifyWait
+        self.osMajor = osMajor
+    }
 
     /// Start streaming the in-app screen into the given WebRTC
     /// capturer (nil on the iOS↔iOS WS-relay path — frames then flow
     /// only through [onFrame]). Returns once `startCapture` has
     /// succeeded (the handler closure is called per-frame from then on).
     /// Throws `.alreadyRunning`, `.recorderUnavailable`, or
-    /// `.captureFailed` on the documented failure modes.
+    /// `.captureFailed` on the documented failure modes, and `.notRunning`
+    /// when the capture ended while it was starting.
     public func start(into capturer: WebRTCPixelBufferCapturer?) async throws {
-        if isRunning { throw ScreenShareError.alreadyRunning }
-        let recorder = RPScreenRecorder.shared()
-        guard recorder.isAvailable else {
+        if liveness.isActive || isStopping { throw ScreenShareError.alreadyRunning }
+        // From iOS 27 the share uses the system capture; the recorder of the app is not used there.
+        if osMajor >= ScreenShareLifecycle.systemCaptureMajor { throw ScreenShareError.recorderUnavailable }
+        guard backend.isAvailable else {
             throw ScreenShareError.recorderUnavailable
         }
-        // The shared recorder's microphone hook is OFF — we want only
-        // video frames here. Audio for the call still flows through
-        // CallService's AVAudioSession independent of ReplayKit.
-        recorder.isMicrophoneEnabled = false
-        // Don't show the camera preview overlay either.
-        recorder.isCameraEnabled = false
+        backend.prepare()
+        // What an earlier capture that ended on its own left behind.
+        removeWatchers()
 
-        targetCapturer = capturer
+        sink.open(capturer: capturer)
         startReferenceCmTime = nil
+        endErrorCode = 0
+        lastStopReport = nil
+        liveness.begin()
 
         // RPScreenRecorder.startCapture is callback-based and not
         // async/await native — bridge via a continuation. The
-        // `handler` runs on a private serial queue for every frame
-        // and (optionally) for audio samples we don't request.
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            recorder.startCapture(
-                handler: { [weak self] sampleBuffer, bufferType, error in
-                    if let error = error {
-                        // Frame-level error from the capture pipeline.
-                        // RPScreenRecorder also signals end-of-capture
-                        // via this callback when the user revokes
-                        // permission mid-stream.
-                        print("[ScreenShareController] frame error: \(error.localizedDescription)")
-                        return
+        // event handler runs on a private serial queue for every frame
+        // and for every error.
+        do {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                backend.startCapture(
+                    onEvent: { [weak self] event in
+                        switch event {
+                        case .failed(let error):
+                            // Frame-level error from the capture pipeline.
+                            // RPScreenRecorder also signals end-of-capture
+                            // via this callback when the user revokes
+                            // permission mid-stream.
+                            print("[ScreenShareController] frame error: \(error.localizedDescription)")
+                            let code = ScreenShareLifecycle.errorCode(error)
+                            Task { @MainActor [weak self] in self?.captureEnded(.error, code: code) }
+                        case .video(let sampleBuffer):
+                            self?.dispatchVideoSample(sampleBuffer)
+                        }
+                    },
+                    completion: { error in
+                        if let error = error {
+                            cont.resume(throwing: ScreenShareError.captureFailed(error))
+                        } else {
+                            cont.resume(returning: ())
+                        }
                     }
-                    // We only care about the video frames — ignore any
-                    // mic / app audio sample buffers if they slip
-                    // through (microphone is disabled above but the
-                    // RPSampleBufferType.audioApp may still ship in
-                    // rare cases on iOS 16).
-                    guard bufferType == .video else { return }
-                    self?.dispatchVideoSample(sampleBuffer)
-                },
-                completionHandler: { error in
-                    if let error = error {
-                        cont.resume(throwing: ScreenShareError.captureFailed(error))
-                    } else {
-                        cont.resume(returning: ())
-                    }
-                }
-            )
+                )
+            }
+        } catch {
+            liveness.startFailed()
+            sink.close()
+            throw error
         }
-        isRunning = true
+        // An end that arrived while the capture was starting stops it here: the caller never sees a running capture.
+        if liveness.startCompleted(now: now(), isRecording: backend.isRecording) != nil {
+            _ = await windDown()
+            throw ScreenShareError.notRunning
+        }
+        watchCapture()
         print("[ScreenShareController] capture started — frames flowing into WebRTC")
     }
 
-    public func stop() async {
-        guard isRunning else { return }
-        let recorder = RPScreenRecorder.shared()
-        // stopCapture is also callback-based; bridge similarly. We
-        // ignore the discarded completion error because failure here
-        // means "ReplayKit couldn't stop cleanly", which doesn't
-        // unblock the UI restoration — the controller still flips
-        // isRunning to false so AppState can re-wire the camera
-        // closure.
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            recorder.stopCapture(handler: { _ in
-                cont.resume(returning: ())
-            })
-        }
-        targetCapturer = nil
-        onFrame = nil
-        startReferenceCmTime = nil
-        isRunning = false
+    /// Stops the capture and returns what the recorder answered and whether it still reports recording afterwards.
+    /// Nil when nothing was capturing.
+    @discardableResult
+    func stop() async -> ScreenCaptureStopReport? {
+        guard liveness.phase == .running || liveness.phase == .ended, !isStopping else { return nil }
+        isStopping = true
+        defer { isStopping = false }
+        onEnded = nil
+        onConfirmed = nil
+        let report = await windDown()
         print("[ScreenShareController] capture stopped — restoring camera path")
+        return report
     }
 
     // MARK: - Private
 
-    /// Extract the CVPixelBuffer and timestamp from a CMSampleBuffer
-    /// and push to the WebRTC capturer. Runs on RPScreenRecorder's
-    /// private queue — `WebRTCPixelBufferCapturer.push` is documented
-    /// thread-safe so we don't bounce to MainActor.
+    /// Tears the capture down. The state goes back to idle and the sink is closed first, so nothing is confirmed,
+    /// reported or delivered from here on. stopCapture is callback-based; bridge similarly. The wait for its answer is
+    /// bounded, and the controller flips to idle whatever the recorder answers, so AppState can re-wire the camera
+    /// closure. The recorder is looked at afterwards: a recorder that still reports recording is part of the answer.
+    private func windDown() async -> ScreenCaptureStopReport {
+        removeWatchers()
+        liveness.reset()
+        sink.close()
+        let code = await stopRecorder()
+        let still = await recorderStillRecording()
+        startReferenceCmTime = nil
+        let report = ScreenCaptureStopReport(errorCode: code != 0 ? code : endErrorCode, stillCapturing: still)
+        lastStopReport = report
+        return report
+    }
+
+    /// Asks the recorder to stop and waits for its answer, at most `stopTimeout`. Returns the code the recorder
+    /// answered with, or `unansweredStopCode` when it did not answer in time.
+    private func stopRecorder() async -> Int {
+        let answer = OSAllocatedUnfairLock<Int?>(initialState: nil)
+        let limit = stopTimeout
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            let finish: @Sendable (Int) -> Void = { code in
+                let first = answer.withLock { value -> Bool in
+                    if value != nil { return false }
+                    value = code
+                    return true
+                }
+                if first { cont.resume(returning: ()) }
+            }
+            backend.stopCapture(completion: finish)
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(limit * 1_000_000_000))
+                finish(Self.unansweredStopCode)
+            }
+        }
+        return answer.withLock { $0 } ?? Self.unansweredStopCode
+    }
+
+    /// Whether the recorder still reports recording after the stop, looked at for at most `verifyWait`.
+    private func recorderStillRecording() async -> Bool {
+        var waited: TimeInterval = 0
+        while backend.isRecording, waited < verifyWait {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            waited += 0.1
+        }
+        return backend.isRecording
+    }
+
+    /// While the capture runs, the recorder is looked at on a short timer.
+    private func watchCapture() {
+        removeWatchers()
+        tickTimer = Timer.scheduledTimer(withTimeInterval: Self.tickInterval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
+    }
+
+    private func removeWatchers() {
+        tickTimer?.invalidate()
+        tickTimer = nil
+    }
+
+    /// One look at the recorder. Internal so a test can drive it with a clock of its own.
+    func tick() {
+        guard liveness.check(now: now(), isRecording: backend.isRecording) != nil else { return }
+        reportEnd()
+    }
+
+    /// The recorder reported that the capture is over.
+    func captureEnded(_ reason: ScreenShareLiveness.EndReason, code: Int = 0) {
+        if endErrorCode == 0 { endErrorCode = code }
+        guard liveness.end(reason) else { return }
+        reportEnd()
+    }
+
+    /// A video sample arrived; the first one of the capture confirms it.
+    func noteFrame() {
+        guard liveness.frame(now: now()) else { return }
+        onConfirmed?()
+    }
+
+    /// A running capture is over: the watchers stop and the owner is told once. The capture itself is torn down by
+    /// the owner's `stop()`.
+    private func reportEnd() {
+        removeWatchers()
+        onEnded?()
+    }
+
+    /// Extract the CVPixelBuffer and timestamp from a CMSampleBuffer and hand them to the sink. Runs on
+    /// RPScreenRecorder's private queue: the sink takes its own lock and `WebRTCPixelBufferCapturer.push` is
+    /// thread-safe, so there is no hop to the main actor for the frame. Only the liveness note goes to the main actor.
     private nonisolated func dispatchVideoSample(_ sample: CMSampleBuffer) {
         guard CMSampleBufferIsValid(sample),
               let pixelBuffer = CMSampleBufferGetImageBuffer(sample)
         else { return }
         let pts = CMSampleBufferGetPresentationTimeStamp(sample)
         let nanos: Int64 = Int64(CMTimeGetSeconds(pts) * 1_000_000_000)
-        // WS-HEVC sink first — `onFrame` is lock-guarded (see its docs
-        // above) so this cross-context read is safe without an actor hop.
-        onFrame?(pixelBuffer, nanos)
-        // Hop a read of `targetCapturer` through the actor — this is
-        // safe because the property is set only on MainActor and only
-        // before/after capture lifecycle transitions. We deliberately
-        // tolerate a frame-dropped race in the stop() path.
-        Task { @MainActor [weak self] in
-            guard let cap = self?.targetCapturer else { return }
-            cap.push(pixelBuffer, rotation: ._0, timestampNs: nanos)
-        }
+        guard sink.deliver(pixelBuffer, timestampNs: nanos) else { return }
+        Task { @MainActor [weak self] in self?.noteFrame() }
     }
 }
 #endif

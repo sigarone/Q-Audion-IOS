@@ -882,6 +882,9 @@ APP_VOCAB = frozenset("""
 """.split())
 # SECURE CANVAS (2026-11-10) -- "canvas hosted capcover": tag "privacy" lines of the screen protection:
 #   canvas hosted=<0|1> [why=1]        capcover shown=1
+#   canvas hosted=<0|1> own=<0|1|2> display=<0|1>   (the screen protection is lifted while this device shares its own screen:
+#                                      own=1 display=0; back when the share is over: own=0, or when another display shows the screen: display=1;
+#                                      own=2: the screen was already captured when the share started, so the protection stays up)
 # Pinned by test_ship_ios_canvas_vocab.py.
 # CALL HOLD (WIRE_SPEC 16, 2026-11-10) -- "callhold" (the line right above) is the one new word, for the "call"-tagged RTLog
 # lines of the hold signal; every value is a number or a short enum word, never an id:

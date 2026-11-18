@@ -55,6 +55,15 @@ final class NotificationService: UNNotificationServiceExtension {
         lock.unlock()
         let bundle = NotificationContentBuilder.appBundle(from: .main)
         let rewritten = (original.mutableCopy() as? UNMutableNotificationContent) ?? generic
+        // While this device shares its screen the banner names nobody and shows no photo: no rewrite with the sender,
+        // and no donation (the photo comes with it).
+        if NotifyPreferences().isSharingScreen() {
+            NotificationContentBuilder.applyWhileSharing(
+                plan, to: rewritten, settings: soundSettings,
+                body: NotificationContentBuilder.newMessageBody(bundle: bundle))
+            deliver(rewritten, step: "sharing")
+            return
+        }
         NotificationContentBuilder.apply(plan, to: rewritten, settings: soundSettings,
                                          body: NotificationContentBuilder.newMessageBody(bundle: bundle))
         // Muted conversations: the place where the filtering entitlement will return an empty content.

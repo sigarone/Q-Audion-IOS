@@ -1,4 +1,30 @@
 import Foundation
+
+/// The log line of the WebRTC video encoder's session recovery, handed to the app's log (`RTLog` in the app). Words and
+/// digits only: no id, key or name. Until the app sets a sink the line is printed, which the app's stdout capture
+/// records.
+public enum EncoderRecoveryLog {
+    private static let lock = NSLock()
+    private nonisolated(unsafe) static var sink: (@Sendable (String) -> Void)?
+
+    public static func setSink(_ handler: (@Sendable (String) -> Void)?) {
+        lock.lock()
+        sink = handler
+        lock.unlock()
+    }
+
+    static func line(_ text: String) {
+        lock.lock()
+        let handler = sink
+        lock.unlock()
+        if let handler {
+            handler(text)
+        } else {
+            print(text)
+        }
+    }
+}
+
 #if canImport(WebRTC)
 import WebRTC
 
@@ -69,41 +95,95 @@ public final class VideoKeyframeController: @unchecked Sendable {
 /// driven through the `ObjCVideoEncoder` C++ shim, so this wrapper is
 /// ALWAYS on the encode hot path — no bypass to guard against.
 ///
+/// Session recovery: the wrapper keeps the settings and core count of the last start, the callback and the last
+/// bitrate. When a frame is refused (a negative result code) it releases the inner encoder, starts it again with the
+/// saved settings, restores the callback and the bitrate, and makes the next frame a key frame. A rebuild is asked for
+/// at most once per `EncodeFailureGate.minRecreateIntervalMs`, only between a successful `startEncode` and `release`,
+/// and one log line (`vcap encfail ...`) is written per episode of refused frames.
+///
 /// Protocol surface mirrored from `sdk/objc/base/RTCVideoEncoder.h`
 /// (webrtc-sdk M144).
 public final class KeyframeForcingVideoEncoder: NSObject, RTCVideoEncoder {
 
+    /// `WEBRTC_VIDEO_CODEC_OK`; a negative result code is a refusal.
+    private static let codecOk = 0
+    /// The refusals that mean the session is gone: `WEBRTC_VIDEO_CODEC_ERROR` and `WEBRTC_VIDEO_CODEC_UNINITIALIZED`.
+    /// The others (a bad parameter, a request for the software fallback) are for libwebrtc to act on, so the encoder
+    /// is left alone for them.
+    static let rebuildableStatuses: Set<Int> = [-1, -7]
+
     private let inner: RTCVideoEncoder
+    private let clock: @Sendable () -> Int64
+    private let emitLine: @Sendable (String) -> Void
     private let lock = NSLock()
     /// Monotonic ms timestamp of the last key frame we forced (or saw
     /// already requested by libwebrtc). 0 = none yet since init.
     private var lastKeyframeAtMs: Int64 = 0
 
-    public init(inner: RTCVideoEncoder) {
+    /// Held by `startEncode`, `release`, `setCallback`, `setBitrate` and the rebuild, so a rebuild never interleaves
+    /// with one of them. Taken before `lock`, never the other way round. `encode` takes it only to rebuild.
+    private let sessionLock = NSLock()
+    private let recoveryGate = EncodeFailureGate()
+    // What a rebuild needs, all guarded by `lock`.
+    private var savedSettings: RTCVideoEncoderSettings?
+    private var savedCores: Int32 = 0
+    private var savedCallback: RTCVideoEncoderCallback?
+    private var savedRate: (kbit: UInt32, framerate: UInt32)?
+
+    public convenience init(inner: RTCVideoEncoder) {
+        self.init(inner: inner,
+                  clock: { KeyframeForcingVideoEncoder.monotonicNowMs() },
+                  emitLine: { line in EncoderRecoveryLog.line(line) })
+    }
+
+    init(inner: RTCVideoEncoder,
+         clock: @escaping @Sendable () -> Int64,
+         emitLine: @escaping @Sendable (String) -> Void) {
         self.inner = inner
+        self.clock = clock
+        self.emitLine = emitLine
         super.init()
     }
 
     /// Monotonic clock (mirror of Android's SystemClock.elapsedRealtime
     /// use — wall-clock jumps must not fake/starve the periodic cadence).
-    private static func nowMs() -> Int64 {
+    private static func monotonicNowMs() -> Int64 {
         return Int64(DispatchTime.now().uptimeNanoseconds / 1_000_000)
     }
 
     // MARK: - RTCVideoEncoder (delegate everything; augment encode only)
 
     public func setCallback(_ callback: RTCVideoEncoderCallback?) {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        lock.lock()
+        savedCallback = callback
+        lock.unlock()
         inner.setCallback(callback)
     }
 
     public func startEncode(with settings: RTCVideoEncoderSettings, numberOfCores: Int32) -> Int {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
         lock.lock()
         lastKeyframeAtMs = 0
+        savedSettings = settings
+        savedCores = numberOfCores
+        savedRate = nil
         lock.unlock()
-        return inner.startEncode(with: settings, numberOfCores: numberOfCores)
+        let status = inner.startEncode(with: settings, numberOfCores: numberOfCores)
+        if status == Self.codecOk {
+            recoveryGate.arm()
+        } else {
+            recoveryGate.disarm()
+        }
+        return status
     }
 
     public func release() -> Int {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        recoveryGate.disarm()
         return inner.release()
     }
 
@@ -113,7 +193,8 @@ public final class KeyframeForcingVideoEncoder: NSObject, RTCVideoEncoder {
         // Android parity: an empty frameTypes array is passed through
         // untouched (nothing to rewrite).
         guard !frameTypes.isEmpty else {
-            return inner.encode(frame, codecSpecificInfo: codecSpecificInfo, frameTypes: frameTypes)
+            return noteEncodeResult(
+                inner.encode(frame, codecSpecificInfo: codecSpecificInfo, frameTypes: frameTypes))
         }
         let keyRaw = RTCFrameType.videoFrameKey.rawValue
         let alreadyKey = frameTypes.contains { $0.uintValue == keyRaw }
@@ -122,7 +203,7 @@ public final class KeyframeForcingVideoEncoder: NSObject, RTCVideoEncoder {
         // periodic cadence is due anyway — Android parity
         // (`consumeForce() || due`, Kotlin `||` evaluates the left side).
         let forcedRequest = VideoKeyframeController.shared.consumeForce()
-        let now = Self.nowMs()
+        let now = clock()
         lock.lock()
         let due = lastKeyframeAtMs == 0 ||
             now - lastKeyframeAtMs >= VideoKeyframeController.shared.intervalMs
@@ -138,11 +219,65 @@ public final class KeyframeForcingVideoEncoder: NSObject, RTCVideoEncoder {
         } else {
             effectiveTypes = frameTypes
         }
-        return inner.encode(frame, codecSpecificInfo: codecSpecificInfo, frameTypes: effectiveTypes)
+        return noteEncodeResult(
+            inner.encode(frame, codecSpecificInfo: codecSpecificInfo, frameTypes: effectiveTypes))
     }
 
     public func setBitrate(_ bitrateKbit: UInt32, framerate: UInt32) -> Int32 {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        lock.lock()
+        savedRate = (bitrateKbit, framerate)
+        lock.unlock()
         return inner.setBitrate(bitrateKbit, framerate: framerate)
+    }
+
+    // MARK: - Session recovery
+
+    /// The result of the inner `encode`: an accepted frame ends the episode, a refused one may rebuild the session.
+    /// The result code goes back to libwebrtc unchanged.
+    private func noteEncodeResult(_ status: Int) -> Int {
+        if status >= Self.codecOk {
+            recoveryGate.noteSuccess()
+            return status
+        }
+        let decision = recoveryGate.noteRefusal(rebuildable: Self.rebuildableStatuses.contains(status), nowMs: clock())
+        var rebuilt = false
+        var rebuildStatus = 0
+        if decision.recreate {
+            (rebuilt, rebuildStatus) = rebuildSession()
+            recoveryGate.noteRecreateResult(succeeded: rebuilt)
+        }
+        if decision.log {
+            emitLine("vcap encfail st=\(status) ask=\(decision.recreate ? 1 : 0) rec=\(rebuilt ? 1 : 0) code=\(rebuildStatus)")
+        }
+        return status
+    }
+
+    /// Releases the inner encoder, starts it again with the saved settings, restores the callback and the last bitrate,
+    /// and makes the next frame a key frame. Returns whether the encoder is running again and the status of its start
+    /// (0 when nothing was attempted, which is the case once `release` has run or while no callback is set).
+    private func rebuildSession() -> (rebuilt: Bool, status: Int) {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        lock.lock()
+        let settings = savedSettings
+        let cores = savedCores
+        let callback = savedCallback
+        let rate = savedRate
+        lock.unlock()
+        guard recoveryGate.isArmed, let settings, let callback else { return (false, 0) }
+        _ = inner.release()
+        let status = inner.startEncode(with: settings, numberOfCores: cores)
+        inner.setCallback(callback)
+        guard status == Self.codecOk else { return (false, status) }
+        if let rate {
+            _ = inner.setBitrate(rate.kbit, framerate: rate.framerate)
+        }
+        lock.lock()
+        lastKeyframeAtMs = 0
+        lock.unlock()
+        return (true, 0)
     }
 
     public func implementationName() -> String {

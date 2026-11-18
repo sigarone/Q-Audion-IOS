@@ -127,86 +127,128 @@
         }
       }
     },
-    "privacy.share_cover": {
+    "privacy.share_notice": {
       "extractionState": "manual",
-      "comment": "Full-screen notice shown instead of a protected screen while this device is sharing its screen in a call.",
+      "comment": "Notice at the top of the screen while this device shares its screen in a call: the screen that is up is hidden from the people watching the share.",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Condivisione schermo attiva: contenuto protetto nascosto"
+            "value": "Nascosto a chi guarda la condivisione"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Screen sharing active: protected content hidden"
+            "value": "Hidden from anyone watching the share"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bildschirmfreigabe aktiv: geschützter Inhalt ausgeblendet"
+            "value": "Für alle in der Freigabe ausgeblendet"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pantalla compartida: contenido protegido oculto"
+            "value": "Oculto para quien ve lo compartido"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Partage d’écran actif : contenu protégé masqué"
+            "value": "Masqué pour qui regarde le partage"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Compartilhamento de tela ativo: conteúdo protegido oculto"
+            "value": "Oculto para quem vê o compartilhamento"
           }
         }
       }
     },
-    "privacy.share_cover.stop": {
+    "call.screenshare.error.screen_captured": {
       "extractionState": "manual",
-      "comment": "Button on the full-screen notice shown while this device is sharing its screen in a call: stops the screen share.",
+      "comment": "Banner shown when a screen share is refused because the screen is already being recorded, mirrored or shown on another display.",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Interrompi condivisione"
+            "value": "Interrompi la registrazione o la duplicazione dello schermo e riprova"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Stop sharing"
+            "value": "Stop the screen recording or mirroring and try again"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Freigabe beenden"
+            "value": "Beende die Bildschirmaufnahme oder Spiegelung und versuche es erneut"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dejar de compartir"
+            "value": "Detén la grabación o la duplicación de pantalla e inténtalo de nuevo"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Arrêter le partage"
+            "value": "Arrête l’enregistrement ou la recopie de l’écran et réessaie"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Parar compartilhamento"
+            "value": "Interrompa a gravação ou o espelhamento da tela e tente novamente"
+          }
+        }
+      }
+    },
+    "call.screenshare.error.display_appeared": {
+      "extractionState": "manual",
+      "comment": "Banner shown when the screen share ends because the screen is now shown on another display.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Condivisione interrotta: lo schermo è mostrato su un altro display"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sharing stopped: the screen is shown on another display"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Freigabe beendet: Der Bildschirm wird auf einem anderen Display angezeigt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se detuvo la compartición: la pantalla se muestra en otra pantalla"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Partage arrêté : l’écran est affiché sur un autre écran"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartilhamento encerrado: a tela aparece em outra tela"
           }
         }
       }
@@ -2181,6 +2223,216 @@
           "stringUnit": {
             "state": "translated",
             "value": "Compartilhar"
+          }
+        }
+      }
+    },
+    "call.control.share_record": {
+      "extractionState": "manual",
+      "comment": "Name under the screen sharing button of the call controls on iOS versions where the system shows the capture as a screen recording.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Registra"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grabar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aufnahme"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gravar"
+          }
+        }
+      }
+    },
+    "call.control.share_a11y_on_record": {
+      "extractionState": "manual",
+      "comment": "VoiceOver label of the screen sharing button while not sharing, on iOS versions where the system shows the capture as a screen recording (tapping starts it).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Registra schermo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record screen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Grabar pantalla"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistrer l'écran"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bildschirm aufnehmen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gravar tela"
+          }
+        }
+      }
+    },
+    "call.control.share_a11y_off_record": {
+      "extractionState": "manual",
+      "comment": "VoiceOver label of the screen sharing button while sharing, on iOS versions where the system shows the capture as a screen recording (tapping stops it).",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Interrompi registrazione schermo"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop screen recording"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Detener grabación de pantalla"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arrêter l'enregistrement de l'écran"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bildschirmaufnahme beenden"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parar gravação de tela"
+          }
+        }
+      }
+    },
+    "call.screenshare.error.still_recording": {
+      "extractionState": "manual",
+      "comment": "Banner shown when the screen recording of the app did not stop when the person stopped sharing: it has to be ended from the system indicator.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La registrazione dello schermo è ancora attiva. Interrompila dall'indicatore di sistema."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen recording is still on. End it from the system indicator."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La grabación de pantalla sigue activa. Detenla desde el indicador del sistema."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'enregistrement de l'écran est toujours actif. Arrête-le depuis l'indicateur du système."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Bildschirmaufnahme läuft noch. Beende sie über die Systemanzeige."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A gravação de tela ainda está ativa. Interrompa-a pelo indicador do sistema."
+          }
+        }
+      }
+    },
+    "call.screenshare.error.still_sharing": {
+      "extractionState": "manual",
+      "comment": "Banner shown when the system screen share did not stop when the person stopped sharing: it has to be ended from the system indicator.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La condivisione dello schermo è ancora attiva. Interrompila dall'indicatore di sistema."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Screen sharing is still on. End it from the system indicator."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compartir pantalla sigue activo. Detenlo desde el indicador del sistema."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le partage d'écran est toujours actif. Arrête-le depuis l'indicateur du système."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Bildschirmfreigabe läuft noch. Beende sie über die Systemanzeige."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O compartilhamento de tela ainda está ativo. Interrompa-o pelo indicador do sistema."
           }
         }
       }

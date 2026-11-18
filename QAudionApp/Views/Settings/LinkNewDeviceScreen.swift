@@ -102,12 +102,12 @@ struct LinkNewDeviceScreen: View {
             // SECURITY F-3: device-link QR carries pairing key material.
             // Mirror ChatDetailScreen's secure-window lifecycle so it
             // cannot be screenshotted / recorded / AirPlay-mirrored.
-            ScreenshotLockService.lock(owner: "device_link")
+            ScreenshotLockService.lock(owner: ScreenshotLockService.deviceLinkOwner)
             if ephemeralPrivateKey == nil { regenerate() }
         }
         .onDisappear {
             // SECURITY F-3: release the secure window on unmount.
-            ScreenshotLockService.unlock(owner: "device_link")
+            ScreenshotLockService.unlock(owner: ScreenshotLockService.deviceLinkOwner)
             // Wipe ephemeral key on disappear: nessun materiale segreto
             // sopravvive alla chiusura della view.
             ephemeralPrivateKey = nil

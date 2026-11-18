@@ -1,5 +1,46 @@
 [
   {
+    "version": "1.0.1294",
+    "notes": {
+      "it": [
+        "Condivisione dello schermo senza coperture: le schermate dell'app si vedono normalmente",
+        "Con iOS 27 puoi condividere l'intero schermo, anche con l'app in secondo piano",
+        "Durante la condivisione le notifiche non mostrano nome e foto",
+        "La condivisione si interrompe quando metti la chiamata in attesa"
+      ],
+      "en": [
+        "Screen sharing without covers: the app's screens show as they are",
+        "With iOS 27 you can share the whole screen, even with the app in the background",
+        "While you share, notifications show no name or photo",
+        "Sharing stops when you put the call on hold"
+      ],
+      "de": [
+        "Bildschirmfreigabe ohne Abdeckung: Die Bildschirme der App sind wie gewohnt zu sehen",
+        "Mit iOS 27 können Sie den ganzen Bildschirm freigeben, auch wenn die App im Hintergrund ist",
+        "Während der Freigabe zeigen Benachrichtigungen weder Namen noch Foto",
+        "Die Freigabe endet, wenn Sie den Anruf halten"
+      ],
+      "es": [
+        "Compartir pantalla sin cubiertas: las pantallas de la app se ven con normalidad",
+        "Con iOS 27 puedes compartir toda la pantalla, incluso con la app en segundo plano",
+        "Mientras compartes, las notificaciones no muestran nombre ni foto",
+        "Compartir se detiene cuando pones la llamada en espera"
+      ],
+      "fr": [
+        "Partage d'écran sans masque : les écrans de l'app s'affichent normalement",
+        "Avec iOS 27, tu peux partager tout l'écran, même avec l'app en arrière-plan",
+        "Pendant le partage, les notifications n'affichent ni nom ni photo",
+        "Le partage s'arrête lorsque tu mets l'appel en attente"
+      ],
+      "pt-BR": [
+        "Compartilhamento de tela sem coberturas: as telas do app aparecem normalmente",
+        "Com o iOS 27 você pode compartilhar a tela inteira, mesmo com o app em segundo plano",
+        "Durante o compartilhamento, as notificações não mostram nome nem foto",
+        "O compartilhamento é interrompido quando você coloca a chamada em espera"
+      ]
+    }
+  },
+  {
     "version": "1.0.1293",
     "notes": {
       "it": [

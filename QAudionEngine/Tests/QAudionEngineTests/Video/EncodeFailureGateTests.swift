@@ -61,4 +61,15 @@ final class EncodeFailureGateTests: XCTestCase {
         gate.noteRecreateResult(succeeded: true)
         XCTAssertFalse(gate.noteFailure(missing, nowMs: 9_000).recreate)
     }
+
+    func testARefusalWithOnlyAResultCodeRebuildsOnlyWhenRebuildable() {
+        let gate = EncodeFailureGate()
+        gate.arm()
+        XCTAssertEqual(gate.noteRefusal(rebuildable: false, nowMs: 1_000), EncodeFailureGate.Decision(recreate: false, log: true))
+        XCTAssertEqual(gate.noteRefusal(rebuildable: true, nowMs: 1_010), EncodeFailureGate.Decision(recreate: true, log: false))
+        XCTAssertEqual(gate.noteRefusal(rebuildable: true, nowMs: 1_900), EncodeFailureGate.Decision(recreate: false, log: false))
+        XCTAssertEqual(gate.noteRefusal(rebuildable: true, nowMs: 2_010), EncodeFailureGate.Decision(recreate: true, log: false))
+        gate.disarm()
+        XCTAssertFalse(gate.noteRefusal(rebuildable: true, nowMs: 9_000).recreate)
+    }
 }

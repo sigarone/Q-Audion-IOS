@@ -146,12 +146,12 @@ struct GroupChatScreen: View {
             // preference as ChatDetailScreen (1:1), so group chat content is
             // not screenshot-/recording-capturable by default either.
             if (UserDefaults.standard.object(forKey: "qaudion.chat.screenshot_lock_enabled") as? Bool) ?? true {
-                ScreenshotLockService.lock(owner: "group_chat")
+                ScreenshotLockService.lock(owner: ScreenshotLockService.groupChatOwner)
             }
         }
         .onDisappear {
             if appState.activeGroupHex == groupHex { appState.activeGroupHex = nil }
-            ScreenshotLockService.unlock(owner: "group_chat")
+            ScreenshotLockService.unlock(owner: ScreenshotLockService.groupChatOwner)
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.userDidTakeScreenshotNotification)) { _ in
             guard ChatProtectionPolicy.lockPreferenceEnabled() else { return }
