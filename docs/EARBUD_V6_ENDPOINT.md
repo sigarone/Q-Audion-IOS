@@ -2,8 +2,11 @@
 
 Status: Accepted by the owner 2026-11-17 (revision 2 + decisions). The accepted text is revision 2, which answers an
 adversarial review of revision 1 (§16 lists every issue raised and what was done with it), with the owner's decisions
-on the open points recorded and made normative (§14). This file is revision 3 of that text; §17 lists every change
-from revision 2 and carries no rule. Docs only: nothing in this file changes behaviour until the WIRE_SPEC text of
+on the open points recorded and made normative (§14). This file is revision 4 of that text: revision 3 recorded the
+first round of decisions, revision 4 records the second round of the same evening and answers the open questions of
+the reviewers and of the KAT generator (§14, §17.2), with the fixes of the review of its first text (§17.2 rows 40 to
+52). §17 lists every change of both revisions and carries no rule.
+Docs only: nothing in this file changes behaviour until the WIRE_SPEC text of
 Appendix A and Appendix B has landed byte-identical in every locked copy together with this file (§13.3) and the KAT
 file of §13 is generated and pinned. Implementation work on the earbud call path starts from phase 0 of §12.1, after
 that landing.
@@ -19,9 +22,11 @@ Baselines this document was written against (every `file:line` below refers to t
 | bcrypto-server open PRs | checked 2026-11-17 | only #328 (earbud-excl-v2 KAT sync, verifier docstring); it touches neither `WIRE_SPEC.md` nor `docs/PQC_HARDENING_V1.md` |
 | qaudion-android-new | `origin/main` `970e77fd` (2026-11-16) | the files first cited in revision 2 were read at `614bc164` (2026-11-17) |
 | qaudion-ios | `origin/main` `6859edb7` (2026-11-17) | the alignment snapshot of 2026-11-16 was `d269ef18`; the files cited were re-read at `6859edb7` |
-| qaudion-firmware | PR #5, `fix/fw-build-align-2026-11` head `74a43d2` | LM20B builds on NCS v3.3.5; `main` is `38fad83`; `button_handler.c`, `ble_gap.c`, `secure_services.c` and both `prj.conf` files were re-read at `74a43d2` for revision 2 |
+| qaudion-firmware | PR #5, `fix/fw-build-align-2026-11` head `74a43d2` | LM20B builds on NCS v3.3.5; `main` was `38fad83` when read (PR #5 has merged since: `main` is `235b994` on 2026-11-18); `button_handler.c`, `ble_gap.c`, `secure_services.c` and both `prj.conf` files were re-read at `74a43d2` for revision 2 |
 | qaudion-firmware | PR #6, `fix/mcuboot-ed25519-2026-11` head `03a83f3` | stacked on PR #5; read for revision 3 only, for the MCUboot anti-rollback decision (§8.3): `firmware/sysbuild.conf`, `firmware/sysbuild/mcuboot.conf` |
 | Firmware spike | 2026-11-17, helsinki `~/vol/fwbuild/spike-logs` | Ed25519, ML-DSA-87, veneers, transport and RAM measurements quoted in §12; silicon timings were not measured |
+| qaudion-firmware | branch `feat/ep-phase0` read at `934e22a` (stacked on `74a43d2`; its head on 2026-11-18 is `86293ad`, after a merge of `main` and a runbook commit) | read for revision 4: `docs/PHASE0_DK_RUNBOOK.md` and the commits `1b759cc` (bench log levels) and `934e22a` (phase-0 headroom); the flash and RAM figures of §12.2 and §12.3 marked "measured, revision 4" come from NCS v3.3.5 builds of `74a43d2` and of this branch (the LC3 and LE Audio figure from two phase-0 builds at `201188a`, Appendix C); `qaudion_gatt.c` re-read at `74a43d2` for the DIAG record (§4.5); the runbook, `config/phase0_mldsa.conf` and `~/vol/ep0-artifacts/BUILD_INFO.txt` re-read at `86293ad` for the review of revision 4 (§3.1, Appendix C) |
+| bcrypto-server | branch `kat/earbud-ep-v1` head `e7cde5d` | `tools/kat/earbud-ep-v1/README.md`: the open points TODO-1 to TODO-19 that revision 4 answers (§17.2) |
 
 This document is a companion of `WIRE_SPEC.md` and `docs/PQC_HARDENING_V1.md`. It defines no new call transcript,
 call KDF, KCMAC, SAS or media construction: the earbud speaks exactly the v6 handshake of WIRE_SPEC §3.7 and the
@@ -44,9 +49,10 @@ phone-earbud link), the earbud's identity, and the rules that make peers accept 
 - "WIRE_SPEC" is the calling contract `WIRE_SPEC.md`: at the lock sha of the baseline table when this text was
   written, and from the landing of Appendix A and Appendix B (§17) at the hash that its lock records; "PQC" is
   `docs/PQC_HARDENING_V1.md`. "PQC B2" means item B2 of that document.
-- Constants fixed by the owner decisions of §14: `EP_MAX_HOSTS = 4` (hosts per earbud, OD-2, §3.2) and
-  `EP_MAX_ENDPOINTS_PER_USER = 4` (§3.6); the capture press adds `ANSWER_PRESS_WINDOW = 10 s` (OD-6 (b), §7.10). Every
-  other constant is defined where it first appears.
+- Constants fixed by the owner decisions of §14: `EP_MAX_HOSTS = 4` (hosts per earbud, OD-2, §3.2),
+  `EP_MAX_ENDPOINTS_PER_USER = 4` and `EP_MAX_TOMBSTONES_PER_USER = 32` (§3.6); the capture press adds
+  `ANSWER_PRESS_WINDOW = 10 s` (OD-6 (b), §7.10, value confirmed by the owner on 2026-11-17). Every other constant is
+  defined where it first appears.
 
 | Term | Meaning |
 |---|---|
@@ -62,6 +68,7 @@ phone-earbud link), the earbud's identity, and the rules that make peers accept 
 | owner host | the host whose authenticated EPL session created a call context; only it may drive that context (§9.13) |
 | confirm gesture | a press-and-hold of at least 3 s of the earbud button that starts after the earbud opened a confirm window; the only gesture that confirms an enrolment or the removal of another host (§9.14) |
 | EP call | a 1:1 call whose local endpoint is the earbud |
+| no-endpoint earbud | an earbud whose image reports PROTOCOL_VERSION `0x02` and exposes no `EP_INFO` (the authoritative and production images, §10.1): its host uses only the characteristics that WIRE_SPEC §7 keeps besides `EP_INFO` (DIAG, attestation, KEY_IMPORT, FE-5 pairing, PSK_LIST), opens no EPL and places no EP call (§8.1) |
 | secure code | the firmware modules that hold call secrets. With owner decision (2) the dev board runs a single image, so this is a module boundary, not hardware isolation (§1.4, §10.2) |
 
 ---
@@ -85,6 +92,12 @@ phone-earbud link), the earbud's identity, and the rules that make peers accept 
    the exclusivity rules of §9.6; OD-6 (b), the capture indicator plus a fresh earbud press in each call before the
    microphone opens. MCUboot anti-rollback is the software version check now; the hardware OTP counter is decided
    later, with the factory flow.
+6. Second round, the same evening (§14): the retired relay plane is removed from every firmware profile in phase 1,
+   so the authoritative and production images report PROTOCOL_VERSION `0x02` without `EP_INFO` and their hosts apply
+   the decision of §8.1; the values revision 3 chose are confirmed; a refusing `EP_AUTH` carries no key and no
+   signature (§4.3); the envelope's `sender_device_id` is always required (§3.7); and the server rules of §3.6: only
+   the host device publishes, per-host removal, a cap of 32 tombstones per account, erasure at account deletion, the
+   DR and failover export, strict decoding of the publish body.
 
 Owner rules of earlier decisions that still bind this design: no call is refused because a peer lacks a capability
 (PQC §0.1 rule 1; the checks this document adds that can end a call are tampering or identity checks, stated as such
@@ -136,11 +149,11 @@ where they appear); before launch a binary-incompatible change is a hard switch 
 
 | Repo | Change |
 |---|---|
-| firmware | the endpoint itself: EPL with its session protocol, identity, enrolment gate, v6 handshake, key schedule, inner seal, media profile, media gate and capture indicator, gestures, exclusivity, telemetry; removal of the retired relay dialect (§8.4) |
+| firmware | the endpoint itself: EPL with its session protocol, identity, enrolment gate, v6 handshake, key schedule, inner seal, media profile, media gate and capture indicator, gestures, exclusivity, telemetry; removal of the retired relay dialect from every firmware profile (§8.4) |
 | Android | host role (§9), including the host-anchored `sigPq` (§3.9); remote-peer verification of earbud endpoints (§3.7, R-EP-PQ); 20 ms receive from an earbud peer (§2.3) |
 | iOS | host role, new feature (§9.11); remote-peer verification; audio profile rule |
 | Desktop, web app | remote-peer verification of earbud endpoints (R-EP-VERIFY, R-EP-PQ) and the audio profile rule only |
-| server | endpoint records API with permanent tombstones and the Sigsum leaf (§3.6), `certPq` verification (phase 2, §3.9); KAT generator and recomputation (§13); the WIRE_SPEC lock gains the firmware repo and a second hash for this document |
+| server | endpoint records API (§3.6): publication by the host device only, strict body decoding, per-host removal, permanent tombstones with a cap per account, erasure at account deletion keeping only the hashes of revoked keys, the DR and failover export, the Sigsum leaf; `certPq` verification (phase 2, §3.9); KAT generator and recomputation (§13); the WIRE_SPEC lock gains the firmware repo and a second hash for this document |
 
 ---
 
@@ -274,9 +287,17 @@ strings it advertises in a phone call (`aprof-60x256-recv-v1`, `dc-mux-v1`, `dc-
 - KAT and QEMU builds run the same signing code over a software key imported from the vector seed. That import path
   exists only under a test Kconfig option that the CI configuration check rejects in the CI, bench, authoritative and
   production profiles. The production path (`psa_sign_message` with a KMU handle on CRACEN) gets its own known-answer
-  check on the DK: a test image imports the vector seed into a spare KMU slot, signs the `eplAuth` and `flows`
-  messages through the KMU handle, compares the signatures byte for byte with the vectors (Ed25519 is
-  deterministic), and destroys the key (§13.1, acceptance item 11).
+  check on the DK: a test image imports the vector seed into a spare KMU slot, signs the messages of the
+  `kmuKnownAnswer` section (§13.1) through the KMU handle, compares the signatures byte for byte with the vectors
+  (Ed25519 is deterministic), and destroys the key (§13.1, acceptance item 11).
+- One test image is exempt from that destruction: the phase-0 DK self-test image (`CONFIG_QA_PHASE0_TESTS`, built
+  only on the bench overlay and refused by every other profile, §12.1) keeps its test keys and destroys nothing, so
+  that its reboot persistence test can run: the phase-0 EK that it generates in KMU slots 120 and 121 (handle
+  `0x7fff3078`), the known-answer keys imported from public vector seeds into slots 124 to 127 (two keys, at 124 and
+  126, two slots each), and the persistent PSA keys it creates (ids `0x100` to `0x103`, `0x200` and `0x7000`;
+  `docs/PHASE0_DK_RUNBOOK.md` at `86293ad`). Because the imported keys are public and the phase-0 EK belongs to no
+  enrolment, `nrfutil device recover` (an ERASEALL, which also erases
+  the KMU) MUST be run on that board before any other image is flashed on it; no other image may keep a test key.
 
 EK signs exactly five kinds of message, each with its own domain prefix, and nothing else: the v6 transcripts (domain
 `qaudion-handshake-sig-v6`, WIRE_SPEC §3.7), the EPL authentication (§4.3), the EPC proof of possession (§3.3), the
@@ -364,9 +385,16 @@ can hear.
    record is sealed under keys no radio attacker of the first pairing can know (§4.3). The host checks there that
    `epEdPub` equals the EK of `ENROLL_RESULT`, reads `HOST_LIST` and shows the enrolled hosts; a host the user does
    not recognise is removed with `UNENROLL` (confirm gesture).
-9. The host stores EK, `earbudId` and the endpoint id, and publishes the endpoint record (§3.6). If the publication
-   fails it retries in the background; peers accept an unlisted endpoint only within the 7-day window of §3.7 step 4
-   (c), so the host shows "Earbud not yet registered" until the publication succeeds.
+9. The host stores EK, `earbudId` and the endpoint id, and publishes the endpoint record (§3.6). Check 6 of §3.6
+   refuses an earbud that was never attested, so before its first publication for an earbud the host runs the
+   existing earbud attestation (§3.2: `ATTEST_INFO` and `ATTEST_POP` of WIRE_SPEC §7, then
+   `POST /api/v1/device/earbud-attest`) unless it has already attested that `earbudId` for this account. If the
+   publication fails on the network or with a 5xx answer it retries in the background. A 4xx answer of §3.6 is shown
+   with its code and is never retried automatically: the host publishes the same record again only after the cause
+   was removed, that is after a successful attestation for 412 `earbud_not_attested`, and after the user removed an
+   endpoint or a host record for 409 `endpoint_limit`; every other 4xx answer is final for that record. Peers accept
+   an unlisted endpoint only within the 7-day window of §3.7 step 4 (c), so the host shows "Earbud not yet
+   registered" until the publication succeeds.
 
 What the code gives, stated: the four symbols carry 8 bits. They are a function of the session transcript, which
 contains the host's commitment made before the earbud revealed its ephemeral key (§4.3), so an attacker between the
@@ -400,7 +428,8 @@ Every OFFER and ACCEPT signed by EK, rekey rounds included, carries one top-leve
   member inside it included, makes the member absent. An absent member is never a malformed bundle by itself.
 - The member is outside the signed transcript and outside EXTX. It needs no binding: it is self-authenticating
   (`cert`, `pop`), and `epEdPub` is the transcript's `signerIK32`. Stripping it only sends the verifier to the
-  R-IDENTITY path (media held pending the SAS).
+  R-IDENTITY path (media held pending the SAS), where a bundle that declares `earbudEpV1` never gets its key pinned
+  (§3.7, "No valid `endpoint` member").
 - Size about 420 bytes of JSON; it is counted in the 24 KiB rule of PQC §5.6. The phase-2 host certificate
   `certPq` (§3.9) is not carried in bundles: it is fetched with the earbud's ML-DSA key, which a bundle never
   carries either (PQC §5.4).
@@ -415,7 +444,7 @@ EK there would change the key every peer uses for the chat safety number and for
 `endpointId` = lowercase hex of the first 16 bytes of `SHA-256(epEdPub)` (32 characters), derived by the server and
 by every client in the same way.
 
-`POST /api/v1/users/me/endpoints` (authenticated; the publishing device is the host):
+`POST /api/v1/users/me/endpoints` (authenticated; only the host device publishes, check 2 below):
 
 ```json
 {
@@ -433,31 +462,91 @@ by every client in the same way.
 }
 ```
 
-The server: checks that `host_device_id` is a device of the authenticated user whose stored per-device identity bundle
-has `ed25519_pub` equal to `host_ed25519_pub_b64`; applies the uniform Ed25519 rule to both keys; rebuilds the EPC and
-verifies both signatures; requires `earbud_id_b64` to be bound to the same user by `earbud-attest` (else 409, or 412 if
-not attested at all); refuses an `endpoint_ed25519_pub_b64` already registered by another user (409); refuses an
-`endpoint_ed25519_pub_b64` that has a revocation tombstone (410). Limits (owner decision OD-2): at most
-`EP_MAX_ENDPOINTS_PER_USER = 4` distinct endpoints (distinct `endpointId`) that are not revoked, and at most
-`EP_MAX_HOSTS = 4` records per endpoint (one per host device, §3.2), so one earbud enrolled by four phones uses one
-endpoint of the user's budget. The per-user budget of live records is therefore at most 4 × 4 = 16, and one host
-device holds at most one live record per endpoint, so at most 4: the `endpoints` member of one device (below) has at
-most 4 live entries and the `?all=1` shape at most 16 live entries in all. A registration that would exceed either
-limit is refused with 409 and changes nothing; a record for an existing `(hostDeviceId, endpointId)` replaces it and
-is never counted twice; tombstones are not counted against either limit. A new record for the same
-`(hostDeviceId, earbudId)` with a different EK revokes the previous one (re-enrolment after a reset). The response
-is `{"endpoint_id": "<id>"}`. Each accepted record queues a Sigsum leaf
+The server runs these checks in order. The first that fails answers with its status and the error body
+`{"error":"<code>"}` (the server's existing error shape, `jsonErr`, `cmd/bcrypto-lite/main.go:4771-4775`) and changes
+nothing:
+
+1. Strict decoding, 400 `endpoint_body_invalid`. The body is one JSON object, decoded under the strict RFC 8259 rule
+   of WIRE_SPEC §3.1 (D27), with exactly the eleven members above, each once. Member names are compared byte for byte
+   with those names, so an unknown member, a duplicate member name and a name that differs from one of them only in
+   case are all refused (a case-insensitive decoder, such as Go's `encoding/json` used alone, does not meet this
+   rule). `version` is the integer 1 and `kind` the string `earbud`; `host_device_id` meets §3.3; the base64 values
+   pass the canonical rule of PQC §2.3 and decode to the stated lengths; `created_ms` is an integer in
+   `[1, 2^53 − 1]` and `build_profile` and `board` integers in `[0, 255]`, written without sign, fraction or exponent.
+2. Caller, 403. The authenticated device (the device of the bearer token) MUST NOT be revoked, `device_revoked` (the
+   authentication layer may refuse such a request earlier, as it refuses every request of a revoked device), and MUST
+   be `host_device_id`, `endpoint_host_mismatch`.
+3. Host key, 409 `endpoint_host_key_mismatch`: the stored per-device identity bundle of `host_device_id` has
+   `ed25519_pub` equal to `host_ed25519_pub_b64`.
+4. Keys, 400 `endpoint_key_invalid`: both keys pass rules 1 and 2 of the uniform Ed25519 rule.
+5. Signatures, 400 `endpoint_sig_invalid`: the server rebuilds the EPC from the body and the account UUID and verifies
+   `cert` under the host key and `pop` under EK (uniform Ed25519 rule).
+6. Earbud: 412 `earbud_not_attested` when `earbud_id_b64` was never attested; 409 `earbud_other_account` when
+   `earbud-attest` bound it to another account.
+7. Revoked key, 410 `endpoint_revoked`: EK has a tombstone in any account, this one or another, or its SHA-256 is in
+   the set of revoked keys that account deletion keeps (below).
+8. Key of another account, 409 `endpoint_key_taken`: EK has a live record (below) in another account. A tombstone of
+   another account is refused by check 7 already.
+9. Limits (owner decision OD-2), 409 `endpoint_limit`: the registration would leave more than
+   `EP_MAX_ENDPOINTS_PER_USER = 4` endpoints with a live record, or more than `EP_MAX_HOSTS = 4` live records for this
+   endpoint (one per host device, §3.2), so one earbud enrolled by four phones uses one endpoint of the budget.
+10. Tombstone cap, 409 `endpoint_tombstone_limit`: the account holds `EP_MAX_TOMBSTONES_PER_USER = 32` tombstones or
+    more and the registration would add a live record (a `(hostDeviceId, endpointId)` that has none); a registration
+    that replaces an existing live record is not refused by this check.
+
+A live record is a record that is neither revoked nor removed (both below) and whose host device is neither revoked
+nor deleted. The limits count live records only: an endpoint counts toward `EP_MAX_ENDPOINTS_PER_USER` while it has a
+live record, tombstones count against neither limit, and a record for an existing `(hostDeviceId, endpointId)`
+replaces it and is never counted twice. The per-user budget of live records is therefore at most 4 × 4 = 16, and one
+host device holds at most one live record per endpoint, so at most 4: the `endpoints` member of one device (below) has
+at most 4 live entries and the `?all=1` shape at most 16 live entries in all. A new record for the same
+`(hostDeviceId, earbudId)` with a different EK revokes the previous one (re-enrolment after a reset). On success the
+server stores the validated fields, never the request text, and answers 200 with `{"endpoint_id": "<id>"}`; every list
+entry it serves later is its own serialization of the stored fields. Each accepted record queues a Sigsum leaf
 `SHA-256("qaudion-kt-endpoint-v1\x20" ‖ uuid16 ‖ hostEdPub[32] ‖ epEdPub[32] ‖ be64(created_ms))`, through the same
 worker as the identity leaves; a submission failure never affects the publish.
 
-`DELETE /api/v1/users/me/endpoints/{endpointId}` from any device of the user revokes every record of that endpoint.
-Revocation is permanent: the record becomes a tombstone `{endpoint_id, endpoint_ed25519_pub_b64,
-host_ed25519_pub_b64, created_ms, revoked_ms}` that is listed for ever (about 150 bytes each; it is never deleted, so
-a revoked key can never become valid again by the certificate alone), and the same EK can never be registered again.
+Revocation. `DELETE /api/v1/users/me/endpoints/{endpointId}` from any non-revoked device of the account
+(403 `device_revoked` otherwise) revokes every record of that endpoint and answers 204; 404 `endpoint_not_found` when
+the account has no record of it; an endpoint that is already revoked answers 204 and nothing changes. Revocation is
+never refused because of a limit or of the tombstone cap. It is permanent: each record becomes a tombstone
+`{endpoint_id, endpoint_ed25519_pub_b64, host_ed25519_pub_b64, created_ms, revoked_ms}` that is listed for ever (about
+150 bytes each; it is never deleted, so a revoked key can never become valid again by the certificate alone), and the
+same EK can never be registered again, by this account or by any other (check 7). Check 10 stops new live records
+once the account holds 32 tombstones; revocation stays open, so the tombstones of the records still live at that
+point can be added beyond 32.
+
+Per-host removal, for a lost or replaced host phone.
+`DELETE /api/v1/users/me/endpoints/{endpointId}/hosts/{hostDeviceId}` (`hostDeviceId` as one RFC 3986 path segment,
+percent-encoded from its exact UTF-8 bytes) from any non-revoked device of the account (403 `device_revoked`
+otherwise) removes the live record of that host device for that endpoint WITHOUT a
+tombstone and answers 204: EK stays valid for the other hosts and may be registered again by a host device, the
+removed one included. 410 `endpoint_revoked` when the account holds a tombstone of that endpoint, checked first, so a
+revoked endpoint answers 410 whatever the host device named (a tombstone is never removed); otherwise 404
+`endpoint_not_found` when no live record of that pair exists. The records of a host device that is revoked or deleted
+are treated the same way: they are not counted toward `EP_MAX_HOSTS` and are never listed to peers as live
+entries; a revoked device that is restored later does not bring them back, its host publishes again. A tombstone is
+never hidden: the tombstones of such a host device stay listed like every other tombstone (below) wherever that
+device's payload is served. Afterwards the `endpoints` list of that host
+device no longer contains K, so step 4 (c) of R-EP-VERIFY (§3.7) applies to the bundles that host signs with K: they
+fail as unlisted (`identity_unresolved`, `ep=unlisted_stale`, media held pending the SAS) at every peer that had
+pinned the endpoint, and at every other peer once `created` is more than 7 days old; inside those 7 days a peer that
+never pinned the endpoint accepts it as `ep=unlisted`, the publication-lag window that any holder of HK can use in any
+case (§1.4). Removing a record does not stop the host device itself from publishing it again: against a lost phone the
+user also revokes that device, after which check 2 refuses its publications. The earbud still holds the host's entry:
+the earbud's owner removes it with `UNENROLL` from another enrolled host (confirm gesture, §3.8, §4.5); until then that
+host, if it still holds HK and reaches the earbud, can open an EPL session.
+
+Account deletion, erasure rule. When an account is deleted the server first revokes every endpoint of the account that
+has a live record, then erases every endpoint record, certificate, proof of possession and tombstone of the account.
+Of the whole endpoint store of the account it keeps only the SHA-256 of each revoked EK: 32 bytes each, stored with no
+account identifier, host key, device id, time or any other field, in a set that is never deleted. Check 7 refuses an
+EK whose SHA-256 is in that set, so a revoked EK can never be registered again by any account. Leaves already
+submitted to the Sigsum log are outside the server's store and are not affected.
 
 Fetch: the payload of a device bundle (`bundlePayload`, `users_identity_key.go:390-420`) gains the member `endpoints`
-only when that device has endpoint records, in all three fetch shapes (default, `?device_id=`, `?all=1`). Old clients
-ignore it and every other payload stays byte-identical:
+only when that device has live endpoint records or tombstones, in all three fetch shapes (default, `?device_id=`,
+`?all=1`). Old clients ignore it and every other payload stays byte-identical:
 
 ```json
 "endpoints": [ {
@@ -469,9 +558,27 @@ ignore it and every other payload stays byte-identical:
 ```
 
 A tombstone appears in the same list with `revoked_ms > 0` and without the certificate members. The list is sent
-complete (no paging); with the limits above and tombstones it stays small. Phase 2 adds the ML-DSA members of §3.9 to
-an entry. EK is never part of the device key set returned by `?all=1`: a peer that only knows the device set must not
-take EK for a device key (iOS would re-pin to it, `HandshakeSigningPolicy.swift:42`, `:199`).
+complete (no paging); with the limits and the tombstone cap above it stays small. Phase 2 adds the ML-DSA members of
+§3.9 to an entry. EK is never part of the device key set returned by `?all=1`: a peer that only knows the device set
+must not take EK for a device key (iOS would re-pin to it, `HandshakeSigningPolicy.swift:42`, `:199`).
+
+The phase-2 publication `POST /api/v1/users/me/endpoints/{endpointId}/mldsa` (§3.9) follows the same rules: strict
+decoding of its body (check 1, with the seven members of §3.9), a caller that is not revoked and is the host device of a
+live record of that endpoint (403 `device_revoked`, `endpoint_host_mismatch`), and the error body above.
+
+Operational requirements of the server:
+
+- The DR export and the failover export carry the per-device identity bundles (bucket
+  `user_identity_bundles_by_device_v2`, `internal/store/bbolt.go:184`), the endpoint records, the tombstones, the set
+  of revoked-key hashes and the device revocation records that the per-host rule above reads (`revoked_keys`, `:78`).
+  At `c1790e7` `drExportBuckets` (`internal/store/bbolt.go:4629-4641`), which `failoverExportBuckets` extends
+  (`:4650-4670`), carries `user_identity_bundles_v2` but neither of those two buckets. Without the per-device bundles a
+  failover node finds no record for `?device_id=`, falls through to the user's latest bundle
+  (`users_identity_key.go:452-454`, `:476-485`) and so serves the latest device's endpoints for every device id.
+- The primary MUST NOT be rolled back below the first server binary that stores endpoint records, and the deployment
+  procedure MUST refuse such a rollback: an older binary does not know the endpoint stores, its exporter drops them,
+  and a failover node fed by that export lists no endpoint, so peers read a revoked endpoint as unlisted (accepted
+  while young, §3.7 step 4 (c)) instead of revoked.
 
 ### 3.7 Verification by the remote peer (R-EP-VERIFY)
 
@@ -484,13 +591,15 @@ the final R-IDENTITY step of its identity resolution:
 2. Otherwise, if the bundle carries a valid `endpoint` member (§3.5): rebuild the EPC with `uuid_raw` of the call's
    peer user (from the call context, never from the bundle), `hostDeviceId`, `hostKey`, `kind = 0x01`,
    `epEdPub = K`, `earbudId`, `created`, `profile` and `board`. Verify `pop` under `K` and `cert` under `hostKey`
-   (uniform Ed25519 rule). If the envelope that carried the bundle has a `sender_device_id`, it MUST equal
-   `hostDeviceId`. Any failure: verdict `identity_key_mismatch` (media held pending the SAS, WIRE_SPEC §3.8.6), log
+   (uniform Ed25519 rule). The envelope that carried the bundle MUST carry `sender_device_id`, and it MUST equal
+   `hostDeviceId` byte for byte (WIRE_SPEC §3.7.3; the server stamps the field on every live and replayed
+   `opaque_message`, WIRE_SPEC §3.7.4 R-COMMIT-KCMAC-DEVICE): an envelope without the field or with another value fails
+   this step. Any failure: verdict `identity_key_mismatch` (media held pending the SAS, WIRE_SPEC §3.8.6), log
    `ep=cert_invalid`.
 3. Resolve `hostKey` as the peer's device key for `hostDeviceId` with the existing resolver (observed key `hostKey`).
    If that resolution is `Unauthenticated` or `Unresolved`, the verdict is the one the resolver gives for `hostKey`
-   (`identity_key_mismatch` or `identity_unresolved`). A deleted host device no longer resolves, which also ends its
-   endpoints.
+   (`identity_key_mismatch` or `identity_unresolved`), log `ep=host_mismatch` or `ep=host_unresolved`. A deleted host
+   device no longer resolves, which also ends its endpoints.
 4. Server listing, from the fetch of the host device's record that the client makes for the call (a callee during
    ringing, a caller when it starts the call, as for identity keys):
    - (a) the list has a tombstone for `K` (`revoked_ms > 0`): verdict `identity_key_mismatch`, log `ep=revoked`,
@@ -499,7 +608,9 @@ the final R-IDENTITY step of its identity resolution:
    - (c) the fetch succeeded and `K` is not in the list: accepted only while the endpoint is young, i.e. `created` is
      at most `EP_UNLISTED_GRACE = 7` days before the verifier's clock and at most 1 day after it (publication lag, a
      retrying host), log `ep=unlisted`. Outside that window: verdict `identity_unresolved` (media held pending the
-     SAS), log `ep=unlisted_stale`. An endpoint pinned earlier and no longer listed is treated the same way.
+     SAS), log `ep=unlisted_stale`. An endpoint that this client had pinned and that the successful fetch no longer
+     lists was listed before (step 6 pins only listed endpoints) and was then removed by its owner (§3.6): verdict
+     `identity_unresolved`, log `ep=unlisted_stale`, whatever its age, and its endpoint pin is deleted.
    - (d) the fetch failed (offline, server error): an endpoint pinned earlier for `(peer user id, hostDeviceId,
      hostKey, K)` is accepted, log `ep=pinned_offline`; an endpoint not pinned gets `identity_unresolved` (media held
      pending the SAS), log `ep=unverified_offline`. The client re-checks the pin at its next successful fetch.
@@ -510,21 +621,56 @@ the final R-IDENTITY step of its identity resolution:
    record keyed by `K`. The PQC §5.5 table is applied to that record with the endpoint resolution of §3.9: a bundle
    whose `sigHybrid` does not verify under the host's ML-DSA key (phase 1) or under an earbud ML-DSA key certified by
    the host's ML-DSA key (phase 2) is, toward a pinned host, the PQC §5.5 anomaly (visible warning, `auth=C`, never
-   an end of call), and the endpoint is not pinned by such a call.
-6. The verdict is `authenticated endpoint`: `sigV6` is verified under `K` over the rebuilt transcript, and the rest of
-   the call policy runs unchanged with `K` as the signer key, except that every capability and PQ pin lookup uses the
-   host's record of step 5. The client records an endpoint pin `(peer user id, hostDeviceId, hostKey, K)` only when
-   steps 4 and 5 gave no anomaly. The device pin of `hostDeviceId` stays the pin of `hostKey`: EK never replaces it,
-   so the chat safety number and the phone calls of the same contact are not affected.
-7. A SAS confirmed in such a call pins `K` as endpoint of `hostKey` and confirms `hostKey` for `hostDeviceId`. The pop
-   makes this sound against a third party: an adversary who certified a genuine EK with a key of its own would need
-   EK's signature over an EPC that names its key, and the earbud signs a pop only at an enrolment confirmed with the
-   confirm gesture (§3.4). It gives nothing against the contact's own host, which can mint a software EK (§1.4).
+   an end of call), and the endpoint is not pinned by such a call. The log tokens are `ep_pq=` and `pq_sig=` of §11.2.
+6. The verdict is `authenticated endpoint`: `sigV6` is verified under `K` over the rebuilt transcript, after steps 2 to
+   5, and the rest of the call policy runs unchanged with `K` as the signer key, except that every capability and PQ
+   pin lookup uses the host's record of step 5. A `sigV6` that does not verify gives `sig_invalid` (media held pending
+   the SAS, WIRE_SPEC §3.8.6) and pins nothing. The client records an endpoint pin `(peer user id, hostDeviceId,
+   hostKey, K)` only when step 4 gave `ep=listed`, step 5 gave no anomaly and `sigV6` verified: an endpoint accepted
+   as `ep=unlisted` or `ep=pinned_offline` is not pinned anew. The device pin of `hostDeviceId` stays the pin of
+   `hostKey`: EK never replaces it and is never pinned as a device key, so the chat safety number and the phone calls
+   of the same contact are not affected.
+7. A SAS confirmed in a call whose verdict is `authenticated endpoint` with `ep=listed`, no step-5 anomaly and a valid
+   `sigV6` pins `K` as endpoint of `hostKey` and confirms `hostKey` for `hostDeviceId`. In every other case a confirmed
+   SAS releases the media hold of that call, if there is one (WIRE_SPEC §3.8.6), and pins nothing (table below). The
+   pop makes the pin sound against a third party: an adversary who certified a genuine EK with a key of its own would
+   need EK's signature over an EPC that names its key, and the earbud signs a pop only at an enrolment confirmed with
+   the confirm gesture (§3.4). It gives nothing against the contact's own host, which can mint a software EK (§1.4).
 8. A later bundle with an endpoint key different from the pinned one for the same `hostKey` is not an identity change
    of the contact: a new EK with a valid certificate by an authenticated host, accepted by step 4 and without an
    anomaly in step 5, is a new or replaced earbud, shown as a neutral notice ("<contact> now uses a new Q-Audion
-   earbud"), never as the identity-change warning. With an anomaly in step 5 the anomaly's warning is shown instead
-   and the new key is not pinned (the "rogue EK under a pinned host" vectors of §13.1).
+   earbud"), never as the identity-change warning; it is pinned only by the rules of steps 6 and 7. With an anomaly in
+   step 5 the anomaly's warning is shown instead and the new key is not pinned (the "rogue EK under a pinned host"
+   vectors of §13.1).
+
+No valid `endpoint` member. When step 1 does not resolve `K` and the bundle carries no valid `endpoint` member
+(absent, invalid, or counted as absent by §3.5), steps 2 to 8 do not run: the bundle gets the verdict of the client's
+existing R-IDENTITY step for `K`, `identity_key_mismatch` when the existing resolution says `Unauthenticated` for `K`
+and `identity_unresolved` when it says `Unresolved`, media held pending the SAS in both cases. When the bundle's
+`capabilities` carry `earbudEpV1` (every earbud bundle carries the member, §2.3) the log is `ep=absent` and a SAS
+confirmed in that call releases its hold and pins nothing: `K` is never pinned as a device key. A bundle without
+`earbudEpV1` is an ordinary unknown key, judged by the existing rules.
+
+Pin actions. The first step that fails gives the verdict; the device pin of `hostDeviceId` is changed by no row except
+the confirmation of `hostKey` in the `ep=listed` row, and `K` is never pinned as a device key in any row.
+
+| Outcome | Verdict | `ep=` | Endpoint pin of `K` | A SAS confirmed in the call |
+|---|---|---|---|---|
+| step 1 resolves `K` | existing resolution | none | not touched | the existing rule |
+| no valid `endpoint` member | R-IDENTITY verdict for `K` | `absent` with `earbudEpV1`, else none | not touched | with `earbudEpV1`: releases the hold, pins nothing; without: the existing rule |
+| step 2 fails (certificate, pop, `sender_device_id`) | `identity_key_mismatch` | `cert_invalid` | not touched | releases the hold, pins nothing |
+| step 3 fails | `identity_key_mismatch` or `identity_unresolved` | `host_mismatch` or `host_unresolved` | not touched | releases the hold, pins nothing |
+| 4 (a) tombstone | `identity_key_mismatch` | `revoked` | deleted | releases the hold, pins nothing |
+| 4 (b) listed, no step-5 anomaly, `sigV6` valid | `authenticated endpoint` | `listed` | recorded | pins `K` as endpoint of `hostKey` and confirms `hostKey` for `hostDeviceId` (step 7) |
+| 4 (b) listed, step-5 anomaly, `sigV6` valid | `authenticated endpoint` with the PQC §5.5 warning, `auth=C` | `listed` | not recorded; an existing one is kept | pins nothing for the endpoint; the record `(peer user id, hostKey)` changes only as PQC §5.5 says for a SAS confirmed from the warning |
+| 4 (c) young, never pinned, `sigV6` valid | `authenticated endpoint` | `unlisted` | not recorded | pins nothing |
+| 4 (c) stale, or pinned and no longer listed | `identity_unresolved` | `unlisted_stale` | deleted | releases the hold, pins nothing |
+| 4 (d) pinned, fetch failed, `sigV6` valid | `authenticated endpoint` | `pinned_offline` | kept, re-checked at the next successful fetch | pins nothing new |
+| 4 (d) not pinned, fetch failed | `identity_unresolved` | `unverified_offline` | not recorded | releases the hold, pins nothing |
+| steps 2 to 5 pass, `sigV6` invalid | `sig_invalid` | the token of step 4 | not recorded; an existing one is kept | releases the hold, pins nothing |
+
+An endpoint that a call did not pin is verified again from step 1 at the next call: nothing of that call is
+remembered for the endpoint except the deletions in the table, and the PQ record follows PQC §5.5.
 
 A client that predates this section sees an unknown signer key and holds media pending the SAS (R-IDENTITY) on every
 EP call. That is safe and degrades every call, so the release gate of §8.6 applies.
@@ -540,9 +686,13 @@ those of WIRE_SPEC §4, computed by the earbud on the other side.
 - Lost or replaced earbud: the user removes it in the host app (DELETE, §3.6) or from any other device of the account.
   The revocation is a permanent tombstone, so the lost unit's EK stays refused by every peer that fetches (§3.7 step
   4). The host also sends `UNENROLL` if the earbud is reachable.
-- Lost host phone: the user revokes the endpoint records of that host from another device. The earbud still holds the
-  lost host's entry; a new host removes it with `UNENROLL` naming that host key, which needs the confirm gesture
-  (§4.5, §9.14). The earbud settings of every enrolled host list the enrolled hosts (`HOST_LIST`).
+- Lost or replaced host phone: from another device of the account the user removes that host's records with the
+  per-host route of §3.6 (no tombstone: EK stays valid for the other hosts) and, for a lost phone, revokes the device,
+  which also hides its records and stops it from publishing them again (§3.6). Peers then see that host's calls with
+  the endpoint as unlisted (§3.6, §3.7 step 4 (c)). The earbud still holds the host's entry; another enrolled host
+  removes it with `UNENROLL` naming that host key, which needs the confirm gesture (§4.5, §9.14), and until then a
+  lost phone that holds HK and reaches the earbud can still open an EPL session. The earbud settings of every enrolled
+  host list the enrolled hosts (`HOST_LIST`).
 - Replacement earbud: a new enrolment, a new EK, a new record. Peers see a new endpoint of an authenticated host
   (§3.7 step 8).
 - Factory reset: a physical gesture defined by the firmware (proposed: hold the button for 10 s while powering on,
@@ -642,9 +792,10 @@ be labelled as one.
 
 ### 4.1 Transport
 
-- The EPL is one L2CAP LE credit-based connection-oriented channel on PSM `0x00B5`, the earbud being the server. The
-  AudioLink channel on PSM `0x00B3` (148 B sealed frames, `audio_link_channel.c`) is retired with PROTOCOL_VERSION
-  `0x02` (§8.4); `0x00B4` (dev clear audio) and `0x00B2` (DoV) are not part of an EP build.
+- The EPL is one L2CAP LE credit-based connection-oriented channel on PSM `0x00B5`, the earbud being the server,
+  registered exactly by the images that expose `EP_INFO` (§8.1, §10.1). The AudioLink channel on PSM `0x00B3` (148 B
+  sealed frames, `audio_link_channel.c`) is retired with PROTOCOL_VERSION `0x02` in every firmware profile (§8.4);
+  `0x00B4` (dev clear audio) and `0x00B2` (DoV) are not part of an EP build.
 - The earbud keeps one EPL channel per connection. A second channel on a connection whose channel is `AUTHED` or
   `ENROL_ONLY` is refused; a second channel on a connection whose only channel is still `UNAUTH` replaces it (the old
   one is closed), so an app that opens the channel and never authenticates cannot block the host (§4.3 timeouts).
@@ -685,8 +836,9 @@ record = BE16(len) ‖ u8(type) ‖ u8(flags) ‖ body        len = 2 + len(body
 - `len` below 2 or above 4094 means the stream is out of sync: the receiver closes the channel.
 - Audio records (`AUDIO_IN`, `AUDIO_OUT`) are single-record messages; their MORE bit is always clear.
 - Sender scheduling (both sides). While a call context carries audio, a sender splits every other message into
-  records of at most 512 bytes of plaintext and, at each record boundary, sends any queued audio record before the
-  next record of another type. A 512-byte record holds the link for about 4 ms at 2M PHY with DLE 251, well under the
+  records of at most 512 bytes of plaintext and, at each record boundary, the boundary before the first record of a
+  message included, sends every audio record queued at that moment before the next record of another type. A
+  512-byte record holds the link for about 4 ms at 2M PHY with DLE 251, well under the
   20 ms frame period and the earbud's 40 ms minimum jitter target (§7.5). Outside a call records may use the full
   size.
 - A receiver MAY parse a message as its records arrive and store each field in its destination buffer instead of
@@ -719,17 +871,25 @@ kE2H    = HKDF-Expand(PRK, "qaudion-epl-e2h-v1" ‖ th, 32)
 enrolCode = SHA-256("qaudion-epl-enrol-code-v1" ‖ th)[0]   four 2-bit symbols, most significant first
 ```
 
-- `hostProto` is `0x0002`. `platform` is `0x01` Android or `0x02` iOS; any other value is refused. `nonceE`, `nonceH`
-  and the X25519 scalars `eE`, `eH` (public keys `xE`, `xH`) are fresh CSPRNG values per session and are erased when
-  the session closes (forward secrecy of the link).
+- `hostProto` is `0x0002`. `platform` is `0x01` Android or `0x02` iOS. The earbud checks both when `HOST_HELLO`
+  arrives: any other `hostProto` (`0x0001` included) and any other `platform` value is refused with `EP_AUTH` result
+  `0x03`, sent in place of `EP_HELLO` and carrying 96 zero bytes for `epEdPub ‖ sigE`, after which the earbud closes
+  the channel. `nonceE`, `nonceH` and the X25519 scalars `eE`, `eH` (public keys `xE`, `xH`) are fresh CSPRNG values
+  per session and are erased when the session closes (forward secrecy of the link).
 - The host sends `HOST_HELLO` first, committing to `hostEdPub`, `nonceH` and `xH` before it sees `xE`. The earbud
   checks `commitH` when `HOST_AUTH` reveals them, then `sigH`; a mismatch is `result` `0x02`. The commitment is what
   makes the enrolment code of §3.4 resist an attacker in the middle: neither side's ephemeral can be chosen after
   seeing the other's.
 - `result`: `0x00` authenticated (`hostEdPub` is an enrolled host and `sigH` verifies), `0x01` enrol only (the
-  signature verifies but the host is not enrolled), `0x02` bad signature or bad commitment, `0x03` protocol version
-  not supported. `epEdPub` and `sigE` are present whenever the earbud holds EK (`result` 0x00 or 0x01) and are 96
-  zero bytes otherwise; `th` is then computed with 32 zero bytes for `epEdPub`.
+  signature verifies but the host is not enrolled), `0x02` bad signature or bad commitment, `0x03` protocol version or
+  platform not supported. `epEdPub ‖ sigE` are EK and its signature over `AUTH_E` exactly when `result` is `0x00`, or
+  `0x01` and the earbud holds EK. In every other case they are 96 zero bytes, in particular in every refusing
+  `EP_AUTH` (`0x02`, `0x03`) whatever the earbud holds: a refusing `EP_AUTH` carries neither EK nor a signature, and
+  the earbud signs nothing for a host whose commitment and `sigH` it has not verified. That rule is about `EP_AUTH`
+  only. EK is a public key: the `EP_INFO` record carries it (`epEdPub`, §8.2) unchanged in `EP_HELLO` and in the
+  characteristic `0xd0`, both of which the earbud serves before it has authenticated the host, so a host refused with
+  `0x02` has already received EK in `EP_HELLO`. In an `0x01` session without EK, `AUTH_E` and `th` are computed with
+  32 zero bytes for `epEdPub`; a refusing `EP_AUTH` has no `th`, and a host ignores its 96 bytes.
 - After `0x02` or `0x03` the earbud closes the channel. A second `HOST_HELLO` or `HOST_AUTH` on the same channel
   closes it as well.
 - The host verifies `sigE` under the EK it stored at enrolment. A different EK means a reset or another unit: the host
@@ -764,8 +924,13 @@ enrolCode = SHA-256("qaudion-epl-enrol-code-v1" ‖ th)[0]   four 2-bit symbols,
   round)` until the context moves past that step (the next request of a later step of the same round, the next round,
   or `CALL_END`). A request byte-identical to the one that produced the cached response gets the cached response again,
   without recomputation and without a new random value; a different body for the same `(callHandle, request type,
-  round)` gets `bad_state`. This is what makes a request lost to a link drop (§5.10) safe to resend: for example a
-  lost `ACCEPT_BOUND` is reproduced exactly, `B` included.
+  round)` gets `bad_state`, except a `PEER_ACCEPT` for a round whose first `PEER_ACCEPT` was answered ok (the round is
+  bound), which gets `already_bound`. This is what makes a request lost to a link drop (§5.10) safe to resend: for
+  example a lost `ACCEPT_BOUND` is reproduced exactly, `B` included. Once a cached response was released (the
+  context moved past its step), the earbud never recomputes it: a later request of that step gets `bad_state`,
+  byte-identical or not, except a `PEER_ACCEPT` for a bound round, which gets `already_bound` (for example a
+  `PEER_ACCEPT` of round 1 that arrives after `KCMAC_VERIFIED` of round 1 erased the cached `ACCEPT_BOUND` and
+  `sasNonce`, §6.7).
 - `EPL_RESPONSE_TIMEOUT` is 5 s for every request, and 10 s for a request whose response carries an ML-DSA signature
   (phase 2), measured by the host from the moment the request was written to the channel. The host treats an expired
   request as failed (§5.11) unless the link dropped meanwhile, in which case it resends after the resume (§5.10).
@@ -777,6 +942,17 @@ enrolCode = SHA-256("qaudion-epl-enrol-code-v1" ‖ th)[0]   four 2-bit symbols,
   audio records are never delayed behind a signature or a KEM operation.
 - `ERROR` (E→H) = `u8(reqType) ‖ u8(code) ‖ LP(detail)`, `detail` printable ASCII of at most 64 bytes with no key,
   MAC, nonce, SAS word or identifier beyond 8 characters.
+- Layout of a refusal. A request refused with a code of the table below is answered with its typed response when that
+  response has a `status` byte (`CALL_BEGIN_OK`, `OFFER_EPH`, `OFFER_SIGNED`, `ACCEPT_BOUND`, `PEER_OFFER_OK`,
+  `ACCEPT_SIGNED`, `RESUME_RESULT`, `KCMAC_ACK`, `ENROLL_RESULT`, `ENROLL_DONE`, `UNENROLL_DONE`). The response keeps
+  the fields that precede `status` (`h` and `round` as in the request), then `status`, and ends there, with two
+  exceptions: `ENROLL_RESULT` keeps its fixed fields as zeros (§4.5), and `CALL_BEGIN_OK` and `RESUME_RESULT` are
+  always 2 bytes (`h = 0x00` in a refused `CALL_BEGIN_OK`, the request's `h` in a refused `RESUME_RESULT`). Every
+  other refusal is an `ERROR` record with the request's type and the code: a request whose response has no `status`
+  byte (`REVEAL` refused by its state, `HOST_LIST`, `ROUND_DROP`, `CALL_END`, `MEDIA_CTRL`), a message the channel
+  state does not allow (`not_authenticated`), a request too short to carry `h` and `round` (`malformed`), an unknown
+  type and a malformed record (§4.2). A `CALL_END` for an `h` with no context gets `ERROR` `bad_state`, which the host
+  takes as the end of that context.
 
 Status and error codes, one table for every response `status` byte and every `ERROR` code:
 
@@ -787,18 +963,18 @@ Status and error codes, one table for every response `status` byte and every `ER
 | `0x02` | malformed | a field has the wrong length, an `LP` overruns, CAPSX or advEnc does not parse, the earbud's own advEnc has more than 64 entries or a non-zero role byte |
 | `0x03` | required_tag_missing | CAPSX of the earbud's own bundle lacks `capsBindV1`, `earbudEpV1`, `innerSealV2` or `rekeyChainV1`, or lacks `sigHybridV1` while a `hybKeyId` is supplied (phase 1) or on phase-2 firmware |
 | `0x04` | forbidden_tag | CAPSX of the earbud's own bundle contains `frameKeyV6` or `innerAudioAadV1`, or contains `sigHybridV1` without a `hybKeyId` on phase-1 firmware |
-| `0x05` | round_rule | first round not 1, round not greater than the last accepted one, `sasCommit` present or absent against WIRE_SPEC §3.1, round above 2^31 − 1 |
+| `0x05` | round_rule | first round not 1, round not greater than the last accepted one, `sasCommit` present or absent against WIRE_SPEC §3.1, round above 2^31 − 1, a `PEER_ACCEPT` whose `roundEcho` differs from its `round` |
 | `0x06` | rekey_nonce_mismatch | `rekeyNonce` differs from the call's |
 | `0x07` | dtls_fp_changed | the own fingerprint supplied differs from the call's, or the peer's fingerprint differs from the one pinned in round 1 |
-| `0x08` | chain_base | PQC B13 refusal: `chainBase` missing, `≥ E`, or naming a round whose `ck` this earbud does not hold |
+| `0x08` | chain_base | PQC B13 refusal of a `PEER_OFFER`: `chainBase` missing, `≥ E`, or naming a round whose `ck` this earbud does not hold (never derived, or erased by the retention rule of PQC B13); the answer is the round's `PEER_OFFER_OK` with this status, and the earbud keeps nothing of the round |
 | `0x09` | too_many_rounds | more than `EP_MAX_STAGED = 8` rounds armed and undecided |
-| `0x0A` | spacing | OFFER requested less than 5 s after the previous one, or while the earbud's previous own round is undecided (PQC §2.6 R-OFFERSPACING) |
+| `0x0A` | spacing | `OFFER_PREP` of a rekey round received less than 5 s after the earbud answered the previous `OFFER_SIGNED` ok, or while the earbud's previous own round is undecided (neither confirmed by `KCMAC_VERIFIED` nor dropped by `ROUND_DROP`) (PQC §2.6 R-OFFERSPACING). Only `OFFER_PREP` gets this code: an `OFFER_FINAL` that follows an `OFFER_EPH` ok is never refused with it. In a call that negotiated `rekeyChainV1` the base rule of §5.4 (caller, step 1) is checked first: an `OFFER_PREP` of a rekey round that arrives before `KCMAC_VERIFIED` of round 1 gets `bad_state`, never `spacing`, although round 1 is then undecided, as the D12 gate of PQC B13 runs before any rate limit |
 | `0x0B` | crypto_failure | key generation, encapsulation or decapsulation failed, or an X25519 output is all zero |
 | `0x0C` | (reserved) | was `peer_key_changed` of the revision-1 peer pin table, removed (§5.9) |
 | `0x0D` | busy | another call context is active, a confirm window is open, a cellular call is ringing or active (enrolment), or another host owns the ring (§9.13) |
 | `0x0E` | unsupported | a feature this firmware does not implement (for example a hw_only PSK reference before phase 1b) |
 | `0x0F` | offer_binding_mismatch | the ACCEPT's `offerBinding` is not the hash of the OFFER this earbud signed |
-| `0x10` | already_bound | a second `PEER_ACCEPT` for a round that is bound |
+| `0x10` | already_bound | a second `PEER_ACCEPT` for a round that is bound, with a body that differs from the first (a byte-identical one gets the cached `ACCEPT_BOUND` while that cache exists, a different one after a refused first `PEER_ACCEPT` gets `bad_state`), and every `PEER_ACCEPT` for a bound round after its cached `ACCEPT_BOUND` was released, byte-identical or not |
 | `0x11` | not_authenticated | channel state does not allow the message |
 | `0x12` | unknown_type | |
 | `0x13` | resource | out of memory or time for this request |
@@ -988,16 +1164,26 @@ EVENT      = u8(code) ‖ LP(data)
              0x03 AUDIO_STATS   data = BE32 txFrames ‖ BE32 rxFrames ‖ BE32 rxLate ‖ BE32 rxLost ‖ BE32 decodeFail
                                 ‖ BE32 concealed ‖ BE16 jitterMs ‖ BE32 replayDrops ‖ BE32 authFails, every 10 s in a
                                 call, and every 2 s while authFails grew in the previous period
-             0x04 DIAG          data = the 32 B DIAG record of characteristic 0x90 (little endian, as today), every 10 s
-             0x05 STATE         data = u8(state) of the call context (idle, ringing, handshake, active, held, resuming)
-             0x06 CELLULAR      data = u8(state) of a cellular call seen by the CCP client during an EP call
+             0x04 DIAG          data = the 32 B DIAG record of characteristic 0x90 (below), every 10 s
+             0x05 STATE         data = u8(state) of the call context: 0x00 idle, 0x01 ringing, 0x02 handshake,
+                                0x03 active, 0x04 held, 0x05 resuming; other values reserved (a host ignores the event)
+             0x06 CELLULAR      data = u8(state) of a cellular call seen by the CCP client during an EP call:
+                                0x00 none (the last one ended), 0x01 incoming, 0x02 outgoing (dialing or alerting),
+                                0x03 active, 0x04 held (locally or remotely); other values reserved (ignored)
              0x07 LE_AUDIO_REFUSED  data = ∅
              0x08 LOG           data = u8(level) ‖ text (≤ 200 B, printable ASCII, no secret), at most 5 per second
              0x09 BATTERY       data = u8(percent), 0xFF unknown
              0x0A INNER_FAIL    data = BE16(fails) ‖ BE16(windowMs) ‖ u8(lastEpochByte) ‖ u8(path): sent at once
                                 when at least 5 inner opens failed within 2,000 ms (about 15 % of a phone's 16.7
                                 frames per second; path 0x04 = innerSealV2, 0x01 = legacy), at most one event per
-                                2 s (§7.11)
+                                2 s (§7.11). Exactly: at each inner failure at time t the earbud counts the failures
+                                in (t − 2,000 ms, t]; when the count is 5 or more and no INNER_FAIL was sent in
+                                (t − 2,000 ms, t], it sends one with fails = that count, windowMs = t minus the time
+                                of the oldest failure counted (0 to 1,999), lastEpochByte = the epoch byte of the
+                                envelope that failed at t (0x00 on the legacy path, which has none) and path = that
+                                envelope's path. An inner failure is an envelope whose AEAD open fails under every
+                                live slot or that the length check of §7.5 drops; a replay or reflection drop is not
+                                one. AUDIO_STATS authFails counts the same failures
              0x0B CAPTURE       data = u8(state) ‖ u8(reason): state 0x00 encoding silence, 0x01 capturing;
                                 reason 0x01 gate closed, 0x02 waiting for the capture press, 0x03 TX_PAUSE,
                                 0x04 MIC_MUTE, 0x00 none (state 0x01 only). When several reasons apply at once the
@@ -1008,6 +1194,31 @@ EVENT      = u8(code) ‖ LP(data)
 
 Events of a call context go to its owner host; `BATTERY`, `LOG` and `DIAG` outside a call go to every `AUTHED`
 session.
+
+DIAG record, the value of characteristic `0x90` (WIRE_SPEC §7) and the data of `EVENT` DIAG: 32 bytes, packed, little
+endian, the layout of `struct qaudion_diag_pkt` at `74a43d2` (`qaudion_gatt.c:211-248`, filled by `diag_read` at
+`:1336`):
+
+```
+offset  0  u32  heap_used_kb        system heap in use, KiB (0 when heap statistics are not built in)
+offset  4  u32  heap_free_kb        system heap free, KiB (same)
+offset  8  u8   cpu_load_pct        0 = not measured
+offset  9  u8   battery_pct         0..100; 0xFF = USB power or unknown (no battery node)
+offset 10  u8   pdm_ok              1 = microphone path ready
+offset 11  u8   tdm_ok              1 = speaker path ready
+offset 12  u32  hs_count            call rounds whose keys the earbud derived since boot; 0 in a no-endpoint image
+offset 16  u8   axon_ok             1 = voice-score NPU ready
+offset 17  u8   call_state          the EVENT STATE value of the call context, 0x00 when there is none
+offset 18  u16  ble_interval_125us  interval of the connection the record is read on (EVENT DIAG: of the receiving
+                                    session's connection), in 1.25 ms units
+offset 20  f32  deepfake_score      IEEE 754 binary32, the last voice score of the NPU (§11.3, without its direction);
+                                    -1.0 = none yet, and also when axon_ok = 0
+offset 24  u32  uptime_sec          seconds since boot
+offset 28  u32  aead_ops_total      inner seal and open operations since the audio pipeline last started
+```
+
+Only two meanings change from `74a43d2`, because the retired plane that defined them goes (§8.4): `hs_count` counted
+the retired GATT handshakes and `call_state` carried the retired CALL_STATE numbering.
 
 ### 4.6 Rules for host-supplied inputs
 
@@ -1026,8 +1237,8 @@ rest:
 - `dtlsFpSelf` is fixed at `CALL_BEGIN` for the call; the peer's fingerprint is pinned at round 1 and compared in every
   later round (WIRE_SPEC §3.8.2 step 5, R-CERT).
 - Round rules of WIRE_SPEC §3.1 and §3.7: first OFFER of a call has round 1 and a 32-byte `sasCommit`, later rounds
-  are strictly increasing and carry none; the ACCEPT echoes the round and `rekeyNonce`; `offerBindingEcho` equals the
-  earbud's `offerBinding`.
+  are strictly increasing and carry none; the ACCEPT echoes the round and `rekeyNonce` (a `PEER_ACCEPT` whose
+  `roundEcho` differs from its `round` gets `round_rule`); `offerBindingEcho` equals the earbud's `offerBinding`.
 - Values the earbud cannot check (the peer's CAPSX and EXTX, `relaySS`, `RELAYX`, the PSK bytes, the selected
   fingerprint string): a wrong value only changes keys or MACs that the remote peer computes from the real wire bytes,
   so the round fails its KCMAC (`kcmac_mismatch`) or the host's own outer layer fails. None of them can make the earbud
@@ -1124,13 +1335,16 @@ sends encoded silence until both are released.
 ### 5.4 Rekey rounds
 
 Only the caller offers (PQC §2.6 R-OFFERER). The host's rekey scheduler decides when; the earbud enforces the spacing
-of R-OFFERSPACING (one own round undecided at a time, at least 5 s between OFFERs, code `spacing`).
+of R-OFFERSPACING (one own round undecided at a time, at least 5 s between OFFERs), checked at `OFFER_PREP` only
+(code `spacing`, §4.4).
 
 Caller (earbud side offers round E + 1):
 
 1. `OFFER_PREP`. The earbud returns its new X25519 public key and, with `rekeyChainV1` negotiated, `chainBase` = the
    greatest epoch whose peer MAC it confirmed and whose `ck` it still holds (PQC B13, D3). Before the round-1 KCMAC
    verified there is no base: the earbud answers `bad_state`, and the host defers the trigger as B13 (D12) requires.
+   This check comes before the spacing check, so such an `OFFER_PREP` never gets `spacing` (§4.4); without
+   `rekeyChainV1` there is no base rule and the same `OFFER_PREP` gets `spacing`, round 1 being undecided.
 2. `OFFER_FINAL` with the round's adverts and, under `relayRotV1`, the round's fresh `relayKem` inputs.
 3. `OFFER_SIGNED`; the host sends the rekey OFFER with the `chainBase` member and waits for its ACCEPT for 30 s
    (R-REKEY-ACCEPT-WAIT).
@@ -1182,6 +1396,16 @@ WIRE_SPEC §3.7.1 and above the at most 7 pending rounds that R-OFFERSPACING all
 
 The host MUST NOT add any other member that changes a value the earbud signed or bound. A mismatch between the JSON and
 what the earbud signed is caught by the peer as `sig_invalid` (transcript fields) or `kcmac_mismatch` (CAPSX, EXTX).
+
+The JSON text is not canonical. The host may write the members above as any valid RFC 8259 text: member order,
+insignificant whitespace and the escaping of `/` (or of any other character JSON allows to escape) are free; the text
+has no duplicate member name, and integers are written in plain decimal. Nothing signs or binds the text: `sigV6`
+covers the transcript (WIRE_SPEC §3.1) and CAPSX the decoded capability names. A receiver decodes it with the strict
+parser of WIRE_SPEC §3.1 (D27, routing by D28, duplicates by its duplicate rule). A vector of §13.1 therefore pins a
+bundle as a parsed JSON object: an emitted text conforms when its strict parse gives the same member names, each once,
+with equal values (strings compared as sequences of Unicode code points after unescaping, integers as exact integers,
+booleans as such, objects member by member, arrays element by element in order). The 24 KiB rule (PQC §5.6) is checked
+on the bytes actually sent.
 
 ### 5.6 Timing against the protocol windows
 
@@ -1376,9 +1600,9 @@ EPL records of an authenticated session (§4.3):
 
 | Value | Formula | When |
 |---|---|---|
-| `m15_a2b`, `m15_b2a` | WIRE_SPEC §1.1: `HKDF(IKM = sessionKey_0, salt = "qaudion-srtp-salt-v1", info = "q-audion-srtp-master-v1:" ‖ callId ‖ ":a2b" / ":b2a", L = 32)` | round 1 only, `RELAY` mode `0x01` (the M-15 sealer is installed once per call, W5) |
+| `m15_a2b`, `m15_b2a` | WIRE_SPEC §1.1: `HKDF(IKM = sessionKey_0, salt = "qaudion-srtp-salt-v1", info = "q-audion-srtp-master-v1:" ‖ callId ‖ ":a2b" / ":b2a", L = 32)`, with the exact `callId` bytes of `CALL_BEGIN`, not `callIdL`: this is the only export that keeps the case, while `kOut`, `kIn`, `ck_E` and `vconfKey_E` use the lowercase form (the `flows` vectors use a mixed-case `callId`, §13.1) | round 1 only, `RELAY` mode `0x01` (the M-15 sealer is installed once per call, W5) |
 | `kOut_audio_o2a`, `kOut_audio_a2o` | PQC B4: `PRK_rel = HKDF-Extract("qaudion-relay-salt-v1", relaySS ‖ sessionKey_E)`, `kOut[audio][d] = HKDF-Expand(PRK_rel, "q-audion-relay-v1" ‖ LP(callIdL) ‖ LP("audio") ‖ LP(d) ‖ acceptBinding_E ‖ RELAYX, 32)` | round 1, and every rekey round under `relayRotV1`, `RELAY` mode `0x02` |
-| `vconfKey_E` | `HKDF(IKM = sessionKey_E, salt = ∅, info = "voice-confidence-announce-v1|" ‖ ASCII-lowercase(callId), L = 32)`, the key of the VCONF advisory (Android `VoiceConfidenceAnnounceCipher.kt:55-62`; an empty salt and a null salt give the same HMAC key) | every round |
+| `vconfKey_E` | `HKDF(IKM = sessionKey_E, salt = ∅, info = "voice-confidence-announce-v1\|" ‖ ASCII-lowercase(callId), L = 32)`, the key of the VCONF advisory (the label ends with a vertical bar, the byte `0x7C`, escaped in this table; Android `VoiceConfidenceAnnounceCipher.kt:55-62`; an empty salt and a null salt give the same HMAC key) | every round |
 
 The kind `video` of `kOut` is never derived: an EP call has no video.
 
@@ -1480,9 +1704,17 @@ When the peer's round-1 bundle lacks `innerSealV2` (an old build; the call is no
 
 ### 7.5 Frames the earbud receives
 
-- Inner envelopes with blocks of 30 to 256 B (wire 30 to 284 B on the `0x04` path), Opus frames of 20, 40 or 60 ms.
-  The decoder buffer grows from 960 to 2880 samples (+3,840 B RAM). A block with `trueLen = 0` is a lost frame for
-  concealment.
+- Inner envelopes with blocks of 2 to 256 B: wire 30 to 284 B on the `0x04` path (28 bytes of header and tag) and 41
+  to 295 B on the legacy `0x01` path (39 bytes); an envelope outside its path's range is dropped before the AEAD open
+  and counted as an inner failure (`authFails`, §4.5). Opus frames of 20, 40 or 60 ms. The decoder buffer grows from
+  960 to 2880 samples (+3,840 B RAM). A block with `trueLen = 0`, or with a `trueLen` larger than the block holds
+  (`blockBytes − 2`), is a lost frame for concealment; the second case is also counted in `decodeFail`.
+- Each counter is decoded at most once, on both paths: on the `0x04` path the replay window drops a duplicate before
+  the open (§7.2); on the legacy path, which has no replay window (PQC B1), a duplicate opens again and the jitter
+  buffer discards it after the open because its `seq` is already buffered or played (counted in `replayDrops`). The
+  decoder takes the frames in counter order; a frame that arrives after its playout time is dropped and counted
+  (`rxLate`). The `profileRx` vectors (§13.1) assume that every frame arrives before its playout time, so the decoded
+  sequence is the counters in increasing order, each once, with every missing counter concealed.
 - Basis in the firmware history: cherry-pick `e4aca5b` (length-aware unseal for 30 to 284 B, a silent frame on pad
   overflow, 284 B NSPE buffers) and `384527c` (loud decode failures) from `wip/audio-60ms-rx-2026-09-19`, and rework
   `3b18ef8` (60 ms decode) after the blockers its commit message lists. That branch's `AUDIO_PROFILE` characteristic
@@ -1548,7 +1780,9 @@ playout are in the earbud, so the host applies it with these EPL operations:
 - Indicator, enforced by the firmware and not changeable by any EPL message: whenever the earbud starts capturing the
   microphone for a call context (also after a resume, a `TX_RESUME`, a `MIC_UNMUTE` or a gate opening) it plays a
   start cue (two rising tones of 150 ms, about −20 dBFS) and sets the capture LED pattern for as long as capture runs;
-  while capture runs it plays a short low cue (one 80 ms tone, about −30 dBFS) every 60 s. Encoding silence (gate
+  while capture runs it plays a short low cue (one 80 ms tone, about −30 dBFS) every 60 s, counted from the most
+  recent start cue: every start of capture (which plays the start cue) restarts the count, and any pause of capture
+  (`MIC_MUTE`, `TX_PAUSE`, a closed gate, a link drop) stops it. Encoding silence (gate
   closed, `MIC_MUTE`, waiting for the press) is not capture: no cue, a distinct LED pattern. `EVENT` CAPTURE reports
   every change to the owner host.
 - Capture press (owner decision OD-6 (b), 2026-11-17). The earbud captures the microphone of a call context only after
@@ -1557,7 +1791,9 @@ playout are in the earbud, so the host applies it with these EPL operations:
      the encoder only while `captureArmed` is true, the media gate is open (§7.9), no `MIC_MUTE` and no `TX_PAUSE`
      applies and the link is up; in every other case it encodes silence (§7.1).
   2. `captureArmed` becomes true on a short press (under 500 ms, the short-press column of §9.14) that began after the
-     context was created, while the context exists. The press is consumed by this function: it is not exported as
+     context was created, while the context exists, at the instant the press acts: an EP context gives the double
+     press a meaning, so that is `DOUBLE_PRESS_GAP` (400 ms) after the press's release, when no second press started
+     in that gap (§9.14). The press is consumed by this function: it is not exported as
      `EVENT` BUTTON and does not refresh the FW-C2 timestamp (§9.14). A double press and a long press keep their
      meaning in this state (§9.14) and never arm capture.
   3. Answer press. When the earbud exports a short press in the ringing state to the ring owner (§9.14, §9.13) it
@@ -1606,8 +1842,27 @@ with `AUDIO_STATS` every 2 s while `authFails` grows. Host rule:
 
 ### 8.1 PROTOCOL_VERSION (`0xa9`)
 
-The characteristic returns `0x02`: the endpoint protocol of this document, EPL on PSM `0x00B5`. `0x01` was the retired
-relay dialect (`qaudion_gatt.c:403-404`). Reading it still requires an encrypted link.
+The characteristic returns `0x02` in every firmware image of this design: the GATT family of WIRE_SPEC §7, without the
+retired relay dialect, which is removed from every profile (§8.4). `0x01` was that dialect (`qaudion_gatt.c:403-404`).
+Whether an image carries the endpoint is said by `EP_INFO` (§8.2): the CI and bench images expose it and register the
+EPL on PSM `0x00B5`; the authoritative and production images, which carry no EP code (OD-4, §10.1), expose neither.
+Reading it still requires an encrypted link.
+
+Host decision, made at every connection before any other characteristic is used, and again after Service Changed
+(§8.4); a decision is never kept across a firmware change:
+
+| PROTOCOL_VERSION read | `EP_INFO` characteristic | Host decision |
+|---|---|---|
+| `0x01` or lower, or absent, unreadable or not one byte long | any | refuse: the host uses no other characteristic, opens no channel, places no EP call and shows "Earbud firmware too old. Update the earbud." |
+| `0x02` | absent from the GATT database | no endpoint: the host uses only the characteristics that WIRE_SPEC §7 keeps besides `EP_INFO` (DIAG, ATTEST_INFO, ATTEST_POP, ATTEST_PQ, KEY_IMPORT, PAIR_BEGIN, PAIR_RESP, PAIR_FIN, PSK_LIST), opens no EPL and places no EP call; every call runs on the phone (§5.1, §5.11) and the earbud settings say "This earbud's firmware has no call endpoint." |
+| `0x02` | present | endpoint per `EP_INFO`: the record checks of §8.2 and the version checks of §8.3 apply; a record or a version they refuse makes the earbud "no endpoint" (the row above) with the notice they name |
+| above `0x02` | any | refuse, as in the first row, with "Update the Q-Audion app to use this earbud." |
+
+Unreadable, in the first row, means that the read fails on a link encrypted under a completed bond (an ATT error, or
+no answer within the platform's GATT timeout). A read that fails because the bond is not complete (insufficient
+authentication or insufficient encryption, a pairing still running, cancelled or failed, §9.2) is a bonding failure,
+not a decision: the host uses no characteristic, shows the bonding step of §9.2 again and decides after the next
+completed bond. It never shows "Earbud firmware too old" for a bonding failure.
 
 ### 8.2 EP_INFO (`0xd0`) and the Device Information Service
 
@@ -1637,6 +1892,12 @@ receive of 60 ms / 256 B, bit 8 hw_only PSKs, bit 9 reserved (the revision-1 pee
 resume, bit 11 host-anchored `sigHybridV1` (phase 1, §3.9), bit 12 capture press required (OD-6 (b), §7.10: always 1
 in an EP build; a host that reads 0 does not open an EP call, §8.3); other bits zero.
 
+Record checks. An `EP_INFO` characteristic that is unreadable in the sense of §8.1 counts as an invalid record. A
+record shorter than 88 bytes, or whose `infoVersion` is `0x00`, or whose `protocolVersion` is not
+`0x02`, is invalid; a record whose `infoVersion` is above `0x01` describes an EPL that this host does not know (§8.7).
+Read over GATT, either makes the earbud "no endpoint" (§8.1), with "This earbud's firmware is not supported by this
+version of the app."; received in `EP_HELLO`, either makes the host close the channel.
+
 The Device Information Service (`0x180A`, open read) is already enabled at `74a43d2` (`CONFIG_BT_DIS=y`, with
 `CONFIG_BT_DIS_FW_REV=y` and Model Number String `Q-Audion Earbud`, `config/prj.conf:175-179`, `firmware/prj.conf:311`).
 EP builds set its Firmware Revision String to `<major>.<minor>.<patch>+<git8>` and add the Hardware Revision String
@@ -1644,16 +1905,18 @@ EP builds set its Firmware Revision String to `<major>.<minor>.<patch>+<git8>` a
 
 ### 8.3 Minimum versions and rollback
 
-- Each host release compiles in `EP_MIN_PROTOCOL = 0x02` and a minimum firmware version. Below either, the host does
-  not open the EPL for calls and shows "Earbud firmware too old. Update the earbud to use it for calls."; diagnostics,
-  attestation and the KMS relay of WIRE_SPEC §7 stay available.
+- Each host release compiles in `EP_MIN_PROTOCOL = 0x02` and a minimum firmware version (`fwMajor`, `fwMinor`,
+  `fwPatch` of `EP_INFO`). A PROTOCOL_VERSION below `EP_MIN_PROTOCOL` is refused (§8.1). An `EP_INFO` firmware version
+  below the minimum makes the earbud "no endpoint" (§8.1): the host does not open the EPL and shows "Earbud firmware
+  too old. Update the earbud to use it for calls."; the characteristics of the no-endpoint row of §8.1 (DIAG,
+  attestation, KEY_IMPORT, FE-5 pairing, PSK_LIST) stay available.
 - A host does not open an EP call when `capsBits` bit 12 (capture press required, §7.10) is clear: such a firmware does
   not enforce the capture press and the host could not state its UI rule (§9.9). It treats it as a firmware below the
-  minimum.
-- A host keeps, per `earbudId`, the highest firmware version it has seen and refuses a lower one with "Earbud firmware
-  was downgraded". MCUboot keeps the image key (Ed25519, offline) and, decided on 2026-11-17 (owner decision 4 and the
-  anti-rollback decision), anti-rollback by the software version check: the bootloader refuses an image whose version
-  is lower than the installed one (`CONFIG_MCUBOOT_DOWNGRADE_PREVENTION`). The hardware security counter in OTP
+  minimum (rule confirmed by the owner on 2026-11-17).
+- A host keeps, per `earbudId`, the highest firmware version it has seen and treats a lower one as "no endpoint"
+  (§8.1) with "Earbud firmware was downgraded". MCUboot keeps the image key (Ed25519, offline) and, decided on
+  2026-11-17 (owner decision 4 and the anti-rollback decision), anti-rollback by the software version check: the
+  bootloader refuses an image whose version is lower than the installed one (`CONFIG_MCUBOOT_DOWNGRADE_PREVENTION`). The hardware security counter in OTP
   (`SB_CONFIG_MCUBOOT_HARDWARE_DOWNGRADE_PREVENTION`; it burns OTP words and cannot be undone, and MCUboot offers it and
   the software check only as a choice) is not enabled by this document: it is decided later, together with the factory
   flow. Limit, stated: a software check can be undone with a chip erase (ERASEALL); that erase destroys EK and the
@@ -1662,7 +1925,8 @@ EP builds set its Firmware Revision String to `<major>.<minor>.<patch>+<git8>` a
 
 ### 8.4 Removal of the retired dialect
 
-Removed in the same release as PROTOCOL_VERSION `0x02` (hard switch, WIRE_SPEC §6):
+Removed in the same release as PROTOCOL_VERSION `0x02`, from every firmware profile, the authoritative and production
+profiles included (OD-4 as decided in the second round of 2026-11-17, §14; hard switch, WIRE_SPEC §6):
 
 | Repo | Removed |
 |---|---|
@@ -1720,13 +1984,16 @@ nominally MITM-protected only: it gives confidentiality against passive observer
 the first pairing may hold the link keys. This design relies on the bond for nothing else; the EPL session protocol
 of §4.3 and the enrolment code of §3.4 carry the security. The host app shows "Press the earbud button, then confirm
 on the phone". Android waits for the bond for at least 60 s (the diagnostics flow waits 20 × 1 s today, too short for
-the button step). On iOS the system pairing dialog appears at the first encrypted read, which is `EP_INFO`. Every EP
+the button step). On iOS the system pairing dialog appears at the first encrypted read, which is `PROTOCOL_VERSION`
+(the first read of §9.3); a read that fails while that pairing runs is a bonding failure, not an unreadable
+characteristic (§8.1). Every EP
 firmware profile sets `CONFIG_BT_BONDING_REQUIRED=y` (the root `prj.conf` has `n`). Only presses that the gesture
 table of §9.14 leaves unconsumed refresh the FW-C2 timestamp.
 
 ### 9.3 Version checks
 
-Before the EPL: read `EP_INFO` (and `PROTOCOL_VERSION`), apply §8.3, show the result in the earbud settings.
+Before anything else: read `PROTOCOL_VERSION` and, when the service has it, `EP_INFO`; apply the decision of §8.1 with
+the checks of §8.2 and §8.3; show the result in the earbud settings.
 
 ### 9.4 L2CAP
 
@@ -1805,7 +2072,7 @@ earbud. Resuming lifts the hold.
 - An earbud settings screen: enrol (with the enrolment code of §3.4), remove, the list of enrolled hosts from
   `HOST_LIST` with a remove action for each, firmware version and profile, battery, endpoint fingerprint, reset
   instructions.
-- A message for every fallback of §5.11 and for the version checks of §8.3.
+- A message for every fallback of §5.11 and for the decisions and version checks of §8.1 to §8.3.
 
 ### 9.10 Remote peer UI
 
@@ -1873,6 +2140,17 @@ handlers; a confirm window is never open while a context, a ring or a cellular c
 toggle is gone. Medium presses (500 ms to 2 s) stay ignored. The gesture-to-event mapping is pinned by the timed
 traces of §13.1.
 
+Classification of a press. A press is classified at its release, by its duration: under 500 ms short, 500 ms to under
+2 s medium (ignored), 2 s to under 3 s long, 3 s or more a hold (the confirm gesture inside a confirm window, a long
+press elsewhere). Nothing acts when a threshold is reached during a press, except the factory reset, which acts when
+the button has been held 10 s during power-on. A double press is two short presses whose second starts at most
+400 ms after the first one's release (`DOUBLE_PRESS_GAP = 400 ms`). In a state where the table gives the double press
+a meaning (an EP context) a short press acts only when 400 ms have passed after its release without a second press,
+that is 400 ms after its release; in every other state it acts at its release. When a second press starts within the
+400 ms and is not short (medium, long or a hold), the first press does not act at all, and the second press is
+classified and acts by itself, as if it were alone. A confirm gesture counts only when it starts after the prompt and is
+released before the confirm window ends; a hold still in progress when the window ends gives `no_press`.
+
 ---
 
 ## 10. Firmware requirements
@@ -1883,7 +2161,8 @@ traces of §13.1.
   APPROTECT and sets `CONFIG_QA_ALLOW_UNBOUNDED_NSC=y` (its points 1 and 2: without them a locked unit loses SWD until
   ERASEALL, which also destroys EK, and every pointer-taking secure call fails closed). EP builds add DLE 251 and
   bonding required. Restricting INF logging (its point 3) to the EP modules is a PREREQUISITE of phase 1 on the bench,
-  not an option: without it the bench has no room for the EP code (§12.2).
+  not an option: it frees 10,144 B (measured, `feat/ep-phase0` `1b759cc`), without which the bench keeps at most
+  3,352 B after phase 1 on the estimate of §12.2 and has no room for phase 2.
 - CI profile (`config/prj.conf`): the same EP features under the GA checks of `tools/check_config_flags.sh`, which
   hard-fail `CONFIG_QA_ALLOW_UNBOUNDED_NSC=y` (`check_config_flags.sh:277`; the profile sets it `n`,
   `config/prj.conf:421`). The EP path therefore must not depend on that escape hatch (§10.2). Until the on-target EP
@@ -1891,10 +2170,12 @@ traces of §13.1.
   fits", not "works".
 - Authoritative profile (`firmware/prj.conf`) and production profile (owner decision OD-4, 2026-11-17): no EP code is
   built into them and no RAM cut is made for it now (1,128 B free today; the cuts of §12.3 are decided with the PCB
-  profile). Until the PCB profile exists, EP calls exist on the CI and bench profiles only. An image of these profiles
-  does not register PSM `0x00B5`, does not expose `EP_INFO` and never reports PROTOCOL_VERSION `0x02`; a host that
-  meets one finds no EPL and runs the call as a phone call (§5.1, §5.11). A firmware CI check fails when an EP symbol
-  is linked into an authoritative or production image (the counterpart of the check of §10.2). The `buildProfile`
+  profile). Until the PCB profile exists, EP calls exist on the CI and bench profiles only. The retired relay plane
+  (§8.4) is removed from these profiles too, in phase 1 (second round of 2026-11-17, §14): an image of these profiles
+  reports PROTOCOL_VERSION `0x02`, exposes no `EP_INFO`, registers no PSM `0x00B5` (and no `0x00B3`) and carries none
+  of the retired characteristics; a host reads it as "no endpoint" (§8.1) and runs every call as a phone call (§5.1,
+  §5.11). A firmware CI check (confirmed by the owner on 2026-11-17) fails when an EP symbol is linked into an
+  authoritative or production image (the counterpart of the check of §10.2). The `buildProfile`
   values `0x03` and `0x04` stay in the EPC and `EP_INFO` formats (§3.3, §8.2) for the PCB profile, and verifiers
   accept them from the first release.
 
@@ -1984,8 +2265,16 @@ QA-EARBUD v=1 call=<callId, first 8 chars>|- ep=<earbudId, first 8 hex> role=o|a
 
 `R-CONFIRM-TELEMETRY` (WIRE_SPEC §3.7.4) and `QA-PQLEVEL` (PQC §6.4) are emitted by the host as for any call. In an EP
 call `frame=-` (no FrameCryptor), `inner=v2` or `legacy` by the negotiation of §7, `relay` and `dcmux` by the outer mode,
-`auth` from the peer's signature as today. On the remote peer, the R-EP-VERIFY line carries `ep=` (§3.7) and
-`ep_pq=host|ep|-` (§3.9).
+`auth` from the peer's signature as today. On the remote peer, the R-EP-VERIFY line carries `ep=` (§3.7: `listed`,
+`unlisted`, `unlisted_stale`, `revoked`, `pinned_offline`, `unverified_offline`, `cert_invalid`, `host_mismatch`,
+`host_unresolved`, `absent`) and `ep_pq=host|ep|-` (§3.9) next to `pq_sig=` of PQC §5.5. `ep_pq` names the key the
+ML-DSA half was checked against and `pq_sig` the result (`valid`, `invalid`, `unavailable`, `otherkey`, `absent`):
+`ep_pq=host` when the bundle's `mldsaKeyId` is the host device's ML-DSA key id (pinned or fetched, phase 1),
+`ep_pq=ep` when it is the key id of an earbud ML-DSA key listed for `K` (phase 2), and `ep_pq=-` when the bundle
+carries no `sigHybrid` or names neither key. So an invalid host-anchored half is `ep_pq=host pq_sig=invalid`; an
+earbud half that does not verify is `ep_pq=ep pq_sig=invalid`, and one whose `certPq` is missing, invalid or not under
+the pinned host key is `ep_pq=ep pq_sig=unavailable` (§3.9); a key that cannot be obtained is
+`ep_pq=- pq_sig=unavailable`, and another key id `ep_pq=- pq_sig=otherkey`.
 
 ### 11.3 Voice score
 
@@ -2004,14 +2293,15 @@ key the host derives from a session key it does not have; the send and receive r
 
 | Phase | Content | Wire | Repos |
 |---|---|---|---|
-| 0 | PR #5 merged; bench overlay per §10.1 with the INF-log restriction (prerequisite, §12.2); an EP size spike: stubs of the EPL parser and session protocol, transcripts, KDF, KCMAC, SAS, exports, inner seal and replay window, jitter buffer and the state machines, with their real signatures and buffers, linked into the bench and CI builds, and the measured flash and RAM decide the cuts before phase 1 starts; on the DK: a RAW KMU Ed25519 key created, used and surviving a reboot, the KMU known-answer check of §3.1, Ed25519, ML-KEM and X25519 timed with DWT `CYCCNT`, a 6.4 KB EPL transfer each way with an Android and an iOS host, the connection interval iOS actually grants, an iOS host kept locked for 10 minutes with the EPL open (§9.5), Android reconnect times after a link drop (§5.10); flash freed by removing the retired plane measured; this document accepted; Appendix A and B and this file landed in the locked copies; KAT `earbud-ep-v1` generated and recomputed; server endpoint records, tombstones and the `endpoints` fetch member | spec, server additive API | all |
-| 1 | EP calls with `sigV6` and, when the host has a published ML-DSA key, the host-anchored `sigHybridV1` (§3.9): EPL with the session protocol and sealed records (§4.3), enrolment with the enrolment code and the confirm gesture, `HOST_LIST`, `EP_INFO`, PROTOCOL_VERSION `0x02`, transcripts and signing, round KEMs, key schedule and exports, `innerSealV2` and legacy B1, 20 ms TX with the pad-overflow rule, RX up to 60 ms / 256 B, jitter buffer, media gate, capture indicator and capture press (OD-6 (b)), gesture table, owner and ring rules, inner failure events, TX queue exclusivity and LE Audio refusal, events, idempotent requests and link resume, removal of the retired plane; Android and iOS hosts; R-EP-VERIFY, R-EP-PQ and R-EP-PROFILE on every client | yes | all |
+| 0 | PR #5 merged; bench overlay per §10.1 with the INF-log restriction (prerequisite, §12.2); an EP size spike: stubs of the EPL parser and session protocol, transcripts, KDF, KCMAC, SAS, exports, inner seal and replay window, jitter buffer and the state machines, with their real signatures and buffers, linked into the bench and CI builds, and the measured flash and RAM decide the cuts before phase 1 starts; on the DK: a RAW KMU Ed25519 key created, used and surviving a reboot, the KMU known-answer check of §3.1, Ed25519, ML-KEM and X25519 timed with DWT `CYCCNT`, a 6.4 KB EPL transfer each way with an Android and an iOS host, the connection interval iOS actually grants, an iOS host kept locked for 10 minutes with the EPL open (§9.5), Android reconnect times after a link drop (§5.10); flash freed by removing the retired plane measured; this document accepted; Appendix A and B and this file landed in the locked copies; KAT `earbud-ep-v1` generated and recomputed; server endpoint records, tombstones and the `endpoints` fetch member, with every rule of §3.6 | spec, server additive API | all |
+| 1 | EP calls with `sigV6` and, when the host has a published ML-DSA key, the host-anchored `sigHybridV1` (§3.9): EPL with the session protocol and sealed records (§4.3), enrolment with the enrolment code and the confirm gesture, `HOST_LIST`, `EP_INFO`, PROTOCOL_VERSION `0x02`, transcripts and signing, round KEMs, key schedule and exports, `innerSealV2` and legacy B1, 20 ms TX with the pad-overflow rule, RX up to 60 ms / 256 B, jitter buffer, media gate, capture indicator and capture press (OD-6 (b)), gesture table, owner and ring rules, inner failure events, TX queue exclusivity and LE Audio refusal, events, idempotent requests and link resume, removal of the retired plane from every firmware profile (§8.4, §10.1); Android and iOS hosts; R-EP-VERIFY, R-EP-PQ and R-EP-PROFILE on every client | yes | all |
 | 1b | hw_only PSKs held in the earbud (§5.12), the pinned KMS epoch key (gap S-2), hardware PoP for `provision-sovereign` rows, the iOS KMS relay fixes (gap AP-3) | yes | firmware, server, Android, iOS |
 | 2 | the earbud's own ML-DSA-87 key: XC, `certPq` and their publication (§3.9), `HT` signed with both halves by the earbud every round, the worker stack of §10.3, the flash and RAM cuts below | yes | firmware, server, hosts |
 | 3 | separate projects: TF-M isolation, endpoint attestation (gap S-3, for example a factory certificate over EK), earbud OTA from the phone (gap O-2), the earbud-rendered SAS (OD-1 (b), not chosen on 2026-11-17: it starts only with a new owner decision) | | |
 
 By OD-4 (2026-11-17) phases 1 and 2 run on the CI and bench profiles; the authoritative and production profiles take
-the EP code with the PCB profile, after the cuts of §12.3 are decided for it.
+the EP code with the PCB profile, after the cuts of §12.3 are decided for it. They lose the retired relay plane in
+phase 1 and report PROTOCOL_VERSION `0x02` without `EP_INFO` (second round of 2026-11-17, §8.1, §10.1).
 
 PQ authentication by phase, toward a remote peer that implements PQC §5.5: in phase 1 a host with a published ML-DSA
 key co-signs, so the call is `auth=H` and is judged by the contact's existing record of that host (§3.9); a host
@@ -2025,13 +2315,15 @@ under `certPq`, without an anomaly for peers that pinned the host.
 |---|---|---|---|
 | Headroom at `74a43d2`, `942,080 − signed.bin`, spike build (clone of `74a43d2` under `~/vol/spike-v6`) | 34,204 | 10,988 | 13,920 |
 | Same commit, PR #5's own build (figures of the PR) | 34,396 | 11,204 | 14,096 |
-| Bench INF logging restricted to the EP modules (prerequisite, §10.1) | 0 | up to +23,216, not measured | 0 |
+| Bench INF logging restricted to the EP modules (prerequisite, §10.1), measured, revision 4 (`1b759cc`: 928,708 B of FLASH with INF everywhere, 918,564 B with INF in the 14 bring-up modules) | 0 | +10,144 | 0 |
 | Ed25519 via PSA/CRACEN, RAW KMU key | −1,636 | −1,636 | −1,636 (not measured alone in this profile) |
 | EP protocol code, ESTIMATE until the phase-0 size spike replaces it (EPL session protocol and records, enrolment, transcripts, `HT`, KDF, KCMAC, SAS, exports, inner seal and window, jitter buffer, gate and capture, gestures, events) | −6,000 to −10,000 | same | same |
 | Removal of the retired plane (§8.4) | not measured, positive | same | same |
 | After phase 1, spike baseline, before the logging and removal credits | 22,568 to 26,568 | −648 to 3,352 | 2,284 to 6,284 |
+| After phase 1, with the measured logging credit, before the removal credit | 22,568 to 26,568 | 9,496 to 13,496 | 2,284 to 6,284 |
 | ML-DSA-87 sign through direct ocrypto with seed expansion (`e4 − e1r`) | −7,416 | −7,416 | −7,436 |
-| After phase 2, same basis | 15,152 to 19,152 | −8,064 to −4,064 | −5,152 to −1,152 |
+| After phase 2, spike baseline, before the logging and removal credits | 15,152 to 19,152 | −8,064 to −4,064 | −5,152 to −1,152 |
+| After phase 2, with the measured logging credit, before the removal credit | 15,152 to 19,152 | 2,080 to 6,080 | −5,152 to −1,152 |
 
 By OD-4 (2026-11-17) the authoritative column is informative: EP is built on the CI and bench profiles until the PCB
 profile exists, and no cut is made for the authoritative profile now.
@@ -2043,14 +2335,29 @@ figures. The estimate of the protocol code rests on the spike's comparison with 
 forty message types and is replaced by the phase-0 size spike (§12.1) before any cut is decided. The host-anchored
 hybrid signature of phase 1 adds no code beyond a second Ed25519 signature call; the EPL session protocol reuses the
 X25519, HKDF and AES-GCM code already linked. The bench overlay cannot take the EP code without the logging credit,
-which is why that restriction is a prerequisite. The 942,080 B ceiling is the MCUboot slot limit quoted by the build
-task; the spike did not re-derive it.
+which is why that restriction is a prerequisite. With the measured credit of 10,144 B (revision 3 assumed up to
+23,216 B) the bench keeps 9,496 to 13,496 B after phase 1 and 2,080 to 6,080 B after phase 2, before the removal
+credit: phase 1 fits with room, phase 2 fits by a thin margin that rests on the estimate of the protocol code, which
+the phase-0 size spike replaces. The 942,080 B ceiling is the MCUboot slot limit quoted by the build task; the spike
+did not re-derive it.
 
-Cuts, cheapest first (sizes from the spike's symbol tables): bench INF logging restricted to the EP modules (the
-bench overlay's logging costs +23,216 B over the CI profile, 928,708 against 905,492 B of FLASH), which covers the bench
-in both phases; MCUmgr and SMP 11.7 to 13.5 KB (OTA over BLE is postponed by owner decision 4); Memfault 3.6 KB
-(authoritative profile); LC3 and the LE Audio host 48 KB (OD-5); the deepfake and Axon glue 18.7 KB; Opus
-(327,289 B) only through a prebuilt library change.
+The phase-0 self-test image (§12.1; the bench overlay with `config/phase0.conf`, which adds the KMU EK and the KMU
+known-answer check, the timings and the L2CAP test server) has about 1.4 KB of headroom, measured, revision 4: 1,452 B
+at `934e22a` (signed image 940,628 B, `docs/PHASE0_DK_RUNBOOK.md` §2) and 1,436 to 1,452 B in the builds of
+`feat/ep-phase0` since. That is too little for ML-DSA-87, so the ML-DSA timing runs in a second phase-0 image built
+without LE Audio and LC3. The phase-0 test code is never part of an EP image (`CONFIG_QA_PHASE0_TESTS` is refused
+outside the bench test images), so this headroom does not bound phase 1.
+
+Cuts, cheapest first (sizes from the spike's symbol tables unless marked): bench INF logging restricted to the EP
+modules, measured at 10,144 B (`1b759cc`); the 23,216 B that revision 3 assumed is the whole difference between the
+bench and CI profiles (928,708 against 905,492 B of FLASH), of which about 5 KB is float printf, which the bench keeps,
+and the rest INF strings that the 14 bring-up modules still carry. It covers the bench in phase 1 and, by 2 to 6 KB,
+in phase 2. Then MCUmgr and SMP 11.7 to 13.5 KB (OTA over BLE is postponed by owner decision 4); Memfault 3.6 KB
+(authoritative profile); LC3 and the LE Audio host, 141,628 B of flash and 26,348 B of RAM, measured, revision 4 (NCS
+v3.3.5, the phase-0 image of `feat/ep-phase0` at `201188a` built with and without them, Appendix C; revision 3
+assumed 48 KB and 14.5 KB), which is not available as a cut: OD-5 keeps LE Audio and the cellular passthrough as
+decided, at this measured cost (§14); the deepfake and Axon
+glue 18.7 KB; Opus (327,289 B) only through a prebuilt library change.
 
 ### 12.3 RAM (bytes)
 
@@ -2061,10 +2368,13 @@ in both phases; MCUmgr and SMP 11.7 to 13.5 KB (OTA over BLE is postponed by own
 | Phase 2, ESTIMATE, ML-DSA `_s`: stack 9.1 KB, signature buffer 4.7 KB, hash and MAC contexts 1.1 KB (less with ML-KEM and ML-DSA buffer reuse) | about +15,000 | same | same |
 
 The CI and bench profiles fit both phases. The authoritative profile fits neither without cuts, and by OD-4 it gets
-none now (no EP code until the PCB profile exists); candidates for those cuts, from the spike, with stack high-water
+none now (no EP code until the PCB profile exists; in phase 1 it only loses the retired relay plane, a RAM credit
+that is positive and not measured); candidates for those cuts, from the spike, with stack high-water
 marks still to be measured: `mic_stack` and `encode_stack` 32,768 B each,
 `s_rx_pump_stack` 24,576 B, `i2s_tx_slab` 46,080 B, `s_opus_enc_buf` 24,640 B, `mbedtls_heap` and `malloc_arena`
-16,384 B each, LC3 states 14,536 B, the Axon interlayer 8,192 B, the Memfault coredump region 8,192 B. The spike's own
+16,384 B each, LC3 states 14,536 B (LE Audio and LC3 together use 26,348 B, measured, revision 4, §12.2, and
+stay by OD-5),
+the Axon interlayer 8,192 B, the Memfault coredump region 8,192 B. The spike's own
 phase-1 figure of about 4.2 KB assumed 4 adverts and no CAPSX storage; this document requires the specification
 maxima. The phase-0 size spike measures the real figure.
 
@@ -2085,25 +2395,28 @@ about 4.7 KB per bundle sent. All figures are QEMU-based estimates until phase 0
 File `tools/kat/earbud-ep-v1/earbud-ep-v1-kat.json`, generated in the server repo by a Go generator
 (`tools/kat/earbud-ep-v1/gen/main.go`, the pattern of the `pqc-hardening-v1/gen_*` generators) and recomputed by an
 independent implementation in Python (`tools/kat/earbud-ep-v1/verify_ep_v1.py`), both run by server CI; sha256 pinned
-in `tools/kat/katpin_test.go`. LF line endings, `-text` in `.gitattributes`, byte-identical in every repo that carries
-it. Every random value of the earbud and of the host is a fixed input of the vector.
+in `tools/kat/katpin_test.go`. The Python verifier keeps that entry point and is required: the recomputation inside
+the Go generator's own tests does not replace it, and server CI runs it on every change to the family. LF line
+endings, `-text` in `.gitattributes`, byte-identical in every repo that carries it. Every random value of the earbud
+and of the host is a fixed input of the vector.
 
 | Section | Inputs | Outputs |
 |---|---|---|
-| `epInfo` | field values | the 88-byte record; a longer future record that a reader must accept |
-| `eplRecord` | message bodies | records: single, MORE continuation, interleaved audio records, the 512-byte split of §4.2; negatives: `len` 1 and 4095, a reserved flag bit, a message over its maximum |
-| `eplSession` | HK seed, EK seed (or none), `earbudId`, `nonceE`, `nonceH`, X25519 scalars `eE` and `eH`, platform, a list of record plaintexts in both directions | `commitH`, `AUTH_H`, `sigH`, `AUTH_E`, `sigE`, `ss`, `th`, `kH2E`, `kE2H`, `enrolCode` and its four symbols, the sealed records with their `seq`; negatives: wrong `earbudId`, swapped nonces, unknown platform byte, `commitH` not matching the revealed values, a record with a flipped tag bit, a record replayed with an old `seq`, an `enrol_only` session with zero `epEdPub` |
-| `epc` | account UUID, `hostDeviceId`, HK and EK seeds, `earbudId`, `created_ms`, `buildProfile`, `board` | EPC bytes, `cert`, `pop`, the `endpoint` JSON member, `endpointId`, the Sigsum endpoint leaf; negatives: non-canonical base64, an extra or duplicated member, `kind` other than `earbud`, `v` other than 1, `created` as `1.0` or `-1`, `profile` as `256`, small-order EK or HK (from `ed25519Strict`), a `pop` over another host key, a `sender_device_id` other than `hostDeviceId` |
-| `verifierPolicy` | host key state (pinned, published, unknown, other key), certificate and pop validity, server listing (listed, unlisted young, unlisted stale, tombstone, fetch failed with and without an endpoint pin), the verifier's clock, `sigV6` validity, the host's PQ record state (no key id, pinned, warning-only) and the `sigHybrid` result | verdict (`authenticated_endpoint`, `identity_key_mismatch`, `identity_unresolved`, `sig_invalid`), the `ep=` and `ep_pq=` log tokens, the `auth=` and `pin=` tokens of PQC §5.5, the pin actions, the UI notice. Includes the "rogue EK under a pinned host" cases: a new EK with a valid Ed25519 `cert` and no valid host `sigPq` (phase 1), and with a missing or foreign `certPq` (phase 2), each giving the warning, `auth=C` and no endpoint pin |
+| `epInfo` | field values; PROTOCOL_VERSION values with and without an `EP_INFO` characteristic | the 88-byte record; a longer future record that a reader must accept; invalid records (87 bytes, `infoVersion` `0x00`, `protocolVersion` other than `0x02`) and an `infoVersion` `0x02` record (§8.2); the host decision of §8.1 for PROTOCOL_VERSION absent, `0x00`, `0x01`, `0x02` without and with `EP_INFO`, and `0x03` |
+| `eplRecord` | message bodies | records: single, MORE continuation, interleaved audio records, the 512-byte split of §4.2, audio queued before the first record of a message (sent first); negatives: `len` 1 and 4095, a reserved flag bit, a message over its maximum |
+| `eplSession` | HK seed, EK seed (or none), `earbudId`, `nonceE`, `nonceH`, X25519 scalars `eE` and `eH`, platform, a list of record plaintexts in both directions | `commitH`, `AUTH_H`, `sigH`, `AUTH_E`, `sigE`, `ss`, `th`, `kH2E`, `kE2H`, `enrolCode` and its four symbols, the sealed records with their `seq`; negatives: wrong `earbudId`, swapped nonces and `commitH` not matching the revealed values (each an `EP_AUTH` `0x02` with 96 zero bytes, then the channel closed), an unknown platform byte and `hostProto` `0x0001` and `0x0003` (each an `EP_AUTH` `0x03` with 96 zero bytes in place of `EP_HELLO`, then the channel closed), a record with a flipped tag bit, a record replayed with an old `seq`, an `enrol_only` session with zero `epEdPub` |
+| `epc` | account UUID, `hostDeviceId`, HK and EK seeds, `earbudId`, `created_ms`, `buildProfile`, `board` | EPC bytes, `cert`, `pop`, the `endpoint` JSON member, `endpointId`, the Sigsum endpoint leaf; negatives: non-canonical base64, an extra or duplicated member, `kind` other than `earbud`, `v` other than 1, `created` as `1.0` or `-1`, `profile` as `256`, small-order EK or HK (from `ed25519Strict`), a `pop` over another host key, a `sender_device_id` other than `hostDeviceId` and an envelope without one; the publish body of §3.6 and its check-1 negatives (an unknown member, a duplicate member, a member name differing only in case) |
+| `verifierPolicy` | host key state (pinned, published, unknown, other key), certificate and pop validity, server listing (listed, unlisted young, unlisted stale, tombstone, fetch failed with and without an endpoint pin), the verifier's clock, `sigV6` validity, the host's PQ record state (no key id, pinned, warning-only) and the `sigHybrid` result | verdict (`authenticated_endpoint`, `identity_key_mismatch`, `identity_unresolved`, `sig_invalid`), the `ep=` and `ep_pq=` log tokens (§11.2), the `auth=`, `pin=` and `pq_sig=` tokens of PQC §5.5, the pin actions and the effect of a SAS confirmed in the call for every row of the pin table of §3.7, the UI notice. Includes a bundle with `earbudEpV1` and no valid `endpoint` member (`ep=absent`), the host-key resolver failures (`ep=host_mismatch`, `ep=host_unresolved`), an endpoint pinned and no longer listed (stale at any age, pin deleted), and the "rogue EK under a pinned host" cases: a new EK with a valid Ed25519 `cert` and no valid host `sigPq` (phase 1), and with a missing or foreign `certPq` (phase 2), each giving the warning, `auth=C` and no endpoint pin |
 | `hybridEp` | the `flows` inputs, the host's ML-DSA seed, fixed `rnd` | phase 1: `HT` with the host's key id, the earbud's `sigEd`, the host's `sigPq`, `htHash`, EXTX with `hybKeyId`; phase 2: `certPq` |
-| `messages` | the inputs of `flows` | byte-exact bodies of every call-plane message of §4.5 for those inputs |
-| `flows` | per call: ML-KEM seeds `(d, z)` and encapsulation randomness per round, X25519 scalars of both sides, EK and peer seeds, `sasNonce`, `rekeyNonce`, `relayKem` secrets, DTLS fingerprints, PSK, CAPS9 (the seven host bytes of §2.4), CAPSX and EXTX of both bundles, a mixed-case `callId` | per round: OFFER_v6, ACCEPT_v6, both `sigV6`, the JSON bundle the host emits, `offerBinding`, `acceptBinding`, `sessionKey_E`, `ck_E`, `K_kc`, `kc_transcript` and `kc_transcript_x`, both MACs, SAS-KDF, words and `B` in round 1, every `EXPORT` value, two inner envelopes per direction (earbud TX 20 ms / 120 B, peer TX 60 ms / 256 B) |
+| `messages` | the inputs of `flows` | byte-exact bodies of every call-plane message of §4.5 for those inputs, the `EVENT` STATE and CELLULAR values and a DIAG record (§4.5), and the refusal layouts of §4.4 |
+| `flows` | per call: ML-KEM seeds `(d, z)` and encapsulation randomness per round, X25519 scalars of both sides, EK and peer seeds, `sasNonce`, `rekeyNonce`, `relayKem` secrets, DTLS fingerprints, PSK, CAPS9 (the seven host bytes of §2.4), CAPSX and EXTX of both bundles, a mixed-case `callId` in every case, the M-15 case (c) included (§6.6: the M-15 export uses the exact `callId`, every other derivation `callIdL`) | per round: OFFER_v6, ACCEPT_v6, both `sigV6`, the JSON bundle the host emits as a parsed object (§5.5), `offerBinding`, `acceptBinding`, `sessionKey_E`, `ck_E`, `K_kc`, `kc_transcript` and `kc_transcript_x`, both MACs, SAS-KDF, words and `B` in round 1, every `EXPORT` value, two inner envelopes per direction (earbud TX 20 ms / 120 B, peer TX 60 ms / 256 B) |
 | `flows` cases | (a) earbud caller and phone callee: rounds 1 to 3 with `rekeyChainV1`, `relayKemV1` and `relayRotV1`, a v3 PSK selected, host-anchored `sigHybridV1`; (b) phone caller and earbud callee, same depth, no PSK, no ML-DSA on the host; (c) a peer without `innerSealV2` (legacy inner seal with B1, M-15 export); (d) earbud to earbud; (e) a peer OFFER with `dualCurve` answered by an ACCEPT without `ciphertext.dualCurve` (accepted); (f) a peer OFFER with 255 adverts | as above |
-| `timedFlows` | the `flows` cases with a monotonic fake clock: event times of requests, records, button edges and link drops | the expected state, message and timer outcome at each step: R-OFFERSPACING (5 s), the previous inner slot erased 30 s after the current round confirmed, the link grace (5, 8 and 15 s, with a drop during round 1 and a resend answered from the cache), the setup timeout (120 s), the `UNAUTH` timeouts (5 s), the confirm window (30 s, a press before the prompt ignored, a 3 s hold after it accepted, a short press cancelling), the 180 s enrolment window, the ring owner (90 s), the INNER_FAIL threshold, the 15 and 30 s KCMAC windows and the 15 s REVEAL window as seen by the host, the gesture table of §9.14 for every state (the capture-press rows included), and the answer-press window of §7.10 (10 s) |
-| `capturePress` | per case, on a `flows` context with a monotonic fake clock: ring and answer-press times with the ring owner's host key, `CALL_BEGIN` times and roles, press edges with their start times and durations (short, double, long), `MEDIA_CTRL` GATE, TX_PAUSE, TX_RESUME, MIC_MUTE and MIC_UNMUTE, a link drop and `CALL_RESUME`, a `CALL_END` followed by a new `CALL_BEGIN` | the sequence of `EVENT` CAPTURE records (state, reason), the instants at which the earbud feeds the microphone to the encoder and plays the start cue and the 60 s cue, and the `EVENT` BUTTON records (none for a capture press). Cases: no press (silence, reason `0x02`, still silence after 60 s); a short press after `CALL_BEGIN_OK` (captures at once when the gate is open); a press while the gate is closed (reason `0x01`, capture at the gate opening) and while muted (reason `0x04`); every `MEDIA_CTRL` command sent without a press (no capture); a double and a long press (never arm); an idle press before `CALL_BEGIN` (does not arm); an answer press 9.9 s before `CALL_BEGIN` (arms) and 10.1 s before (does not); an answer press followed by a `CALL_BEGIN` of another host key or with role caller (does not arm, memory cleared); one answer press used by one context only; an answer on the phone's screen (waits); a second context after `CALL_END` (waits again); link drop and resume (stays armed, state re-reported) |
-| `negative` | per case | expected status code of §4.4: round rule, `rekeyNonce` changed, fingerprint changed, `offerBinding` echo wrong, all-zero X25519, required tag missing, `frameKeyV6` present, `sigHybridV1` without `hybKeyId`, second `PEER_ACCEPT`, `chain_base`, spacing, ninth staged round, own advEnc with 65 entries or a non-zero role byte, a rekey `CAPSX_own` different from round 1, a message from a non-owner host, `ENROLL_BEGIN` without a fresh bond or window, a retried request with a changed body |
-| `innerRx` | envelopes of 30 to 284 B, 20, 40 and 60 ms Opus frames, `trueLen = 0` | the opened blocks and the decode or concealment decision |
-| `profileRx` | a sequence of 20 ms / 120 B envelopes at 50 per second from an earbud peer, both envelope types, with a loss, a duplicate and a reordered frame | the frames each receiver opens and decodes, in order; consumed by every receiver (Android, iOS, Desktop, the web app and the firmware) |
+| `timedFlows` | the `flows` cases with a monotonic fake clock: event times of requests, records, button edges and link drops | the expected state, message and timer outcome at each step: R-OFFERSPACING (5 s, refused at `OFFER_PREP`, §4.4), the previous inner slot erased 30 s after the current round confirmed, the link grace (5, 8 and 15 s, with a drop during round 1 and a resend answered from the cache), the setup timeout (120 s), the `UNAUTH` timeouts (5 s), the confirm window (30 s, a press before the prompt ignored, a 3 s hold after it accepted, a short press cancelling), the 180 s enrolment window, the ring owner (90 s), the INNER_FAIL threshold with the event bytes (`fails`, `windowMs`, §4.5) and one event for several failures at the same instant, the 15 and 30 s KCMAC windows and the 15 s REVEAL window as seen by the host, the gesture table of §9.14 for every state (the capture-press rows included) with the classification at release and the 400 ms double-press gap, and the answer-press window of §7.10 (10 s) |
+| `capturePress` | per case, on a `flows` context with a monotonic fake clock: ring and answer-press times with the ring owner's host key, `CALL_BEGIN` times and roles, press edges with their start times and durations (short, double, long), `MEDIA_CTRL` GATE, TX_PAUSE, TX_RESUME, MIC_MUTE and MIC_UNMUTE, a link drop and `CALL_RESUME`, a `CALL_END` followed by a new `CALL_BEGIN` | the sequence of `EVENT` CAPTURE records (state, reason), the instants at which the earbud feeds the microphone to the encoder and plays the start cue and the 60 s cue, and the `EVENT` BUTTON records (none for a capture press). Cases: no press (silence, reason `0x02`, still silence after 60 s); a short press after `CALL_BEGIN_OK` with no second press (captures 400 ms after its release, `DOUBLE_PRESS_GAP` of §9.14, when the gate is open); a short press followed within 400 ms by a long press (does not arm; the long press is exported); a press while the gate is closed (reason `0x01`, capture at the gate opening) and while muted (reason `0x04`); every `MEDIA_CTRL` command sent without a press (no capture); a double and a long press (never arm); an idle press before `CALL_BEGIN` (does not arm); an answer press 9.9 s before `CALL_BEGIN` (arms) and 10.1 s before (does not); an answer press followed by a `CALL_BEGIN` of another host key or with role caller (does not arm, memory cleared); one answer press used by one context only; an answer on the phone's screen (waits); a second context after `CALL_END` (waits again); link drop and resume (stays armed, state re-reported); a mute of more than 60 s followed by an unmute (start cue at the unmute, the 60 s cue counted from it, §7.10) |
+| `negative` | per case | expected status code of §4.4: round rule, `rekeyNonce` changed, fingerprint changed, `offerBinding` echo wrong, all-zero X25519, required tag missing, `frameKeyV6` present, `sigHybridV1` without `hybKeyId`, a second `PEER_ACCEPT` with a different body after a bound round (`already_bound`) and after a refused one (`bad_state`), a byte-identical `PEER_ACCEPT` of round 1 after `KCMAC_VERIFIED` released its cached `ACCEPT_BOUND` (`already_bound`), a `PEER_ACCEPT` whose `roundEcho` differs (`round_rule`), `chain_base` (also for a base below E whose `ck` the B13 retention erased), spacing, a rekey `OFFER_PREP` before `KCMAC_VERIFIED` of round 1 in a `rekeyChainV1` call (`bad_state`, not `spacing`), ninth staged round, own advEnc with 65 entries or a non-zero role byte, a rekey `CAPSX_own` different from round 1, a message from a non-owner host, `ENROLL_BEGIN` without a fresh bond or window, a retried request with a changed body; each response in the refusal layout of §4.4 |
+| `innerRx` | envelopes of wire size 30 to 284 B (`0x04`) and 41 to 295 B (legacy), one byte outside each range, 20, 40 and 60 ms Opus frames, `trueLen = 0` and a `trueLen` larger than the block | the opened blocks and the decode or concealment decision (§7.5) |
+| `profileRx` | a sequence of 20 ms / 120 B envelopes at 50 per second from an earbud peer, both envelope types, with a loss, a duplicate and a reordered frame, every frame before its playout time | the frames each receiver opens, and the decoded sequence: each counter once, in counter order, the missing one concealed, a legacy duplicate opened twice and decoded once (§7.5); consumed by every receiver (Android, iOS, Desktop, the web app and the firmware) |
+| `kmuKnownAnswer` | EK seeds and messages from the sections below | for each message, its Ed25519 signature by EK: every message of the five kinds EK signs (§3.1) that this file contains, that is the `AUTH_E` of every `eplSession` vector in which the earbud holds EK (the authenticated sessions and the `enrol_only` session with EK), the pop message `"qaudion-endpoint-pop-v1" ‖ SHA-256(EPC)` of every `epc` vector, every `OFFER_v6` and `ACCEPT_v6` the earbud signs in `flows`, every hybrid `sigEd` message of `flows` and `hybridEp` and, in phase 2, the `xcEd` message of `epXcert`; the set the KMU known-answer check of §3.1 signs |
 | `epXcert` (phase 2) | EK seed, `ξ`, `endpointId`, `mldsa_xc_created_ms` | XC, `xcEd`, `xcPq` with a fixed `rnd`, the publish body with `certPq` |
 | `epSigHybrid` (phase 2) | the `flows` inputs, `ξ`, fixed `rnd` | `HT`, `sigEd`, `sigPq`, EXTX computed by the earbud from raw `relayKem` |
 
@@ -2114,8 +2427,10 @@ Tests that are not vectors:
   fields, CAPSX, advEnc with 255 entries, `PSKREF`, `RELAY`, `EXTXIN`), `EP_INFO` parsing on the host side, and the
   `endpoint` JSON member on every client. Each target runs in CI for a fixed time budget on every change to its
   sources, with the corpus seeded from the vectors.
-- KMU known-answer check. A DK test image signs the `eplSession` and `flows` messages through a KMU-backed Ed25519 key
+- KMU known-answer check. A DK test image signs the `kmuKnownAnswer` messages through a KMU-backed Ed25519 key
   imported from the vector seed and compares the signatures byte for byte (§3.1); it runs in each phase's acceptance.
+  The phase-0 image is the only one that keeps its test keys afterwards, and `nrfutil device recover` follows it
+  before any other image (§3.1).
 
 ### 13.2 Existing families the firmware must carry
 
@@ -2144,8 +2459,8 @@ The pins above are those of `tools/kat/katpin_test.go` at `c1790e7`. The S8b to 
 - This document is normative for the EPL, the call plane, the key schedule and the verifier rules that Appendix A
   delegates to it, so it is locked the same way: the accepted revision is copied byte-identical to
   `docs/EARBUD_V6_ENDPOINT.md` in all six repos, and `wire-spec-lock.yml` gains a second expected hash for that path,
-  checked by the same job and changed by the same coordinated push. Its review notes (§16), the list of revision 3
-  changes (§17) and the evidence index (Appendix C) are part of the locked bytes; they carry no rule.
+  checked by the same job and changed by the same coordinated push. Its review notes (§16), the lists of revision 3
+  and revision 4 changes (§17) and the evidence index (Appendix C) are part of the locked bytes; they carry no rule.
 - The firmware CI gains a test that hashes every vendored KAT file against its pin and fails on a mismatch, runs the
   families in the portable host build, and runs the ocrypto paths (ML-KEM now, ML-DSA in phase 2) in the QEMU harness
   of `tests/mlkem_kat_qemu`. No KAT test is skipped (today `portable/tests/test_mlkem.c` skips without liboqs).
@@ -2182,7 +2497,8 @@ Android host (from `sigstore-release.yml`) and a TestFlight build of the iOS hos
     answered with the earbud's own answer press starts armed when `CALL_BEGIN` follows within 10 s and waits for a press
     when it does not; a call answered on the phone's screen waits for a press; a second call needs its own press; the
     earbud plays the start cue at capture start and the periodic cue every 60 s.
-11. The KMU known-answer check (§3.1, §13.1).
+11. The KMU known-answer check over the `kmuKnownAnswer` set (§3.1, §13.1), with `nrfutil device recover` before
+    any image that follows the phase-0 image.
 12. An EP call on a CI-profile image (not the bench overlay), proving that the EP path does not depend on
     `CONFIG_QA_ALLOW_UNBOUNDED_NSC` (§10.1, §10.2).
 13. Firmware upgrade of a bonded unit that removes characteristics: Android and iOS rediscover after Service Changed
@@ -2197,6 +2513,10 @@ Android host (from `sigstore-release.yml`) and a TestFlight build of the iOS hos
     `CALL_BEGIN_OK` until the first `EVENT` CAPTURE with a reason other than `0x02`, and not otherwise (not after the
     press, not in a call that started armed), in an outgoing call, in a call answered on the earbud and in a call
     answered on the phone's screen.
+18. Host decision of §8.1, on Android and on iOS: an image of the authoritative profile, built for this check only,
+    reports PROTOCOL_VERSION `0x02`, has no `EP_INFO`, no PSM `0x00B5` and none of the retired characteristics, and
+    the host shows it as an earbud without call endpoint and places phone calls; an image that reports `0x01` (the
+    firmware before the removal) is refused.
 
 ---
 
@@ -2212,7 +2532,7 @@ was offered.
 | OD-2 | Host devices per earbud | one; up to 4 of the same account | up to 4 of the same account: `EP_MAX_HOSTS = 4` | §3.2, §3.4, §3.6, §8.2, §9.13, §10.4 |
 | OD-3 | Earbud unavailable before the first bundle of a call | the call runs on the phone with a visible notice; the call is not placed | the call runs on the phone with a visible notice | §5.1, §5.3, §5.11 |
 | OD-4 | The authoritative profile (`firmware/prj.conf`) | accept RAM cuts of about 40 KB for phase 1 (and about 15 KB more for phase 2) from the list of §12.3; keep EP calls on the CI and bench profiles until the PCB profile exists | EP calls on the CI and bench profiles only until the PCB profile exists; no RAM cuts on the authoritative profile now | §10.1, §12.1 to §12.3, §13.4 |
-| OD-5 | LE Audio and the cellular passthrough on the earbud | keep them, with the exclusivity of §9.6; drop LC3 and the LE Audio host from EP builds (48 KB flash, about 14.5 KB RAM) | keep them, with the exclusivity of §9.6 | §9.6, §9.7 |
+| OD-5 | LE Audio and the cellular passthrough on the earbud | keep them, with the exclusivity of §9.6; drop LC3 and the LE Audio host from EP builds (offered as 48 KB flash and about 14.5 KB RAM; measured in revision 4 at 141,628 B flash and 26,348 B RAM, §12.2) | keep them, with the exclusivity of §9.6; the decision stands at the measured cost (second round, below) | §9.6, §9.7, §12.2 |
 | OD-6 | Microphone capture of an EP call (§7.10) | (a) the capture indicator only; (b) the indicator, and capture starts only after a fresh earbud press in each call (the answer press counts when the call is answered on the earbud) | (b): the capture indicator plus a fresh earbud press in each call before the microphone opens | §1.4, §4.5, §5.1 to §5.3, §7.10, §8.2, §8.3, §9.9, §9.14, §13.1, §13.4 |
 | MCUboot | Anti-rollback of the earbud image (§8.3) | the software version check; the hardware security counter in OTP | the software version check now; the hardware OTP counter is decided later, with the factory flow | §1.1, §8.3 |
 
@@ -2223,6 +2543,22 @@ non-exportable KMU key); the host-anchored hybrid signature of phase 1 and the h
 unlisted endpoints (§3.6, §3.7); the EPL session protocol with an audible enrolment code (§3.4, §4.3); the new PSM
 `0x00B5` instead of reusing `0x00B3`; and the remote UI wording "reported by their device" until endpoint attestation
 exists.
+
+Second round, decided by the owner on 2026-11-17 in the evening, recorded in revision 4 and normative where the last
+column points:
+
+| Id | Decision (2026-11-17, evening) | Normative in |
+|---|---|---|
+| OD-4, second round | The retired relay plane (the `0x10`/`0x20`/`0x30` handshake, `0xc4` MEDIA_KEY_INSTALL, PSM `0x00B3` and every retired GATT characteristic) is removed from every firmware profile in phase 1. The authoritative and production images, which carry no EP code, report PROTOCOL_VERSION `0x02`, expose no `EP_INFO` and register no PSM `0x00B5`. A host decides by the table of §8.1: `0x01` or lower, refuse; `0x02` without `EP_INFO`, no endpoint (DIAG, attestation, key import, FE-5 pairing and PSK_LIST only, no EPL, no EP call); `0x02` with `EP_INFO`, an endpoint per `EP_INFO` | §0, §1.1, §1.5, §4.1, §8.1 to §8.4, §9.3, §10.1, §12.1, §12.3, §13.4, WIRE_SPEC §6 and §7 |
+| Values of revision 3 | Confirmed: `ANSWER_PRESS_WINDOW = 10 s`; HTTP 409 for a registration over the endpoint or host limits; the `EVENT` CAPTURE reason order `0x02`, `0x01`, `0x03`, `0x04`; a host does not open an EP call when `capsBits` bit 12 is 0; the firmware CI fails when an EP symbol is linked into an authoritative or production image | §0, §3.6, §4.5, §7.10, §8.3, §10.1 |
+| Refusing `EP_AUTH` | Result `0x02` or `0x03` carries 96 zero bytes in place of `epEdPub ‖ sigE`: a refusing `EP_AUTH` carries neither EK nor a signature, and the earbud signs nothing for a host it has not authenticated (EK itself is public and stays in `EP_INFO`, §8.2; wording scoped to `EP_AUTH` by §17.2 row 40). An unknown platform byte is refused with `0x03` and the channel is closed; every `hostProto` other than `0x0002`, `0x0001` included, is refused with `0x03` | §4.3 |
+| `sender_device_id` | The envelope that carried an endpoint bundle MUST carry `sender_device_id`, equal to `hostDeviceId`; absent or different, media are held as for any R-EP-VERIFY failure | §3.7 step 2 |
+| Server endpoint records | (a) only the host device publishes, and not while revoked (403 with a named code); (b) per-host removal without a tombstone, for a lost or replaced host phone, by any non-revoked device of the account; the records of a revoked or deleted host device are not counted toward `EP_MAX_HOSTS` and not listed; (c) `EP_MAX_TOMBSTONES_PER_USER = 32`, a new registration beyond it refused with 409, revocation always allowed; (d) account deletion erases the account's endpoint records, certificates and tombstones and keeps only the SHA-256 of each revoked EK, with no link to the account, so a revoked EK can never be registered again; (e) the per-device identity bundles in the DR and failover export, and no rollback of the primary below the first binary that stores endpoint records; (f) strict decoding of the publish body, stored fields and the server's own serialization | §3.6, §3.8 |
+| OD-5, cost | LE Audio and the cellular passthrough stay as decided; their measured cost is 141,628 B of flash and 26,348 B of RAM | §12.2, §12.3 |
+
+The reviewers' open questions and the open points of the KAT generator (`tools/kat/earbud-ep-v1/README.md`, TODO-1 to
+TODO-19) are answered in revision 4 by clarifications that take the reading which refuses or holds media where the
+text allowed two (§17.2); the owner may override any of them.
 
 ---
 
@@ -2258,6 +2594,8 @@ exists.
 | Review: MODE, PTT, VOLUME | §7.7, §8.4, §9.14 |
 | Review: pairing procedure and button gate | §9.1, §9.2, §9.14 |
 | Review of revision 1 (2026-11-17) | §16 |
+| Reviews of revision 3 and the KAT open points TODO-1 to TODO-19 (2026-11-17) | §17.2 |
+| Review of the first revision-4 text `641bf74` | §17.2 rows 40 to 52 |
 
 ---
 
@@ -2296,7 +2634,12 @@ No issue was rejected. Four suggestions were adapted, for the reasons given in r
 
 ---
 
-## 17. Revision 3 changes (owner decisions of 2026-11-17)
+## 17. Revision 3 and revision 4 changes (owner decisions of 2026-11-17)
+
+This section carries no rule of its own: §17.1 lists the changes of revision 3 and §17.2 those of revision 4, each with
+the text that now carries the rule.
+
+### 17.1 Revision 3
 
 Revision 3 is revision 2 as the owner accepted it, with the owner's decisions recorded and made normative. No byte
 format, transcript, KDF, KCMAC, SAS, domain string, message type, status code, capability bit or key of revision 2
@@ -2310,21 +2653,95 @@ no rule of its own.
 | 2 | OD-1 (a) recorded: the active-host limit is stated and accepted and no earbud-played SAS is built now. Wording only; revision 2 already specified the limit | §1.3, §1.4, §5.9, §12.1, §14 |
 | 3 | OD-2: `EP_MAX_HOSTS = 4` is a defined constant (revision 2 said "proposed 4"); `EP_INFO.maxHosts` is 4; the per-user budget is stated as at most 16 live records, at most 4 per host device, tombstones not counted, replacement of an existing `(hostDeviceId, endpointId)` not counted twice, and a registration over a limit is refused with 409 | §0, §3.2, §3.4, §3.6, §8.2, §9.13, §10.4, §16 row 20 |
 | 4 | OD-3 recorded: a call that cannot use the earbud before the first bundle runs on the phone with a visible notice and is never refused. Wording only; revision 2 already specified the fallback | §5.1, §5.11 |
-| 5 | OD-4: the authoritative and production profiles carry no EP code until the PCB profile exists, do not register PSM `0x00B5`, do not expose `EP_INFO` and never report PROTOCOL_VERSION `0x02`; a firmware CI check keeps EP symbols out of them; no RAM cut now; acceptance runs on CI and bench images | §10.1, §12.1 to §12.3, §13.4 |
+| 5 | OD-4: the authoritative and production profiles carry no EP code until the PCB profile exists, do not register PSM `0x00B5`, do not expose `EP_INFO` and never report PROTOCOL_VERSION `0x02`; a firmware CI check keeps EP symbols out of them; no RAM cut now; acceptance runs on CI and bench images. Superseded in part by §17.2 row 2: those images now report `0x02` without `EP_INFO` | §10.1, §12.1 to §12.3, §13.4 |
 | 6 | OD-5 recorded: LE Audio and the cellular passthrough stay in EP builds under the rules of §9.6. Wording only | §9.6, §14 |
-| 7 | OD-6 (b) made unconditional and complete: the `captureArmed` flag and its five rules, the answer press and the new constant `ANSWER_PRESS_WINDOW = 10 s` (chosen in revision 3; it is the host's time between the press and `CALL_BEGIN`, with margin, and phase 0 may tighten it), the exact `EVENT` CAPTURE pair for "waiting for the capture press" (state `0x00`, reason `0x02`) with the reporting points and the order of reasons, the statement that no EPL message arms capture, `capsBits` bit 12 always 1 in an EP build and a host not opening an EP call when it reads 0, the host text rules, the gesture-table cells, the KAT section `capturePress`, acceptance items 10 and 17 | §1.4, §4.5, §5.1 to §5.3, §7.10, §8.2, §8.3, §9.9, §9.14, §12.1, §13.1, §13.4 |
+| 7 | OD-6 (b) made unconditional and complete: the `captureArmed` flag and its five rules, the answer press and the new constant `ANSWER_PRESS_WINDOW = 10 s` (chosen in revision 3; it is the host's time between the press and `CALL_BEGIN`, with margin, and phase 0 may tighten it; confirmed by the owner, §17.2 row 5, so a change now needs an owner decision), the exact `EVENT` CAPTURE pair for "waiting for the capture press" (state `0x00`, reason `0x02`) with the reporting points and the order of reasons, the statement that no EPL message arms capture, `capsBits` bit 12 always 1 in an EP build and a host not opening an EP call when it reads 0, the host text rules, the gesture-table cells, the KAT section `capturePress`, acceptance items 10 and 17 | §1.4, §4.5, §5.1 to §5.3, §7.10, §8.2, §8.3, §9.9, §9.14, §12.1, §13.1, §13.4 |
 | 8 | MCUboot anti-rollback: the software version check now, the hardware OTP counter later with the factory flow; the limit of the software check is stated | §1.1, §8.3, §14, Appendix C |
 | 9 | Appendix A and Appendix B are the text that landed in `WIRE_SPEC.md`: the headings and the introductory sentences say so, the fenced text is unchanged. Appendix B replaced lines 1686 to 1729 of the baseline `WIRE_SPEC.md` (the section up to the sentence ending "(audit D10-3)."), not 1686 to 1731: line 1731 is the `---` separator before §8, which stays | Appendix A, Appendix B |
 | 10 | The lock job text of the Android, iOS and Desktop copies says "four repos" where the server and web copies say "five" (today's workflows); every copy says six after the landing. The web client's lock also covers `desktop.pin.json` and `spec/IMPLEMENTS.json` (`scripts/check-spec.mjs`), and the iOS engine tests read the `EXPECTED=` line | §13.3, Appendix C |
-| 11 | Landing in the server repository: `WIRE_SPEC.md` after Appendix A, the consequential edits and Appendix B has sha256 `d59b321bbe1f6d298483aa23bd251899aadf17482e52256590a861de1da25092`; the two `PQC_HARDENING_V1.md` pointer sentences are added; `.github/workflows/wire-spec-lock.yml` checks `WIRE_SPEC.md` (the line `EXPECTED=`) and this file (the line `EXPECTED_EARBUD_EP=`) and lists both in its trigger paths; `.gitattributes` keeps this file at LF | §13.3, Appendix A, Appendix B |
+| 11 | Landing in the server repository: `WIRE_SPEC.md` after Appendix A, the consequential edits and Appendix B had sha256 `d59b321bbe1f6d298483aa23bd251899aadf17482e52256590a861de1da25092` at revision 3; after revision 4 and its review fixes it has sha256 `6a01ab50a8b49b19d9e46fc32d6ea087f927476332c20b9b3c7c9bbcd2ae4e0c` (§17.2 row 53); the two `PQC_HARDENING_V1.md` pointer sentences are added; `.github/workflows/wire-spec-lock.yml` checks `WIRE_SPEC.md` (the line `EXPECTED=`) and this file (the line `EXPECTED_EARBUD_EP=`) and lists both in its trigger paths; `.gitattributes` keeps this file at LF | §13.3, Appendix A, Appendix B |
+
+### 17.2 Revision 4
+
+Revision 4 records the second round of owner decisions of 2026-11-17 (§14) and answers the open questions of the
+reviewers of revision 3 and of the KAT generator (`tools/kat/earbud-ep-v1/README.md`, TODO-1 to TODO-19, at
+`e7cde5d`). Byte formats, KDFs, transcripts, domain strings, message types, status codes and capability bits are
+those of revision 3, with the exceptions the owner decided: the authoritative and production images report
+PROTOCOL_VERSION `0x02` without `EP_INFO` instead of never reporting it (row 2); a refusing `EP_AUTH` carries 96 zero
+bytes in its `epEdPub ‖ sigE` fields, and an unknown platform or any `hostProto` other than `0x0002` gets result `0x03`
+(row 6). Values that revision 3 named but did not number are now fixed (the `EVENT` STATE and CELLULAR values, the
+DIAG layout as the firmware already has it, the HTTP error codes of §3.6, `DOUBLE_PRESS_GAP`); no value that revision 3
+fixed has changed. A row marked "clarification" settles a point where the text allowed two readings, by the reading
+that refuses or holds media: it is a clarification, conservative reading, and the owner may override it. The fenced
+text of Appendix A and Appendix B follows the WIRE_SPEC changes of the rows that name them. Rows 40 to 52 answer the
+review of the first revision-4 text (`641bf74`): its six findings and those of its questions that were plain
+inconsistencies of the text; they change no byte format, KDF, transcript, domain string, message type, status code
+or capability bit, and where they amend an earlier row of this table they say so.
+
+| # | Change | Where |
+|---|---|---|
+| 1 | Status says revision 4; the baseline table gains the firmware branch `feat/ep-phase0` (`934e22a`) and the KAT branch (`e7cde5d`); §13.3 and §15 name the revision-4 lists; §17 is split into §17.1 and §17.2 | head, §13.3, §15, §17 |
+| 2 | Owner decision (OD-4, second round): the retired relay plane (the `0x10`/`0x20`/`0x30` handshake, `0xc4` MEDIA_KEY_INSTALL, PSM `0x00B3`, the retired GATT characteristics) is removed from every firmware profile in phase 1; the authoritative and production images, which carry no EP code, report PROTOCOL_VERSION `0x02`, expose no `EP_INFO` and register no PSM `0x00B5`; new term "no-endpoint earbud". Supersedes §17.1 row 5 where it said those images never report `0x02` | §0, §1.1 item 6, §1.5, §4.1, §8.1, §8.4, §10.1, §12.1, §12.3, §14, WIRE_SPEC §6 and §7 (Appendix A, Appendix B) |
+| 3 | Owner decision: the host decision table, `0x01` or lower refuse, `0x02` without `EP_INFO` no endpoint (DIAG, attestation, key import, FE-5 pairing and PSK_LIST only, no EPL, no EP call), `0x02` with `EP_INFO` an endpoint per `EP_INFO`; the same table in WIRE_SPEC §7 "Phone obligations"; KAT `epInfo` decision vectors and acceptance item 18 | §8.1, §8.3, §9.3, §9.9, §13.1, §13.4, WIRE_SPEC §7 (Appendix B) |
+| 4 | Clarification, conservative reading, the owner may override: the rows the decision did not name. An absent, unreadable or not one-byte PROTOCOL_VERSION is refused as `0x01`; a value above `0x02` is refused ("Update the Q-Audion app"); a firmware version below the host's minimum, `capsBits` bit 12 clear or a downgrade makes the earbud "no endpoint"; the decision is made at every connection and again after Service Changed | §8.1, §8.3, WIRE_SPEC §7 (Appendix B) |
+| 5 | Owner confirmation of the values chosen in revision 3, unchanged: `ANSWER_PRESS_WINDOW = 10 s`; HTTP 409 for a registration over the endpoint or host limits (now with the code `endpoint_limit`); the `EVENT` CAPTURE reason order `0x02`, `0x01`, `0x03`, `0x04`; a host does not open an EP call when `capsBits` bit 12 is 0; the firmware CI check against EP symbols in authoritative and production images | §0, §3.6, §4.5, §7.10, §8.3, §10.1, §14, §17.1 row 7 |
+| 6 | Owner decision: a refusing `EP_AUTH` (`0x02`, `0x03`) carries 96 zero bytes for `epEdPub ‖ sigE`, so it carries neither EK nor a signature and the earbud signs nothing for a host it has not authenticated (scoped to `EP_AUTH` by row 40: EK stays in `EP_INFO`); the revision-3 sentence that could be read as "EK whenever the earbud holds it" is replaced; an unknown platform byte is refused with `0x03` and the channel closed; every `hostProto` other than `0x0002`, `0x0001` included, is refused with `0x03`; result `0x03` reads "protocol version or platform not supported" (KAT TODO-3, TODO-4); WIRE_SPEC §7 says that a refused host gets no key and no signature | §4.3, §13.1, WIRE_SPEC §7 (Appendix B) |
+| 7 | Clarification, conservative reading, the owner may override: the earbud checks `hostProto` and `platform` when `HOST_HELLO` arrives and sends the refusing `EP_AUTH` `0x03` in place of `EP_HELLO`, so a refused host gets no `EP_INFO`, nonce or ephemeral key; a host ignores the 96 bytes of a refusing `EP_AUTH` | §4.3 |
+| 8 | Owner decision: the envelope that carried an endpoint bundle MUST carry `sender_device_id`, equal to `hostDeviceId`; the sentence of §3.7 step 2 that made the check conditional ("If the envelope ... has a `sender_device_id`") is replaced; absent or different fails step 2 (`identity_key_mismatch`, `ep=cert_invalid`, media held). WIRE_SPEC §3.7.3 already said it unconditionally and is unchanged on this point | §3.7 step 2, §13.1 |
+| 9 | Owner decision (server, a): only the host device publishes, and not while revoked, 403 `endpoint_host_mismatch` or `device_revoked`. Clarification, conservative reading, the owner may override: the order of the checks and the codes of the checks that revision 3 left unnamed (400 `endpoint_body_invalid`, `endpoint_key_invalid`, `endpoint_sig_invalid`; 409 `endpoint_host_key_mismatch`, `earbud_other_account`, `endpoint_key_taken`, `endpoint_limit`, `endpoint_tombstone_limit`; 410 `endpoint_revoked`; 412 `earbud_not_attested`; 404 `endpoint_not_found`), the error body `{"error":"<code>"}`, 200 on a publish and 204 on a deletion, the same caller rule for the phase-2 `mldsa` publication, and a host that retries a failed publication only after a network or 5xx failure, never after a 4xx answer | §3.4 step 9, §3.6 |
+| 10 | Owner decision (server, b): per-host removal `DELETE .../endpoints/{endpointId}/hosts/{hostDeviceId}` by any non-revoked device of the account, without a tombstone; the records of a revoked or deleted host device are not counted toward `EP_MAX_HOSTS` and are not listed; what peers see afterwards (unlisted, step 4 (c)) and the earbud owner's `UNENROLL`; the lost-host case of §3.8 rewritten. Clarification, conservative reading, the owner may override: the definition of a live record, an endpoint counted toward `EP_MAX_ENDPOINTS_PER_USER` only while it has one, a restored device not bringing its hidden records back, and the publication-lag window stated as a limit | §3.6, §3.8 |
+| 11 | Owner decision (server, c): `EP_MAX_TOMBSTONES_PER_USER = 32`; at 32 tombstones a new registration is refused with 409 `endpoint_tombstone_limit`; revocation is never refused. Clarification, conservative reading, the owner may override: the cap applies to a registration that adds a live record, not to the replacement of an existing one | §0, §3.6 |
+| 12 | Owner decision (server, d): account deletion erases the account's endpoint records, certificates, proofs of possession and tombstones and keeps only the SHA-256 of each revoked EK, with no link to the account, so a revoked EK can never be registered again by any account (check 7). Clarification, conservative reading, the owner may override: the deletion first revokes the account's live endpoints, so every EK the account published enters that set | §3.6 |
+| 13 | Owner decision (server, e): the per-device identity bundles are part of the DR and failover export, and the primary is never rolled back below the first binary that stores endpoint records, with the evidence at `c1790e7` (`bbolt.go:4629-4670`, the `?device_id=` fall-through of `users_identity_key.go:476-485`). Clarification, conservative reading, the owner may override: the export also carries the endpoint stores, the revoked-key set and the device revocation records (`revoked_keys`) that the per-host rule reads | §3.6, Appendix C |
+| 14 | Owner decision (server, f): the publish body is decoded strictly (an unknown member, a duplicate name, a name differing only in case: 400 `endpoint_body_invalid`), the server stores the validated fields and serves its own serialization | §3.6, §13.1 |
+| 15 | Clarification, conservative reading, the owner may override (question 1 of the review): after an R-EP-VERIFY failure (`ep=cert_invalid`, `host_mismatch`, `host_unresolved`, `revoked`, `unlisted_stale`, `unverified_offline`, or `sig_invalid`) a confirmed SAS releases the hold of that call and pins nothing, neither `K` as endpoint nor `K` as a device key nor `hostKey`; EK is never pinned as a device key; the pin table of §3.7 states every case | §3.7 steps 6 and 7, pin table, WIRE_SPEC §3.7.3 (Appendix A) |
+| 16 | Question 2 of the review: the WIRE_SPEC §3.7.3 summary states the young-endpoint window as at most 7 days before and at most 1 day after the verifier's clock, as §3.7 step 4 (c) | WIRE_SPEC §3.7.3 (Appendix A) |
+| 17 | Clarification, conservative reading, the owner may override (KAT TODO-7): `ep=host_mismatch` and `ep=host_unresolved` for the host-key resolver failures of step 3, `ep=absent` for an `earbudEpV1` bundle without a valid member; `ep_pq` names the key the ML-DSA half was checked against and `pq_sig` of PQC §5.5 the result, with the invalid and unavailable cases spelled out | §3.7, §11.2, §13.1 |
+| 18 | Clarification, conservative reading, the owner may override (KAT TODO-8): a bundle without a valid `endpoint` member gets the R-IDENTITY verdict for `K` (`identity_key_mismatch` for `Unauthenticated`, `identity_unresolved` for `Unresolved`), media held; with `earbudEpV1` its SAS pins nothing | §3.5, §3.7, WIRE_SPEC §3.7.3 (Appendix A) |
+| 19 | Clarification, conservative reading, the owner may override (KAT TODO-9): (a) an invalid `sigV6` gives `sig_invalid` and pins nothing; (b) an endpoint is pinned only with `ep=listed`, no step-5 anomaly and a valid `sigV6`, an endpoint accepted as `ep=unlisted` or `ep=pinned_offline` is not pinned anew, and an endpoint pinned and no longer listed is `unlisted_stale` at any age and its pin is deleted; (c) a SAS confirmed in a call with a step-5 anomaly pins nothing for the endpoint and the PQ record follows PQC §5.5. The WIRE_SPEC §3.7.3 summary says the same | §3.7 steps 4 (c), 6, 7, 8, pin table, WIRE_SPEC §3.7.3 (Appendix A) |
+| 20 | Clarification, conservative reading, the owner may override (KAT TODO-1): an `EP_INFO` shorter than 88 bytes, with `infoVersion` `0x00` or with `protocolVersion` other than `0x02` is invalid, one with `infoVersion` above `0x01` describes an unknown EPL; over GATT the earbud is then "no endpoint", in `EP_HELLO` the host closes the channel | §8.2, §13.1 |
+| 21 | Clarification, conservative reading, the owner may override (KAT TODO-2): audio queued before the first record of a message is sent before that record | §4.2, §13.1 |
+| 22 | Clarification, conservative reading, the owner may override (KAT TODO-5): the JSON text of a bundle is not canonical; bundles are compared as parsed values under the strict parser of WIRE_SPEC §3.1; the 24 KiB rule applies to the bytes sent | §5.5, §13.1 |
+| 23 | KAT TODO-6: the `EVENT` STATE values `0x00` to `0x05` and the `EVENT` CELLULAR values `0x00` to `0x04` (revision 3 named the states without numbers); the 32-byte DIAG record as `struct qaudion_diag_pkt` of `74a43d2`, with the meanings of `hs_count` and `call_state` that replace those of the retired plane; the WIRE_SPEC §7 DIAG row points to §4.5 | §4.5, §13.1, WIRE_SPEC §7 (Appendix B) |
+| 24 | Clarification, conservative reading, the owner may override (KAT TODO-10): blocks of 2 to 256 B, wire 30 to 284 B on the `0x04` path and 41 to 295 B on the legacy path (revision 3 wrote "blocks of 30 to 256 B"); an envelope outside its range is dropped before the open and counted as an inner failure | §7.5, §13.1 |
+| 25 | Clarification, conservative reading, the owner may override (KAT TODO-11): each counter is decoded at most once on both paths, a legacy duplicate is discarded after the open (`replayDrops`), decoding in counter order; the `profileRx` vectors assume every frame arrives before its playout time | §7.5, §13.1 |
+| 26 | Clarification, conservative reading, the owner may override (KAT TODO-12): a press is classified at its release (the factory reset acts at 10 s); new constant `DOUBLE_PRESS_GAP = 400 ms`, chosen in revision 4; where a double press has a meaning a short press acts after the gap; a confirm gesture is released before the window ends | §9.14, §13.1 |
+| 27 | Clarification, conservative reading, the owner may override (KAT TODO-13): `spacing` is returned only by `OFFER_PREP`, measured from the previous `OFFER_SIGNED` ok or while the previous own round is undecided | §4.4, §5.4, §13.1 |
+| 28 | Clarification, conservative reading, the owner may override (KAT TODO-14): the `EVENT` INNER_FAIL bytes (`fails` over the window ending at the failure, `windowMs` the span from the oldest counted failure, `lastEpochByte` `0x00` on the legacy path), what counts as an inner failure, and `authFails` counting the same failures | §4.5, §7.5, §13.1 |
+| 29 | Clarification, conservative reading, the owner may override (KAT TODO-15): the layout of a refusal, a typed response cut after `status` (with the `ENROLL_RESULT`, `CALL_BEGIN_OK` and `RESUME_RESULT` exceptions) or an `ERROR` record; a `CALL_END` for an unknown `h` gets `ERROR` `bad_state` | §4.4, §13.1 |
+| 30 | Clarification, conservative reading, the owner may override (KAT TODO-16): a second `PEER_ACCEPT` with a different body gets `already_bound` when the round is bound and `bad_state` after a refused first one; a `PEER_ACCEPT` whose `roundEcho` differs from its `round` gets `round_rule` | §4.4, §4.6, §13.1 |
+| 31 | Clarification, conservative reading, the owner may override (KAT TODO-17): a block whose `trueLen` exceeds what the block holds is a lost frame for concealment, counted in `decodeFail` | §7.5, §13.1 |
+| 32 | Clarification, conservative reading, the owner may override (KAT TODO-18): the 60 s cue counts from the most recent start cue, and a pause of capture stops it | §7.10, §13.1 |
+| 33 | Clarification, conservative reading, the owner may override (KAT TODO-19): `chain_base` also when the retention rule of PQC B13 erased `ck_B`; the refusal is the round's `PEER_OFFER_OK` with that status and the earbud keeps nothing of the round | §4.4, §13.1 |
+| 34 | Question 4 of the review: the `kmuKnownAnswer` set is named (the `AUTH_E` of every session with EK, the `enrol_only` one included, every EPC pop, every `OFFER_v6` and `ACCEPT_v6` the earbud signs, every hybrid `sigEd` message, the phase-2 `xcEd`) and §3.1 points to it (revision 3 named a section `eplAuth` that does not exist); the M-15 export uses the exact `callId` while `kOut` uses `callIdL`, and every `flows` case, the M-15 case (c) included, uses a mixed-case `callId`; the Python verifier keeps `tools/kat/earbud-ep-v1/verify_ep_v1.py`, is required and is run by server CI | §3.1, §6.6, §13.1, §13.4 item 11 |
+| 35 | Question 5 of the review: the phase-0 DK image alone keeps its KMU test keys (slots 124 to 127) and PSA test keys; `nrfutil device recover` is required before any other image is flashed on that board | §3.1, §13.1, §13.4 item 11 |
+| 36 | Question 6 of the review, measured on NCS v3.3.5 at `74a43d2` and `feat/ep-phase0`: LC3 and the LE Audio host cost 141,628 B of flash and 26,348 B of RAM (revision 3: 48 KB and 14.5 KB); the bench INF-log restriction frees 10,144 B (revision 3: up to 23,216 B); the phase-0 image has about 1.4 KB of headroom (1,452 B at `934e22a`, 1,436 to 1,452 B in later builds) under the 942,080 B ceiling; the flash table gains the rows with the measured credit and the conclusions follow (phase 1 fits the bench with 9.5 to 13.5 KB, phase 2 by 2 to 6 KB); OD-5 stands as decided at the measured cost | §10.1, §12.2, §12.3, §14 |
+| 37 | Question 7 of the review: the change log at the end of WIRE_SPEC gains the entry `Latest: 2026-11-17` for revisions 3 and 4 of this document, and the previous `Latest:` line becomes `Previous:` | WIRE_SPEC footer, Appendix A |
+| 38 | Consistency of WIRE_SPEC with §13.3: its list of mirror copies names the six locked repositories (it named four) | WIRE_SPEC head, Appendix A |
+| 39 | Appendix A and Appendix B carry the revision-4 text of WIRE_SPEC §3.7.3 and §7 (rows 2, 3, 4, 6, 15, 16, 18, 19, 23, 40, 49); Appendix A lists the revision-4 consequential edits (the §6 sentence, the head, the footer); Appendix C gains the evidence read for revision 4 | Appendix A, Appendix B, Appendix C |
+| 40 | Review of `641bf74`, finding 1: the sentence "the earbud never sends EK or a signature to a host it has not authenticated" (§4.3, §14, row 6, and its WIRE_SPEC §7 counterpart) was false, because `EP_HELLO` carries `EP_INFO`, `epEdPub` included, before `HOST_AUTH`, and the characteristic `0xd0` serves the same record. It is scoped to `EP_AUTH`: a refusing `EP_AUTH` carries neither EK nor a signature, the earbud signs nothing for a host it has not authenticated, and EK, a public key, stays in `EP_INFO` (the 88-byte record and the `epInfo` vectors are unchanged). The owner decision, 96 zero bytes in a refusing `EP_AUTH`, is unchanged; the WIRE_SPEC §7 sentence and its change-log entry say the same; row 6 is corrected in place | §4.3, §14, WIRE_SPEC §7 and footer (Appendix B) |
+| 41 | Review of `641bf74`, finding 2: check 7 refuses an EK that has a tombstone in any account (it said "in this account", which let a second account register an EK that the first account had revoked, while the first account exists), and check 8 refuses an EK that has a live record in another account (it said "registered", a term the section does not define); the revocation paragraph says that a revoked EK can never be registered again by any account. This restores the revision-3 rule (an EK with a revocation tombstone is refused) and owner decision (d) of the server records | §3.6 checks 7 and 8, Revocation |
+| 42 | Review of `641bf74`, finding 3. Clarification, conservative reading, the owner may override: in a call that negotiated `rekeyChainV1`, an `OFFER_PREP` that arrives before `KCMAC_VERIFIED` of round 1 gets `bad_state` (no base, §5.4 caller step 1) and never `spacing`, although round 1 is then undecided: the base rule is checked first, as the D12 gate of PQC B13 runs before any rate limit; without `rekeyChainV1` the same `OFFER_PREP` gets `spacing`. Amends row 27 | §4.4 code `0x0A`, §5.4, §13.1 (`timedFlows`, `negative`) |
+| 43 | Review of `641bf74`, finding 4: the `EVENT` INNER_FAIL rule checks that no event was sent in (t − 2,000 ms, t], an interval closed at t; it said open at t, so several failures at the same instant (several `AUDIO_IN` records of one SDU) each sent an event. Events are now at least 2,000 ms apart, as "at most one event per 2 s" says. Amends row 28 | §4.5, §13.1 (`timedFlows`) |
+| 44 | Review of `641bf74`, finding 5 and the double-press question. Clarification, conservative reading, the owner may override: in an EP context a capture press acts, and capture can start, `DOUBLE_PRESS_GAP` (400 ms) after the short press's release when no second press started in that gap; the `capturePress` case that said "captures at once" says so, and §7.10 rule 2 names the instant. When a second press starts within the gap and is not short (medium, long or a hold), the first press does not act at all and the second is classified and acts by itself; a `capturePress` case pins a short press followed by a long press. Amends row 26 | §7.10 rule 2, §9.14, §13.1 (`capturePress`) |
+| 45 | Review of `641bf74`, finding 6: what the host of a no-endpoint earbud may use is the same list everywhere, the list of §8.1 and WIRE_SPEC §7 (DIAG, attestation, KEY_IMPORT, FE-5 pairing, PSK_LIST); §0, §14 and row 3 said "attestation, key import and pairing" and §8.3 "diagnostics, attestation and the KMS relay"; row 3 is corrected in place | §0, §8.3, §14 |
+| 46 | Review of `641bf74`, question on a second `PEER_ACCEPT`. Clarification, conservative reading, the owner may override: once a cached response was released (the context moved past its step) the earbud never recomputes it; a later request of that step gets `bad_state`, byte-identical or not, and a `PEER_ACCEPT` for a bound round gets `already_bound`, for example a byte-identical `PEER_ACCEPT` of round 1 after `KCMAC_VERIFIED` erased the cached `ACCEPT_BOUND` and `sasNonce`. The text promised a cached response that no longer existed. Amends row 30 | §4.4, code `0x10`, §13.1 (`negative`) |
+| 47 | Review of `641bf74`, questions on the per-host removal. Clarification, conservative reading, the owner may override: a per-host `DELETE` for an endpoint that has a tombstone in the account answers 410 `endpoint_revoked`, checked before 404; the records of a revoked or deleted host device are hidden only as live entries, and the tombstones of such a device stay listed like every tombstone (they were "never listed" in one sentence and "listed for ever" in another) | §3.6 |
+| 48 | Review of `641bf74`, question on publication retries (a gap of the flow). Clarification, the owner may override: check 6 refuses an earbud that was never attested and §3.4 never attested it, so before its first publication for an earbud the host runs the existing earbud attestation (`POST /api/v1/device/earbud-attest`, `cmd/bcrypto-lite/main.go:12843`); a 4xx answer is never retried automatically, and the same record is published again only after its cause was removed (an attestation for 412 `earbud_not_attested`, the user's removal of an endpoint or a host record for 409 `endpoint_limit`); every other 4xx answer stays final for that record. Amends row 9 | §3.4 step 9 |
+| 49 | Review of `641bf74`, question on the first read: on iOS the first encrypted read is `PROTOCOL_VERSION`, which §9.3 reads first (§9.2 said `EP_INFO`). Clarification, conservative reading, the owner may override: "unreadable" in the first row of the host decision means a read that fails on a link encrypted under a completed bond; a read that fails because the bond is not complete is a bonding failure, after which the host uses no characteristic and decides again once bonded, and it never shows "Earbud firmware too old" for it; WIRE_SPEC §7 says the same; an unreadable `EP_INFO` counts as an invalid record (§8.2). Amends row 4 | §8.1, §8.2, §9.2, WIRE_SPEC §7 and footer (Appendix B) |
+| 50 | Review of `641bf74`, question on the phase-0 test keys: §3.1 names every key that the phase-0 image keeps, from `docs/PHASE0_DK_RUNBOOK.md` at `86293ad`: the phase-0 EK in KMU slots 120 and 121, the known-answer keys in slots 124 to 127 and the persistent PSA ids `0x100` to `0x103`, `0x200` and `0x7000` (it named slots 124 to 127 only). Amends row 35 | §3.1, Appendix C |
+| 51 | Review of `641bf74`, question on the LC3 and LE Audio cost: the measurement log is named. The figure of 141,628 B of flash and 26,348 B of RAM is the difference between two builds of the phase-0 image at `201188a`, with and without LE Audio and LC3 and both without ML-DSA (`~/vol/ep0-logs/fin-p0.build.log`, `fin-p0c.build.log`, Appendix C); revision 4 named `74a43d2` and `934e22a` as the commits and cited the `86293ad` artifacts, whose two phase-0 images differ by 132,948 B and 10,956 B because the second also adds ML-DSA-87. The figure, the conclusions and OD-5 are unchanged; the commit is corrected. Amends row 36 | §12.2, the baseline table, Appendix C |
+| 52 | Review of `641bf74`, cosmetic points: the baseline table gives the firmware `main` after PR #5 (`235b994`) and the head of `feat/ep-phase0` on 2026-11-18 (`86293ad`); the `vconfKey_E` row of §6.6 escapes the vertical bar of its label, which GitHub rendered as an extra cell | head, §6.6 |
+| 53 | Lock: `WIRE_SPEC.md` after revision 4 and the review fixes of rows 40 to 52 has sha256 `6a01ab50a8b49b19d9e46fc32d6ea087f927476332c20b9b3c7c9bbcd2ae4e0c`, recorded in §17.1 row 11; `EXPECTED` and `EXPECTED_EARBUD_EP` of `.github/workflows/wire-spec-lock.yml` are updated (this file cannot quote its own hash); `.gitattributes` is unchanged | §13.3, §17.1 row 11 |
 
 ---
 
 ## Appendix A. Text of WIRE_SPEC §3.7.3 (as landed)
 
-Replaced lines 1139 to 1154 of `WIRE_SPEC.md` at `7a12b308...`. The text below is the exact content that landed in
-`WIRE_SPEC.md`, byte for byte, together with the consequential edits listed after it; it lands with the new lock hash
-in every locked copy at once (§13.3).
+Replaced lines 1139 to 1154 of `WIRE_SPEC.md` at `7a12b308...`. Revision 3 landed it; revision 4 amended its identity
+bullet (§17.2 rows 15, 16, 18, 19). The text below is the exact current content of `WIRE_SPEC.md`, byte for byte,
+together with the consequential edits listed after it; it lands with the new lock hash in every locked copy at once
+(§13.3).
 
 ```markdown
 #### 3.7.3 No unauthenticated handshake path; the hardware earbud endpoint (R-EARBUD, R-EARBUD-EP)
@@ -2361,12 +2778,16 @@ call:
   `signerIdentityKey` verifies `cert` and `pop` (the uniform Ed25519 rule), requires the envelope's
   `sender_device_id` to equal `hostDeviceId`, resolves `hostKey` as the peer's device key with the same resolution,
   and checks the server's endpoint list of that device: a revocation tombstone gives `identity_key_mismatch`; an
-  endpoint that the list does not contain is accepted only within 7 days of its `created` time, and otherwise, or
-  when the list cannot be fetched and the endpoint is not pinned, gives `identity_unresolved`. On success
-  `signerIdentityKey` is authenticated as an endpoint of that device: the device pin stays the device key, the
-  endpoint key is pinned beside it, and a SAS confirmed in such a call confirms both. On any failure the existing rule
-  applies: an unknown identity key holds media pending the SAS (§3.8.6). The earbud's key is never part of the device
-  key set of `?all=1` and never replaces a device pin.
+  endpoint that the list does not contain is accepted only while its `created` time is at most 7 days before and at
+  most 1 day after the verifier's clock, and never when the receiver had pinned it; otherwise, or when the list
+  cannot be fetched and the endpoint is not pinned, it gives `identity_unresolved`. On success `signerIdentityKey` is
+  authenticated as an endpoint of that device and the device pin stays the device key; only when the list contained
+  the endpoint and the post-quantum check below gave no anomaly is the endpoint key pinned beside the device key, and
+  only then does a SAS confirmed in the call confirm both. On any failure the existing rule applies: an unknown
+  identity key holds media pending the SAS (§3.8.6), and a SAS confirmed after such a failure releases the hold of
+  that call and pins nothing. A bundle whose `capabilities` carry `earbudEpV1` without a valid `endpoint` member is
+  judged as an unknown identity key and its key is never pinned. The earbud's key is never part of the device key set
+  of `?all=1`, is never pinned as a device key and never replaces a device pin.
 - Post-quantum pins (R-EP-PQ). For an authenticated endpoint, every capability and post-quantum pin record of
   `docs/PQC_HARDENING_V1.md` §2.5 and §5.5 is the record of the host device key `hostKey`, never a record of the
   endpoint key. The ML-DSA half of the endpoint's `sigHybrid` is made by the host device's ML-DSA key, or by an
@@ -2401,25 +2822,34 @@ Consequential edits in the same lock change, exact sentences:
 - §1.1, first paragraph: "(no SRTP HKDF label exists anywhere in `bcrypto-server`; the firmware SPE comment confirms
   "the session key NEVER leaves the SPE")" becomes "(no SRTP HKDF label exists anywhere in `bcrypto-server`). In a call
   whose endpoint is a hardware earbud the earbud derives these keys and hands them to its host phone (§3.7.3)."
-- §6, first list: unchanged. Add after the hard-switch paragraph: "The earbud endpoint of §3.7.3 (PROTOCOL_VERSION
-  `0x02` of §7) is a hard switch of this kind: the relay dialect of PROTOCOL_VERSION `0x01` is deleted, not
-  negotiated."
+- §6, first list: unchanged. Add after the hard-switch paragraph (revision 3; reworded by revision 4, §17.2 row 2):
+  "The earbud endpoint of §3.7.3 and the GATT family of §7 (PROTOCOL_VERSION `0x02`) are a hard switch of this kind:
+  the relay dialect of PROTOCOL_VERSION `0x01` is deleted from every earbud firmware image, not negotiated, and a phone
+  refuses an earbud that reports it (§7)."
+- Head (revision 4, §17.2 row 38): "the four client repos pull the updated spec" becomes "the client repos pull the
+  updated spec", and the list of mirror copies becomes "Mirror copies live at the root of six repositories,
+  byte-identical and checked by `.github/workflows/wire-spec-lock.yml` in each:" followed by `bcrypto-server` (this
+  file), `qaudion-android-new`, `qaudion-desktop`, `qaudion-ios`, `qaudion-webapp` and `qaudion-firmware`, one per line.
+- Change log at the end (revision 4, §17.2 row 37): a new first line `Latest: 2026-11-17 (hardware earbud as a v6 call
+  endpoint, docs/EARBUD_V6_ENDPOINT.md revisions 3 and 4, ...)` that summarises §3.7.3, §3.1, §1.1, §6 and §7 as
+  landed, and the line that began `Latest: 2026-11-13` begins `Previous: 2026-11-13`.
 
 ---
 
 ## Appendix B. Text of WIRE_SPEC §7 (as landed)
 
 Replaced lines 1686 to 1729 of `WIRE_SPEC.md` at `7a12b308...` (the section up to the sentence ending "(audit
-D10-3)."; the `---` separator at line 1731 stays). The text below is the exact content that landed in `WIRE_SPEC.md`,
-byte for byte.
+D10-3)."; the `---` separator at line 1731 stays). Revision 3 landed it; revision 4 amended it (§17.2 rows 2, 3, 4,
+6, 23, 40 and 49). The text below is the exact current content of `WIRE_SPEC.md`, byte for byte.
 
 ```markdown
 ## 7. Earbud BLE contract: GATT family and endpoint link (PROTOCOL_VERSION 0x02)
 
-The hardware earbud (nRF54LM20B firmware) exposes one GATT service and one L2CAP channel to the phone it is bonded to.
-FROZEN cross-platform contract: iOS and Android MUST use these exact values. Source of truth: the firmware commit that
-introduces PROTOCOL_VERSION `0x02`, `firmware/nspe/src/transport/qaudion_gatt.c`; the endpoint link and the call
-plane are specified in `docs/EARBUD_V6_ENDPOINT.md` (§4 to §7), locked with this file (§3.7.3).
+The hardware earbud (nRF54LM20B firmware) exposes one GATT service to the phone it is bonded to and, in an image that
+carries the endpoint, one L2CAP channel. FROZEN cross-platform contract: iOS and Android MUST use these exact values.
+Source of truth: the firmware commit that introduces PROTOCOL_VERSION `0x02`,
+`firmware/nspe/src/transport/qaudion_gatt.c`; the endpoint link and the call plane are specified in
+`docs/EARBUD_V6_ENDPOINT.md` (§4 to §7), locked with this file (§3.7.3).
 
 **Base UUID pattern:** `f2c0aaaa-bcc0-4001-8000-0000000000XX`, where `XX` is the characteristic's last byte; the
 service is `...0001`. Every attribute needs an encrypted link; the bond is LESC numeric comparison, confirmed with a
@@ -2429,8 +2859,8 @@ attribute table.
 
 | Opcode | Name | Dir | Content |
 |---|---|---|---|
-| 0x90 | DIAG | read | 32-byte little-endian diagnostics record (heap, battery, handshake count, call state, BLE interval, voice score, uptime, AEAD operation count) |
-| 0xa9 | PROTOCOL_VERSION | read | 1 byte, `0x02` = this section and the endpoint link; `0x01` was the retired relay dialect |
+| 0x90 | DIAG | read | 32-byte little-endian diagnostics record (heap, battery, handshake count, call state, BLE interval, voice score, uptime, AEAD operation count; layout in `docs/EARBUD_V6_ENDPOINT.md` §4.5) |
+| 0xa9 | PROTOCOL_VERSION | read | 1 byte, `0x02` = this section, in every firmware image; `0x01` was the retired relay dialect (phone decision below) |
 | 0xc0 | ATTEST_INFO | read | pk_se(32) ‖ earbud_id(32), earbud_id = SHA-256(pk_se) |
 | 0xc1 | ATTEST_POP | write 48 B, read 32 B | attestation PoP (qa-attest-pop-v1); also returns the KMS PoP after KEY_IMPORT |
 | 0xc2 | ATTEST_PQ | write 1 B, read 392 B | pk_pq (ML-KEM-1024 public key), 4 × 392 B chunks |
@@ -2439,28 +2869,46 @@ attribute table.
 | 0xc6 | PAIR_RESP | write 1 B, read 408 B | FE-5 msg2 = pk_se(32) ‖ ct_ee(1568) ‖ eid(32), 4 chunks |
 | 0xc7 | PAIR_FIN | write | FE-5 msg3 = SAS-confirm MAC (32 B) |
 | 0xca | PSK_LIST | read | active hw_only PSK list: `[n:1] + n × [epoch_le8(8) + fp(32)]` |
-| 0xd0 | EP_INFO | read | 88-byte endpoint information record (`docs/EARBUD_V6_ENDPOINT.md` §8.2): protocol and firmware version, build profile, board, capability bits, link parameters, earbud_id, endpoint key |
+| 0xd0 | EP_INFO | read | 88-byte endpoint information record (`docs/EARBUD_V6_ENDPOINT.md` §8.2): protocol and firmware version, build profile, board, capability bits, link parameters, earbud_id, endpoint key; present only in an image that carries the endpoint |
 
-Retired with PROTOCOL_VERSION `0x02` and absent from the service: `0x10` HANDSHAKE_INIT, `0x20` HANDSHAKE_RESPONSE,
-`0x30` HANDSHAKE_FINALIZE, `0x40` CALL_STATE, `0x50` MODE, `0x60` PTT, `0x70` DEEPFAKE_SCORE, `0x80` VOLUME, `0xb0`
-SAS_ENTROPY, `0xc4` MEDIA_KEY_INSTALL, `0xc8` FP_ADV_REQUEST, `0xc9` KC_CONFIRM. A phone MUST NOT write or subscribe
-to them.
+Retired with PROTOCOL_VERSION `0x02` and absent from the service of every firmware image: `0x10` HANDSHAKE_INIT,
+`0x20` HANDSHAKE_RESPONSE, `0x30` HANDSHAKE_FINALIZE, `0x40` CALL_STATE, `0x50` MODE, `0x60` PTT, `0x70`
+DEEPFAKE_SCORE, `0x80` VOLUME, `0xb0` SAS_ENTROPY, `0xc4` MEDIA_KEY_INSTALL, `0xc8` FP_ADV_REQUEST, `0xc9` KC_CONFIRM.
+A phone MUST NOT write or subscribe to them.
 
-**Endpoint link.** L2CAP LE credit-based channel on PSM `0x00B5`, the earbud being the server, security level L4,
-one channel per connection; PSM `0x00B3` (AudioLink, 148-byte sealed frames) is retired. The channel is a byte
-stream of records `BE16(len) ‖ u8(type) ‖ u8(flags) ‖ body` (`2 ≤ len ≤ 4094`, flags bit 0 = more), independent of
-SDU boundaries. Every channel starts with `HOST_HELLO` (a commitment), `EP_HELLO`, `HOST_AUTH` and `EP_AUTH`: an
-X25519 exchange whose ephemeral keys are signed by the host's and the earbud's Ed25519 identity keys. The earbud
+**Endpoint link.** L2CAP LE credit-based channel on PSM `0x00B5`, registered exactly by the images that expose
+EP_INFO, the earbud being the server, security level L4, one channel per connection; PSM `0x00B3` (AudioLink,
+148-byte sealed frames) is retired from every image. The channel is a byte stream of records
+`BE16(len) ‖ u8(type) ‖ u8(flags) ‖ body` (`2 ≤ len ≤ 4094`, flags bit 0 = more), independent of SDU boundaries.
+Every channel starts with `HOST_HELLO` (a commitment), `EP_HELLO`, `HOST_AUTH` and `EP_AUTH`: an X25519 exchange whose
+ephemeral keys are signed by the host's and the earbud's Ed25519 identity keys. A host that the earbud refuses (bad
+signature or commitment, unsupported protocol version or platform) gets an `EP_AUTH` with no key and no signature,
+and the channel closes: the earbud signs nothing for a host it has not authenticated. The endpoint key itself is
+public and is not withheld: EP_INFO carries it and is readable before the endpoint link authenticates. The earbud
 accepts the call plane only from a host whose enrolled identity key signed, and every later record in both directions
 is sealed with AES-256-GCM under the session's keys. Enrolling a new host needs a fresh bond or a pairing-mode window
 opened on the earbud, and a confirm gesture on the earbud after an audible code derived from the session. The
 message catalogue, the call flows, the key schedule and the media envelopes are those of
 `docs/EARBUD_V6_ENDPOINT.md`.
 
-**Phone obligations.** A phone reads PROTOCOL_VERSION and EP_INFO before it opens the endpoint link, refuses calls
-with firmware below `0x02` or below its compiled minimum ("Earbud firmware too old"), handles Service Changed on a
-bonded earbud, never routes system call audio (SCO, LE Audio) to the earbud during a call whose endpoint is the
-earbud, and uses `createL2capChannel` (Android, API 29 or later) or `openL2CAPChannel` (iOS) on the bonded earbud.
+**Phone obligations.** Before it uses the earbud, a phone reads PROTOCOL_VERSION and, when the service has it,
+EP_INFO, and decides:
+
+| PROTOCOL_VERSION | EP_INFO | Phone decision |
+|---|---|---|
+| `0x01` or lower, or absent, unreadable or not one byte long | any | refused: the phone uses no other characteristic, opens no channel, places no call with the earbud as endpoint and shows "Earbud firmware too old" |
+| `0x02` | absent | no endpoint (an image without the endpoint, `docs/EARBUD_V6_ENDPOINT.md` §10.1): only the other characteristics of the table above (DIAG, attestation, KEY_IMPORT, FE-5 pairing, PSK_LIST), no endpoint link, no call with the earbud as endpoint |
+| `0x02` | present | an endpoint as EP_INFO describes it, after the record and version checks of `docs/EARBUD_V6_ENDPOINT.md` §8.2 and §8.3; a record or a firmware version those checks refuse (firmware below the phone's compiled minimum included) is handled as no endpoint, with the notice they name |
+| above `0x02` | any | refused, as in the first row, with a notice to update the app |
+
+A characteristic is unreadable when its read fails on a link encrypted under a completed bond. A read that fails
+because the bond is not complete (insufficient authentication or encryption, a pairing still running, cancelled or
+failed) is a bonding failure, not a decision: the phone uses no characteristic, shows the bonding step again and
+decides after the next completed bond.
+
+The phone handles Service Changed on a bonded earbud and decides again after it, never routes system call audio
+(SCO, LE Audio) to the earbud during a call whose endpoint is the earbud, and uses `createL2capChannel` (Android,
+API 29 or later) or `openL2CAPChannel` (iOS) on the bonded earbud.
 ```
 
 ---
@@ -2514,3 +2962,11 @@ Every statement about existing code in this document rests on these reads (refs 
 | MCUboot offers the software version check and the hardware security counter only as a choice; the hardware counter burns OTP words | firmware PR #6 `03a83f3` `firmware/sysbuild.conf:39-54` (`SB_CONFIG_MCUBOOT_HARDWARE_DOWNGRADE_PREVENTION=y` there), `firmware/sysbuild/mcuboot.conf:5-8`; `firmware/config/bench_dev.conf:36` |
 | Other repos' copies and lock files of `WIRE_SPEC.md` (all at `7a12b308...`) | Android `614bc164`, iOS `6859edb7`, Desktop `2904583`: `WIRE_SPEC.md` and `.github/workflows/wire-spec-lock.yml` (`EXPECTED=`, comment "four repos"); iOS also `QAudionEngine/Tests/QAudionEngineTests/Crypto/SasCommitTests.swift:911-913`; web `master` `308b89d7`: `WIRE_SPEC.md`, `.github/workflows/wire-spec-lock.yml` (comment "five repos"), `desktop.pin.json` (`wire_spec_sha256`), `spec/IMPLEMENTS.json` (`spec_sha256`, one entry per heading), `scripts/check-spec.mjs`; firmware `main` `38fad83`: no copy and no lock |
 | Server tests that read `WIRE_SPEC.md` | server `tools/kat/wirespec_timing_test.go:18` (rule texts), `tools/katgen/location/location_test.go:942` (the §14.1 constants table), `internal/webui/gate_test.go:105` and `:200` (the web bundle's `wire_spec_sha256`, skipped while `internal/webui/webui.lock.json` is unpinned) |
+| Revision 4: DR and failover export sets; the per-device bundle bucket; the device revocation bucket | server `c1790e7` `internal/store/bbolt.go:4629-4641` (`drExportBuckets`, with `bucketUserIdentityBundles` and without `bucketUserIdentityBundlesByDevice`), `:4650-4670` (`failoverExportBuckets`), `:175`, `:184` (`user_identity_bundles_v2`, `user_identity_bundles_by_device_v2`), `:78` (`revoked_keys`) |
+| Revision 4: `?device_id=` falls through to the latest bundle | server `c1790e7` `cmd/bcrypto-lite/users_identity_key.go:452-454`, `:476-485`; `internal/store/identity_bundles.go:214-225` (`GetBundleForDevice` returns nothing for a device without a record) |
+| Revision 4: the server's error body | server `c1790e7` `cmd/bcrypto-lite/main.go:4771-4775` (`jsonErr`, `{"error": msg}`) |
+| Revision 4: the server stamps `sender_device_id` on live and replayed `opaque_message` | server `WIRE_SPEC.md` §3.7.4, R-COMMIT-KCMAC-DEVICE, its "Server fact" item |
+| Revision 4: DIAG record layout | firmware `74a43d2` `firmware/nspe/src/transport/qaudion_gatt.c:211-248` (`struct qaudion_diag_pkt`), `:1336` (`diag_read`) |
+| Revision 4: bench INF-log credit, phase-0 headroom, phase-0 test keys and `nrfutil device recover` | firmware `feat/ep-phase0`: commit `1b759cc` (928,708 B against 918,564 B of FLASH, 10,144 B freed), commit `934e22a` and `docs/PHASE0_DK_RUNBOOK.md` §1 (the phase-0 EK in KMU slot 120, two 16-byte slots, handle `0x7fff3078`; KMU slots 124 and 126 for the known-answer seeds; re-read at `86293ad`, whose §7 lists the persistent PSA ids `0x100` to `0x103`, `0x200` and `0x7000`), §2 (signed image 940,628 B, 1,452 B below 942,080 B), §4 (`nrfutil device recover` before any image other than a phase-0 one); helsinki `~/vol/ep0-artifacts/BUILD_INFO.txt` (a later build of the branch: 1,436 B) |
+| Revision 4: LC3 and LE Audio host cost | two NCS v3.3.5 builds of the phase-0 image (`config/prj.conf`, `config/bench_dev.conf`, `config/phase0.conf`) of `feat/ep-phase0` at `201188a`, on 2026-11-17 at 19:22 and 19:28 UTC: helsinki `~/vol/ep0-logs/fin-p0.build.log` (application FLASH 936,652 B, RAM 497,244 B; `CONFIG_BT_AUDIO=y`, `CONFIG_LIBLC3=y`) and `~/vol/ep0-logs/fin-p0c.build.log` (FLASH 795,024 B, RAM 470,896 B; both unset, `CONFIG_QA_PHASE0_MLDSA` unset in both), a difference of 141,628 B and 26,348 B. Their `.config` files (`~/vol/fwbuild/ep0-fin-p0/firmware/zephyr/.config`, `~/vol/fwbuild/ep0-fin-p0c/...`) differ in 78 lines, all of them `CONFIG_LIBLC3` or Bluetooth symbols of the LE Audio host and its dependants (extended advertising, event buffer sizes). The phase-0 sizes are those that `~/vol/ep0-artifacts-201188a/BUILD_INFO.txt` records for `201188a`. Revision 4 cited `74a43d2`, `934e22a` and `~/vol/ep0-artifacts/BUILD_INFO.txt` (`86293ad`), whose `lm20b-phase0` and `lm20b-phase0-mldsa` images differ by 132,948 B and 10,956 B only, because the second also adds ML-DSA-87 (at `201188a`, `fin-p0m.build.log` against `fin-p0c.build.log`: 8,728 B of flash, 15,400 B of RAM) |
+| Revision 4: the open points TODO-1 to TODO-19 | server branch `kat/earbud-ep-v1` `e7cde5d` `tools/kat/earbud-ep-v1/README.md` (section "Open points", the list TODO-1 to TODO-19) |

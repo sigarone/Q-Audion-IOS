@@ -24,7 +24,8 @@
 #                                 gates, and the variant builds whose files changed
 #   QAudionAppTests only          app-build-and-tests and gates, not the engine tests
 #   engine source or tests        ios-simulator-tests, app-build-and-tests, gates, the variants the files name
-#   vectors, WIRE_SPEC.md         ios-simulator-tests only (the engine tests read them)
+#   vectors, WIRE_SPEC.md,        ios-simulator-tests only (the engine tests read the vectors and WIRE_SPEC.md;
+#   docs/EARBUD_V6_ENDPOINT.md    the endpoint document is locked with WIRE_SPEC.md and runs the same job)
 #   scripts/ci, the log filter    gates (and the macOS job that runs the script, when it is one of those)
 #   another workflow              gates
 #   this file, the plan scripts, the label `full-ci`, a manual dispatch    everything

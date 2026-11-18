@@ -4,14 +4,17 @@ Authored 2026-05-06 after the consolidation pass that brought Android,
 Server, Desktop and iOS back to `main` in lock-step. This document is
 the single source of truth for the on-the-wire contracts every client
 must honour. Whenever a server-side wire shape changes, this file is
-the gating commit — the four client repos pull the updated spec and
+the gating commit — the client repos pull the updated spec and
 adapt before shipping.
 
-Mirror copies live at the root of:
-- `apps/bcrypto-server/WIRE_SPEC.md` (this file)
-- `apps/qaudion-android-new/WIRE_SPEC.md`
-- `apps/qaudion-desktop/WIRE_SPEC.md`
-- `apps/qaudion-ios/WIRE_SPEC.md`
+Mirror copies live at the root of six repositories, byte-identical and
+checked by `.github/workflows/wire-spec-lock.yml` in each:
+- `bcrypto-server` (this file)
+- `qaudion-android-new`
+- `qaudion-desktop`
+- `qaudion-ios`
+- `qaudion-webapp`
+- `qaudion-firmware`
 
 ---
 
@@ -1174,12 +1177,16 @@ call:
   `signerIdentityKey` verifies `cert` and `pop` (the uniform Ed25519 rule), requires the envelope's
   `sender_device_id` to equal `hostDeviceId`, resolves `hostKey` as the peer's device key with the same resolution,
   and checks the server's endpoint list of that device: a revocation tombstone gives `identity_key_mismatch`; an
-  endpoint that the list does not contain is accepted only within 7 days of its `created` time, and otherwise, or
-  when the list cannot be fetched and the endpoint is not pinned, gives `identity_unresolved`. On success
-  `signerIdentityKey` is authenticated as an endpoint of that device: the device pin stays the device key, the
-  endpoint key is pinned beside it, and a SAS confirmed in such a call confirms both. On any failure the existing rule
-  applies: an unknown identity key holds media pending the SAS (§3.8.6). The earbud's key is never part of the device
-  key set of `?all=1` and never replaces a device pin.
+  endpoint that the list does not contain is accepted only while its `created` time is at most 7 days before and at
+  most 1 day after the verifier's clock, and never when the receiver had pinned it; otherwise, or when the list
+  cannot be fetched and the endpoint is not pinned, it gives `identity_unresolved`. On success `signerIdentityKey` is
+  authenticated as an endpoint of that device and the device pin stays the device key; only when the list contained
+  the endpoint and the post-quantum check below gave no anomaly is the endpoint key pinned beside the device key, and
+  only then does a SAS confirmed in the call confirm both. On any failure the existing rule applies: an unknown
+  identity key holds media pending the SAS (§3.8.6), and a SAS confirmed after such a failure releases the hold of
+  that call and pins nothing. A bundle whose `capabilities` carry `earbudEpV1` without a valid `endpoint` member is
+  judged as an unknown identity key and its key is never pinned. The earbud's key is never part of the device key set
+  of `?all=1`, is never pinned as a device key and never replaces a device pin.
 - Post-quantum pins (R-EP-PQ). For an authenticated endpoint, every capability and post-quantum pin record of
   `docs/PQC_HARDENING_V1.md` §2.5 and §5.5 is the record of the host device key `hostKey`, never a record of the
   endpoint key. The ML-DSA half of the endpoint's `sigHybrid` is made by the host device's ML-DSA key, or by an
@@ -1713,8 +1720,9 @@ Rules 1-3 above apply from the first public release on. The signed transcript v6
 and the SAS commitment, §3.7, §3.7.4, §3.8), the frame IV counter change (§11) and the file format v2 (§12) are hard
 switches of this kind.
 
-The earbud endpoint of §3.7.3 (PROTOCOL_VERSION `0x02` of §7) is a hard switch of this kind: the relay dialect of
-PROTOCOL_VERSION `0x01` is deleted, not negotiated.
+The earbud endpoint of §3.7.3 and the GATT family of §7 (PROTOCOL_VERSION `0x02`) are a hard switch of this kind:
+the relay dialect of PROTOCOL_VERSION `0x01` is deleted from every earbud firmware image, not negotiated, and a phone
+refuses an earbud that reports it (§7).
 
 A new version of a file message (the `qa_file` member of §12.7.1) is a binary-incompatible change. Until a signed
 per-device announcement of the highest file message version it reads is defined in this specification, a sender MUST
@@ -1735,10 +1743,11 @@ text); a frame with another first byte is dropped.
 
 ## 7. Earbud BLE contract: GATT family and endpoint link (PROTOCOL_VERSION 0x02)
 
-The hardware earbud (nRF54LM20B firmware) exposes one GATT service and one L2CAP channel to the phone it is bonded to.
-FROZEN cross-platform contract: iOS and Android MUST use these exact values. Source of truth: the firmware commit that
-introduces PROTOCOL_VERSION `0x02`, `firmware/nspe/src/transport/qaudion_gatt.c`; the endpoint link and the call
-plane are specified in `docs/EARBUD_V6_ENDPOINT.md` (§4 to §7), locked with this file (§3.7.3).
+The hardware earbud (nRF54LM20B firmware) exposes one GATT service to the phone it is bonded to and, in an image that
+carries the endpoint, one L2CAP channel. FROZEN cross-platform contract: iOS and Android MUST use these exact values.
+Source of truth: the firmware commit that introduces PROTOCOL_VERSION `0x02`,
+`firmware/nspe/src/transport/qaudion_gatt.c`; the endpoint link and the call plane are specified in
+`docs/EARBUD_V6_ENDPOINT.md` (§4 to §7), locked with this file (§3.7.3).
 
 **Base UUID pattern:** `f2c0aaaa-bcc0-4001-8000-0000000000XX`, where `XX` is the characteristic's last byte; the
 service is `...0001`. Every attribute needs an encrypted link; the bond is LESC numeric comparison, confirmed with a
@@ -1748,8 +1757,8 @@ attribute table.
 
 | Opcode | Name | Dir | Content |
 |---|---|---|---|
-| 0x90 | DIAG | read | 32-byte little-endian diagnostics record (heap, battery, handshake count, call state, BLE interval, voice score, uptime, AEAD operation count) |
-| 0xa9 | PROTOCOL_VERSION | read | 1 byte, `0x02` = this section and the endpoint link; `0x01` was the retired relay dialect |
+| 0x90 | DIAG | read | 32-byte little-endian diagnostics record (heap, battery, handshake count, call state, BLE interval, voice score, uptime, AEAD operation count; layout in `docs/EARBUD_V6_ENDPOINT.md` §4.5) |
+| 0xa9 | PROTOCOL_VERSION | read | 1 byte, `0x02` = this section, in every firmware image; `0x01` was the retired relay dialect (phone decision below) |
 | 0xc0 | ATTEST_INFO | read | pk_se(32) ‖ earbud_id(32), earbud_id = SHA-256(pk_se) |
 | 0xc1 | ATTEST_POP | write 48 B, read 32 B | attestation PoP (qa-attest-pop-v1); also returns the KMS PoP after KEY_IMPORT |
 | 0xc2 | ATTEST_PQ | write 1 B, read 392 B | pk_pq (ML-KEM-1024 public key), 4 × 392 B chunks |
@@ -1758,28 +1767,46 @@ attribute table.
 | 0xc6 | PAIR_RESP | write 1 B, read 408 B | FE-5 msg2 = pk_se(32) ‖ ct_ee(1568) ‖ eid(32), 4 chunks |
 | 0xc7 | PAIR_FIN | write | FE-5 msg3 = SAS-confirm MAC (32 B) |
 | 0xca | PSK_LIST | read | active hw_only PSK list: `[n:1] + n × [epoch_le8(8) + fp(32)]` |
-| 0xd0 | EP_INFO | read | 88-byte endpoint information record (`docs/EARBUD_V6_ENDPOINT.md` §8.2): protocol and firmware version, build profile, board, capability bits, link parameters, earbud_id, endpoint key |
+| 0xd0 | EP_INFO | read | 88-byte endpoint information record (`docs/EARBUD_V6_ENDPOINT.md` §8.2): protocol and firmware version, build profile, board, capability bits, link parameters, earbud_id, endpoint key; present only in an image that carries the endpoint |
 
-Retired with PROTOCOL_VERSION `0x02` and absent from the service: `0x10` HANDSHAKE_INIT, `0x20` HANDSHAKE_RESPONSE,
-`0x30` HANDSHAKE_FINALIZE, `0x40` CALL_STATE, `0x50` MODE, `0x60` PTT, `0x70` DEEPFAKE_SCORE, `0x80` VOLUME, `0xb0`
-SAS_ENTROPY, `0xc4` MEDIA_KEY_INSTALL, `0xc8` FP_ADV_REQUEST, `0xc9` KC_CONFIRM. A phone MUST NOT write or subscribe
-to them.
+Retired with PROTOCOL_VERSION `0x02` and absent from the service of every firmware image: `0x10` HANDSHAKE_INIT,
+`0x20` HANDSHAKE_RESPONSE, `0x30` HANDSHAKE_FINALIZE, `0x40` CALL_STATE, `0x50` MODE, `0x60` PTT, `0x70`
+DEEPFAKE_SCORE, `0x80` VOLUME, `0xb0` SAS_ENTROPY, `0xc4` MEDIA_KEY_INSTALL, `0xc8` FP_ADV_REQUEST, `0xc9` KC_CONFIRM.
+A phone MUST NOT write or subscribe to them.
 
-**Endpoint link.** L2CAP LE credit-based channel on PSM `0x00B5`, the earbud being the server, security level L4,
-one channel per connection; PSM `0x00B3` (AudioLink, 148-byte sealed frames) is retired. The channel is a byte
-stream of records `BE16(len) ‖ u8(type) ‖ u8(flags) ‖ body` (`2 ≤ len ≤ 4094`, flags bit 0 = more), independent of
-SDU boundaries. Every channel starts with `HOST_HELLO` (a commitment), `EP_HELLO`, `HOST_AUTH` and `EP_AUTH`: an
-X25519 exchange whose ephemeral keys are signed by the host's and the earbud's Ed25519 identity keys. The earbud
+**Endpoint link.** L2CAP LE credit-based channel on PSM `0x00B5`, registered exactly by the images that expose
+EP_INFO, the earbud being the server, security level L4, one channel per connection; PSM `0x00B3` (AudioLink,
+148-byte sealed frames) is retired from every image. The channel is a byte stream of records
+`BE16(len) ‖ u8(type) ‖ u8(flags) ‖ body` (`2 ≤ len ≤ 4094`, flags bit 0 = more), independent of SDU boundaries.
+Every channel starts with `HOST_HELLO` (a commitment), `EP_HELLO`, `HOST_AUTH` and `EP_AUTH`: an X25519 exchange whose
+ephemeral keys are signed by the host's and the earbud's Ed25519 identity keys. A host that the earbud refuses (bad
+signature or commitment, unsupported protocol version or platform) gets an `EP_AUTH` with no key and no signature,
+and the channel closes: the earbud signs nothing for a host it has not authenticated. The endpoint key itself is
+public and is not withheld: EP_INFO carries it and is readable before the endpoint link authenticates. The earbud
 accepts the call plane only from a host whose enrolled identity key signed, and every later record in both directions
 is sealed with AES-256-GCM under the session's keys. Enrolling a new host needs a fresh bond or a pairing-mode window
 opened on the earbud, and a confirm gesture on the earbud after an audible code derived from the session. The
 message catalogue, the call flows, the key schedule and the media envelopes are those of
 `docs/EARBUD_V6_ENDPOINT.md`.
 
-**Phone obligations.** A phone reads PROTOCOL_VERSION and EP_INFO before it opens the endpoint link, refuses calls
-with firmware below `0x02` or below its compiled minimum ("Earbud firmware too old"), handles Service Changed on a
-bonded earbud, never routes system call audio (SCO, LE Audio) to the earbud during a call whose endpoint is the
-earbud, and uses `createL2capChannel` (Android, API 29 or later) or `openL2CAPChannel` (iOS) on the bonded earbud.
+**Phone obligations.** Before it uses the earbud, a phone reads PROTOCOL_VERSION and, when the service has it,
+EP_INFO, and decides:
+
+| PROTOCOL_VERSION | EP_INFO | Phone decision |
+|---|---|---|
+| `0x01` or lower, or absent, unreadable or not one byte long | any | refused: the phone uses no other characteristic, opens no channel, places no call with the earbud as endpoint and shows "Earbud firmware too old" |
+| `0x02` | absent | no endpoint (an image without the endpoint, `docs/EARBUD_V6_ENDPOINT.md` §10.1): only the other characteristics of the table above (DIAG, attestation, KEY_IMPORT, FE-5 pairing, PSK_LIST), no endpoint link, no call with the earbud as endpoint |
+| `0x02` | present | an endpoint as EP_INFO describes it, after the record and version checks of `docs/EARBUD_V6_ENDPOINT.md` §8.2 and §8.3; a record or a firmware version those checks refuse (firmware below the phone's compiled minimum included) is handled as no endpoint, with the notice they name |
+| above `0x02` | any | refused, as in the first row, with a notice to update the app |
+
+A characteristic is unreadable when its read fails on a link encrypted under a completed bond. A read that fails
+because the bond is not complete (insufficient authentication or encryption, a pairing still running, cancelled or
+failed) is a bonding failure, not a decision: the phone uses no characteristic, shows the bonding step again and
+decides after the next completed bond.
+
+The phone handles Service Changed on a bonded earbud and decides again after it, never routes system call audio
+(SCO, LE Audio) to the earbud during a call whose endpoint is the earbud, and uses `createL2capChannel` (Android,
+API 29 or later) or `openL2CAPChannel` (iOS) on the bonded earbud.
 
 ---
 
@@ -4318,7 +4345,8 @@ advertise the tag, so no phone waits for an ACK that cannot come.
 - Telemetry: one event per applied or sent state change with `cause` and seq (nothing beyond the call id already
   logged) and a counter of CALL_HOLD sends that were never acknowledged.
 
-Latest: 2026-11-13 (PQC hardening alignment with docs/PQC_HARDENING_V1.md of the server repository: routing rule of a handshake bundle (first byte `{`, no trimming, §3.1, D28) and duplicate member names are valid JSON (§3.1); `rekeyRound` is in [1, 2^31 − 1] for every call (§3.1, §3.7 transcript table, §3.8.6, D24); a handshake bundle is decoded with a strict RFC 8259 JSON parser and any non-JSON text is `handshake_malformed` (§3.1, §3.8.6, D27); §11.1 states the FrameCryptor derivation `aesKey = HKDF-SHA256(IKM = key_slot, salt = empty, info = 128 bytes of 0x00, L = 32)` (D25, S10).)
+Latest: 2026-11-17 (hardware earbud as a v6 call endpoint, docs/EARBUD_V6_ENDPOINT.md revisions 3 and 4, accepted by the owner and locked with this file: §3.7.3 keeps the retirement of the relay handshake and adds R-EARBUD-EP, the earbud signs OFFER_v6 and ACCEPT_v6 with its own Ed25519 key, derives the session key, KCMAC, SAS and inner layer and hands its host phone only one-way outer-layer and voice-confidence keys; R-EP-VERIFY: the `endpoint` member (certificate by the host device's key, proof of possession by the earbud's key), the envelope's `sender_device_id` always required equal to `hostDeviceId`, the server's endpoint list with permanent tombstones and an unlisted endpoint accepted only from 7 days before to 1 day after the verifier's clock and never once it had been pinned, the endpoint key pinned beside the device key only when listed and without a post-quantum anomaly, a SAS confirmed after any failure releases that call's hold and pins nothing, the earbud's key never a device key; R-EP-PQ: the post-quantum pin record is the host device's; tag `earbudEpV1` (requires `capsBindV1`) with R-EP-PROFILE, the earbud sends 20 ms / 120 B and receives up to 60 ms / 256 B, audio only; §3.1 the `endpoint` member and its duplicate rule; §1.1 the earbud derives the M-15 keys of an endpoint call; §6 the earbud endpoint and the GATT family of §7 are a hard switch, PROTOCOL_VERSION `0x01` deleted from every firmware image; §7 rewritten: GATT family of PROTOCOL_VERSION `0x02` in every image, EP_INFO and the endpoint link on PSM `0x00B5` only in images that carry the endpoint, the retired relay characteristics and PSM `0x00B3` removed, a refusing `EP_AUTH` carries no key and no signature (the endpoint key stays public in EP_INFO), the phone decision table (`0x01` or lower refused, `0x02` without EP_INFO no endpoint, `0x02` with EP_INFO an endpoint per EP_INFO) with an unreadable characteristic defined as a read that fails under a completed bond, the DIAG layout in the earbud specification; the mirror list names the six locked repositories.)
+Previous: 2026-11-13 (PQC hardening alignment with docs/PQC_HARDENING_V1.md of the server repository: routing rule of a handshake bundle (first byte `{`, no trimming, §3.1, D28) and duplicate member names are valid JSON (§3.1); `rekeyRound` is in [1, 2^31 − 1] for every call (§3.1, §3.7 transcript table, §3.8.6, D24); a handshake bundle is decoded with a strict RFC 8259 JSON parser and any non-JSON text is `handshake_malformed` (§3.1, §3.8.6, D27); §11.1 states the FrameCryptor derivation `aesKey = HKDF-SHA256(IKM = key_slot, salt = empty, info = 128 bytes of 0x00, L = 32)` (D25, S10).)
 Previous: 2026-11-09 (new section 16: the sealed in-call control lane 0x03 documented (HANGUP dc-hangup-v1, NACK_REQUEST audio-nack-v1, OUTER_OFF outer-off-v1) and CALL_HOLD / CALL_HOLD_ACK (kinds 0x04 / 0x05) defined on it, sent on both legs when needed so native SRTP calls are covered under the capability tag call-hold-v1: In attesa on the other side, a local hold tone, silence watchdogs suspended while held, a peer-not-audible hint after 10 s without a hold signal; Android stops refusing system hold; no server change).
 Previous: 2026-10-28 (new §15 notification envelope: a device key registered with PUT /account/notify-key (local alert-token record required), a sealed sender
 blob `qn` of fixed padded length next to the generic message alert (no collapse id on the envelope form), known-answer vectors in internal/push/testdata).

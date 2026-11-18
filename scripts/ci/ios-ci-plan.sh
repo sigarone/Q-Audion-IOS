@@ -15,7 +15,8 @@
 #   engine   job ios-simulator-tests (macOS: the QAudionEngine package tests). Set by every path EXCEPT a list of paths
 #            that nothing in that job reads. It is a list of what is irrelevant and not of what matters on purpose:
 #            the engine tests read files outside QAudionEngine/ (the wiring tests read QAudionApp/ sources, the vector
-#            tests read tools/kat/, WIRE_SPEC.md and scripts/ship-ios-logs.py), so a short list of triggers would miss
+#            tests read tools/kat/, WIRE_SPEC.md and scripts/ship-ios-logs.py; docs/EARBUD_V6_ENDPOINT.md is locked
+#            with WIRE_SPEC.md and runs the same job), so a short list of triggers would miss
 #            the next test that reads a new path. A path that is not listed runs the job.
 #   scripts  job gates (Linux: the self-tests of the CI scripts and the log filter tests). Set by scripts/ci/,
 #            the log filter and its tests, the Swift files whose log lines the filter checks, and every workflow.

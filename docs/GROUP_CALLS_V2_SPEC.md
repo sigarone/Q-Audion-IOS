@@ -437,7 +437,7 @@ Therefore:
     The auto-join decision (28) runs on an invite received over the WebSocket, when a token is stored,
     when the peer's round-1 KCMAC verifies and when the 3 s hold ends. The byte layout, the constants and
     the vectors are in docs/GROUP_CALLS_V2.md section 2.7 of the server repository (it moves to a WIRE_SPEC
-    section when the four copies of that file take it) and
+    section when the six copies of that file take it) and
     `QAudionEngine/Tests/QAudionEngineTests/Resources/kat/promotion-token-kat.json`, a byte-for-byte copy of
     the shared vector file of the server repository (`test/kat/group_promotion_token_v1/`, generated there
     by `tools/katgen/grouptoken` with deterministic Ed25519; `GroupPromotionTokenTests` pins its SHA-256
