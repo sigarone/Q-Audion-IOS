@@ -34,6 +34,9 @@ final class VideoPathDiag: @unchecked Sendable {
         /// forwarding wrapper WebRTCRemoteVideoView attaches around
         /// RTCMTLVideoView — renderer detached ⇒ this counter stops).
         var rxFramesRendered: Int64 = 0
+        /// `rxFramesRendered` as it was at the last stats merge: the arrivals counter only moves at that instant, so
+        /// a window that compares arrivals with renders has to read both here, not at a later tick.
+        var rxFramesRenderedAtStats: Int64 = 0
         /// Local encoder IDRs forced by the §8.7 honor/self-heal paths.
         var txKeyframesForced: Int64 = 0
         /// Monotonic ms of the last inbound `call_media_ready`; 0 = never.
@@ -90,6 +93,7 @@ final class VideoPathDiag: @unchecked Sendable {
                 s.rxFramesDecoded += Self.cumulativeContribution(
                     newTotal: Int64(dec), prevTotal: &s.statsFramesDecBase)
             }
+            s.rxFramesRenderedAtStats = s.rxFramesRendered
         }
     }
 

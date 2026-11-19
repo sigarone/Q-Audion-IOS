@@ -63,6 +63,12 @@ final class RPScreenRecorderBackend: ScreenCaptureBackend {
     }
 }
 
+/// True when the recorder reports that the person declined its prompt.
+private func recorderDeclined(_ error: Error) -> Bool {
+    let ns = error as NSError
+    return ns.domain == RPRecordingErrorDomain && ns.code == RPRecordingErrorCode.userDeclined.rawValue
+}
+
 /// W533 — In-app screen capture via ReplayKit's `RPScreenRecorder`,
 /// piped into the existing WebRTC video sender used by camera calls.
 ///
@@ -122,6 +128,8 @@ public final class ScreenShareController: ScreenFrameSource {
         case alreadyRunning
         case captureFailed(Error)
         case notRunning
+        /// The person dismissed the system prompt: not a failure, nothing to tell them.
+        case cancelledByUser
 
         public var errorDescription: String? {
             switch self {
@@ -131,7 +139,7 @@ public final class ScreenShareController: ScreenFrameSource {
                 return String(localized: "call.screenshare.error.already_active", defaultValue: "La condivisione schermo è già attiva.", comment: "Error when screen sharing is started while it is already running.")
             case .captureFailed(let err):
                 return String(localized: "call.screenshare.error.capture_failed", defaultValue: "Avvio cattura schermo fallito: \(err.localizedDescription)", comment: "Error when screen capture could not be started. %@ is the technical reason.")
-            case .notRunning:
+            case .notRunning, .cancelledByUser:
                 return String(localized: "call.screenshare.error.not_active", defaultValue: "La condivisione schermo non è attiva.", comment: "Error when screen sharing is stopped while it is not running.")
             }
         }
@@ -254,7 +262,7 @@ public final class ScreenShareController: ScreenFrameSource {
                     },
                     completion: { error in
                         if let error = error {
-                            cont.resume(throwing: ScreenShareError.captureFailed(error))
+                            cont.resume(throwing: recorderDeclined(error) ? ScreenShareError.cancelledByUser : ScreenShareError.captureFailed(error))
                         } else {
                             cont.resume(returning: ())
                         }

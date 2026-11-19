@@ -1,6 +1,7 @@
 import XCTest
 import CoreMedia
 import CoreVideo
+import ReplayKit
 @testable import QAudionApp
 
 /// The rules that decide when this device's own screen capture is confirmed running and when it is over: the pure
@@ -243,6 +244,22 @@ final class ScreenShareControllerTests: XCTestCase {
         } catch {}
         XCTAssertFalse(controller.isRunning)
         XCTAssertEqual(ended, 0)
+    }
+
+    func test_aPromptTheRecorderSaysWasDeclinedIsACancelNotAFailure() async {
+        let started = Task { @MainActor in try await controller.start(into: nil) }
+        while backend.completion == nil { await Task.yield() }
+        backend.completion?(NSError(domain: RPRecordingErrorDomain, code: RPRecordingErrorCode.userDeclined.rawValue))
+
+        do {
+            try await started.value
+            XCTFail("the start must not succeed")
+        } catch let error as ScreenShareController.ScreenShareError {
+            guard case .cancelledByUser = error else { return XCTFail("unexpected error \(error)") }
+        } catch {
+            XCTFail("unexpected error \(error)")
+        }
+        XCTAssertFalse(controller.isRunning)
     }
 
     func test_theRecorderNoLongerRecordingEndsTheCaptureOnTheNextLook() async throws {

@@ -1,5 +1,28 @@
 [
   {
+    "version": "1.0.1296",
+    "notes": {
+      "it": [
+        "Condivisione dello schermo più fluida quando cambi idea: annullare la scelta non mostra più messaggi"
+      ],
+      "en": [
+        "Smoother screen sharing when you change your mind: cancelling the choice no longer shows any message"
+      ],
+      "de": [
+        "Flüssigere Bildschirmfreigabe, wenn Sie es sich anders überlegen: Abbrechen zeigt keine Meldung mehr"
+      ],
+      "es": [
+        "Compartir pantalla más fluido cuando cambias de idea: cancelar la elección ya no muestra mensajes"
+      ],
+      "fr": [
+        "Partage d'écran plus fluide quand vous changez d'avis : annuler le choix n'affiche plus de message"
+      ],
+      "pt-BR": [
+        "Compartilhamento de tela mais fluido quando você muda de ideia: cancelar a escolha não mostra mais mensagens"
+      ]
+    }
+  },
+  {
     "version": "1.0.1295",
     "notes": {
       "it": [

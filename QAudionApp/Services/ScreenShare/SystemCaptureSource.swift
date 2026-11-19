@@ -287,7 +287,7 @@ private final class PickerObserver: NSObject, SCContentSharingPickerObserver, @u
     }
 
     func contentSharingPicker(_ picker: SCContentSharingPicker, didCancelFor stream: SCStream?) {
-        Task { @MainActor [owner] in owner?.pickerAnswered(.failure(ScreenShareController.ScreenShareError.notRunning)) }
+        Task { @MainActor [owner] in owner?.pickerAnswered(.failure(ScreenShareController.ScreenShareError.cancelledByUser)) }
     }
 
     func contentSharingPickerStartDidFailWithError(_ error: Error) {
