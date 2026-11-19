@@ -37,13 +37,29 @@ public enum VideoStallSelfHeal {
     /// window. "Frames arrive but never reach the screen" — the exact
     /// signature of the recurring black/purple video bugs. No arrivals at
     /// all is NOT a stall (nothing to recover — peer stopped sending).
+    ///
+    /// The arrivals counter is a 3 s stats poll while the rendered counter is
+    /// live, so right after the peer stops the arrivals still look fresh and
+    /// rendering already looks stale. The rule therefore also needs the last
+    /// arrivals window to have been black (`pollWindowIsBlack`): frames
+    /// arrived and none was rendered in that same window.
     public static func isBlackVideoStall(
         msSinceLastArrivedIncrease: Int64,
-        msSinceLastRenderedIncrease: Int64
+        msSinceLastRenderedIncrease: Int64,
+        lastPollWindowHadUnrenderedArrivals: Bool
     ) -> Bool {
         return msSinceLastArrivedIncrease < stallWindowMs
             && msSinceLastRenderedIncrease >= stallWindowMs
+            && lastPollWindowHadUnrenderedArrivals
     }
+
+    /// One arrivals window: more than `minUnrenderedFrames` frames arrived and the renderer advanced by none.
+    public static func pollWindowIsBlack(arrivedDelta: Int64, renderedDelta: Int64) -> Bool {
+        return arrivedDelta > minUnrenderedFrames && renderedDelta == 0
+    }
+
+    /// Frames that must arrive in a window, with no render, for the window to count as black.
+    public static let minUnrenderedFrames: Int64 = 5
 
     /// §8.7 RECOVERY RULE — arrivals idle this long means "the peer stopped
     /// sending, no media is NOT a black-video stall".

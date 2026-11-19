@@ -2695,6 +2695,11 @@ final class AppState: ObservableObject {
     private var videoDiagPrevRendered: Int64 = 0
     private var videoDiagLastArrivedIncreaseMs: Int64 = 0
     private var videoDiagLastRenderedIncreaseMs: Int64 = 0
+    /// Rendered count at the stats instant of the last arrivals increase, and whether the latest arrivals window was
+    /// black: frames arrived and none was rendered in that same window. Both deltas are taken at the stats instant,
+    /// because the arrivals counter moves only then while the tick that notices it can come up to a second later.
+    private var videoDiagRenderedAtLastArrivedIncrease: Int64 = 0
+    private var videoDiagLastPollWindowBlack = false
     /// Last inbound video mid announced via call_media_ready — the mid
     /// the rung-3 re-announce re-sends for. Reset with the watchdog.
     private var lastInboundVideoMid: String?
@@ -9976,6 +9981,8 @@ final class AppState: ObservableObject {
         let now = VideoPathDiag.nowMs()
         videoDiagPrevArrived = 0
         videoDiagPrevRendered = 0
+        videoDiagRenderedAtLastArrivedIncrease = 0
+        videoDiagLastPollWindowBlack = false
         videoDiagLastArrivedIncreaseMs = 0    // 0 = no arrival observed yet
         videoDiagLastRenderedIncreaseMs = now // grace: no stall before start+3s
         videoStallLadder.reset()
@@ -10018,6 +10025,10 @@ final class AppState: ObservableObject {
         let snap = videoDiag.snapshot()
         // Update the last-increase memos off the monotonic counters.
         if snap.rxVideoFramesArrived > videoDiagPrevArrived {
+            videoDiagLastPollWindowBlack = VideoStallSelfHeal.pollWindowIsBlack(
+                arrivedDelta: snap.rxVideoFramesArrived - videoDiagPrevArrived,
+                renderedDelta: snap.rxFramesRenderedAtStats - videoDiagRenderedAtLastArrivedIncrease)
+            videoDiagRenderedAtLastArrivedIncrease = snap.rxFramesRenderedAtStats
             videoDiagPrevArrived = snap.rxVideoFramesArrived
             videoDiagLastArrivedIncreaseMs = now
         }
@@ -10062,7 +10073,8 @@ final class AppState: ObservableObject {
             }
         } else if VideoStallSelfHeal.isBlackVideoStall(
             msSinceLastArrivedIncrease: now - videoDiagLastArrivedIncreaseMs,
-            msSinceLastRenderedIncrease: now - videoDiagLastRenderedIncreaseMs) {
+            msSinceLastRenderedIncrease: now - videoDiagLastRenderedIncreaseMs,
+            lastPollWindowHadUnrenderedArrivals: videoDiagLastPollWindowBlack) {
             videoStallLadder.noteStalled(nowMs: now)
             RTLog.warn("VIDEODIAG", "stall ev=stall state=active")
             emitVideoStallTelemetry(event: "detected", snap: snap, now: now,
@@ -25336,6 +25348,10 @@ extension AppState {
                 return
             }
             restoreAfterFailedShareStart(source)
+            if case ScreenShareController.ScreenShareError.cancelledByUser = error {
+                RTLog.info("call", "startScreenShare cancelled by user")
+                return
+            }
             let msg: String = error.localizedDescription
             RTLog.warn("call", "startScreenShare failed: " + msg)
             errorMessage = msg

@@ -618,15 +618,27 @@ final class UpgradeFlowKatTests: XCTestCase {
 
     /// §8.7 BLACK-VIDEO STALL rule + TX storm rule (pure predicates).
     func testStallAndStormRules() {
-        // Arrivals recent + nothing rendered for >=3s = stall.
+        // Arrivals recent + nothing rendered for >=3s, with a black arrivals window = stall.
         XCTAssertTrue(VideoStallSelfHeal.isBlackVideoStall(
-            msSinceLastArrivedIncrease: 500, msSinceLastRenderedIncrease: 3000))
+            msSinceLastArrivedIncrease: 500, msSinceLastRenderedIncrease: 3000,
+            lastPollWindowHadUnrenderedArrivals: true))
         // Rendering recently = healthy.
         XCTAssertFalse(VideoStallSelfHeal.isBlackVideoStall(
-            msSinceLastArrivedIncrease: 500, msSinceLastRenderedIncrease: 2999))
+            msSinceLastArrivedIncrease: 500, msSinceLastRenderedIncrease: 2999,
+            lastPollWindowHadUnrenderedArrivals: true))
         // No arrivals at all = idle, NOT a stall (nothing to recover).
         XCTAssertFalse(VideoStallSelfHeal.isBlackVideoStall(
-            msSinceLastArrivedIncrease: 3000, msSinceLastRenderedIncrease: 10_000))
+            msSinceLastArrivedIncrease: 3000, msSinceLastRenderedIncrease: 10_000,
+            lastPollWindowHadUnrenderedArrivals: true))
+        // The window that last brought arrivals also rendered (the peer stopped after it) = no stall.
+        XCTAssertFalse(VideoStallSelfHeal.isBlackVideoStall(
+            msSinceLastArrivedIncrease: 500, msSinceLastRenderedIncrease: 3000,
+            lastPollWindowHadUnrenderedArrivals: false))
+        // Arrivals window: black only when frames arrived and none rendered.
+        XCTAssertTrue(VideoStallSelfHeal.pollWindowIsBlack(arrivedDelta: 90, renderedDelta: 0))
+        XCTAssertFalse(VideoStallSelfHeal.pollWindowIsBlack(arrivedDelta: 36, renderedDelta: 36))
+        XCTAssertFalse(VideoStallSelfHeal.pollWindowIsBlack(arrivedDelta: 3, renderedDelta: 0))
+        XCTAssertFalse(VideoStallSelfHeal.pollWindowIsBlack(arrivedDelta: 90, renderedDelta: 1))
         // 3 peer keyframe requests inside 5s = storm (force IDR now).
         XCTAssertTrue(VideoStallSelfHeal.isPeerKeyframeStorm(
             requestTimesMs: [0, 2000, 4000], nowMs: 5000))
