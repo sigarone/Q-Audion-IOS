@@ -1,5 +1,28 @@
 [
   {
+    "version": "1.0.1295",
+    "notes": {
+      "it": [
+        "Condivisione dello schermo più fluida: l'app resta sempre visibile e utilizzabile mentre condividi"
+      ],
+      "en": [
+        "Smoother screen sharing: the app stays visible and usable the whole time you share"
+      ],
+      "de": [
+        "Flüssigere Bildschirmfreigabe: Die App bleibt während der Freigabe immer sichtbar und bedienbar"
+      ],
+      "es": [
+        "Compartir pantalla más fluido: la app sigue visible y utilizable mientras compartes"
+      ],
+      "fr": [
+        "Partage d'écran plus fluide : l'app reste visible et utilisable pendant tout le partage"
+      ],
+      "pt-BR": [
+        "Compartilhamento de tela mais fluido: o app continua visível e utilizável enquanto você compartilha"
+      ]
+    }
+  },
+  {
     "version": "1.0.1294",
     "notes": {
       "it": [

@@ -41,7 +41,9 @@ final class ScreenshotLockServiceTests: XCTestCase {
         ScreenshotLockService.unlock(owner: "b")
         for owner in Self.screenOwners { ScreenshotLockService.unlock(owner: owner) }
         ScreenshotLockService.unlock()
-        PrivacyShield.setOwnShareActive(false)
+        PrivacyShield.endOwnShare()
+        PrivacyShield.capturedOverride = nil
+        PrivacyShield.refreshShareEnding(isCaptured: false)
         super.tearDown()
     }
 
@@ -122,12 +124,12 @@ final class ScreenshotLockServiceTests: XCTestCase {
                                                          coverTakesTouches: !ownShareActive))
                         }
                         // The own share alone, whatever the capture flag says: only a screen that holds a secret is
-                        // protected, with the canvas and the notice and no cover; the cover stands in only where the
-                        // canvas could not host the content. Nothing takes a touch.
+                        // protected, with the canvas and the notice and no cover, also where the canvas could not
+                        // host the content. Nothing takes a touch.
                         XCTAssertEqual(
                             PrivacyShield.protection(isCaptured: isCaptured, lockHeld: lockHeld, secretHeld: secretHeld,
                                                      ownShareActive: true, externalDisplay: false, canvasHosted: canvasHosted),
-                            PrivacyShield.Protection(cover: secretHeld && !canvasHosted, canvas: secretHeld,
+                            PrivacyShield.Protection(cover: false, canvas: secretHeld,
                                                      notice: secretHeld && canvasHosted, coverTakesTouches: false))
                     }
                 }
@@ -311,8 +313,8 @@ final class ScreenshotLockServiceTests: XCTestCase {
         XCTAssertTrue(ScreenshotLockService.isHostedInSecureCanvas, "owner a still holds the lock")
     }
 
-    /// No view of the shield takes a touch while the own share runs: not the notice next to the canvas, not the cover
-    /// that stands in for a canvas that could not host the content. A recording keeps its cover that takes touches.
+    /// No view of the shield takes a touch while the own share runs, and the cover of a canvas that could not host the
+    /// content is gone: only the notice remains. A recording keeps its cover that takes touches.
     func test_noShieldViewTakesTouchesDuringTheOwnShare() {
         let (window, controller) = makeWindow()
         for canvasHosted in [true, false] {
@@ -321,7 +323,7 @@ final class ScreenshotLockServiceTests: XCTestCase {
             PrivacyShield.apply(wanted, in: window)
 
             let views = shieldViews(window)
-            XCTAssertEqual(views.count, 1, "canvasHosted \(canvasHosted): the notice, or the cover, and not both")
+            XCTAssertEqual(views.count, canvasHosted ? 1 : 0, "canvasHosted \(canvasHosted): the notice, and no cover")
             for view in views { XCTAssertFalse(view.isUserInteractionEnabled) }
             let hit = window.hitTest(CGPoint(x: 160, y: 320), with: nil)
             XCTAssertTrue(hit === controller.view || hit?.isDescendant(of: controller.view) == true,
@@ -337,9 +339,9 @@ final class ScreenshotLockServiceTests: XCTestCase {
         XCTAssertTrue(shieldViews(window).allSatisfy { $0.isUserInteractionEnabled })
     }
 
-    /// The cover that was up for a recording stops taking touches when the share starts, and the notice replaces it
-    /// when the canvas is hosting.
-    func test_aCoverStopsTakingTouchesWhenTheShareStarts() {
+    /// The cover that was up for a recording is removed when the share starts; the notice is shown only when the canvas
+    /// is hosting.
+    func test_aCoverGoesAwayWhenTheShareStarts() {
         let (window, _) = makeWindow()
         PrivacyShield.apply(PrivacyShield.protection(isCaptured: true, lockHeld: true, secretHeld: true, ownShareActive: false,
                                                      externalDisplay: false), in: window)
@@ -347,8 +349,87 @@ final class ScreenshotLockServiceTests: XCTestCase {
 
         PrivacyShield.apply(PrivacyShield.protection(isCaptured: true, lockHeld: true, secretHeld: true, ownShareActive: true,
                                                      externalDisplay: false, canvasHosted: false), in: window)
+        XCTAssertTrue(shieldViews(window).isEmpty)
+    }
+
+    /// While the share is starting, a captured screen that holds the lock gets no cover, and the share state that comes
+    /// after it is the same.
+    func test_noCoverWhileTheShareIsStarting() {
+        let (window, _) = makeWindow()
+        ScreenshotLockService.lock(owner: "a", in: window)
+        PrivacyShield.setShareStarting(true)
+        XCTAssertEqual(PrivacyShield.currentProtection(isCaptured: true).cover, false)
+        PrivacyShield.setOwnShareActive(true)
+        XCTAssertFalse(PrivacyShield.shareStarting)
+        XCTAssertEqual(PrivacyShield.currentProtection(isCaptured: true).cover, false)
+        PrivacyShield.endOwnShare()
+        XCTAssertFalse(PrivacyShield.ownShareSpan)
+        XCTAssertTrue(PrivacyShield.currentProtection(isCaptured: true).cover)
+    }
+
+    /// After a stop the share stays an own capture while the screen is captured, and the state clears at the first
+    /// refresh that sees the screen not captured; a foreign capture after that gets the cover again.
+    func test_theEndingStateHoldsNoCoverUntilTheCaptureIsOver() {
+        let (window, _) = makeWindow()
+        ScreenshotLockService.lock(owner: "a", in: window)
+        PrivacyShield.capturedOverride = true
+        PrivacyShield.markShareEnding(.stillCapturing)
+        XCTAssertTrue(PrivacyShield.shareEnding)
+        XCTAssertFalse(PrivacyShield.currentProtection(isCaptured: true).cover)
+        PrivacyShield.refreshCaptureCover()
+        XCTAssertTrue(PrivacyShield.shareEnding, "still captured: still the own capture")
+        PrivacyShield.endingBoundPassed(generation: PrivacyShield.endingGeneration)
+        XCTAssertTrue(PrivacyShield.shareEnding, "a capture that is still running has no bound")
+
+        PrivacyShield.capturedOverride = false
+        PrivacyShield.refreshCaptureCover()
+        XCTAssertFalse(PrivacyShield.shareEnding)
+        XCTAssertTrue(PrivacyShield.currentProtection(isCaptured: true).cover)
+    }
+
+    /// After a stop that answered "stopped" the ending state absorbs the lag of the screen state and clears at its
+    /// bound, so a mirror that keeps the screen captured gets its cover; an older bound does not clear a newer state.
+    func test_theEndingStateAfterAStopClearsAtItsBound() {
+        let (window, _) = makeWindow()
+        ScreenshotLockService.lock(owner: "a", in: window)
+        PrivacyShield.capturedOverride = true
+        PrivacyShield.markShareEnding(.stopped)
+        XCTAssertTrue(PrivacyShield.shareEnding)
+        XCTAssertFalse(PrivacyShield.currentProtection(isCaptured: true).cover)
+        let first = PrivacyShield.endingGeneration
+        PrivacyShield.markShareEnding(.stopped)
+
+        PrivacyShield.endingBoundPassed(generation: first)
+        XCTAssertTrue(PrivacyShield.shareEnding, "the bound of an older state is ignored")
+        PrivacyShield.endingBoundPassed(generation: PrivacyShield.endingGeneration)
+        XCTAssertFalse(PrivacyShield.shareEnding)
+        XCTAssertTrue(PrivacyShield.currentProtection(isCaptured: true).cover)
+    }
+
+    /// A foreign capture with the lock held and no share keeps its cover.
+    func test_aForeignCaptureStillGetsTheCover() {
+        let wanted = PrivacyShield.protection(isCaptured: true, lockHeld: true, secretHeld: false, ownShareActive: false,
+                                              externalDisplay: false)
+        XCTAssertTrue(wanted.cover)
+    }
+
+    /// Removing the cover removes every cover view, also one that the shield no longer remembers.
+    func test_removingTheCoverRemovesEveryCoverView() {
+        let (window, _) = makeWindow()
+        let recording = PrivacyShield.protection(isCaptured: true, lockHeld: true, secretHeld: false, ownShareActive: false,
+                                                 externalDisplay: false)
+        PrivacyShield.apply(recording, in: window)
         XCTAssertEqual(shieldViews(window).count, 1)
-        XCTAssertTrue(shieldViews(window).allSatisfy { !$0.isUserInteractionEnabled })
+        let stray = UIView(frame: window.bounds)
+        stray.tag = shieldViews(window)[0].tag
+        stray.accessibilityIdentifier = ScreenshotLockService.shieldIdentifier
+        window.addSubview(stray)
+
+        PrivacyShield.apply(recording, in: window)
+        XCTAssertEqual(shieldViews(window).count, 1, "a second cover is removed before the cover is placed")
+
+        PrivacyShield.apply(Self.noShieldViews, in: window)
+        XCTAssertTrue(shieldViews(window).isEmpty)
     }
 
     func test_aLockReleasedDuringTheOwnShareLeavesNothingToHost() {
