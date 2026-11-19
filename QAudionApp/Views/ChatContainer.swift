@@ -49,7 +49,7 @@ final class ChatContainer: ObservableObject {
     }
 
     @Published private(set) var viewModel: ChatViewModel {
-        didSet { if screenshotLockTracking, PrivacyShield.ownShareActive { syncScreenshotLock() } }
+        didSet { if screenshotLockTracking, PrivacyShield.ownShareSpan { syncScreenshotLock() } }
     }
     @Published var composerText: String = ""
 
@@ -71,7 +71,7 @@ final class ChatContainer: ObservableObject {
     /// When true, the NEXT message sent will be flagged as view-once.
     /// Mirrors conversation.screenshotGrantedByPeer for reactive UI.
     @Published private(set) var screenshotGrantedByPeer: Bool? = nil {
-        didSet { if screenshotLockTracking, PrivacyShield.ownShareActive { syncScreenshotLock() } }
+        didSet { if screenshotLockTracking, PrivacyShield.ownShareSpan { syncScreenshotLock() } }
     }
     /// True while the chat screen is on screen. While this device shares its screen, a change of the data that turns
     /// the chat into a protected one (a timer, a self-destructing message, a withdrawn grant) takes the lock in the

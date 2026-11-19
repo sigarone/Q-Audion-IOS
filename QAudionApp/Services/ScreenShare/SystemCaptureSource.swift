@@ -143,12 +143,11 @@ final class SystemCaptureSource: NSObject, ScreenFrameSource {
         // The pending frame is dropped with the stop.
         spacing.withLock { $0 = Spacing() }
         var code = 0
-        if let stream, !streamOver {
-            do {
-                try await stream.stopCapture()
-                streamOver = true
-            } catch {
-                code = ScreenShareLifecycle.errorCode(error)
+        if stream != nil, !streamOver {
+            switch await stopStream() {
+            case .stopped: streamOver = true
+            case .failed(let failure): code = failure
+            case .timedOut: break
             }
         }
         let still = !streamOver
@@ -157,6 +156,46 @@ final class SystemCaptureSource: NSObject, ScreenFrameSource {
         let report = ScreenCaptureStopReport(errorCode: code, stillCapturing: still)
         lastStopReport = report
         return report
+    }
+
+    /// How the stop of the stream answered.
+    private enum StopOutcome {
+        case stopped
+        case failed(Int)
+        case timedOut
+    }
+
+    /// How long the system gets to answer the stop of the stream.
+    private let stopTimeout: TimeInterval = 2
+
+    /// Asks the stream to stop and waits for the answer, at most `stopTimeout`. A stream that did not answer in time
+    /// is reported as still capturing by the caller.
+    private func stopStream() async -> StopOutcome {
+        let answer = OSAllocatedUnfairLock<StopOutcome?>(initialState: nil)
+        let limit = stopTimeout
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            let finish: @Sendable (StopOutcome) -> Void = { outcome in
+                let first = answer.withLock { value -> Bool in
+                    if value != nil { return false }
+                    value = outcome
+                    return true
+                }
+                if first { cont.resume(returning: ()) }
+            }
+            Task { @MainActor [weak self] in
+                do {
+                    try await self?.stream?.stopCapture()
+                    finish(.stopped)
+                } catch {
+                    finish(.failed(ScreenShareLifecycle.errorCode(error)))
+                }
+            }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(limit * 1_000_000_000))
+                finish(.timedOut)
+            }
+        }
+        return answer.withLock { $0 } ?? .timedOut
     }
 
     /// The system ended the stream (its indicator, its own controls, an error): the share ends once.

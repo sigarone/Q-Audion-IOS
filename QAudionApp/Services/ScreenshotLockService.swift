@@ -283,6 +283,8 @@ public enum ScreenshotLockService {
         windowFallback?.removeFromSuperview()
         windowFallback = nil
         PrivacyShield.refreshCaptureCover()
+        // The refresh above can lift the own-share state while this guard is up: the hosting is decided again after it.
+        DispatchQueue.main.async { MainActor.assumeIsolated { protectionDidChange() } }
     }
 
     // MARK: - Private helpers

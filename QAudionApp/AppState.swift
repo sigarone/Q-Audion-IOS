@@ -2720,6 +2720,10 @@ final class AppState: ObservableObject {
     private var preScreenShareCameraClosure: ((CVPixelBuffer, Int64) -> Void)?
     /// True while `startScreenShare()` waits for the capture to start (the system prompt is up).
     private var screenShareStartInFlight = false
+    /// True from the first line of `startScreenShare` to its end: a second start is ignored meanwhile.
+    private var screenShareStartClaimed = false
+    /// True while the end of the call is winding the capture down: the own-share state stays until the stop returns.
+    private var screenShareCallEndInFlight = false
     /// True while `stopScreenShare()` winds the capture down, so a second stop (from the system, from the call screen)
     /// does not run the same steps again.
     private var screenShareStopInFlight = false
@@ -25154,6 +25158,13 @@ extension AppState {
             print("[AppState] callhold: screen share refused while held")
             return
         }
+        // One start at a time, and none over a share that is on or being wound down.
+        guard !isScreenSharing, !screenShareStartClaimed, !screenShareCallEndInFlight else {
+            RTLog.info("call", "startScreenShare: ignored, a share is already starting or on")
+            return
+        }
+        screenShareStartClaimed = true
+        defer { screenShareStartClaimed = false }
         #if os(iOS)
         guard isInCall else {
             RTLog.warn("call", "startScreenShare: not in a call — refusing")
@@ -25181,6 +25192,12 @@ extension AppState {
             errorMessage = String(localized: "call.screenshare.error.screen_captured", defaultValue: "Interrompi la registrazione o la duplicazione dello schermo e riprova", comment: "Banner shown when a screen share is refused because the screen is already being recorded, mirrored or shown on another display.")
             return
         }
+        // From here until the share is confirmed running or over, no cover goes up. Set after the refusal above, which
+        // asks about a capture that is not ours, and cleared on every way out of this function that does not hand the
+        // share over to the running state.
+        PrivacyShield.setShareStarting(true)
+        var shareHandedOver = false
+        defer { if !shareHandedOver { PrivacyShield.endOwnShare() } }
         PrivacyShield.onDisplayAppeared = { [weak self] in self?.screenShareDisplayAppeared() }
         // media-consent v1: screen share works from an AUDIO-ONLY call and
         // NEVER opens the camera (the old W538 flow ran a full camera
@@ -25298,6 +25315,7 @@ extension AppState {
                 restoreAfterFailedShareStart(source)
                 return
             }
+            shareHandedOver = true
             isScreenSharing = true
             RTLog.info("call", "startScreenShare: capture live (camera untouched)")
             // W538: fire-and-forget peer announce so cross-platform
@@ -25349,7 +25367,8 @@ extension AppState {
         source.onFrame = nil
         source.onConfirmed = nil
         source.onEnded = nil
-        PrivacyShield.setOwnShareActive(false)
+        PrivacyShield.markShareEnding(.stopped)
+        PrivacyShield.endOwnShare()
         preScreenShareCameraClosure = nil
     }
 
@@ -25357,6 +25376,7 @@ extension AppState {
     /// the system still reports a capture afterwards. Does nothing, and logs nothing, when the source was not capturing.
     private func stopCaptureSource(_ source: ScreenFrameSource?, why: ScreenShareEndWhy) async {
         guard let source, let report = await source.stop() else { return }
+        PrivacyShield.markShareEnding(report.stillCapturing ? .stillCapturing : .stopped)
         RTLog.info("call", ScreenShareLifecycle.endLine(why: why, kind: source.kind, report: report))
         if report.stillCapturing { reportCaptureStillActive(kind: source.kind) }
     }
@@ -25364,6 +25384,7 @@ extension AppState {
     /// The line of a stop that a source did by itself because its capture ended while it was starting.
     private func logStopDoneByStart(_ source: ScreenFrameSource, why: ScreenShareEndWhy) {
         guard let report = source.lastStopReport else { return }
+        PrivacyShield.markShareEnding(report.stillCapturing ? .stillCapturing : .stopped)
         RTLog.info("call", ScreenShareLifecycle.endLine(why: why, kind: source.kind, report: report))
         if report.stillCapturing { reportCaptureStillActive(kind: source.kind) }
     }
@@ -25389,10 +25410,12 @@ extension AppState {
         guard isScreenSharing, !screenShareStopInFlight else { return }
         screenShareStopInFlight = true
         defer { screenShareStopInFlight = false }
-        // The protection of the screens is back before the capture is wound down, so it does not depend on how long
-        // the capture takes to stop.
-        PrivacyShield.setOwnShareActive(false)
+        // The own-share state stays until the capture has stopped, so the screen that is still captured meanwhile gets no
+        // cover. The frames no longer reach the peer once the stop begins. A capture that did not stop keeps the state
+        // until the screen is no longer captured.
         await stopCaptureSource(screenShareSource, why: why)
+        PrivacyShield.markShareEnding(.stopped)
+        PrivacyShield.endOwnShare()
         // Restore the camera path so VideoCallPipeline frames once
         // again flow to the WebRTC capturer.
         videoPipeline?.onCapturedPixelBuffer = preScreenShareCameraClosure
@@ -25449,6 +25472,8 @@ extension AppState {
             screenShareDisplayAppeared()
             return
         }
+        // While the end of the call winds the capture down, the own-share state is ended by that wind-down.
+        if !active && screenShareCallEndInFlight { return }
         PrivacyShield.setOwnShareActive(active)
         #endif
     }
@@ -25457,7 +25482,7 @@ extension AppState {
     private func screenShareDisplayAppeared() {
         #if os(iOS)
         guard isScreenSharing, !screenShareStopInFlight else { return }
-        PrivacyShield.setOwnShareActive(false)
+        PrivacyShield.endOwnShare()
         errorMessage = String(localized: "call.screenshare.error.display_appeared", defaultValue: "Condivisione interrotta: lo schermo è mostrato su un altro display", comment: "Banner shown when the screen share ends because the screen is now shown on another display.")
         Task { @MainActor [weak self] in
             await self?.stopScreenShare(why: .displayAppeared)
@@ -25466,17 +25491,21 @@ extension AppState {
     }
 
     /// The capture ended without a stop from this app: an error, the system ended it, or nothing is captured any more.
-    /// The protection is back first, whatever state the share is in; then the share is torn down. A start that is still
-    /// waiting for the capture learns of the end from the controller and fails.
+    /// The share is torn down first and the own-share state ends after the stop, as in every stop of the share. A start
+    /// that is still waiting for the capture learns of the end from the controller, fails, and ends the state itself.
     private func screenShareCaptureEnded() {
         #if os(iOS)
-        PrivacyShield.setOwnShareActive(false)
         Task { @MainActor [weak self] in
             guard let self else { return }
             if self.isScreenSharing {
                 await self.stopScreenShare(why: .system)
             } else {
                 await self.stopCaptureSource(self.screenShareSource, why: .system)
+                // A start that claimed the share meanwhile owns the state now.
+                if !self.screenShareStartClaimed && !self.isScreenSharing {
+                    PrivacyShield.markShareEnding(.stopped)
+                    PrivacyShield.endOwnShare()
+                }
             }
         }
         #endif
@@ -25493,7 +25522,7 @@ extension AppState {
     func endScreenShareWithCall() {
         #if os(iOS)
         guard isScreenSharing || screenShareStartInFlight else { return }
-        PrivacyShield.setOwnShareActive(false)
+        screenShareCallEndInFlight = true
         isScreenSharing = false
         preScreenShareCameraClosure = nil
         let source = screenShareSource
@@ -25506,11 +25535,15 @@ extension AppState {
             // A capture that is already open is stopped and logged with the system's answer; a share that had opened
             // none (the call ended while it was starting) logs the end alone.
             if let source, let report = await source.stop() {
+                PrivacyShield.markShareEnding(report.stillCapturing ? .stillCapturing : .stopped)
                 RTLog.info("call", ScreenShareLifecycle.endLine(why: .callEnded, kind: source.kind, report: report))
                 if report.stillCapturing { self?.reportCaptureStillActive(kind: source.kind) }
             } else {
                 RTLog.info("call", ScreenShareLifecycle.endLineWithoutCapture(why: .callEnded))
             }
+            self?.screenShareCallEndInFlight = false
+            PrivacyShield.markShareEnding(.stopped)
+            PrivacyShield.endOwnShare()
         }
         #endif
     }
