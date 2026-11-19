@@ -44415,216 +44415,6 @@
         }
       }
     },
-    "voice.enrollment.error.mic_denied": {
-      "extractionState": "manual",
-      "comment": "Error during voice enrollment: microphone access was denied; points to the iOS Settings app",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permesso microfono negato. Abilitalo in Impostazioni → Q-Audion → Microfono."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Microphone permission denied. Enable it in Settings → Q-Audion → Microphone."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permiso de micrófono denegado. Actívalo en Ajustes → Q-Audion → Micrófono."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Accès au micro refusé. Active-le dans Réglages → Q-Audion → Micro."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zugriff auf das Mikrofon verweigert. Aktivieren Sie ihn unter Einstellungen → Q-Audion → Mikrofon."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Permissão de microfone negada. Ative em Ajustes → Q-Audion → Microfone."
-          }
-        }
-      }
-    },
-    "voice.enrollment.error.audio_engine": {
-      "extractionState": "manual",
-      "comment": "Error during voice enrollment: the audio engine could not start. %@ is a technical detail from the system",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Motore audio non avviato: %@"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Audio engine failed to start: %@"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "El motor de audio no se pudo iniciar: %@"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Le moteur audio n'a pas démarré : %@"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Audio-Engine konnte nicht gestartet werden: %@"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "O mecanismo de áudio não foi iniciado: %@"
-          }
-        }
-      }
-    },
-    "voice.enrollment.error.no_prompt": {
-      "extractionState": "manual",
-      "comment": "Error during voice enrollment: there is no phrase to read aloud",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nessuna frase da leggere"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No phrase to read"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No hay ninguna frase para leer"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aucune phrase à lire"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kein Satz zum Vorlesen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nenhuma frase para ler"
-          }
-        }
-      }
-    },
-    "voice.enrollment.error.recording_failed": {
-      "extractionState": "manual",
-      "comment": "Error during voice enrollment: the recording failed. %@ is the system error text",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Registrazione non riuscita: %@"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Recording failed: %@"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Error en la grabación: %@"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Échec de l'enregistrement : %@"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Aufnahme fehlgeschlagen: %@"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Falha na gravação: %@"
-          }
-        }
-      }
-    },
-    "voice.enrollment.error.processing_failed": {
-      "extractionState": "manual",
-      "comment": "Error shown when the voiceprint could not be built from the recorded phrases at the end of voice enrollment",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Elaborazione del voiceprint non riuscita. Riprova la registrazione."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voiceprint processing failed. Try recording again."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "No se pudo procesar el voiceprint. Vuelve a grabar."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Le traitement du voiceprint a échoué. Recommence l'enregistrement."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Die Verarbeitung des Voiceprints ist fehlgeschlagen. Wiederholen Sie die Aufnahme."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Falha ao processar o voiceprint. Refaça a gravação."
-          }
-        }
-      }
-    },
     "trust.assurance.default_secret_label": {
       "extractionState": "manual",
       "comment": "Lowercase fallback used inside the call security line 'Pre-shared key: <name>' when the contact's name is not known: 'this contact'",
@@ -49077,48 +48867,6 @@
         }
       }
     },
-    "Registra la tua voce": {
-      "extractionState": "manual",
-      "comment": "Title of the first step of the voice enrollment screen",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Registra la tua voce"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Record your voice"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Graba tu voz"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enregistre ta voix"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nehmen Sie Ihre Stimme auf"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Grave sua voz"
-          }
-        }
-      }
-    },
     "Leggi 3 brevi frasi (3 secondi ciascuna). Q-Audion userà il prototipo per riconoscerti durante le chiamate e bloccare i deepfake.": {
       "extractionState": "manual",
       "comment": "Introduction text of the voice enrollment screen",
@@ -49157,174 +48905,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Leia 3 frases curtas (3 segundos cada uma). O Q-Audion usará o protótipo para reconhecer você durante as chamadas e bloquear deepfakes."
-          }
-        }
-      }
-    },
-    "Elaborazione del prototipo vocale…": {
-      "extractionState": "manual",
-      "comment": "Title shown while the voice prototype is being processed",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Elaborazione del prototipo vocale…"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Processing the voice prototype…"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Procesando el prototipo de voz…"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Traitement du prototype vocal…"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sprachprototyp wird verarbeitet…"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Processando o protótipo de voz…"
-          }
-        }
-      }
-    },
-    "Stiamo creando il tuo voiceprint. Tieni il dispositivo fermo per qualche secondo.": {
-      "extractionState": "manual",
-      "comment": "Text shown while the voiceprint is being created",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stiamo creando il tuo voiceprint. Tieni il dispositivo fermo per qualche secondo."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "We're creating your voiceprint. Hold the device still for a few seconds."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Estamos creando tu voiceprint. Mantén el dispositivo quieto unos segundos."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nous créons ton voiceprint. Garde l'appareil immobile quelques secondes."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Wir erstellen Ihren Voiceprint. Halten Sie das Gerät einige Sekunden lang ruhig."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Estamos criando seu voiceprint. Mantenha o dispositivo parado por alguns segundos."
-          }
-        }
-      }
-    },
-    "Voice-as-Key attivo": {
-      "extractionState": "manual",
-      "comment": "Title shown when voice enrollment is complete",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice-as-Key attivo"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice-as-Key active"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice-as-Key activo"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice-as-Key activé"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice-as-Key aktiv"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Voice-as-Key ativo"
-          }
-        }
-      }
-    },
-    "Il tuo voiceprint è registrato (id=%@). Da ora le chiamate saranno verificate per voce.": {
-      "extractionState": "manual",
-      "comment": "Text shown when voice enrollment is complete. %@ is the last 8 characters of the voiceprint identifier",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Il tuo voiceprint è registrato (id=%@). Da ora le chiamate saranno verificate per voce."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Your voiceprint is registered (id=%@). From now on, calls will be verified by voice."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tu voiceprint está registrado (id=%@). A partir de ahora, las llamadas se verificarán por voz."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ton voiceprint est enregistré (id=%@). Désormais, les appels seront vérifiés par la voix."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ihr Voiceprint ist registriert (id=%@). Ab jetzt werden Anrufe per Stimme verifiziert."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Seu voiceprint foi registrado (id=%@). A partir de agora, as chamadas serão verificadas por voz."
           }
         }
       }
@@ -51046,47 +50626,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pular"
-          }
-        }
-      }
-    },
-    "Salta per ora": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Salta per ora"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Skip for now"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Omitir por ahora"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Passer pour l'instant"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vorerst überspringen"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Pular por agora"
           }
         }
       }
@@ -53019,47 +52558,6 @@
         }
       }
     },
-    "Tocca Registra e leggi a voce normale.": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tocca Registra e leggi a voce normale."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tap Record and read at a normal volume."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Toca Grabar y lee en voz normal."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Appuie sur Enregistrer et lis à voix normale."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tippen Sie auf Aufnehmen und lesen Sie mit normaler Stimme."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Toque em Gravar e leia em voz normal."
-          }
-        }
-      }
-    },
     "Tocca per rientrare": {
       "extractionState": "manual",
       "localizations": {
@@ -54370,6 +53868,28 @@
             "value": "Voice-as-Key"
           }
         }
+      }
+    },
+    "Voce imparata dalle tue chiamate": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "Voce imparata dalle tue chiamate" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Voice learned from your calls" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Stimme aus Ihren Anrufen gelernt" } },
+        "es": { "stringUnit": { "state": "translated", "value": "Voz aprendida de tus llamadas" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Voix apprise à partir de vos appels" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Voz aprendida das suas chamadas" } }
+      }
+    },
+    "La tua voce viene imparata durante le chiamate": {
+      "extractionState": "manual",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "La tua voce viene imparata durante le chiamate" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Your voice is being learned during your calls" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Ihre Stimme wird während Ihrer Anrufe gelernt" } },
+        "es": { "stringUnit": { "state": "translated", "value": "Tu voz se aprende durante tus llamadas" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Votre voix est apprise pendant vos appels" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Sua voz está sendo aprendida durante suas chamadas" } }
       }
     },
     "Warning": {
@@ -73831,47 +73351,6 @@
         }
       }
     },
-    "%lld di %lld campioni": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld di %lld campioni"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld of %lld samples"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld von %lld Sprachproben"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld de %lld muestras"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld sur %lld échantillons"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "%lld de %lld amostras"
-          }
-        }
-      }
-    },
     "%lld membri": {
       "extractionState": "manual",
       "localizations": {
@@ -74487,47 +73966,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bloquear %@"
-          }
-        }
-      }
-    },
-    "Campione %lld / %lld": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Campione %lld / %lld"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sample %lld / %lld"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Sprachprobe %lld / %lld"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Muestra %lld / %lld"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Échantillon %lld / %lld"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Amostra %lld / %lld"
           }
         }
       }
@@ -86989,47 +86427,6 @@
         }
       }
     },
-    "Registra voiceprint · 5 campioni": {
-      "extractionState": "manual",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Registra voiceprint · 5 campioni"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Record voiceprint · 5 samples"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Enregistrer l'empreinte vocale · 5 échantillons"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stimmprofil aufnehmen · 5 Sprachproben"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Graba la huella de voz · 5 muestras"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gravar impressão de voz · 5 amostras"
-          }
-        }
-      }
-    },
     "Protocollo di trasporto": {
       "extractionState": "manual",
       "localizations": {
@@ -87645,19 +87042,19 @@
         }
       }
     },
-    "Cancella il modello vocale registrato su questo dispositivo": {
+    "Cancella il modello vocale salvato su questo dispositivo": {
       "extractionState": "manual",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cancella il modello vocale registrato su questo dispositivo"
+            "value": "Cancella il modello vocale salvato su questo dispositivo"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Delete the voice model recorded on this device"
+            "value": "Delete the voice model saved on this device"
           }
         },
         "fr": {
@@ -87675,13 +87072,13 @@
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Eliminar el modelo de voz grabado en este dispositivo"
+            "value": "Eliminar el modelo de voz guardado en este dispositivo"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Excluir o modelo de voz gravado neste dispositivo"
+            "value": "Excluir o modelo de voz salvo neste dispositivo"
           }
         }
       }

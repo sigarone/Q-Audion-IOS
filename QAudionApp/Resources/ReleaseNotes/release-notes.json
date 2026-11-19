@@ -1,5 +1,28 @@
 [
   {
+    "version": "1.0.1298",
+    "notes": {
+      "it": [
+        "Il riconoscimento della voce si imposta da solo durante le tue chiamate, senza niente da configurare"
+      ],
+      "en": [
+        "Voice recognition now sets itself up during your calls, with nothing to configure"
+      ],
+      "de": [
+        "Die Stimmerkennung richtet sich jetzt während Ihrer Anrufe von selbst ein, ganz ohne Einstellungen"
+      ],
+      "es": [
+        "El reconocimiento de voz ahora se configura solo durante tus llamadas, sin nada que ajustar"
+      ],
+      "fr": [
+        "La reconnaissance vocale se configure désormais toute seule pendant vos appels, sans rien à régler"
+      ],
+      "pt-BR": [
+        "O reconhecimento de voz agora se configura sozinho durante suas chamadas, sem nada para ajustar"
+      ]
+    }
+  },
+  {
     "version": "1.0.1297",
     "notes": {
       "it": [

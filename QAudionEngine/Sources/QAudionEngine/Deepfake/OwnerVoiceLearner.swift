@@ -15,15 +15,15 @@ import Security
 /// The record binds the learning to the signed-in account. A Keychain item survives a reinstall, so without it a
 /// second account on the same phone would inherit the first one's template and read as a different voice. A template
 /// that a record of another account vouches for is removed and the learning starts again for this account: a few
-/// calls give a new template, nothing is asked of the person. When there is no record at all (a template made by the
-/// manual enrolment before the record existed) the template is adopted: it is bound to the current account and treated
-/// as a manual seed.
+/// calls give a new template, nothing is asked of the person. When there is no record at all (a template made before
+/// the record existed) the template is adopted: it is bound to the current account and treated as the starting
+/// template.
 ///
 /// A new embedding format (`VoiceprintCodec.formatVersion`) drops the windows of the old one and starts again, the
 /// same way a template of an old format already reads as no template.
 ///
-/// Everything is serialised on one lock shared by all instances (the monitor, the announce, Settings and the enrolment
-/// each make their own). Reads and writes are Keychain calls: call this from a background queue,
+/// Everything is serialised on one lock shared by all instances (the monitor, the announce and Settings each make
+/// their own). Reads and writes are Keychain calls: call this from a background queue,
 /// never from the audio thread.
 public final class OwnerVoiceLearner: @unchecked Sendable {
 
@@ -90,7 +90,7 @@ public final class OwnerVoiceLearner: @unchecked Sendable {
         }
 
         // No record at all (absent or not decodable) and a template: made before the record existed, so it is adopted
-        // for this account like a manual seed.
+        // for this account as the starting template.
         if stored == nil, template != nil {
             let adopted = OwnerVoiceRecord(userId: userId, embeddingVersion: VoiceprintCodec.formatVersion,
                                            refined: false, windows: [])
@@ -178,7 +178,7 @@ public final class OwnerVoiceLearner: @unchecked Sendable {
         // voice. The current template stays, the windows are kept, and the line says so without a score.
         if let current, (OwnerVoiceLearning.cosine(current, fusion.centroid) + 1) / 2 < OwnerContinuityMonitor.uncertainThreshold {
             _ = writeRecord(next)
-            print("[OwnerCont] learn st=keep")
+            print("[OwnerCont] learn_stage=keep")
             return nil
         }
         guard templates.save(contactId: VoiceprintStore.deviceOwnerId, template: fusion.centroid) else {
@@ -192,32 +192,6 @@ public final class OwnerVoiceLearner: @unchecked Sendable {
         }
         _ = writeRecord(next)
         return OwnerVoiceLearning.stage(status)
-    }
-
-    // MARK: - Manual enrolment
-
-    /// Stores a template made by the manual enrolment and binds it to `userId`, so that it seeds this learner: it is
-    /// the template of the calls that follow, and the learning goes on from there and replaces it once the calls give
-    /// a template of their own (MIN). `false` when it could not be stored and bound; nothing is then left behind.
-    @discardableResult
-    public func seed(template: [Float], userId: String) -> Bool {
-        guard !userId.isEmpty else { return false }
-        lock.lock(); defer { lock.unlock() }
-        var base = OwnerVoiceRecord(userId: userId, embeddingVersion: VoiceprintCodec.formatVersion,
-                                    refined: false, windows: [])
-        switch readRecord() {
-        case .unreadable: return false
-        case .absent: break
-        case .present(let r):
-            if r.userId == userId, r.embeddingVersion == VoiceprintCodec.formatVersion { base = r }
-        }
-        base.refined = false
-        guard templates.save(contactId: VoiceprintStore.deviceOwnerId, template: template) else { return false }
-        guard writeRecord(base) else {
-            templates.delete(contactId: VoiceprintStore.deviceOwnerId)
-            return false
-        }
-        return true
     }
 
     /// Removes the template and everything the learning kept. The learning then starts again from the next call.

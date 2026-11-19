@@ -8,7 +8,6 @@ public struct OnboardingFlowViewModel: ViewModelProtocol {
         case register
         case login
         case recoverySetup         // enroll mnemonic
-        case voiceEnrollment       // record voice
         case done
 
         fileprivate var rank: Int {
@@ -17,26 +16,21 @@ public struct OnboardingFlowViewModel: ViewModelProtocol {
             case .authChoice: return 1
             case .register, .login: return 2
             case .recoverySetup: return 3
-            case .voiceEnrollment: return 4
-            case .done: return 5
+            case .done: return 4
             }
         }
     }
 
     public let step: Step
     public let canSkipRecovery: Bool
-    public let canSkipVoice: Bool
     /// User chose to skip recovery (warned). Tracked so we can re-prompt later.
     public let skippedRecovery: Bool
-    public let skippedVoice: Bool
 
-    public init(step: Step, canSkipRecovery: Bool = true, canSkipVoice: Bool = true,
-                skippedRecovery: Bool = false, skippedVoice: Bool = false) {
+    public init(step: Step, canSkipRecovery: Bool = true,
+                skippedRecovery: Bool = false) {
         self.step = step
         self.canSkipRecovery = canSkipRecovery
-        self.canSkipVoice = canSkipVoice
         self.skippedRecovery = skippedRecovery
-        self.skippedVoice = skippedVoice
     }
 
     public func advancing(to next: Step) -> OnboardingFlowViewModel {
@@ -44,19 +38,15 @@ public struct OnboardingFlowViewModel: ViewModelProtocol {
         return OnboardingFlowViewModel(
             step: next,
             canSkipRecovery: canSkipRecovery,
-            canSkipVoice: canSkipVoice,
-            skippedRecovery: skippedRecovery,
-            skippedVoice: skippedVoice
+            skippedRecovery: skippedRecovery
         )
     }
 
-    public func markingSkipped(recovery: Bool = false, voice: Bool = false) -> OnboardingFlowViewModel {
+    public func markingSkipped(recovery: Bool = false) -> OnboardingFlowViewModel {
         OnboardingFlowViewModel(
             step: step,
             canSkipRecovery: canSkipRecovery,
-            canSkipVoice: canSkipVoice,
-            skippedRecovery: skippedRecovery || recovery,
-            skippedVoice: skippedVoice || voice
+            skippedRecovery: skippedRecovery || recovery
         )
     }
 

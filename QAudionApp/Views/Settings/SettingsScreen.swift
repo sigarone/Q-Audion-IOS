@@ -34,6 +34,7 @@ import QAudionEngine
 /// deferred until the engine surfaces a unified `SettingsUiState`.
 struct SettingsScreen: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject private var capabilityGate: CapabilityGate
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
@@ -286,7 +287,7 @@ struct SettingsScreen: View {
         // .task rather than inline in sicurezzaSection's body: hasTemplate
         // is a synchronous SecItemCopyMatching and this root re-renders on
         // every appState change. .task rather than .onAppear so re-entering
-        // after enrolling in VoiceEnrollmentScreen picks up the new state.
+        // after a call picks up the new state.
         .task {
             ownerVoiceEnrolled = VoiceprintStore().hasTemplate(contactId: VoiceprintStore.deviceOwnerId)
         }
@@ -445,6 +446,15 @@ struct SettingsScreen: View {
         .padding(.horizontal, 16)
     }
 
+    private var voiceKeyStatusRow: some View {
+        SettingsRow(icon: "waveform.badge.mic",
+                    iconColor: scheme.primary,
+                    title: "Voice-as-Key",
+                    subtitle: ownerVoiceEnrolled
+                        ? "Voce imparata dalle tue chiamate"
+                        : "La tua voce viene imparata durante le chiamate")
+    }
+
     private var sicurezzaSection: some View {
         VStack(spacing: 8) {
             SettingsSectionHeader("SICUREZZA")
@@ -480,24 +490,23 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
-            // Entitlements Task 5 — Capability.voiceBiometrics, same
-            // whole-destination gate as Gestione chiavi above.
-            NavigationLink {
-                LazyView { GatedScreenEntry(capability: .voiceBiometrics) { VoiceEnrollmentScreen() } }
-            } label: {
-                SettingsRow(icon: "waveform.badge.mic",
-                            iconColor: scheme.primary,
-                            title: "Voice-as-Key",
-                            subtitle: "Registra voiceprint · 5 campioni")
+            // Status of the voice learned from the person's calls. Where
+            // `voiceBiometrics` is unlocked it is a plain row (nothing to open
+            // or start); where it is locked, tapping it shows the same upgrade
+            // screen as before.
+            if capabilityGate.isUnlocked(.voiceBiometrics) {
+                voiceKeyStatusRow
+            } else {
+                NavigationLink {
+                    LazyView { GatedScreenEntry(capability: .voiceBiometrics) { EmptyView() } }
+                } label: {
+                    voiceKeyStatusRow
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
 
-            // The only way to discard the device-owner voice key. Until now
-            // there was none: VoiceprintStore.delete has existed and been
-            // implemented down to the Keychain the whole time, with exactly
-            // zero callers, and the enrolment screen offers Inizia /
-            // Registra / Stop / Fatto / Riprova and no discard. A voiceprint
-            // learned from the wrong voice was permanent on this device —
+            // The way to discard the device-owner voice key: a voiceprint
+            // learned from the wrong voice would otherwise stay on this device,
             // and it is announced to contacts as an identity claim.
             //
             // Shown only when a template exists; there is nothing to reset
@@ -510,7 +519,7 @@ struct SettingsScreen: View {
                     SettingsRow(icon: "arrow.counterclockwise",
                                 iconColor: .orange,
                                 title: "Reimposta Voice-as-Key",
-                                subtitle: "Cancella il modello vocale registrato su questo dispositivo")
+                                subtitle: "Cancella il modello vocale salvato su questo dispositivo")
                 }
                 .buttonStyle(.plain)
                 // Anchored to the Button, not the section, so the iPad

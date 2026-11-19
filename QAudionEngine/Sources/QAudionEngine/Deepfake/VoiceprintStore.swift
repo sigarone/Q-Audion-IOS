@@ -48,7 +48,7 @@ extension VoiceprintBacking {
 }
 
 /// Biometric voiceprint template store — the device owner's Voice-as-Key
-/// template (enrollment in `VoiceEnrollmentContainer`, read by the owner-voice
+/// template (learned from the owner's own calls, read by the owner-voice
 /// check during calls) is kept here under `deviceOwnerId`. Earlier versions also
 /// kept per-contact templates here; they are removed once by
 /// `LegacyContactVoiceCleanup` and nothing writes one any more.
@@ -79,7 +79,7 @@ extension VoiceprintBacking {
 public final class VoiceprintStore {
 
     /// Reserved `contactId` for Feature A's device-owner voiceprint
-    /// (`VoiceEnrollmentContainer` is the enrollment writer, the owner-voice
+    /// (the owner-voice learner is the writer, the owner-voice
     /// check of a call is the reader). Never collides
     /// with a real peer/contact id — those are server-issued UUIDs.
     public static let deviceOwnerId = "__qaudion_device_owner__"

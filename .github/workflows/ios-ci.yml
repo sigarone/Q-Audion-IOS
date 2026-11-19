@@ -660,12 +660,7 @@ jobs:
             ${{ runner.os }}-spm-
 
       - name: Install xcodegen
-        run: |
-          if command -v xcodegen >/dev/null 2>&1; then
-            echo "xcodegen already installed: $(xcodegen --version)"
-          else
-            brew install xcodegen
-          fi
+        run: bash scripts/ci/install-xcodegen.sh
 
       - name: Generate Xcode project (default spec, no VPN support)
         working-directory: QAudionApp
@@ -994,12 +989,7 @@ jobs:
             ${{ runner.os }}-spm-
 
       - name: Install xcodegen
-        run: |
-          if command -v xcodegen >/dev/null 2>&1; then
-            echo "xcodegen already installed: $(xcodegen --version)"
-          else
-            brew install xcodegen
-          fi
+        run: bash scripts/ci/install-xcodegen.sh
 
       - name: Generate Xcode project (share spec)
         working-directory: QAudionApp
@@ -1061,12 +1051,7 @@ jobs:
           cache: false
 
       - name: Install xcodegen
-        run: |
-          if command -v xcodegen >/dev/null 2>&1; then
-            echo "xcodegen already installed: $(xcodegen --version)"
-          else
-            brew install xcodegen
-          fi
+        run: bash scripts/ci/install-xcodegen.sh
 
       # QAudionVPN.entitlements must stay equal to QAudion.entitlements plus the
       # Network Extension key and the App Group shared with the extension.
@@ -1164,12 +1149,7 @@ jobs:
             ${{ runner.os }}-spm-
 
       - name: Install xcodegen
-        run: |
-          if command -v xcodegen >/dev/null 2>&1; then
-            echo "xcodegen already installed: $(xcodegen --version)"
-          else
-            brew install xcodegen
-          fi
+        run: bash scripts/ci/install-xcodegen.sh
 
       # Sources and specs: the default spec never mentions the flag, the earbud specs set it, the
       # combined spec is the union of the VPN and earbud flags.
@@ -1301,12 +1281,7 @@ jobs:
             ${{ runner.os }}-spm-
 
       - name: Install xcodegen
-        run: |
-          if command -v xcodegen >/dev/null 2>&1; then
-            echo "xcodegen already installed: $(xcodegen --version)"
-          else
-            brew install xcodegen
-          fi
+        run: bash scripts/ci/install-xcodegen.sh
 
       - name: Generate Xcode project (default spec)
         working-directory: QAudionApp
