@@ -17759,6 +17759,7 @@ final class AppState: ObservableObject {
         // Set before returning `integration`, so it is wired before this
         // responder's `onAndroidBundleReceived` can ever run.
         integration.resolveSelfUserId = { [weak self] in self?.currentUserId ?? "" }
+        integration.resolveVoiceAccountId = { AppState.currentUserIdSnapshot ?? "" }
         // W-STALESEALER (fix-3) — see `QAudionCallIntegration.provideCallGeneration`'s
         // doc: the integration reads this at the START of processing each inbound
         // handshake message (before any of its internal `await`s), NOT when
@@ -20778,6 +20779,7 @@ final class AppState: ObservableObject {
                 // message can arrive, so `onAndroidBundleReceived`'s
                 // `resolveSelfUserId?()` call is never nil-when-it-shouldn't-be.
                 integration.resolveSelfUserId = { [weak self] in self?.currentUserId ?? "" }
+                integration.resolveVoiceAccountId = { AppState.currentUserIdSnapshot ?? "" }
                 // W-STALESEALER (fix-3) — see the responder leg's identical wiring
                 // / `QAudionCallIntegration.provideCallGeneration`'s doc.
                 integration.provideCallGeneration = { [weak self] in self?.callService.currentCallGeneration() ?? -1 }
@@ -23482,8 +23484,14 @@ extension AppState {
     /// after. Jitter breaks that phase-lock (W-SELFECHOSYMMETRIC parity).
     private func startVoiceKeyAnnounceLoop(peerId: String) {
         voiceKeyAnnounceTask?.cancel()
-        let enrolled = VoiceprintStore().hasTemplate(contactId: VoiceprintStore.deviceOwnerId)
+        // Checked against the signed-in account first: another account's template is never announced.
+        // Off the main actor: it can read and write the Keychain.
         voiceKeyAnnounceTask = Task { @MainActor [weak self] in
+            let userId = AppState.currentUserIdSnapshot ?? ""
+            let enrolled = await Task.detached(priority: .utility) {
+                OwnerVoiceLearner().hasTemplate(userId: userId)
+            }.value
+            guard !Task.isCancelled else { return }
             var attempt = 0
             while !Task.isCancelled {
                 guard let self else { return }

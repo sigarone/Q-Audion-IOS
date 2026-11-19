@@ -87686,43 +87686,43 @@
         }
       }
     },
-    "Il modello vocale salvato su questo dispositivo viene cancellato. Ai tuoi contatti non verrà più annunciata la voce come chiave, finché non registri di nuovo.": {
+    "Il modello vocale salvato su questo dispositivo viene cancellato. La tua voce verrà imparata di nuovo in automatico durante le chiamate.": {
       "extractionState": "manual",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Il modello vocale salvato su questo dispositivo viene cancellato. Ai tuoi contatti non verrà più annunciata la voce come chiave, finché non registri di nuovo."
+            "value": "Il modello vocale salvato su questo dispositivo viene cancellato. La tua voce verrà imparata di nuovo in automatico durante le chiamate."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The voice model saved on this device will be deleted. Your contacts will no longer be told your voice is a key until you record it again."
+            "value": "The voice model saved on this device will be deleted. Your voice will be learned again automatically during your calls."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le modèle vocal enregistré sur cet appareil sera supprimé. Tes contacts ne seront plus informés que ta voix est une clé, tant que tu ne l'auras pas enregistrée de nouveau."
+            "value": "Le modèle vocal enregistré sur cet appareil sera supprimé. Ta voix sera de nouveau apprise automatiquement pendant tes appels."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Das auf diesem Gerät gespeicherte Stimmmodell wird gelöscht. Ihre Kontakte erfahren nicht mehr, dass Ihre Stimme ein Schlüssel ist, bis Sie sie erneut aufnehmen."
+            "value": "Das auf diesem Gerät gespeicherte Stimmmodell wird gelöscht. Ihre Stimme wird während Ihrer Anrufe automatisch neu gelernt."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El modelo de voz guardado en este dispositivo se eliminará. Tus contactos ya no sabrán que tu voz es una clave hasta que la grabes de nuevo."
+            "value": "El modelo de voz guardado en este dispositivo se eliminará. Tu voz se volverá a aprender automáticamente durante tus llamadas."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O modelo de voz salvo neste dispositivo será excluído. Seus contatos deixarão de ser informados de que sua voz é uma chave, até você gravá-la novamente."
+            "value": "O modelo de voz salvo neste dispositivo será excluído. Sua voz será aprendida de novo automaticamente durante suas chamadas."
           }
         }
       }

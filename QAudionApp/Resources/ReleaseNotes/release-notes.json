@@ -1,5 +1,28 @@
 [
   {
+    "version": "1.0.1297",
+    "notes": {
+      "it": [
+        "L'app impara a riconoscere la tua voce durante le tue chiamate"
+      ],
+      "en": [
+        "The app now learns to recognise your voice during your calls"
+      ],
+      "de": [
+        "Die App lernt jetzt, Ihre Stimme während Ihrer Anrufe zu erkennen"
+      ],
+      "es": [
+        "La app ahora aprende a reconocer tu voz durante tus llamadas"
+      ],
+      "fr": [
+        "L'app apprend désormais à reconnaître votre voix pendant vos appels"
+      ],
+      "pt-BR": [
+        "O app agora aprende a reconhecer sua voz durante suas chamadas"
+      ]
+    }
+  },
+  {
     "version": "1.0.1296",
     "notes": {
       "it": [

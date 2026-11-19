@@ -267,6 +267,22 @@ public final class SpeakerVerifier: @unchecked Sendable {
         return cosineSimilarity(currentTemplate, embedding)
     }
 
+    /// The embedding of audio that is already mono 16 kHz, or `nil` when there is none (no audio, the model is
+    /// unavailable or the audio is too short). Independent of the stored template: the owner monitor takes one
+    /// embedding per window and uses it both to learn the template and to score against it.
+    public func embed(pcm16k: [Float]) -> [Float]? {
+        guard !pcm16k.isEmpty else { return nil }
+        return try? embedder.embed(pcm16kMono: pcm16k)
+    }
+
+    /// The cosine of an embedding (see `embed(pcm16k:)`) against the stored template, in `[-1, 1]`, or `nil` when
+    /// not ready.
+    public func cosine(embedding: [Float]) -> Float? {
+        lock.lock(); defer { lock.unlock() }
+        guard state == .ready, let template = storedTemplate else { return nil }
+        return cosineSimilarity(template, embedding)
+    }
+
     public func getState() -> State { lock.lock(); defer { lock.unlock() }; return state }
 
     /// Export the enrolled template for external persistence (e.g.

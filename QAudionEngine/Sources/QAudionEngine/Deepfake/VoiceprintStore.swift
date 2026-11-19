@@ -171,7 +171,7 @@ enum VoiceprintCodec {
     /// 3 == the embedding the model gives for a multiple of 200 fbank frames (2026-11-16, see
     /// `CamPlusSpeakerEmbedder.modelFrames(from:)`). Only this version decodes; any other reads as "no template"
     /// (`VoiceprintLookup.absent`).
-    private static let formatVersion: UInt32 = 3
+    static let formatVersion: UInt32 = 3
     private static let headerSize = 12 // magic(4) + version(4) + dim(4)
 
     static func encode(_ template: [Float]) -> Data {

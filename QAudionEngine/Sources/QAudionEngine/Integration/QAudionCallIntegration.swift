@@ -681,6 +681,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// wires this closure once at integration construction time. `nil`/unset resolves to `""`.
     public var resolveSelfUserId: (() -> String)?
 
+    /// The signed-in account for the owner-voice learning, read from the monitor's own queue: it must be a source that
+    /// is safe off the main thread (the stored user id), unlike `resolveSelfUserId`. Unset resolves to "": nothing
+    /// is learned.
+    public var resolveVoiceAccountId: (() -> String)?
+
     /// W-STALESEALER (2026-09-26, fix-3) — resolves `CallService`'s monotonic
     /// call-generation counter (`currentCallGeneration()`), same wiring pattern
     /// as `resolveSelfUserId` above: AppState sets this once, at integration
@@ -1413,10 +1418,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         if let ownerTemplate = VoiceprintStore().load(contactId: VoiceprintStore.deviceOwnerId) {
             ownerVerifier.importTemplate(ownerTemplate)
         }
-        ownerContinuityMonitor = OwnerContinuityMonitor(verifier: ownerVerifier)
+        // The same monitor learns the template from the owner's own calls (`OwnerVoiceLearner`), for the account that
+        // `resolveSelfUserId` names; until a template exists the verifier above stays `.idle` and the state `.inactive`.
+        ownerContinuityMonitor = OwnerContinuityMonitor(verifier: ownerVerifier, learner: OwnerVoiceLearner())
 
         guardianMode.onAlert = { [weak self] level, score in self?.onDeepfakeAlert?(level, score) }
         ownerContinuityMonitor.onStateChanged = { [weak self] state in self?.onOwnerContinuityStateChanged?(state) }
+        ownerContinuityMonitor.userIdProvider = { [weak self] in self?.resolveVoiceAccountId?() ?? "" }
         contactVoiceVerifier.onSpeakerChanged = { [weak self] verdict in self?.onSpeakerChangeVerdict?(verdict) }
         acousticPathAnchor.onReanchor = { [weak self] in self?.acousticPathChanged() }
         // MASVS-CRYPTO remediation (2026-08-20/21) — relay the raw score.
