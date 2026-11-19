@@ -522,7 +522,8 @@ struct SettingsScreen: View {
                     titleVisibility: .visible
                 ) {
                     Button("Reimposta", role: .destructive) {
-                        VoiceprintStore().delete(contactId: VoiceprintStore.deviceOwnerId)
+                        // The template and what the learning kept: a window of the wrong voice must not come back.
+                        OwnerVoiceLearner().reset()
                         ownerVoiceEnrolled = false
                         snackbar?.show(.init(
                             text: String(localized: "Voice-as-Key reimpostato."),
@@ -531,7 +532,7 @@ struct SettingsScreen: View {
                     }
                     Button("Annulla", role: .cancel) { }
                 } message: {
-                    Text("Il modello vocale salvato su questo dispositivo viene cancellato. Ai tuoi contatti non verrà più annunciata la voce come chiave, finché non registri di nuovo.")
+                    Text("Il modello vocale salvato su questo dispositivo viene cancellato. La tua voce verrà imparata di nuovo in automatico durante le chiamate.")
                 }
             }
 

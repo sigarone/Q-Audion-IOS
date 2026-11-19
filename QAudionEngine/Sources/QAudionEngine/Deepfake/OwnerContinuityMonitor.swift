@@ -21,6 +21,13 @@ import Foundation
 /// `SpeakerVerifier` is not `.ready` (no enrolled Voice-as-Key template) —
 /// this must never nag or penalize a user who has not opted in.
 ///
+/// Learning (`learner`, see `OwnerVoiceLearning` for the rules): the same windows that are scored are also the
+/// material the owner's template is learned from, so a person who never enrolled by hand gets one from ordinary
+/// calls with nothing asked of them. While a call runs the windows that pass the speech gate are embedded (one
+/// embedding per window, reused for the score) and kept in memory, at most `OwnerVoiceLearning.maxWindowsPerCall`;
+/// they are handed to the learner once, when the call ends, never one by one. The state stays `.inactive` until
+/// a template exists. Only the local microphone is ever learned from: `feed` takes nothing else.
+///
 /// Only windows that hold speech count: a window with less than
 /// `minSpeechMs` of it (a listening owner in a loud place, dead air) is
 /// skipped before anything else, and so is a window the embedder gave no
@@ -71,7 +78,7 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     /// the smoothing of this class. Offline speech is a guide, not a phone
     /// call: the signal is a soft, advisory indicator.
     private static let verifiedThreshold: Float = 0.72
-    private static let uncertainThreshold: Float = 0.62
+    static let uncertainThreshold: Float = 0.62
 
     /// EMA smoothing factor — 2026-08-01 fix carried from Android: the raw
     /// per-tick CAM++ score is too noisy to threshold directly (confirmed
@@ -110,6 +117,12 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     static let minSpeechMs = 1_500
 
     private let verifier: SpeakerVerifier
+    /// Learns the owner's template from the windows of the calls; `nil` keeps the monitor to scoring against whatever
+    /// template the verifier was given.
+    private let learner: OwnerVoiceLearner?
+    /// The signed-in account, read on the monitor's queue when a call's first window arrives: the learning belongs to
+    /// it (`OwnerVoiceLearner`). Empty or unset: nothing is learned.
+    public var userIdProvider: (() -> String)?
     /// The speech gate: a window with less than `minSpeechMs` of speech in it is
     /// skipped, whatever its energy.
     private let speechDetector: any WindowSpeechDetector
@@ -132,6 +145,17 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     /// after a (re)start is always delivered once; afterwards only a repeated
     /// `.inactive` is suppressed (see `setState`).
     private var lastNotified: State?
+    /// The learning of the current call (queue-confined). `sessionPrepared` is false from `start()` until the first
+    /// window has asked the learner for the template of the account.
+    private var sessionPrepared = false
+    private var learning = false
+    private var collectForRefinement = false
+    private var sessionUserId = ""
+    private var sessionId = UUID().uuidString
+    private var pendingWindows: [OwnerVoiceLearning.Window] = []
+    /// While the call's collection is open and a template exists: the number of windows judged below the lower bar
+    /// against it (not kept). A call that is mostly mismatch is dropped at the end (`flushPendingWindows`).
+    private var mismatchCount = 0
 
     // MARK: - Lock-guarded state (read from `shouldAlert()`/`currentState()`
     // on an arbitrary caller thread, written from `queue` inside `setState`)
@@ -145,6 +169,9 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     private var _inactiveQueued = false
     /// Number of chunks `feed` actually enqueued (test observability only).
     private var _enqueuedChunks = 0
+    /// True once there is nothing left to learn or score in this call (no template and the call's windows are all
+    /// kept, or nothing can be learned), so `feed` stops enqueuing.
+    private var _learnDone = false
 
     /// Fires on `queue` (NOT the caller's thread) whenever `state` changes —
     /// a deliberate difference from `GuardianMode`'s
@@ -158,9 +185,16 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
 
     /// - Parameter speechDetector: the speech gate, see `minSpeechMs`. The default is the Silero VAD of the
     ///   voice bundle, shared by the app.
-    public init(verifier: SpeakerVerifier, speechDetector: any WindowSpeechDetector = SileroWindowSpeechDetector.shared) {
+    /// - Parameter learner: learns the owner's template from the windows of the calls, see the type's doc. `nil` (the
+    ///   default) leaves the monitor as a scorer of the template the verifier already has.
+    public init(
+        verifier: SpeakerVerifier,
+        speechDetector: any WindowSpeechDetector = SileroWindowSpeechDetector.shared,
+        learner: OwnerVoiceLearner? = nil
+    ) {
         self.verifier = verifier
         self.speechDetector = speechDetector
+        self.learner = learner
     }
 
     /// (Re)starts the monitor. `nativeSampleRateHz` is the TX capture
@@ -176,9 +210,16 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         lock.lock()
         _enrolled = enrolledNow
         _inactiveQueued = false
+        _learnDone = false
         lock.unlock()
         queue.async { [weak self] in
             guard let self else { return }
+            // The windows of a call that was not stopped first are handed over before the new call starts.
+            self.flushPendingWindows()
+            self.sessionPrepared = false
+            self.learning = false
+            self.collectForRefinement = false
+            self.sessionId = UUID().uuidString
             self.buffer.removeAll(keepingCapacity: true)
             self.targetBytes = Int(Double(nativeSampleRateHz) * Self.targetWindowSeconds) * MemoryLayout<Int16>.size
             self.nativeRateHz = nativeSampleRateHz
@@ -199,7 +240,9 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
 
     public func stop() {
         queue.async { [weak self] in
-            self?.buffer.removeAll(keepingCapacity: true)
+            guard let self else { return }
+            self.buffer.removeAll(keepingCapacity: true)
+            self.flushPendingWindows()
         }
     }
 
@@ -216,7 +259,7 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         // after a start is queued (to deliver that state once); every later
         // chunk returns here without queueing anything (up to 100 per second).
         lock.lock()
-        if !_enrolled {
+        if !_enrolled && !(learner != nil && !_learnDone) {
             if _inactiveQueued { lock.unlock(); return }
             _inactiveQueued = true
         }
@@ -257,8 +300,15 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     // MARK: - Internals (queue-confined — only ever called from `queue`)
 
     private func process(_ pcmFrame: Data) {
-        guard enrolledCached else {
+        if learner != nil, !sessionPrepared { prepareSession() }
+        guard enrolledCached || learning else {
             setState(.inactive)
+            return
+        }
+        // No template yet and this call's windows are all kept: nothing more to do until the call ends.
+        if !enrolledCached, pendingWindows.count >= OwnerVoiceLearning.maxWindowsPerCall {
+            buffer.removeAll(keepingCapacity: true)
+            markLearnDone()
             return
         }
         buffer.append(pcmFrame)
@@ -277,9 +327,32 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         // smoothing nor the streak.
         guard speechDetector.speechMs(pcm16k: window) >= Self.minSpeechMs else { return }
 
-        // A window the embedder gave no embedding for has no score: skipped
-        // like the windows above, EMA and streak untouched.
-        guard let cosine = verifier.cosine(pcm16k: window) else { return }
+        // One embedding per window, whatever wants it: it is kept as learning material while there is no template or
+        // the template is not final, and scored against the template when there is one. A window the embedder gave no
+        // embedding for is neither: skipped like the windows above, EMA and streak untouched, and it does not use up
+        // the call's share of windows.
+        let collecting = learning && (!enrolledCached || collectForRefinement)
+            && pendingWindows.count < OwnerVoiceLearning.maxWindowsPerCall
+        let windowEmbedding = (collecting || enrolledCached) ? verifier.embed(pcm16k: window) : nil
+        let windowCosine = windowEmbedding.flatMap { enrolledCached ? verifier.cosine(embedding: $0) : nil }
+        // With a template, another voice must not become part of it: while the call's collection is open, a window
+        // below the lower bar is not kept and is counted (`flushPendingWindows` drops a call that is mostly
+        // mismatch). Windows after the cap are not judged for learning. With no template yet the phone's user is
+        // taken to be the owner, so every window is kept.
+        var keep = true
+        if collecting, enrolledCached, let windowCosine {
+            if (windowCosine + 1) / 2 < Self.uncertainThreshold { mismatchCount += 1; keep = false }
+        }
+        if collecting, keep, let windowEmbedding {
+            pendingWindows.append(OwnerVoiceLearning.Window(
+                embedding: windowEmbedding,
+                callId: sessionId,
+                capturedAtEpochMs: Int64(Date().timeIntervalSince1970 * 1000),
+                netSpeechMs: window.count * 1000 / 16_000))
+        }
+        // Learning without a template is silent: the state stays `.inactive`.
+        guard enrolledCached else { return }
+        guard let cosine = windowCosine else { return }
 
         // W-VSCORESCALE — convert to the scale the thresholds actually live
         // on before comparing. `cosine` is a raw cosine; the constants
@@ -328,6 +401,68 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         _mismatchStreak = (level == .mismatch) ? _mismatchStreak + 1 : 0
         lock.unlock()
         setState(.scored(score: smoothed, level: level))
+    }
+
+    /// Once per call, on the first window: asks the learner for the template of the signed-in account and whether this
+    /// call's windows are still worth keeping. When it cannot say (`.unavailable`) the monitor keeps whatever template
+    /// the verifier holds and learns nothing.
+    private func prepareSession() {
+        sessionPrepared = true
+        guard let learner else { return }
+        let userId = userIdProvider?() ?? ""
+        switch learner.prepare(userId: userId) {
+        case .unavailable:
+            learning = false
+        case .ready(let template, let collect):
+            learning = true
+            sessionUserId = userId
+            collectForRefinement = collect
+            if let template {
+                verifier.importTemplate(template)
+                enrolledCached = true
+            } else {
+                verifier.reset()
+                enrolledCached = false
+            }
+            lock.lock()
+            _enrolled = enrolledCached
+            lock.unlock()
+        }
+        if !enrolledCached {
+            if !learning { markLearnDone() }
+            setState(.inactive)
+        }
+    }
+
+    private func markLearnDone() {
+        lock.lock()
+        _learnDone = true
+        lock.unlock()
+    }
+
+    /// Hands the call's kept windows to the learner, once. `print`, not RTLog, like the line in `process`: this
+    /// package cannot reach RTLog. The line says how far the learning is and nothing about the voice.
+    private func flushPendingWindows() {
+        let mismatches = mismatchCount
+        mismatchCount = 0
+        guard !pendingWindows.isEmpty else { return }
+        let batch = pendingWindows
+        pendingWindows.removeAll()
+        // At least 2 mismatches and at least a third of the windows judged: another voice on the phone. One noise
+        // burst among good windows does not cost the call.
+        if mismatches >= 2, mismatches * 3 >= mismatches + batch.count {
+            print("[OwnerCont] learn st=drop")
+            return
+        }
+        guard learning, let learner,
+              let stage = learner.record(windows: batch, userId: sessionUserId) else { return }
+        let code: String
+        switch stage {
+        case .learning: code = "lrn"
+        case .min:      code = "min"
+        case .refined:  code = "ref"
+        }
+        print("[OwnerCont] learn st=" + code)
     }
 
     /// Stores the state and notifies the observer, except that a repeated

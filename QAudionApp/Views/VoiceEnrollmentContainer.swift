@@ -46,10 +46,12 @@ final class VoiceEnrollmentContainer: ObservableObject {
     /// `startEnrollment()` per full `start()`, NOT per prompt); the multi-
     /// prompt flow builds ONE device-owner template.
     private let speakerVerifier = SpeakerVerifier(embedder: CamPlusSpeakerEmbedder.shared)
-    /// Keychain-backed (`VoiceprintStore`) — persists the finished template
+    /// Keychain-backed (`OwnerVoiceLearner`) — persists the finished template
     /// under `VoiceprintStore.deviceOwnerId` so it survives an app restart
-    /// and is loaded for the owner-voice check during calls.
-    private let voiceprintStore = VoiceprintStore()
+    /// and is loaded for the owner-voice check during calls. The template is
+    /// bound to the signed-in account and seeds the learning from calls, which
+    /// replaces it with one of its own once enough calls are in.
+    private let ownerVoiceLearner = OwnerVoiceLearner()
 
     init(initial: VoiceEnrollmentViewModel = .mock) {
         self.viewModel = initial
@@ -204,7 +206,7 @@ final class VoiceEnrollmentContainer: ObservableObject {
         // Success is reported only when the template is really stored: an
         // unusable template, or a Keychain that refused the write, is a
         // failed enrollment, not a finished one.
-        guard voiceprintStore.save(contactId: VoiceprintStore.deviceOwnerId, template: template) else {
+        guard ownerVoiceLearner.seed(template: template, userId: AppState.currentUserIdSnapshot ?? "") else {
             return nil
         }
         return "embed-\(UUID().uuidString.prefix(8))"

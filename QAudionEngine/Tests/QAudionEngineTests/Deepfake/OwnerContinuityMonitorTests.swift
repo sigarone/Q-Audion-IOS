@@ -47,10 +47,10 @@ final class OwnerContinuityMonitorTests: XCTestCase {
     }
 
     /// 20 ms of a 440 Hz tone at 48 kHz, Int16 mono little-endian.
-    private func toneFrame(phase: Int) -> Data {
+    private func toneFrame(phase: Int, hz: Double = 440) -> Data {
         var out = Data(capacity: 960 * 2)
         for i in 0..<960 {
-            let v = Int16(8000 * sin(2 * Double.pi * 440 * Double(phase + i) / 48_000))
+            let v = Int16(8000 * sin(2 * Double.pi * hz * Double(phase + i) / 48_000))
             withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) }
         }
         return out
@@ -165,6 +165,163 @@ final class OwnerContinuityMonitorTests: XCTestCase {
         XCTAssertEqual(scoredCount(recorder), 0)
         XCTAssertFalse(monitor.shouldAlert())
         XCTAssertEqual(monitor.currentState(), .inactive)
+    }
+
+    // MARK: - Learning from calls
+
+    private struct LearningRig {
+        let monitor: OwnerContinuityMonitor
+        let recorder: StateRecorder
+        let templates: VoiceprintStore
+        let progress: MemoryOwnerVoiceProgress
+        let speech: StubSpeechDetector
+    }
+
+    private func makeLearningRig(userId: @escaping () -> String = { "u1" }) -> LearningRig {
+        let templates = VoiceprintStore(backing: InMemoryVoiceprintBacking())
+        let progress = MemoryOwnerVoiceProgress()
+        let speech = StubSpeechDetector(ms: 4_000)
+        let monitor = OwnerContinuityMonitor(
+            verifier: SpeakerVerifier(embedder: DeterministicTestEmbedder()),
+            speechDetector: speech,
+            learner: OwnerVoiceLearner(templates: templates, progress: progress))
+        monitor.userIdProvider = userId
+        let recorder = StateRecorder()
+        monitor.onStateChanged = { recorder.record($0) }
+        return LearningRig(monitor: monitor, recorder: recorder, templates: templates, progress: progress, speech: speech)
+    }
+
+    /// One call: `start`, `windows` windows of tone from the local microphone, `stop` (which hands the windows over).
+    private func runCall(_ rig: LearningRig, windows: Int) {
+        rig.monitor.start()
+        rig.monitor.drainForTesting()
+        for _ in 0..<windows {
+            for n in 0..<windowFrames { rig.monitor.feed(pcmFrame: toneFrame(phase: n * 960)) }
+        }
+        rig.monitor.stop()
+        rig.monitor.drainForTesting()
+    }
+
+    /// One call whose windows are tones of the given frequencies, in order.
+    private func runCall(_ rig: LearningRig, tones: [Double]) {
+        rig.monitor.start()
+        rig.monitor.drainForTesting()
+        for hz in tones {
+            for n in 0..<windowFrames { rig.monitor.feed(pcmFrame: toneFrame(phase: n * 960, hz: hz)) }
+        }
+        rig.monitor.stop()
+        rig.monitor.drainForTesting()
+    }
+
+    private func learnedTemplateRig() -> LearningRig {
+        let rig = makeLearningRig()
+        runCall(rig, windows: 6)
+        runCall(rig, windows: 6)
+        XCTAssertEqual(rig.progress.record?.windows.count, 12)
+        return rig
+    }
+
+    /// With a template, windows of another voice are not kept for the next fusion.
+    func testWindowsThatMismatchTheTemplateAreNotCollected() {
+        let rig = learnedTemplateRig()
+        runCall(rig, tones: [1_000, 1_000, 1_000])
+        XCTAssertEqual(rig.progress.record?.windows.count, 12)
+    }
+
+    /// One mismatch among good windows (a noise burst) costs only that window, wherever it falls.
+    func testOneMismatchAmongGoodWindowsStillContributesTheGoodOnes() {
+        let rig = learnedTemplateRig()
+        runCall(rig, tones: [440, 440, 1_000])
+        XCTAssertEqual(rig.progress.record?.windows.count, 14)
+        runCall(rig, tones: [1_000, 440, 440])
+        XCTAssertEqual(rig.progress.record?.windows.count, 16)
+    }
+
+    /// A call that is mostly mismatch (2 or more, at least a third of the windows judged) contributes nothing.
+    func testAMostlyMismatchedCallContributesNothing() {
+        let rig = learnedTemplateRig()
+        runCall(rig, tones: [440, 1_000, 1_000])
+        XCTAssertEqual(rig.progress.record?.windows.count, 12)
+    }
+
+    /// Windows after the cap are not judged for learning: a mismatch there does not cost the batch.
+    func testAMismatchAfterTheCapKeepsTheBatch() {
+        let rig = learnedTemplateRig()
+        runCall(rig, tones: [440, 440, 440, 440, 440, 440, 1_000, 1_000, 1_000])
+        XCTAssertEqual(rig.progress.record?.windows.count, 18)
+    }
+
+    /// Before the first template there is nothing to compare with: every window is kept, whoever speaks.
+    func testTheFirstLearningWithoutATemplateKeepsEveryWindow() {
+        let rig = makeLearningRig()
+        runCall(rig, tones: [1_000, 440, 1_000])
+        XCTAssertEqual(rig.progress.record?.windows.count, 3)
+    }
+
+    /// A person who never enrolled by hand gets a template from two ordinary calls, with the state `.inactive`
+    /// throughout (nothing is asked and nothing is announced), and the call after that is scored against it. A call
+    /// keeps at most 6 windows.
+    func testATemplateIsLearnedFromCallsAndScoredFromTheNextOne() throws {
+        let rig = makeLearningRig()
+        runCall(rig, windows: 7)
+        XCTAssertEqual(rig.progress.record?.windows.count, OwnerVoiceLearning.maxWindowsPerCall)
+        XCTAssertNil(rig.templates.load(contactId: VoiceprintStore.deviceOwnerId), "6 windows of one call are below MIN")
+
+        runCall(rig, windows: 6)
+        XCTAssertNotNil(rig.templates.load(contactId: VoiceprintStore.deviceOwnerId), "12 windows of 2 calls reach MIN")
+        XCTAssertEqual(scoredCount(rig.recorder), 0, "learning is silent")
+        XCTAssertEqual(rig.monitor.currentState(), .inactive)
+        XCTAssertFalse(rig.monitor.shouldAlert())
+
+        runCall(rig, windows: 1)
+        XCTAssertEqual(scoredCount(rig.recorder), 1, "with a template the window is scored")
+        guard case .scored(_, let level) = rig.monitor.currentState() else { return XCTFail("expected a scored state") }
+        XCTAssertEqual(level, .verified)
+    }
+
+    /// Only windows that hold speech are learned from: the gate that keeps them out of the score keeps them out of
+    /// the template.
+    func testWindowsWithoutSpeechAreNotLearnedFrom() {
+        let rig = makeLearningRig()
+        rig.speech.set(0)
+        runCall(rig, windows: 3)
+        XCTAssertEqual(rig.progress.record?.windows.count, 0)
+
+        rig.speech.set(OwnerContinuityMonitor.minSpeechMs - 1)
+        runCall(rig, windows: 2)
+        XCTAssertEqual(rig.progress.record?.windows.count, 0, "just under the gate is no speech")
+
+        rig.speech.set(OwnerContinuityMonitor.minSpeechMs)
+        runCall(rig, windows: 2)
+        XCTAssertEqual(rig.progress.record?.windows.count, 2)
+    }
+
+    /// A different account on the same phone starts fresh: the first account's template is not scored against the
+    /// second account's voice and is not inherited.
+    func testADifferentAccountIsNotScoredAgainstTheFirstOnesTemplate() {
+        var account = "u1"
+        let rig = makeLearningRig(userId: { account })
+        runCall(rig, windows: 6)
+        runCall(rig, windows: 6)
+        runCall(rig, windows: 1)
+        XCTAssertEqual(scoredCount(rig.recorder), 1)
+
+        account = "u2"
+        runCall(rig, windows: 1)
+        XCTAssertEqual(scoredCount(rig.recorder), 1, "nothing is scored for the new account")
+        XCTAssertEqual(rig.monitor.currentState(), .inactive)
+        XCTAssertNil(rig.templates.load(contactId: VoiceprintStore.deviceOwnerId))
+        XCTAssertEqual(rig.progress.record?.userId, "u2")
+        XCTAssertEqual(rig.progress.record?.windows.count, 1)
+    }
+
+    /// Without an account nothing is learned and nothing is written.
+    func testNothingIsLearnedWithoutAnAccount() {
+        let rig = makeLearningRig(userId: { "" })
+        runCall(rig, windows: 3)
+        XCTAssertNil(rig.progress.data)
+        XCTAssertNil(rig.templates.load(contactId: VoiceprintStore.deviceOwnerId))
+        XCTAssertEqual(rig.monitor.currentState(), .inactive)
     }
 
     private func scoredCount(_ recorder: StateRecorder) -> Int {
