@@ -456,11 +456,7 @@ jobs:
 
           # Install xcodegen if missing -- runners have it sometimes,
           # sometimes not, depending on image rotation.
-          if command -v xcodegen >/dev/null 2>&1; then
-            echo "xcodegen already installed: $(xcodegen --version)"
-          else
-            brew install xcodegen
-          fi
+          bash scripts/ci/install-xcodegen.sh
 
           # macOS runner enforces PEP 668 (externally-managed Python),
           # so we use pipx to install codemagic-cli-tools in an isolated
