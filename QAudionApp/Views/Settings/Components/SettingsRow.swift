@@ -39,6 +39,7 @@ struct SettingsRow: View {
     let iconColor: Color?
     let title: LocalizedStringKey
     let subtitle: LocalizedStringKey?
+    let verbatimSubtitle: String?
     let mono: Bool
     let trailingBadge: LocalizedStringKey?
     let trailingBadgeColor: Color?
@@ -52,14 +53,15 @@ struct SettingsRow: View {
     // audit after real device testing. Every existing call site passes a
     // string LITERAL for title (and almost all for subtitle/trailingBadge),
     // which keeps compiling unchanged since a literal satisfies either type;
-    // the handful of call sites passing a runtime String wrap it in
-    // `LocalizedStringKey(value)` at the call site (verbatim display, no
-    // catalog lookup surprise — correct for genuinely dynamic content like a
-    // profile name or a byte count).
+    // a runtime String wrapped in `LocalizedStringKey(value)` is still looked
+    // up in the catalog as a key, so text that is already localized can be
+    // translated a second time when it equals another key. Already-localized
+    // text goes through `verbatimSubtitle`, shown as is.
     init(icon: String,
          iconColor: Color? = nil,
          title: LocalizedStringKey,
          subtitle: LocalizedStringKey? = nil,
+         verbatimSubtitle: String? = nil,
          mono: Bool = false,
          trailingBadge: LocalizedStringKey? = nil,
          trailingBadgeColor: Color? = nil,
@@ -68,6 +70,7 @@ struct SettingsRow: View {
         self.iconColor = iconColor
         self.title = title
         self.subtitle = subtitle
+        self.verbatimSubtitle = verbatimSubtitle
         self.mono = mono
         self.trailingBadge = trailingBadge
         self.trailingBadgeColor = trailingBadgeColor
@@ -86,8 +89,8 @@ struct SettingsRow: View {
                 Text(title)
                     .qaudionStyle(type.bodyMedium)
                     .foregroundStyle(destructive ? extras.riskHigh : scheme.onSurface)
-                if let subtitle {
-                    Text(subtitle)
+                if let line = verbatimSubtitle.map({ Text(verbatim: $0) }) ?? subtitle.map({ Text($0) }) {
+                    line
                         .qaudionStyle(type.labelSmall)
                         .foregroundStyle(scheme.onSurfaceVariant)
                         .lineLimit(2)

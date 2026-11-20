@@ -39,6 +39,13 @@ public enum OwnerVoiceLearning {
         public let netSpeechMs: Int
         /// MIN reached: enough for a first usable template.
         public let met: Bool
+
+        /// How close the material is to MIN, in `0...1`: the furthest-behind of the four rules decides.
+        public var fraction: Double {
+            OwnerVoiceLearning.progress(
+                self, windows: OwnerVoiceLearning.minWindows, calls: OwnerVoiceLearning.minDistinctCalls,
+                days: OwnerVoiceLearning.minDistinctDays, speechMs: OwnerVoiceLearning.minNetSpeechMs)
+        }
     }
 
     /// The template a set of windows gives.
@@ -116,6 +123,20 @@ public enum OwnerVoiceLearning {
     public static func shouldRefine(_ status: GateStatus) -> Bool {
         status.windows < refinedWindows || status.distinctCalls < refinedDistinctCalls
             || status.distinctDays < refinedDistinctDays || status.netSpeechMs < refinedNetSpeechMs
+    }
+
+    /// How close the material is to REFINED, in `0...1`, by the same rule as `GateStatus.fraction`.
+    public static func maturity(_ status: GateStatus) -> Double {
+        progress(status, windows: refinedWindows, calls: refinedDistinctCalls,
+                 days: refinedDistinctDays, speechMs: refinedNetSpeechMs)
+    }
+
+    fileprivate static func progress(_ status: GateStatus, windows: Int, calls: Int, days: Int, speechMs: Int) -> Double {
+        let axes = [Double(status.windows) / Double(windows),
+                    Double(status.distinctCalls) / Double(calls),
+                    Double(status.distinctDays) / Double(days),
+                    Double(status.netSpeechMs) / Double(speechMs)]
+        return min(max(axes.min() ?? 0, 0), 1)
     }
 
     public static func stage(_ status: GateStatus) -> Stage {

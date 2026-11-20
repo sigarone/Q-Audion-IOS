@@ -34,7 +34,6 @@ import QAudionEngine
 /// deferred until the engine surfaces a unified `SettingsUiState`.
 struct SettingsScreen: View {
     @EnvironmentObject var appState: AppState
-    @EnvironmentObject private var capabilityGate: CapabilityGate
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
@@ -67,12 +66,9 @@ struct SettingsScreen: View {
     /// to recompute (computed property reads filesystem; cheap but
     /// only worth doing when the row re-renders).
     @State private var cacheUsageRefreshTrigger: Int = 0
-    /// Gate for the Voice-as-Key reset row. Read once in `.task` rather
-    /// than inline in the section body, because `hasTemplate` is a
-    /// synchronous Keychain query and this root re-renders often. The
-    /// reset itself flips it false, which is what makes the row vanish.
-    @State private var ownerVoiceEnrolled: Bool = false
-    @State private var showVoiceResetConfirm: Bool = false
+    /// Short Voice-as-Key status for the row subtitle. Read in `.task` rather than inline in the section body,
+    /// because it reads the Keychain and this root re-renders often; `nil` until the first read.
+    @State private var voiceKeyStatus: OwnerVoiceLearner.Status?
     /// Drives `recoveryBanner`. Re-read on every `.onAppear` (not just
     /// once) because Settings is exactly where the user goes to run the
     /// enrolment flow and come back — Android's `refreshRecoveryBanner()`
@@ -284,12 +280,11 @@ struct SettingsScreen: View {
             print("[Settings] SettingsScreen appeared — userId=\(appState.currentUserId?.prefix(8) ?? "nil")… ext=\(appState.currentUserDialExtension ?? "nil") isInCall=\(appState.isInCall)")
             recoveryReminderNeeded = RecoveryEnrollmentStatus.needsReminder(userId: appState.currentUserId ?? "")
         }
-        // .task rather than inline in sicurezzaSection's body: hasTemplate
-        // is a synchronous SecItemCopyMatching and this root re-renders on
-        // every appState change. .task rather than .onAppear so re-entering
-        // after a call picks up the new state.
+        // .task rather than inline in sicurezzaSection's body: the status reads the Keychain and this root
+        // re-renders on every appState change. .task rather than .onAppear so re-entering after a call or a
+        // reset picks up the new state.
         .task {
-            ownerVoiceEnrolled = VoiceprintStore().hasTemplate(contactId: VoiceprintStore.deviceOwnerId)
+            voiceKeyStatus = await VoiceKeySettingsScreen.loadStatus()
         }
     }
 
@@ -450,9 +445,7 @@ struct SettingsScreen: View {
         SettingsRow(icon: "waveform.badge.mic",
                     iconColor: scheme.primary,
                     title: "Voice-as-Key",
-                    subtitle: ownerVoiceEnrolled
-                        ? "Voce imparata dalle tue chiamate"
-                        : "La tua voce viene imparata durante le chiamate")
+                    verbatimSubtitle: VoiceKeySettingsScreen.shortStatus(voiceKeyStatus ?? .notStarted))
     }
 
     private var sicurezzaSection: some View {
@@ -490,60 +483,14 @@ struct SettingsScreen: View {
             }
             .buttonStyle(.plain)
 
-            // Status of the voice learned from the person's calls. Where
-            // `voiceBiometrics` is unlocked it is a plain row (nothing to open
-            // or start); where it is locked, tapping it shows the same upgrade
-            // screen as before.
-            if capabilityGate.isUnlocked(.voiceBiometrics) {
+            // What the app has learned of the person's voice from their calls, how it works, and the reset. Not
+            // gated: deleting one's own voice model must always be reachable.
+            NavigationLink {
+                LazyView { VoiceKeySettingsScreen() }
+            } label: {
                 voiceKeyStatusRow
-            } else {
-                NavigationLink {
-                    LazyView { GatedScreenEntry(capability: .voiceBiometrics) { EmptyView() } }
-                } label: {
-                    voiceKeyStatusRow
-                }
-                .buttonStyle(.plain)
             }
-
-            // The way to discard the device-owner voice key: a voiceprint
-            // learned from the wrong voice would otherwise stay on this device,
-            // and it is announced to contacts as an identity claim.
-            //
-            // Shown only when a template exists; there is nothing to reset
-            // otherwise, and the row disappearing is what confirms the
-            // reset worked.
-            if ownerVoiceEnrolled {
-                Button {
-                    showVoiceResetConfirm = true
-                } label: {
-                    SettingsRow(icon: "arrow.counterclockwise",
-                                iconColor: .orange,
-                                title: "Reimposta Voice-as-Key",
-                                subtitle: "Cancella il modello vocale salvato su questo dispositivo")
-                }
-                .buttonStyle(.plain)
-                // Anchored to the Button, not the section, so the iPad
-                // popover points at the right row — same shape as the
-                // sign-out confirmation in this file.
-                .confirmationDialog(
-                    "Reimpostare Voice-as-Key?",
-                    isPresented: $showVoiceResetConfirm,
-                    titleVisibility: .visible
-                ) {
-                    Button("Reimposta", role: .destructive) {
-                        // The template and what the learning kept: a window of the wrong voice must not come back.
-                        OwnerVoiceLearner().reset()
-                        ownerVoiceEnrolled = false
-                        snackbar?.show(.init(
-                            text: String(localized: "Voice-as-Key reimpostato."),
-                            severity: .info,
-                            durationSeconds: 3))
-                    }
-                    Button("Annulla", role: .cancel) { }
-                } message: {
-                    Text("Il modello vocale salvato su questo dispositivo viene cancellato. La tua voce verrà imparata di nuovo in automatico durante le chiamate.")
-                }
-            }
+            .buttonStyle(.plain)
 
             NavigationLink {
                 LazyView { TransportSettingsScreen(state: appState) }
