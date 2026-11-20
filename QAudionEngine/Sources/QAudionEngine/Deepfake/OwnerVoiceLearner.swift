@@ -116,6 +116,43 @@ public final class OwnerVoiceLearner: @unchecked Sendable {
         return false
     }
 
+    /// What Settings shows about the learning of one account.
+    public enum Status: Equatable, Sendable {
+        /// No window kept yet.
+        case notStarted
+        /// No template yet. `percent` is capped at 99 (100 would mean there is one); `calls` and `speechSeconds` are
+        /// capped at what MIN asks for.
+        case learning(percent: Int, calls: Int, speechSeconds: Int)
+        /// A template is in use and still improving; `percent` is the progress towards REFINED.
+        case active(percent: Int)
+        /// The template is final.
+        case refined
+    }
+
+    /// Where the learning of `userId` stands, or `nil` when it cannot be told (no account, or the Keychain cannot be
+    /// read). `prepare` runs first, so another account's template is removed and never shown as this account's.
+    /// Keychain reads: call from a background queue.
+    public func status(userId: String) -> Status? {
+        guard case .ready(let template, _) = prepare(userId: userId) else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        let record: OwnerVoiceRecord?
+        switch readRecord() {
+        case .unreadable: return nil
+        case .absent: record = nil
+        case .present(let r): record = r.userId == userId ? r : nil
+        }
+        let gate = OwnerVoiceLearning.gateStatus(record?.windows ?? [])
+        if template == nil {
+            guard gate.windows > 0 else { return .notStarted }
+            return .learning(
+                percent: min(Int((gate.fraction * 100).rounded(.down)), 99),
+                calls: min(gate.distinctCalls, OwnerVoiceLearning.minDistinctCalls),
+                speechSeconds: min(gate.netSpeechMs / 1000, OwnerVoiceLearning.minNetSpeechMs / 1000))
+        }
+        if record?.refined == true { return .refined }
+        return .active(percent: Int((OwnerVoiceLearning.maturity(gate) * 100).rounded(.down)))
+    }
+
     // MARK: - After a call
 
     /// Adds the windows a call kept (once per call, when it ends) and, when they pass MIN and agree, stores the new

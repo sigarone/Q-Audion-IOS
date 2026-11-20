@@ -1,5 +1,28 @@
 [
   {
+    "version": "1.0.1299",
+    "notes": {
+      "it": [
+        "Nelle Impostazioni, Voice-as-Key mostra a che punto è l'apprendimento della tua voce e spiega come funziona"
+      ],
+      "en": [
+        "In Settings, Voice-as-Key now shows how far the learning of your voice has got and explains how it works"
+      ],
+      "de": [
+        "In den Einstellungen zeigt Voice-as-Key jetzt, wie weit das Lernen Ihrer Stimme ist, und erklärt, wie es funktioniert"
+      ],
+      "es": [
+        "En Ajustes, Voice-as-Key muestra ahora cuánto ha aprendido de tu voz y explica cómo funciona"
+      ],
+      "fr": [
+        "Dans les Réglages, Voice-as-Key indique désormais où en est l'apprentissage de votre voix et explique son fonctionnement"
+      ],
+      "pt-BR": [
+        "Nos Ajustes, o Voice-as-Key agora mostra em que ponto está o aprendizado da sua voz e explica como funciona"
+      ]
+    }
+  },
+  {
     "version": "1.0.1298",
     "notes": {
       "it": [

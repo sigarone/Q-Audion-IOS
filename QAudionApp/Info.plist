@@ -50,7 +50,7 @@
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Q-Audion captures your screen only when you choose to share it in a call. What is captured is end-to-end encrypted and goes only to the person on the call. You can stop at any time from the system indicator.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Q-Audion uses your microphone for end-to-end encrypted voice and video calls, for voice messages in chats, and to record your voice for Voice-as-Key.</string>
+	<string>Q-Audion uses your microphone for end-to-end encrypted voice and video calls and for voice messages in chats. During calls it also learns your voice for Voice-as-Key, on this device only.</string>
 	<key>NFCReaderUsageDescription</key>
 	<string>Q-Audion uses NFC only when you pair a contact in person: you hold your iPhone against their Android phone running Q-Audion, and the two phones together derive a shared key that you compare using a 6-digit code.</string>
 	<!-- W-NFCIOS  -  the AID of the Android HCE service we tap against

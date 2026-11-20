@@ -342,6 +342,58 @@ final class OwnerVoiceLearningTests: XCTestCase {
         XCTAssertEqual(rig.progress.record?.userId, "alice")
     }
 
+    // MARK: - Status for Settings
+
+    private func store(_ rig: Rig, user: String = "alice", refined: Bool = false, _ w: [OwnerVoiceLearning.Window]) {
+        rig.progress.data = OwnerVoiceRecordCodec.encode(OwnerVoiceRecord(
+            userId: user, embeddingVersion: VoiceprintCodec.formatVersion, refined: refined, windows: w))
+    }
+
+    func testStatusNotStartedWithoutWindowsAndNilWithoutAccountOrStore() {
+        let rig = makeRig()
+        XCTAssertEqual(rig.learner.status(userId: "alice"), .notStarted)
+        XCTAssertNil(rig.learner.status(userId: ""))
+        rig.progress.failReads = true
+        XCTAssertNil(rig.learner.status(userId: "alice"))
+    }
+
+    func testStatusLearningShowsTheFurthestBehindRuleAndCapsCallsAndSeconds() {
+        let rig = makeRig()
+        store(rig, windows("a", count: 6))
+        XCTAssertEqual(rig.learner.status(userId: "alice"), .learning(percent: 50, calls: 1, speechSeconds: 24))
+
+        // Three calls and 90 s of speech: both read as MIN, the windows (6 of 10) still say 60 %.
+        store(rig, windows("a", count: 2, speechMs: 15_000) + windows("b", count: 2, speechMs: 15_000)
+                    + windows("c", count: 2, speechMs: 15_000))
+        XCTAssertEqual(rig.learner.status(userId: "alice"), .learning(percent: 60, calls: 2, speechSeconds: 40))
+    }
+
+    func testStatusLearningNeverReachesOneHundredWithoutATemplate() {
+        let rig = makeRig()
+        store(rig, windows("a", count: 5) + windows("b", count: 5))
+        XCTAssertEqual(rig.learner.status(userId: "alice"), .learning(percent: 99, calls: 2, speechSeconds: 40))
+    }
+
+    func testStatusActiveShowsMaturityAndRefinedHasNoPercent() {
+        let rig = makeRig()
+        _ = rig.learner.prepare(userId: "alice")
+        rig.learner.record(windows: windows("a", count: 6), userId: "alice")
+        rig.learner.record(windows: windows("b", count: 6), userId: "alice")
+        // 12 windows, 2 calls, 1 day, 48 s against 30, 6, 3, 120 s: the days and calls rules give a third.
+        XCTAssertEqual(rig.learner.status(userId: "alice"), .active(percent: 33))
+
+        store(rig, refined: true, [])
+        XCTAssertEqual(rig.learner.status(userId: "alice"), .refined)
+    }
+
+    func testStatusOfAnotherAccountIsNotShownAsThisOnes() {
+        let rig = makeRig()
+        XCTAssertTrue(rig.templates.save(contactId: ownerId, template: [1, 0, 0, 0]))
+        store(rig, user: "alice", refined: true, [])
+        XCTAssertEqual(rig.learner.status(userId: "bob"), .notStarted)
+        XCTAssertNil(rig.templates.load(contactId: ownerId))
+    }
+
     // MARK: - Record format
 
     func testRecordCodecRoundTripAndRejectsAnythingElse() throws {

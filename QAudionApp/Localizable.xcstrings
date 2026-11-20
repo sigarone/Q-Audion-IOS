@@ -101761,6 +101761,1224 @@
           }
         }
       }
+    },
+    "voicekey.title": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, navigation title",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key"
+          }
+        }
+      }
+    },
+    "voicekey.status.not_started": {
+      "extractionState": "manual",
+      "comment": "Settings, Voice-as-Key row subtitle: nothing learned yet",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si attiva da sola con le tue chiamate"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turns on by itself during your calls"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se activa sola durante tus llamadas"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S'active toute seule pendant vos appels"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schaltet sich während Ihrer Anrufe von selbst ein"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ativa-se sozinha durante suas chamadas"
+          }
+        }
+      }
+    },
+    "voicekey.status.learning": {
+      "extractionState": "manual",
+      "comment": "Settings, Voice-as-Key row subtitle: learning in progress; the number is a percentage",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In apprendimento · %lld%%"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Learning · %lld%%"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aprendiendo · %lld %%"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apprentissage · %lld %%"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lernt · %lld %%"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aprendendo · %lld%%"
+          }
+        }
+      }
+    },
+    "voicekey.status.active": {
+      "extractionState": "manual",
+      "comment": "Settings, Voice-as-Key row subtitle: on, the model is still improving",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attiva · in affinamento"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On · still improving"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activa · en perfeccionamiento"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Active · en cours d'affinage"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktiv · wird noch verfeinert"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ativa · em aperfeiçoamento"
+          }
+        }
+      }
+    },
+    "voicekey.status.refined": {
+      "extractionState": "manual",
+      "comment": "Settings, Voice-as-Key row subtitle: on, the model is complete",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attiva"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activa"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Active"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktiv"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ativa"
+          }
+        }
+      }
+    },
+    "voicekey.card.title.not_started": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, status card title: not on yet",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non ancora attiva"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not on yet"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Todavía no está activa"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas encore active"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Noch nicht aktiv"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ainda não está ativa"
+          }
+        }
+      }
+    },
+    "voicekey.card.title.learning": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, status card title: learning the voice",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In apprendimento"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Learning your voice"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aprendiendo tu voz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apprentissage de votre voix"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lernt Ihre Stimme"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aprendendo sua voz"
+          }
+        }
+      }
+    },
+    "voicekey.card.title.active": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, status card title: on",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attiva"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Activa"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Active"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktiv"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ativa"
+          }
+        }
+      }
+    },
+    "voicekey.card.body.not_started": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, status card text: nothing learned yet",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comincia a imparare la tua voce dalla prossima chiamata in cui parli."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "It starts learning your voice from the next call in which you talk."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Empieza a aprender tu voz en la próxima llamada en la que hables."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elle commence à apprendre votre voix dès le prochain appel où vous parlez."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie beginnt, Ihre Stimme beim nächsten Anruf zu lernen, in dem Sie sprechen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Começa a aprender sua voz na próxima chamada em que você falar."
+          }
+        }
+      }
+    },
+    "voicekey.card.body.learning": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, status card text: what turns it on; first number is a count of calls, second a count of seconds",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si attiva dopo almeno %1$lld chiamate, con circa %2$lld secondi di voce in tutto."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "It turns on after at least %1$lld calls with about %2$lld seconds of your voice in total."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se activa tras al menos %1$lld llamadas, con unos %2$lld segundos de tu voz en total."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elle s'active après au moins %1$lld appels, avec environ %2$lld secondes de votre voix au total."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie wird nach mindestens %1$lld Anrufen mit insgesamt etwa %2$lld Sekunden Ihrer Stimme aktiv."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ativa-se depois de pelo menos %1$lld chamadas, com cerca de %2$lld segundos da sua voz no total."
+          }
+        }
+      }
+    },
+    "voicekey.card.progress.learning": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, progress line while learning: calls so far of the calls needed, then seconds of voice so far of the seconds needed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld di %2$lld chiamate · %3$lld di %4$lld secondi di voce"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld of %2$lld calls · %3$lld of %4$lld seconds of voice"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld de %2$lld llamadas · %3$lld de %4$lld segundos de voz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld sur %2$lld appels · %3$lld sur %4$lld secondes de voix"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld von %2$lld Anrufen · %3$lld von %4$lld Sekunden Stimme"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$lld de %2$lld chamadas · %3$lld de %4$lld segundos de voz"
+          }
+        }
+      }
+    },
+    "voicekey.card.body.active": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, status card text: on and still improving",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La tua voce viene riconosciuta. Il modello continua a migliorare nelle prossime chiamate."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your voice is recognised. The model keeps improving over your next calls."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu voz ya se reconoce. El modelo sigue mejorando en tus próximas llamadas."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Votre voix est reconnue. Le modèle continue de s'améliorer au fil de vos prochains appels."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ihre Stimme wird erkannt. Das Modell wird mit Ihren nächsten Anrufen weiter verbessert."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sua voz já é reconhecida. O modelo continua melhorando nas próximas chamadas."
+          }
+        }
+      }
+    },
+    "voicekey.card.progress.active": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, progress line once on: percentage of the improvement reached",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Affinamento %lld%%"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Improving: %lld%%"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Perfeccionamiento: %lld %%"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Affinage : %lld %%"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verfeinerung: %lld %%"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aperfeiçoamento: %lld%%"
+          }
+        }
+      }
+    },
+    "voicekey.card.body.refined": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, status card text: model complete",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il modello della tua voce è completo: l'app non raccoglie più campioni."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your voice model is complete: the app no longer collects samples."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El modelo de tu voz está completo: la app ya no recoge muestras."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le modèle de votre voix est complet : l'application ne collecte plus d'échantillons."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ihr Stimmmodell ist vollständig: Die App sammelt keine Proben mehr."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O modelo da sua voz está completo: o app não coleta mais amostras."
+          }
+        }
+      }
+    },
+    "voicekey.how.header": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, section header: how the feature works",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Come funziona"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "How it works"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cómo funciona"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comment ça marche"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "So funktioniert es"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Como funciona"
+          }
+        }
+      }
+    },
+    "voicekey.how.learns.title": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, item title: it learns by itself",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impara da sola"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "It learns by itself"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aprende sola"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elle apprend toute seule"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie lernt von selbst"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aprende sozinha"
+          }
+        }
+      }
+    },
+    "voicekey.how.learns.body": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, item text: learning happens by itself from the own microphone during calls",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante le chiamate l'app usa solo il tuo microfono e, nei momenti in cui parli, ricava un modello numerico della tua voce. Non devi registrare niente: dopo un paio di chiamate la Voice-as-Key si attiva, poi continua ad affinarsi per qualche giorno."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "During calls the app uses only your own microphone and, while you speak, builds a numeric model of your voice. There is nothing to record: after a couple of calls Voice-as-Key turns on, then it keeps improving for a few days."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante las llamadas, la app usa solo tu micrófono y, mientras hablas, crea un modelo numérico de tu voz. No tienes que grabar nada: tras un par de llamadas, Voice-as-Key se activa y luego sigue perfeccionándose durante unos días."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pendant les appels, l'application utilise uniquement votre microphone et, quand vous parlez, construit un modèle numérique de votre voix. Vous n'avez rien à enregistrer : après quelques appels, Voice-as-Key s'active, puis continue de s'affiner pendant quelques jours."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Während der Anrufe nutzt die App nur Ihr eigenes Mikrofon und erstellt, während Sie sprechen, ein numerisches Modell Ihrer Stimme. Sie müssen nichts aufnehmen: Nach ein paar Anrufen wird Voice-as-Key aktiv und verfeinert sich danach noch einige Tage lang."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante as chamadas, o app usa apenas o seu microfone e, enquanto você fala, cria um modelo numérico da sua voz. Você não precisa gravar nada: depois de algumas chamadas, o Voice-as-Key é ativado e continua se aperfeiçoando por alguns dias."
+          }
+        }
+      }
+    },
+    "voicekey.how.sees.title": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, item title: what the contact sees",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cosa vede il tuo contatto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What your contact sees"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Qué ve tu contacto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce que voit votre contact"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Was Ihr Kontakt sieht"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O que seu contato vê"
+          }
+        }
+      }
+    },
+    "voicekey.how.sees.body": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, item text: the result of the comparison is sent to the contact and shown as a shield with a microphone in three colours",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In chiamata il tuo telefono confronta la voce che parla nel microfono con il tuo modello e manda al contatto solo l'esito, cifrato end-to-end. Nella schermata della chiamata il contatto vede uno scudo con il microfono: verde finché la voce corrisponde, viola se il confronto è incerto, rosso se sta parlando un'altra persona, per esempio perché il telefono è passato in altre mani. Tu vedi lo stesso scudo per i contatti che hanno la Voice-as-Key attiva."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "During a call your phone compares the voice speaking into the microphone with your model and sends your contact only the result, end-to-end encrypted. On the call screen your contact sees a shield with a microphone: green while the voice matches, purple if the comparison is uncertain, red if someone else is speaking, for example because the phone changed hands. You see the same shield for contacts who have Voice-as-Key on."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante una llamada, tu teléfono compara la voz que habla al micrófono con tu modelo y envía a tu contacto solo el resultado, cifrado de extremo a extremo. En la pantalla de la llamada tu contacto ve un escudo con un micrófono: verde mientras la voz coincide, morado si la comparación es dudosa, rojo si está hablando otra persona, por ejemplo porque el teléfono ha cambiado de manos. Tú ves el mismo escudo para los contactos que tienen Voice-as-Key activa."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pendant un appel, votre téléphone compare la voix qui parle dans le microphone à votre modèle et n'envoie à votre contact que le résultat, chiffré de bout en bout. Sur l'écran d'appel, votre contact voit un bouclier avec un microphone : vert tant que la voix correspond, violet si la comparaison est incertaine, rouge si une autre personne parle, par exemple parce que le téléphone a changé de mains. Vous voyez le même bouclier pour les contacts qui ont activé Voice-as-Key."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Während eines Anrufs vergleicht Ihr Telefon die Stimme am Mikrofon mit Ihrem Modell und sendet Ihrem Kontakt nur das Ergebnis, Ende-zu-Ende-verschlüsselt. Auf dem Anrufbildschirm sieht Ihr Kontakt ein Schild mit einem Mikrofon: grün, solange die Stimme übereinstimmt, violett, wenn der Vergleich unsicher ist, rot, wenn eine andere Person spricht, zum Beispiel weil das Telefon in andere Hände gelangt ist. Sie sehen dasselbe Schild bei Kontakten, die Voice-as-Key aktiviert haben."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Durante uma chamada, seu telefone compara a voz que fala no microfone com o seu modelo e envia ao contato apenas o resultado, com criptografia de ponta a ponta. Na tela da chamada, o contato vê um escudo com um microfone: verde enquanto a voz corresponde, roxo se a comparação é incerta, vermelho se outra pessoa está falando, por exemplo porque o telefone mudou de mãos. Você vê o mesmo escudo para os contatos que têm o Voice-as-Key ativado."
+          }
+        }
+      }
+    },
+    "voicekey.how.limits.title": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, item title: what it does not do",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cosa non fa"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What it does not do"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lo que no hace"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce qu'elle ne fait pas"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Was sie nicht tut"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O que ela não faz"
+          }
+        }
+      }
+    },
+    "voicekey.how.limits.body": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, item text: an extra signal, not proof; it unlocks nothing; SAS is the short authentication string",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "È un segnale in più, non una prova: una voce si può imitare o registrare. Non sblocca l'app e non sostituisce la cifratura né la verifica dell'identità (SAS)."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "It is an extra signal, not proof: a voice can be imitated or recorded. It does not unlock the app and does not replace encryption or identity verification (SAS)."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Es una señal más, no una prueba: una voz se puede imitar o grabar. No desbloquea la app ni sustituye al cifrado ni a la verificación de identidad (SAS)."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "C'est un signal supplémentaire, pas une preuve : une voix peut être imitée ou enregistrée. Elle ne déverrouille pas l'application et ne remplace ni le chiffrement ni la vérification d'identité (SAS)."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie ist ein zusätzliches Signal, kein Beweis: Eine Stimme lässt sich nachahmen oder aufnehmen. Sie entsperrt die App nicht und ersetzt weder die Verschlüsselung noch die Identitätsprüfung (SAS)."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "É um sinal a mais, não uma prova: uma voz pode ser imitada ou gravada. Não desbloqueia o app e não substitui a criptografia nem a verificação de identidade (SAS)."
+          }
+        }
+      }
+    },
+    "voicekey.how.privacy.title": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, item title: privacy",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privacy"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privacy"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privacidad"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confidentialité"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Datenschutz"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privacidade"
+          }
+        }
+      }
+    },
+    "voicekey.how.privacy.body": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, item text: the model stays on the device; no audio is stored",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il modello resta solo su questo dispositivo, cifrato, e non viene mai inviato al server né ai contatti. L'audio delle chiamate non viene salvato: per imparare si conservano solo valori numerici ricavati dalla voce, mai la voce stessa."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The model stays on this device only, encrypted, and is never sent to the server or to your contacts. Call audio is not saved: to learn, the app keeps only numbers derived from your voice, never the voice itself."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El modelo se queda solo en este dispositivo, cifrado, y nunca se envía al servidor ni a tus contactos. El audio de las llamadas no se guarda: para aprender, la app solo conserva valores numéricos obtenidos de tu voz, nunca la voz en sí."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le modèle reste uniquement sur cet appareil, chiffré, et n'est jamais envoyé au serveur ni à vos contacts. L'audio des appels n'est pas enregistré : pour apprendre, l'application ne conserve que des valeurs numériques tirées de votre voix, jamais la voix elle-même."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Modell bleibt verschlüsselt nur auf diesem Gerät und wird nie an den Server oder an Ihre Kontakte gesendet. Der Ton der Anrufe wird nicht gespeichert: Zum Lernen behält die App nur aus Ihrer Stimme abgeleitete Zahlenwerte, nie die Stimme selbst."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O modelo fica apenas neste dispositivo, criptografado, e nunca é enviado ao servidor nem aos seus contatos. O áudio das chamadas não é salvo: para aprender, o app guarda apenas valores numéricos obtidos da sua voz, nunca a própria voz."
+          }
+        }
+      }
+    },
+    "voicekey.reset.hint": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, text above the reset button",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se l'app ha imparato una voce sbagliata, per esempio quella di chi ti stava vicino o di chi ha usato il tuo telefono, reimpostala: ricomincerà a imparare dalle prossime chiamate."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "If the app learned the wrong voice, for example someone next to you or someone who used your phone, reset it: it will start learning again from your next calls."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si la app ha aprendido una voz equivocada, por ejemplo la de alguien a tu lado o de quien usó tu teléfono, restablécela: volverá a aprender en tus próximas llamadas."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Si l'application a appris une mauvaise voix, par exemple celle d'une personne à côté de vous ou de quelqu'un qui a utilisé votre téléphone, réinitialisez-la : elle recommencera à apprendre lors de vos prochains appels."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wenn die App eine falsche Stimme gelernt hat, zum Beispiel die einer Person neben Ihnen oder von jemandem, der Ihr Telefon benutzt hat, setzen Sie sie zurück: Sie beginnt bei den nächsten Anrufen neu zu lernen."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se o app aprendeu a voz errada, por exemplo de alguém ao seu lado ou de quem usou seu telefone, redefina-o: ele voltará a aprender nas próximas chamadas."
+          }
+        }
+      }
+    },
+    "voicekey.reset.button": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, destructive button that deletes the learned voice model",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reimposta Voice-as-Key"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset Voice-as-Key"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restablecer Voice-as-Key"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réinitialiser Voice-as-Key"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key zurücksetzen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Redefinir Voice-as-Key"
+          }
+        }
+      }
+    },
+    "voicekey.reset.confirm.title": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, reset confirmation title",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reimpostare Voice-as-Key?"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset Voice-as-Key?"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "¿Restablecer Voice-as-Key?"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réinitialiser Voice-as-Key ?"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key zurücksetzen?"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Redefinir o Voice-as-Key?"
+          }
+        }
+      }
+    },
+    "voicekey.reset.confirm.message": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, reset confirmation message",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il modello vocale salvato su questo dispositivo viene cancellato. La tua voce verrà imparata di nuovo in automatico durante le chiamate."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The voice model saved on this device is deleted. Your voice will be learned again automatically during your calls."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se borra el modelo de voz guardado en este dispositivo. Tu voz se volverá a aprender automáticamente durante tus llamadas."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le modèle vocal enregistré sur cet appareil est supprimé. Votre voix sera de nouveau apprise automatiquement pendant vos appels."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das auf diesem Gerät gespeicherte Stimmmodell wird gelöscht. Ihre Stimme wird bei Ihren Anrufen automatisch neu gelernt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O modelo de voz salvo neste dispositivo é apagado. Sua voz será aprendida de novo automaticamente durante as chamadas."
+          }
+        }
+      }
+    },
+    "voicekey.reset.confirm.ok": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, destructive confirm button of the reset",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reimposta"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restablecer"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Réinitialiser"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zurücksetzen"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Redefinir"
+          }
+        }
+      }
+    },
+    "voicekey.reset.done": {
+      "extractionState": "manual",
+      "comment": "Voice-as-Key screen, snackbar after the reset",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key reimpostata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key reset."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key restablecida."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key réinitialisée."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key zurückgesetzt."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice-as-Key redefinido."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
