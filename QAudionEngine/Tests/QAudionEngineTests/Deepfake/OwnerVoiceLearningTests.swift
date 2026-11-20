@@ -212,7 +212,8 @@ final class OwnerVoiceLearningTests: XCTestCase {
         let rig = makeRig()
         var far = [Float](repeating: 0, count: dim)
         far[8] = 1
-        XCTAssertTrue(rig.learner.seed(template: far, userId: "alice"))
+        XCTAssertTrue(rig.templates.save(contactId: ownerId, template: far))
+        _ = rig.learner.prepare(userId: "alice")
         rig.learner.record(windows: windows("a", count: 6), userId: "alice")
         XCTAssertNil(rig.learner.record(windows: windows("b", count: 6), userId: "alice"), "no stage is reported when the fused template is refused")
         XCTAssertEqual(rig.templates.load(contactId: ownerId), far, "the template in use is kept")
@@ -295,31 +296,13 @@ final class OwnerVoiceLearningTests: XCTestCase {
         XCTAssertEqual(rig.progress.record?.userId, "bob")
     }
 
-    func testTheManualEnrolmentSeedsTheLearnerForItsAccountOnly() throws {
-        let rig = makeRig()
-        let template: [Float] = [1, 0, 0, 0]
-        XCTAssertFalse(rig.learner.seed(template: template, userId: ""), "no account, no seed")
-        XCTAssertNil(rig.templates.load(contactId: ownerId))
-
-        XCTAssertTrue(rig.learner.seed(template: template, userId: "alice"))
-        XCTAssertEqual(rig.learner.prepare(userId: "alice"), .ready(template: template, collect: true))
-        XCTAssertEqual(rig.learner.prepare(userId: "bob"), .ready(template: nil, collect: true))
-        XCTAssertNil(rig.templates.load(contactId: ownerId))
-    }
-
-    func testASeedThatCannotBeBoundLeavesNothing() {
-        let rig = makeRig()
-        rig.progress.failWrites = true
-        XCTAssertFalse(rig.learner.seed(template: [1, 0, 0, 0], userId: "alice"))
-        XCTAssertNil(rig.templates.load(contactId: ownerId))
-    }
-
-    func testTheCallsLearnedAfterASeedReplaceIt() throws {
+    func testTheCallsLearnedAfterAnAdoptedTemplateReplaceIt() throws {
         let rig = makeRig()
         let seed = window("s", 1).embedding
-        XCTAssertTrue(rig.learner.seed(template: seed, userId: "alice"))
+        XCTAssertTrue(rig.templates.save(contactId: ownerId, template: seed))
+        _ = rig.learner.prepare(userId: "alice")
         rig.learner.record(windows: windows("a", count: 6), userId: "alice")
-        XCTAssertEqual(rig.templates.load(contactId: ownerId), seed, "below MIN the seed stays")
+        XCTAssertEqual(rig.templates.load(contactId: ownerId), seed, "below MIN the adopted template stays")
         XCTAssertEqual(rig.learner.record(windows: windows("b", count: 6), userId: "alice"), .min)
         let template = try XCTUnwrap(rig.templates.load(contactId: ownerId))
         XCTAssertGreaterThan(OwnerVoiceLearning.cosine(template, window("x", 0).embedding), 0.95)

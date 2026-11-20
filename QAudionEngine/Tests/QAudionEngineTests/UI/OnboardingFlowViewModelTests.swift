@@ -22,14 +22,8 @@ final class OnboardingFlowViewModelTests: XCTestCase {
         XCTAssertTrue(vm.skippedRecovery)
     }
 
-    func test_skippedVoiceTracked() {
-        let vm = OnboardingFlowViewModel.mock.markingSkipped(voice: true)
-        XCTAssertTrue(vm.skippedVoice)
-    }
-
     func test_canSkipDefaults() {
         XCTAssertTrue(OnboardingFlowViewModel.mock.canSkipRecovery)
-        XCTAssertTrue(OnboardingFlowViewModel.mock.canSkipVoice)
     }
 
     func test_doneIsFinalStep() {

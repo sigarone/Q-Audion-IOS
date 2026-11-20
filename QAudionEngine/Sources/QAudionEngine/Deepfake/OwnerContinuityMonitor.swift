@@ -451,7 +451,7 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         // At least 2 mismatches and at least a third of the windows judged: another voice on the phone. One noise
         // burst among good windows does not cost the call.
         if mismatches >= 2, mismatches * 3 >= mismatches + batch.count {
-            print("[OwnerCont] learn st=drop")
+            print("[OwnerCont] learn_stage=drop")
             return
         }
         guard learning, let learner,
@@ -462,7 +462,7 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         case .min:      code = "min"
         case .refined:  code = "ref"
         }
-        print("[OwnerCont] learn st=" + code)
+        print("[OwnerCont] learn_stage=" + code)
     }
 
     /// Stores the state and notifies the observer, except that a repeated

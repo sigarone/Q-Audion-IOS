@@ -34,8 +34,6 @@ final class DevResetContainer: ObservableObject {
         "com.qaudion.chat.muted",
         // Recent calls history (legacy mock fallback)
         "com.qaudion.calls.recent",
-        // Voice enrollment skip flag
-        "com.qaudion.voice.enrollmentSkipped",
         // W58 Contacts sort mode
         "com.qaudion.contacts.sortMode",
         // W68a CallHistory deletion tombstones
