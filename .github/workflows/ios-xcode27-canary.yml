@@ -199,11 +199,7 @@ jobs:
 
       - name: Install xcodegen
         run: |
-          if command -v xcodegen >/dev/null 2>&1; then
-            echo "xcodegen already installed: $(xcodegen --version)"
-          else
-            brew install xcodegen
-          fi
+          bash scripts/ci/install-xcodegen.sh
 
       - name: Generate Xcode project (default spec)
         working-directory: QAudionApp
@@ -383,11 +379,7 @@ jobs:
 
       - name: Install xcodegen
         run: |
-          if command -v xcodegen >/dev/null 2>&1; then
-            echo "xcodegen already installed: $(xcodegen --version)"
-          else
-            brew install xcodegen
-          fi
+          bash scripts/ci/install-xcodegen.sh
 
       - name: Generate Xcode project
         working-directory: QAudionApp
