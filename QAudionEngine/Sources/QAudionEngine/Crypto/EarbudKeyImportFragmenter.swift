@@ -24,6 +24,33 @@ public enum EarbudKeyImportFragmenter {
     /// firmware KEYIMPORT_POP_INPUTS_LEN — the body length (16+16+32+16).
     public static let popInputsBodyLen = 80
 
+    /// The ordered ATT writes of ONE KEY_IMPORT (c3): the PoP-INPUTS frame first, when there is
+    /// one, then the package fragments (`fragment`, big-endian offsets).
+    ///
+    /// The order is the firmware's, not a choice: the import and the PoP both run on the LAST
+    /// package fragment (`key_import_write`), and the staged PoP inputs are wiped as soon as an
+    /// import attempt has run, so a PoP-INPUTS frame written after the package never reaches the
+    /// SE and ATTEST_POP (c1) then holds no qa-kms-pop-v1 PoP.
+    ///
+    /// `maxWriteLength` is the largest ATT write the link carries in ONE PDU (ATT_MTU - 3), the
+    /// same budget for every frame. The firmware refuses an ATT write with a non-zero offset
+    /// (`offset != 0` is INVALID_OFFSET), so a frame must never need a Prepare Write / long write:
+    /// the caller must not pass the 512 B that CoreBluetooth reports for a write WITH response.
+    ///
+    /// - Returns: nil when the budget cannot carry the frames: below 3 (`[off:2][>=1 data]`) or
+    ///   smaller than the PoP-INPUTS frame, which cannot be split (the firmware stages it from a
+    ///   single write of exactly 82 bytes).
+    public static func writeFrames(pkg: Data, popInputs: Data?, maxWriteLength: Int) -> [Data]? {
+        guard maxWriteLength >= 3 else { return nil }
+        var frames: [Data] = []
+        if let pop = popInputs {
+            guard pop.count <= maxWriteLength else { return nil }
+            frames.append(pop)
+        }
+        frames.append(contentsOf: fragment(pkg, mtuPayload: maxWriteLength - 2))
+        return frames
+    }
+
     public static func fragment(_ pkg: Data, mtuPayload: Int) -> [Data] {
         precondition(mtuPayload > 0, "mtuPayload must be positive")
         var frames: [Data] = []

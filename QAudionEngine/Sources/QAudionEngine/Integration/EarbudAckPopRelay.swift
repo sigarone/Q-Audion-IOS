@@ -14,8 +14,17 @@ import Foundation
 public final class EarbudAckPopRelay {
 
     private let gatt: EarbudKeyGattProxy
+    private let prepareLink: (@Sendable () async -> Void)?
 
-    public init(gatt: EarbudKeyGattProxy) { self.gatt = gatt }
+    /// - Parameter prepareLink: called, and awaited, only when a hw_only key is being handled and the
+    ///   earbud is NOT connected, before the relay gives up with `earbud_not_connected`. The app uses
+    ///   it to reach the remembered earbud (a bounded wait), so the KMS sweep does not wait for an
+    ///   earbud when there is no hw_only key to deliver, and a key is not deferred forever just
+    ///   because nothing ever connected the link.
+    public init(gatt: EarbudKeyGattProxy, prepareLink: (@Sendable () async -> Void)? = nil) {
+        self.gatt = gatt
+        self.prepareLink = prepareLink
+    }
 
     // MARK: - Public
 
@@ -39,6 +48,9 @@ public final class EarbudAckPopRelay {
         }
         guard let popInputs = buildPopInputsFrame(key: key) else {
             return .defer(reason: "bad_pop_inputs")
+        }
+        if !gatt.isConnected, let prepare = prepareLink {
+            await prepare()
         }
         guard gatt.isConnected else {
             return .defer(reason: "earbud_not_connected")

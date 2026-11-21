@@ -1,0 +1,107 @@
+{
+  "schema": "qa-earbud-pair-sas-v1-kat:1",
+  "description": "SAS words and fingerprint of an FE-5 earbud pairing, derived from the 32-byte pair_id (scripts/kat/gen_earbud_pair_sas_kat.py, hashlib only)",
+  "word_count": 6,
+  "word_list_sha256": "dc8ab3dc96fe33b8bdaadd02b308f03819564be7e3a18fb1d9d18a2c2fba1845",
+  "pair_id_label": "qa-earbud-excl-pair-v2",
+  "vectors": [
+    {
+      "name": "ascending_bytes",
+      "note": "pair_id 00 01 .. 1f: each 3-byte group maps to its last byte (02, 05, 08, 0b, 0e, 11); the vector the Android unit test pinned first",
+      "pair_id_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "words": [
+        "accrue",
+        "adult",
+        "aimless",
+        "alone",
+        "apple",
+        "Athens"
+      ],
+      "fingerprint_hex16": "0001020304050607",
+      "fingerprint_display": "0001 0203 0405 0607"
+    },
+    {
+      "name": "descending_bytes",
+      "note": "pair_id ff fe .. e0: indices above 127, so a signed-byte mistake changes every word",
+      "pair_id_hex": "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0efeeedecebeae9e8e7e6e5e4e3e2e1e0",
+      "words": [
+        "willow",
+        "wallet",
+        "virus",
+        "upshot",
+        "unwind",
+        "tycoon"
+      ],
+      "fingerprint_hex16": "fffefdfcfbfaf9f8",
+      "fingerprint_display": "fffe fdfc fbfa f9f8"
+    },
+    {
+      "name": "honest_pair",
+      "note": "the two earbuds of the Android SAS test, in either order (the pair_id is symmetric)",
+      "eid_a_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "eid_b_hex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "pair_id_hex": "52fdf9b2b0e47c4575d39fe31046466dbe433db941ee8f1949d027d0f57ad561",
+      "words": [
+        "waffle",
+        "tonic",
+        "indulge",
+        "tissue",
+        "cubic",
+        "crucial"
+      ],
+      "fingerprint_hex16": "52fdf9b2b0e47c45",
+      "fingerprint_display": "52fd f9b2 b0e4 7c45"
+    },
+    {
+      "name": "swapped_order",
+      "note": "the same two earbuds with eid_a and eid_b exchanged: the same pair_id, the same words",
+      "eid_a_hex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "eid_b_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "pair_id_hex": "52fdf9b2b0e47c4575d39fe31046466dbe433db941ee8f1949d027d0f57ad561",
+      "words": [
+        "waffle",
+        "tonic",
+        "indulge",
+        "tissue",
+        "cubic",
+        "crucial"
+      ],
+      "fingerprint_hex16": "52fdf9b2b0e47c45",
+      "fingerprint_display": "52fd f9b2 b0e4 7c45"
+    },
+    {
+      "name": "substituted_identity",
+      "note": "a relay replaced earbud B by its own key towards one phone: the pair_id, and so the words, differ",
+      "eid_a_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "eid_b_hex": "55565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f7071727374",
+      "pair_id_hex": "ce562bd0c0ec4a34e0c60377d40c5d56e7a02a30c37ab35cb627d623e5f442c0",
+      "words": [
+        "briefcase",
+        "tumor",
+        "tapeworm",
+        "involve",
+        "exceed",
+        "ragtime"
+      ],
+      "fingerprint_hex16": "ce562bd0c0ec4a34",
+      "fingerprint_display": "ce56 2bd0 c0ec 4a34"
+    },
+    {
+      "name": "excl_v2_kat_pair-A-B-epoch7",
+      "note": "the pair_id of earbud-excl-v2-kat.json pairwise[pair-A-B-epoch7] (firmware, Android and iOS share it)",
+      "eid_a_hex": "305fb786cd22ca01603ad583faa0dd0d0f9a98361566373164d1e03a5b2e7b88",
+      "eid_b_hex": "5eb94746bbabfdb0835f9ea91fe36f6c3688b0de3bb49f2f30b2727ab2e86095",
+      "pair_id_hex": "c6fbc3aa70cc09107da5c9655d2d6a455e4c34f26c4a4be7c6f5c9f683a70025",
+      "words": [
+        "snowcap",
+        "spigot",
+        "klaxon",
+        "fracture",
+        "Geiger",
+        "drainage"
+      ],
+      "fingerprint_hex16": "c6fbc3aa70cc0910",
+      "fingerprint_display": "c6fb c3aa 70cc 0910"
+    }
+  ]
+}
