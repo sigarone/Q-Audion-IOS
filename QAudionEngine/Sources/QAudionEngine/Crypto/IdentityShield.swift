@@ -495,9 +495,9 @@ public enum SasConfirmPolicy {
     public static func action(auth: CallIdentityAuth, callId: String, candidate: IdentityRotationCandidate?) -> Action {
         if let tag = auth.callIdOrNil, tag != callId.lowercased() { return .refuse }
         switch auth {
-        case .pending, .noIdentity:
-            return .refuse
-        case .lost:
+        case .pending, .noIdentity, .lost:
+            // Nothing vouches for a key, but the media may still be held (a verdict that never arrived, a call that lost its key): the
+            // no-brick rule releases it, writing nothing, and the shield stays as it is. Releasing a call that is not held is a no-op.
             // The call stands on no key anymore, but the media may be held: the no-brick rule releases it, writing nothing, and the
             // shield stays red. (Releasing a call that is not held is a no-op.)
             return .releaseOnly

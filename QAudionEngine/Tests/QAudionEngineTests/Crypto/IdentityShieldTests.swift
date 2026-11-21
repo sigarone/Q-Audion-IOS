@@ -120,9 +120,9 @@ final class IdentityShieldTests: XCTestCase {
 
     // MARK: H4: a confirmation records nothing unless a signature of this call vouches for a key
 
-    func testH4_pendingAndNoIdentityRefuse() {
+    func testH4_pendingAndNoIdentityReleaseOnlyAndRecordNothing() {
         for auth in [CallIdentityAuth.pending, .noIdentity(callId: callId)] {
-            XCTAssertEqual(.refuse, SasConfirmPolicy.action(auth: auth, callId: callId, candidate: nil), "\(auth)")
+            XCTAssertEqual(.releaseOnly, SasConfirmPolicy.action(auth: auth, callId: callId, candidate: nil), "\(auth)")
             XCTAssertFalse(SasConfirmPolicy.mayRecord(auth: auth, callId: callId, pinnedKey: newKey(), adoptedSignerKey: newKey()))
         }
         XCTAssertEqual(.refuse, SasConfirmPolicy.action(
