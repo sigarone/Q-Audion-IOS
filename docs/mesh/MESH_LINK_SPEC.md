@@ -717,15 +717,25 @@ See `relayProbability` in the vectors.
 | sent | accepted by the first hop (10.1) |
 | delivered | a valid delivery receipt arrived |
 | read | a valid read receipt arrived |
-| failed | outbox gave up (default 1 hour) |
+| failed | not set by the mesh outbox: a message it gives up on goes to the network outbox (below) |
 
 Acceptance by the first hop is not delivery. A message stays in the outbox
 after it is sent and is retransmitted every 20 s until a delivery receipt
-arrives or the outbox gives up. A retransmission is a new packet (new
+arrives or the message is handed to the network. A retransmission is a new packet (new
 `timestampMs`, so relays do not suppress it as a duplicate, and new `setId`)
 carrying the same sealed shell, so the receiver's duplicate check on `c` makes
 a second copy harmless. Receipts that cannot be sent immediately are also queued; a
 newer receipt for the same message and kind replaces a queued one.
+
+A message is never stranded on the mesh. It leaves the outbox for the network outbox (the same sealing and sending as any
+text, same client message id) at the first of: no delivery receipt 120 s after it was queued and the network can carry
+it; the antenna is off; the one-hour limit (handed over, never marked failed). A reconnect of the signalling socket runs
+the same check at once. A message set to Bluetooth only (the contact is set to Bluetooth only, or a target is armed)
+is never handed over by these rules: at the same moments the user is asked on the message, and only "send over the
+internet" hands it over (`user_choice`). At the one-hour limit it is parked with a persistent "not delivered over
+Bluetooth" state and the same two actions, never failed. One `fallback` line is written per hand-over. A receiver drops a second copy of the same client
+message id, whichever path it came by. Reachability at send time is read from the transport's live links, so a link that
+just dropped no longer counts.
 
 ## 11. Unknown senders
 
@@ -796,6 +806,7 @@ display names. The only identifiers allowed are:
 | `app.tx` | `ph`, `kind` (`msg`, `rcpt`), `state` (`sent`, `queued`, `failed`), `attempt` |
 | `app.rx` | `ph`, `kind`, `result` (`stored`, `dup`, `unknown_sender`, `refresh_hit`, `undecryptable`, `bad_envelope`, `readdressed`, `service`, `blocked`, `applied`) |
 | `outbox` | `pending`, `retried`, `gaveUp` |
+| `fallback` | `ph`, `reason` (`deadline`, `radio_off`, `giveup`, `reconnect`, `user_choice`); one line per message handed from the outbox to the network outbox |
 | `radio.pause` | `reason` (`bt_call_route`) |
 | `radio.resume` | `reason` (`call_ended`, `route_changed`), `pausedMs` |
 | `connect.backoff` | `link`, `failures`, `waitMs` |

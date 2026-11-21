@@ -124,6 +124,11 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
     /// dedup (a placeholder must never swallow the resend that repairs it).
     /// `nil` = an ordinary row, the value of every pre-existing stored row.
     public let isPlaceholder: Bool?
+    /// True for an outgoing message set to Bluetooth only (the contact is set to Bluetooth only, or a target was armed on the
+    /// radar when it was written): the network outbox and every other network send path refuse the row while this is set.
+    /// Only the user's "send over the internet" answer clears it. Written with the row, so it holds even if the app is killed
+    /// before anything else is stored. `nil` = an ordinary row, the value of every pre-existing stored row.
+    public let bluetoothHold: Bool?
 
     public init(id: UUID, conversationId: UUID, direction: Direction,
                 plaintext: String, sentAt: Date, deliveredAt: Date?,
@@ -142,7 +147,8 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
                 exportBlocked: Bool? = nil,
                 viaMesh: Bool? = nil,
                 wireAttachmentId: String? = nil,
-                isPlaceholder: Bool? = nil) {
+                isPlaceholder: Bool? = nil,
+                bluetoothHold: Bool? = nil) {
         self.id = id
         self.conversationId = conversationId
         self.direction = direction
@@ -167,5 +173,17 @@ public struct Message: Equatable, Sendable, Hashable, Codable, Identifiable {
         self.viaMesh = viaMesh
         self.wireAttachmentId = wireAttachmentId
         self.isPlaceholder = isPlaceholder
+        self.bluetoothHold = bluetoothHold
+    }
+
+    /// The same message with the Bluetooth-only hold set or cleared; every other field is carried over.
+    func withBluetoothHold(_ hold: Bool?) -> Message {
+        Message(id: id, conversationId: conversationId, direction: direction, plaintext: plaintext, sentAt: sentAt,
+                deliveredAt: deliveredAt, readAt: readAt, status: status, senderUserId: senderUserId,
+                serverMessageId: serverMessageId, mediaLocalPath: mediaLocalPath, mediaDurationMs: mediaDurationMs,
+                mediaMimeType: mediaMimeType, clientMsgId: clientMsgId, edited: edited, deletedAt: deletedAt,
+                reactions: reactions, expiresAt: expiresAt, isViewOnce: isViewOnce, viewOnceOpened: viewOnceOpened,
+                exportBlocked: exportBlocked, viaMesh: viaMesh, wireAttachmentId: wireAttachmentId,
+                isPlaceholder: isPlaceholder, bluetoothHold: hold)
     }
 }

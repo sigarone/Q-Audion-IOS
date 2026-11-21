@@ -7564,6 +7564,8 @@ final class AppState: ObservableObject {
                     if prev != .authenticated {
                         Task { @MainActor in
                             ChatOutboxDrain.shared.kick(reason: "ws-authenticated")
+                            // A message waiting on Bluetooth past its deadline goes to the server now.
+                            MeshOutboxDrain.shared.networkReconnected()
                             // 2026-09-19 service-message root fix — held service
                             // payloads (CONTROL only) flush once a socket exists.
                             ServiceSendHub.shared.socketBecameReady()

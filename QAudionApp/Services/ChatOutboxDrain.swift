@@ -98,6 +98,21 @@ final class ChatOutboxDrain {
         self.encrypt = encrypt
     }
 
+    /// Whether the signalling socket can carry a message right now.
+    var isTransportUsable: Bool { isTransportReady?() ?? false }
+
+    /// A message the Bluetooth outbox gave up on becomes a normal network row: its retry entry starts now (its own
+    /// clock, not the age of the row), and the pass seals the text again at transmit time like any other row.
+    func adoptFromMesh(row: Message, peerUserId: String) {
+        let clientMsgId = row.clientMsgId ?? row.id.uuidString
+        outbox.enqueueMessage(
+            clientMsgId: clientMsgId, messageId: row.id,
+            conversationId: row.conversationId, peerUserId: peerUserId,
+            wireBlob: Data(), attempts: 0,
+            createdAtMs: Self.nowMs(), nextAttemptAtMs: 0)
+        kick(reason: "mesh-fallback")
+    }
+
     // MARK: - Live-send ownership
 
     func beginLiveSend(clientMsgId: String) {
@@ -177,6 +192,9 @@ final class ChatOutboxDrain {
             }
             if liveSends.contains(clientMsgId) { continue }
             if meshOutbox.contains(messageId: row.id.uuidString) { continue }
+            // A row held for Bluetooth only is never sent from here; only the user's "send over the internet" answer clears
+            // the hold. (The store already leaves held rows out of this list; this is the second check.)
+            if row.bluetoothHold == true { continue }
             guard let conv = conversationById[row.conversationId], conv.kind == .oneToOne else { continue }
             let peerUserId = conv.peerUserId
 

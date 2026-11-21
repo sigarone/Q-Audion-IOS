@@ -126,6 +126,10 @@ final class BleMeshTransport: NSObject, MeshTransport {
     private var malformedGuard = MeshMalformedGuard()
     private var relayGate = MeshRelayGate()
     private var announcedNeighborsByNode: [String: Set<String>] = [:]
+    /// The links that can be written to right now, kept in step with every change to the link tables
+    /// (``refreshLiveSnapshot()``), so the send decision can ask from any thread without waiting on `bleQueue`.
+    private let liveLock = NSLock()
+    private var liveSnapshot: [MeshLiveLink] = []
 
     /// A connected call exists on the device (any app, cellular included); given by `MeshRuntime` together with
     /// `btRoute`, kept across stop() / start() (the owner gives fresh facts before every start).
@@ -362,6 +366,7 @@ final class BleMeshTransport: NSObject, MeshTransport {
         restoredLinks.removeAll()
         restoredSubscribers.removeAll()
         announcedNeighborsByNode.removeAll()
+        refreshLiveSnapshot()
         relayGate = MeshRelayGate()
         // Antenna off: the pause (which never brings anything back on its own) and the backoff table (spec 3.5) go.
         // `callActive` and `btRoute` stay: they are facts the owner gives, and it gives fresh ones before a later start.
@@ -1328,7 +1333,27 @@ final class BleMeshTransport: NSObject, MeshTransport {
 
     /// One `MeshPeerInfo` per node, however many links reach it (an outgoing and an incoming link to the same device
     /// are common): the strongest RSSI of its links, connected if any of them is writable.
+    /// The links that are writable at this instant. Thread-safe; the answer changes the moment a link is torn down.
+    func liveLinks() -> [MeshLiveLink] {
+        liveLock.lock()
+        defer { liveLock.unlock() }
+        return liveSnapshot
+    }
+
+    private func refreshLiveSnapshot() {
+        var byNode: [String: Set<String>] = [:]
+        for link in writableLinks() {
+            guard let nodeHex = link.nodeHex else { continue }
+            byNode[nodeHex] = announcedNeighborsByNode[nodeHex] ?? []
+        }
+        let snapshot = byNode.map { MeshLiveLink(nodeHex: $0.key, announcedNeighborHexes: $0.value) }
+        liveLock.lock()
+        liveSnapshot = snapshot
+        liveLock.unlock()
+    }
+
     private func recomputeAndNotifyPeers() {
+        refreshLiveSnapshot()
         let now = wallMs()
         struct Accum {
             var rssi: Int?
@@ -1396,6 +1421,8 @@ final class BleMeshTransport: NSObject, MeshTransport {
         if let nodeHex = link.nodeHex, !allLinks().contains(where: { $0.nodeHex == nodeHex }) {
             announcedNeighborsByNode.removeValue(forKey: nodeHex)
         }
+        // A dropped link stops counting as reachable at once, whichever path tore it down.
+        refreshLiveSnapshot()
         // Spec 3.5: an outgoing attempt that ended (connect or setup timeout, a drop, a refusal) before the first
         // ANNOUNCE arrived on it failed, and the advertiser is left alone for a while.
         if countsAsFailure,

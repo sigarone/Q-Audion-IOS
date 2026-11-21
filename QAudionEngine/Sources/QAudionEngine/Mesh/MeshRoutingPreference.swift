@@ -22,12 +22,11 @@ public enum MeshRoutingPreference: String, CaseIterable, Sendable {
     /// Never the mesh, whatever is in range.
     case networkOnly = "NETWORK_ONLY"
 
-    /// The mesh and nothing else — wait rather than fall back.
+    /// Bluetooth first, as a constraint ("Solo BT").
     ///
-    /// This is what arming a specific device on the radar has always meant.
-    /// Someone who picks a device out of a list is usually picking it FOR a
-    /// reason — no network, or not wanting to use it — and silently rerouting
-    /// them onto the public network defeats the only thing they asked for.
+    /// The message is tried over Bluetooth and never stranded there: when Bluetooth does not succeed (see
+    /// `MeshFallbackPolicy`) it goes through the server, and the user is told on that message. Arming a specific
+    /// device on the radar is treated the same way.
     case meshOnly = "MESH_ONLY"
 
     public static let `default`: MeshRoutingPreference = .preferMesh
@@ -68,7 +67,7 @@ public func meshRoutingDecision(
     case .meshOnly:
         return peerReachableOverMesh ? .sendOverMesh : .queueForMesh
     case .preferMesh:
-        // The whole point is that it never strands a message.
+        // The whole point is that it never strands a message. Reachability here is the LIVE one (`MeshLiveReach`).
         return peerReachableOverMesh ? .sendOverMesh : .sendOverNetwork
     }
 }

@@ -29165,6 +29165,114 @@
         }
       }
     },
+    "mesh.bt.content_prompt": {
+      "extractionState": "manual",
+      "comment": "Question under content (a file, picture, voice note or video) in a conversation set to Bluetooth only: the mesh cannot carry it.",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "Questo contenuto non può essere inviato via Bluetooth. Vuoi inviarlo via internet?" } },
+        "en": { "stringUnit": { "state": "translated", "value": "This content cannot be sent over Bluetooth. Do you want to send it over the internet?" } },
+        "es": { "stringUnit": { "state": "translated", "value": "Este contenido no se puede enviar por Bluetooth. ¿Quieres enviarlo por internet?" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Ce contenu ne peut pas être envoyé en Bluetooth. Veux-tu l’envoyer par internet ?" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Dieser Inhalt kann nicht per Bluetooth gesendet werden. Möchtest du ihn per Internet senden?" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Este conteúdo não pode ser enviado por Bluetooth. Quer enviá-lo pela internet?" } }
+      }
+    },
+    "mesh.bt.content_no": {
+      "extractionState": "manual",
+      "comment": "Button under held content in a conversation set to Bluetooth only: do not send it through the internet.",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "No" } },
+        "en": { "stringUnit": { "state": "translated", "value": "No" } },
+        "es": { "stringUnit": { "state": "translated", "value": "No" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Non" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Nein" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Não" } }
+      }
+    },
+    "mesh.bt.content_unsent": {
+      "extractionState": "manual",
+      "comment": "State under held content (a file, picture, voice note or video) in a conversation set to Bluetooth only, after the user said no.",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "Non inviato: questo contenuto non può essere inviato via Bluetooth" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Not sent: this content cannot be sent over Bluetooth" } },
+        "es": { "stringUnit": { "state": "translated", "value": "No enviado: este contenido no se puede enviar por Bluetooth" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Non envoyé : ce contenu ne peut pas être envoyé en Bluetooth" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Nicht gesendet: Dieser Inhalt kann nicht per Bluetooth gesendet werden" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Não enviado: este conteúdo não pode ser enviado por Bluetooth" } }
+      }
+    },
+    "mesh.bt.live_blocked": {
+      "extractionState": "manual",
+      "comment": "Shown when a live location share is started in a conversation set to Bluetooth only: nothing is sent.",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "La posizione in tempo reale non può essere condivisa via Bluetooth. Cambia la rete di questo contatto per usarla." } },
+        "en": { "stringUnit": { "state": "translated", "value": "Live location cannot be shared over Bluetooth. Change the network for this contact to use it." } },
+        "es": { "stringUnit": { "state": "translated", "value": "La ubicación en tiempo real no se puede compartir por Bluetooth. Cambia la red de este contacto para usarla." } },
+        "fr": { "stringUnit": { "state": "translated", "value": "La position en temps réel ne peut pas être partagée en Bluetooth. Change le réseau de ce contact pour l’utiliser." } },
+        "de": { "stringUnit": { "state": "translated", "value": "Der Live-Standort kann nicht per Bluetooth geteilt werden. Ändere das Netzwerk dieses Kontakts, um ihn zu nutzen." } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "A localização em tempo real não pode ser compartilhada por Bluetooth. Mude a rede deste contato para usá-la." } }
+      }
+    },
+    "mesh.bt.prompt": {
+      "extractionState": "manual",
+      "comment": "Question under an outgoing message set to Bluetooth only that Bluetooth could not deliver.",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "Non riesco a consegnarlo via Bluetooth: il contatto non è raggiungibile. Vuoi inviarlo via internet?" } },
+        "en": { "stringUnit": { "state": "translated", "value": "I cannot deliver it over Bluetooth: the contact is not reachable. Do you want to send it over the internet?" } },
+        "es": { "stringUnit": { "state": "translated", "value": "No puedo entregarlo por Bluetooth: el contacto no está al alcance. ¿Quieres enviarlo por internet?" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Je n’arrive pas à le remettre en Bluetooth : ton contact n’est pas joignable. Veux-tu l’envoyer par internet ?" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Ich kann es nicht per Bluetooth zustellen: Der Kontakt ist nicht erreichbar. Möchtest du es per Internet senden?" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Não consigo entregar por Bluetooth: o contato não está ao alcance. Quer enviar pela internet?" } }
+      }
+    },
+    "mesh.bt.undelivered": {
+      "extractionState": "manual",
+      "comment": "State under an outgoing message set to Bluetooth only that could not be delivered over Bluetooth within an hour.",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "Non consegnato via Bluetooth" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Not delivered over Bluetooth" } },
+        "es": { "stringUnit": { "state": "translated", "value": "No entregado por Bluetooth" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Non remis en Bluetooth" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Nicht per Bluetooth zugestellt" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Não entregue por Bluetooth" } }
+      }
+    },
+    "mesh.bt.send_internet": {
+      "extractionState": "manual",
+      "comment": "Button under an undelivered Bluetooth-only message: send it through the internet.",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "Invia via internet" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Send over the internet" } },
+        "es": { "stringUnit": { "state": "translated", "value": "Enviar por internet" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Envoyer par internet" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Per Internet senden" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Enviar pela internet" } }
+      }
+    },
+    "mesh.bt.keep": {
+      "extractionState": "manual",
+      "comment": "Button under the question about a Bluetooth-only message: keep trying over Bluetooth.",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "No, continua via Bluetooth" } },
+        "en": { "stringUnit": { "state": "translated", "value": "No, keep using Bluetooth" } },
+        "es": { "stringUnit": { "state": "translated", "value": "No, seguir por Bluetooth" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Non, continuer en Bluetooth" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Nein, weiter per Bluetooth" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Não, continuar por Bluetooth" } }
+      }
+    },
+    "mesh.bt.retry": {
+      "extractionState": "manual",
+      "comment": "Button under an undelivered Bluetooth-only message: try Bluetooth again.",
+      "localizations": {
+        "it": { "stringUnit": { "state": "translated", "value": "Riprova via Bluetooth" } },
+        "en": { "stringUnit": { "state": "translated", "value": "Try Bluetooth again" } },
+        "es": { "stringUnit": { "state": "translated", "value": "Reintentar por Bluetooth" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Réessayer en Bluetooth" } },
+        "de": { "stringUnit": { "state": "translated", "value": "Per Bluetooth erneut versuchen" } },
+        "pt-BR": { "stringUnit": { "state": "translated", "value": "Tentar de novo por Bluetooth" } }
+      }
+    },
     "mesh.sheet.route_bt_waiting": {
       "extractionState": "manual",
       "comment": "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth only and the contact is not near yet.",
@@ -29172,37 +29280,37 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Solo Bluetooth · in attesa che il contatto sia vicino"
+            "value": "Solo Bluetooth · se il contatto non è vicino ti chiedo se inviare via internet"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bluetooth only · waiting for the contact to be near"
+            "value": "Bluetooth only · if the contact is not near, I ask whether to send over the internet"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Solo Bluetooth · esperando a que el contacto esté cerca"
+            "value": "Solo Bluetooth · si el contacto no está cerca, te pregunto si enviar por internet"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bluetooth uniquement · en attente que le contact soit proche"
+            "value": "Bluetooth uniquement · si ton contact n’est pas proche, je te demande si je l’envoie par internet"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nur Bluetooth · wartet, bis der Kontakt in der Nähe ist"
+            "value": "Nur Bluetooth · wenn der Kontakt nicht in der Nähe ist, frage ich, ob per Internet gesendet werden soll"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Só Bluetooth · aguardando o contato ficar por perto"
+            "value": "Só Bluetooth · se o contato não estiver por perto, pergunto se envio pela internet"
           }
         }
       }

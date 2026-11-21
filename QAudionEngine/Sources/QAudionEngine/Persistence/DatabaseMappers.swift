@@ -97,6 +97,7 @@ extension Message: FetchableRecord, PersistableRecord {
         // receipt could never find the row it names.
         container["wireAttachmentId"] = wireAttachmentId
         container["isPlaceholder"] = isPlaceholder
+        container["bluetoothHold"] = bluetoothHold
 
         if let reactions = reactions,
            let data = try? JSONEncoder().encode(reactions),
@@ -154,7 +155,8 @@ extension Message: FetchableRecord, PersistableRecord {
             exportBlocked: row["exportBlocked"],
             viaMesh: row["viaMesh"],
             wireAttachmentId: wireAttachmentId,
-            isPlaceholder: row["isPlaceholder"]
+            isPlaceholder: row["isPlaceholder"],
+            bluetoothHold: row["bluetoothHold"]
         )
     }
 }

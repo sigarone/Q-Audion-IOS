@@ -459,6 +459,14 @@ public final class QAudionDatabase {
         // Live location shares (WIRE_SPEC 14, docs/LOCATION_SHARING.md 1.3): the receiver's live-share records, the tombstones of a stop
         // or a delete that overtook its start, and the note the sending process leaves for the next one. NEW tables only, no change to
         // `messages`: an app rolled back to a pre-v10 build simply ignores them.
+        // Bluetooth-only hold (`Message.bluetoothHold`): one nullable column, no data rewrite; every pre-existing row decodes
+        // with `nil` (an ordinary row).
+        migrator.registerMigration("v11-bluetooth-hold") { db in
+            try db.alter(table: "messages") { t in
+                t.add(column: "bluetoothHold", .boolean)
+            }
+        }
+
         migrator.registerMigration("v10-live-shares") { db in
             try LocationShareSchema.create(in: db)
         }

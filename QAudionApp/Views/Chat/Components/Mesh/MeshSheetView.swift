@@ -441,7 +441,7 @@ struct MeshSheetView: View {
             }
             return reachable
                 ? String(localized: "mesh.sheet.route_bt_reachable", defaultValue: "Solo Bluetooth · il contatto è raggiungibile", comment: "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth only and the contact is reachable now.")
-                : String(localized: "mesh.sheet.route_bt_waiting", defaultValue: "Solo Bluetooth · in attesa che il contatto sia vicino", comment: "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth only and the contact is not near yet.")
+                : String(localized: "mesh.sheet.route_bt_waiting", defaultValue: "Solo Bluetooth · se il contatto non è vicino ti chiedo se inviare via internet", comment: "Bluetooth mesh sheet, subtitle of the network row of this contact: Bluetooth only and the contact is not near yet.")
         }
     }
 

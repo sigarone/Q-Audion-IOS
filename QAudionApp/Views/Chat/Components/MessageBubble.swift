@@ -99,6 +99,14 @@ struct MessageBubble<Body: View>: View {
     /// `Message.viaMesh`.
     /// Renders a small antenna glyph in the footer next to the timestamp.
     let viaMesh: Bool
+    /// For a message set to Bluetooth only: `.prompted` shows the question "send through the internet?", `.undelivered`
+    /// the persistent "not delivered over Bluetooth" state, both with the two actions.
+    let btPrompt: MeshBtOnlyState
+    /// True when the held message is content the mesh cannot carry (a file, a picture, a voice note, a video): the wording is
+    /// about the content and "No" leaves it unsent.
+    let btContent: Bool
+    let onBtInternet: (() -> Void)?
+    let onBtKeep: (() -> Void)?
     /// Stored as `content` (NOT `body`) to avoid colliding with the
     /// `View` protocol's required `var body: some View`. Both members
     /// would otherwise share the same name in the same type, which the
@@ -112,6 +120,10 @@ struct MessageBubble<Body: View>: View {
          reactions: [MessageReaction] = [],
          onReact: ((String) -> Void)? = nil,
          viaMesh: Bool = false,
+         btPrompt: MeshBtOnlyState = .idle,
+         btContent: Bool = false,
+         onBtInternet: (() -> Void)? = nil,
+         onBtKeep: (() -> Void)? = nil,
          @ViewBuilder content: @escaping () -> Body) {
         self.variant = variant
         self.timeLabel = timeLabel
@@ -120,6 +132,10 @@ struct MessageBubble<Body: View>: View {
         self.reactions = reactions
         self.onReact = onReact
         self.viaMesh = viaMesh
+        self.btPrompt = btPrompt
+        self.btContent = btContent
+        self.onBtInternet = onBtInternet
+        self.onBtKeep = onBtKeep
         self.content = content
     }
 
@@ -205,17 +221,55 @@ struct MessageBubble<Body: View>: View {
     // MARK: - Footer (time + delivery)
 
     private func footer(timeLabel: String) -> some View {
-        HStack(spacing: 4) {
-            if variant == .sent {
-                Spacer(minLength: 0)
+        VStack(alignment: variant == .sent ? .trailing : .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                if variant == .sent {
+                    Spacer(minLength: 0)
+                }
+                transportChip
+                Text(timeLabel)
+                    .qaudionStyle(type.labelSmall)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                if variant == .sent, let delivery {
+                    deliveryIcon(delivery)
+                }
             }
-            transportChip
-            Text(timeLabel)
+            .frame(maxWidth: .infinity, alignment: variant == .sent ? .trailing : .leading)
+            if btPrompt == .prompted || btPrompt == .undelivered {
+                btPromptView
+            }
+        }
+    }
+
+    /// The question on a Bluetooth-only message that Bluetooth could not deliver, or the persistent state after the one-hour
+    /// limit. Two actions; nothing is sent through the internet unless the user taps the first.
+    private var btPromptView: some View {
+        VStack(alignment: variant == .sent ? .trailing : .leading, spacing: 4) {
+            Text(btContent
+                 ? (btPrompt == .undelivered
+                    ? String(localized: "mesh.bt.content_unsent", defaultValue: "Non inviato: questo contenuto non può essere inviato via Bluetooth", comment: "State under held content (a file, picture, voice note or video) in a conversation set to Bluetooth only, after the user said no.")
+                    : String(localized: "mesh.bt.content_prompt", defaultValue: "Questo contenuto non può essere inviato via Bluetooth. Vuoi inviarlo via internet?", comment: "Question under content (a file, picture, voice note or video) in a conversation set to Bluetooth only: the mesh cannot carry it."))
+                 : btPrompt == .undelivered
+                 ? String(localized: "mesh.bt.undelivered", defaultValue: "Non consegnato via Bluetooth", comment: "State under an outgoing message set to Bluetooth only that could not be delivered over Bluetooth within an hour.")
+                 : String(localized: "mesh.bt.prompt", defaultValue: "Non riesco a consegnarlo via Bluetooth: il contatto non è raggiungibile. Vuoi inviarlo via internet?", comment: "Question under an outgoing message set to Bluetooth only that Bluetooth could not deliver."))
                 .qaudionStyle(type.labelSmall)
                 .foregroundStyle(scheme.onSurfaceVariant)
-            if variant == .sent, let delivery {
-                deliveryIcon(delivery)
+                .multilineTextAlignment(variant == .sent ? .trailing : .leading)
+            HStack(spacing: 8) {
+                Button(String(localized: "mesh.bt.send_internet", defaultValue: "Invia via internet", comment: "Button under an undelivered Bluetooth-only message: send it through the internet.")) {
+                    onBtInternet?()
+                }
+                if !(btContent && btPrompt == .undelivered) {
+                Button(btContent
+                       ? String(localized: "mesh.bt.content_no", defaultValue: "No", comment: "Button under held content in a conversation set to Bluetooth only: do not send it through the internet.")
+                       : btPrompt == .undelivered
+                       ? String(localized: "mesh.bt.retry", defaultValue: "Riprova via Bluetooth", comment: "Button under an undelivered Bluetooth-only message: try Bluetooth again.")
+                       : String(localized: "mesh.bt.keep", defaultValue: "No, continua via Bluetooth", comment: "Button under the question about a Bluetooth-only message: keep trying over Bluetooth.")) {
+                    onBtKeep?()
+                }
+                }
             }
+            .qaudionStyle(type.labelSmall)
         }
         .frame(maxWidth: .infinity, alignment: variant == .sent ? .trailing : .leading)
     }
