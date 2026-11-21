@@ -1,0 +1,1002 @@
+{
+  "description": "Stage 6: s, s_as, l, l_c (and the call-local reference). Inputs are the stage 5 expected embeddings (raw file + norm), templates, the bundle cohort (cohort.bin: float32 [K, 512], unit rows) and the stage 3 window measurements; the synthetic cases take unit vectors from vectors.f32 (row i = floats [512 i, 512 i + 512)).",
+  "tolerance": {
+    "abs": 0.001,
+    "fields": ["s", "s_as", "l", "l_c"],
+    "diagnostics_abs_1e-3": ["mu_e", "sd_e", "mu_t", "sd_t"],
+    "centroid_abs": 1e-05
+  },
+  "cohort_file": "../cohort.bin",
+  "vectors_file": "stage6_scoring/vectors.f32",
+  "vector_count": 28,
+  "sd_floor": 0.001,
+  "cases": [
+    {
+      "name": "kat_a_w0_vs_a0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_a_w0.raw.f32", "norm": 23.564039353502423},
+      "template": {"raw_file": "stage5_embedding/clip_a_w0.raw.f32"},
+      "snr_db": 31.10967704032994,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": true,
+      "expected": {"s": 0.9999998211860657, "mu_e": 0.25715981274843214, "sd_e": 0.1526642645937261, "mu_t": 0.25715981274843214, "sd_t": 0.1526642645937261, "s_as": 4.865840807044777, "l": -5.874169839656846, "l_c": -4.0}
+    },
+    {
+      "name": "kat_a_w0_vs_d0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_a_w0.raw.f32", "norm": 23.564039353502423},
+      "template": {"raw_file": "stage5_embedding/clip_d_w0.raw.f32"},
+      "snr_db": 31.10967704032994,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 75.5,
+      "xcond": false,
+      "expected": {"s": 0.09936998039484024, "mu_e": 0.25715981274843214, "sd_e": 0.1526642645937261, "mu_t": 0.23621312752366067, "sd_t": 0.145975276403653, "s_as": -0.9855073458807637, "l": -13.74386388635057, "l_c": -4.0}
+    },
+    {
+      "name": "kat_a_w1_vs_a0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_a_w1.raw.f32", "norm": 22.509132033938325},
+      "template": {"raw_file": "stage5_embedding/clip_a_w0.raw.f32"},
+      "snr_db": 30.571744421180703,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 75.5,
+      "xcond": false,
+      "expected": {"s": 0.8838489055633545, "mu_e": 0.2312510384246707, "sd_e": 0.14920206801472916, "mu_t": 0.25715981274843214, "sd_t": 0.1526642645937261, "s_as": 4.239467347778214, "l": -5.916361241921966, "l_c": -4.0}
+    },
+    {
+      "name": "kat_a_w1_vs_d0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_a_w1.raw.f32", "norm": 22.509132033938325},
+      "template": {"raw_file": "stage5_embedding/clip_d_w0.raw.f32"},
+      "snr_db": 30.571744421180703,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": 0.15322791039943695, "mu_e": 0.2312510384246707, "sd_e": 0.14920206801472916, "mu_t": 0.23621312752366067, "sd_t": 0.145975276403653, "s_as": -0.5457120674009227, "l": -13.001458547385258, "l_c": -4.0}
+    },
+    {
+      "name": "kat_b_w0_vs_a0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_b_w0.raw.f32", "norm": 22.67107413651265},
+      "template": {"raw_file": "stage5_embedding/clip_a_w0.raw.f32"},
+      "snr_db": 29.733605252399762,
+      "plc": 0.030035040881027864,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": 0.17287667095661163, "mu_e": 0.24121087044477463, "sd_e": 0.15590730376947587, "mu_t": 0.25715981274843214, "sd_t": 0.1526642645937261, "s_as": -0.495190924425148, "l": -13.233691758443536, "l_c": -4.0}
+    },
+    {
+      "name": "kat_b_w0_vs_d0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_b_w0.raw.f32", "norm": 22.67107413651265},
+      "template": {"raw_file": "stage5_embedding/clip_d_w0.raw.f32"},
+      "snr_db": 29.733605252399762,
+      "plc": 0.030035040881027864,
+      "nb": false,
+      "enroll_speech_s": 75.5,
+      "xcond": true,
+      "expected": {"s": 0.1516183614730835, "mu_e": 0.24121087044477463, "sd_e": 0.15590730376947587, "mu_t": 0.23621312752366067, "sd_t": 0.145975276403653, "s_as": -0.5770833789100966, "l": -14.449202257476372, "l_c": -4.0}
+    },
+    {
+      "name": "kat_b_w1_vs_a0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_b_w1.raw.f32", "norm": 22.035108936738197},
+      "template": {"raw_file": "stage5_embedding/clip_a_w0.raw.f32"},
+      "snr_db": 30.52250553823495,
+      "plc": 0.0598702810577083,
+      "nb": false,
+      "enroll_speech_s": 75.5,
+      "xcond": true,
+      "expected": {"s": 0.13274696469306946, "mu_e": 0.2260985692963004, "sd_e": 0.15985311918498693, "mu_t": 0.25715981274843214, "sd_t": 0.1526642645937261, "s_as": -0.6994638851352175, "l": -14.926081695994323, "l_c": -4.0}
+    },
+    {
+      "name": "kat_b_w1_vs_d0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_b_w1.raw.f32", "norm": 22.035108936738197},
+      "template": {"raw_file": "stage5_embedding/clip_d_w0.raw.f32"},
+      "snr_db": 30.52250553823495,
+      "plc": 0.0598702810577083,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": 0.2144806981086731, "mu_e": 0.2260985692963004, "sd_e": 0.15985311918498693, "mu_t": 0.23621312752366067, "sd_t": 0.145975276403653, "s_as": -0.11077794060490702, "l": -12.950380961893444, "l_c": -4.0}
+    },
+    {
+      "name": "kat_c_w0_vs_a0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_c_w0.raw.f32", "norm": 19.277900032699115},
+      "template": {"raw_file": "stage5_embedding/clip_a_w0.raw.f32"},
+      "snr_db": 39.72412206724827,
+      "plc": 0.0,
+      "nb": true,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": 0.12570080161094666, "mu_e": 0.14982213657349347, "sd_e": 0.11866746715159172, "mu_t": 0.25715981274843214, "sd_t": 0.1526642645937261, "s_as": -0.5321835399397202, "l": -13.405138152858656, "l_c": -4.0}
+    },
+    {
+      "name": "kat_c_w0_vs_d0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_c_w0.raw.f32", "norm": 19.277900032699115},
+      "template": {"raw_file": "stage5_embedding/clip_d_w0.raw.f32"},
+      "snr_db": 39.72412206724827,
+      "plc": 0.0,
+      "nb": true,
+      "enroll_speech_s": 75.5,
+      "xcond": false,
+      "expected": {"s": 0.18850132822990417, "mu_e": 0.14982213657349347, "sd_e": 0.11866746715159172, "mu_t": 0.23621312752366067, "sd_t": 0.145975276403653, "s_as": -0.00045122434968944414, "l": -12.700211496779023, "l_c": -4.0}
+    },
+    {
+      "name": "kat_d_w0_vs_a0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_d_w0.raw.f32", "norm": 21.22026558162984},
+      "template": {"raw_file": "stage5_embedding/clip_a_w0.raw.f32"},
+      "snr_db": 7.924347067003934,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 75.5,
+      "xcond": false,
+      "expected": {"s": 0.09936998039484024, "mu_e": 0.23621312752366067, "sd_e": 0.145975276403653, "mu_t": 0.25715981274843214, "sd_t": 0.1526642645937261, "s_as": -0.9855073458807637, "l": -13.986193700582952, "l_c": -4.0}
+    },
+    {
+      "name": "kat_d_w0_vs_d0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_d_w0.raw.f32", "norm": 21.22026558162984},
+      "template": {"raw_file": "stage5_embedding/clip_d_w0.raw.f32"},
+      "snr_db": 7.924347067003934,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": true,
+      "expected": {"s": 1.0000004768371582, "mu_e": 0.23621312752366067, "sd_e": 0.145975276403653, "mu_t": 0.23621312752366067, "sd_t": 0.145975276403653, "s_as": 5.232306237951292, "l": -5.566801507529454, "l_c": -4.0}
+    },
+    {
+      "name": "kat_d_w1_vs_a0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_d_w1.raw.f32", "norm": 20.661559828417648},
+      "template": {"raw_file": "stage5_embedding/clip_a_w0.raw.f32"},
+      "snr_db": 7.725691609461163,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": true,
+      "expected": {"s": 0.08383101224899292, "mu_e": 0.24291835054755212, "sd_e": 0.15332360177547266, "mu_t": 0.25715981274843214, "sd_t": 0.1526642645937261, "s_as": -1.086475661852773, "l": -15.049629080608057, "l_c": -4.0}
+    },
+    {
+      "name": "kat_d_w1_vs_d0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_d_w1.raw.f32", "norm": 20.661559828417648},
+      "template": {"raw_file": "stage5_embedding/clip_d_w0.raw.f32"},
+      "snr_db": 7.725691609461163,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 75.5,
+      "xcond": false,
+      "expected": {"s": 0.840570867061615, "mu_e": 0.24291835054755212, "sd_e": 0.15332360177547266, "mu_t": 0.23621312752366067, "sd_t": 0.145975276403653, "s_as": 4.019059428567966, "l": -6.483998262282361, "l_c": -4.0}
+    },
+    {
+      "name": "kat_d_w2_vs_a0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_d_w2.raw.f32", "norm": 21.4215930524231},
+      "template": {"raw_file": "stage5_embedding/clip_a_w0.raw.f32"},
+      "snr_db": 6.234882048215998,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 75.5,
+      "xcond": false,
+      "expected": {"s": 0.030223533511161804, "mu_e": 0.22464514132589103, "sd_e": 0.14179346040155988, "mu_t": 0.25715981274843214, "sd_t": 0.1526642645937261, "s_as": -1.4288330891722285, "l": -14.667132687136656, "l_c": -4.0}
+    },
+    {
+      "name": "kat_d_w2_vs_d0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_d_w2.raw.f32", "norm": 21.4215930524231},
+      "template": {"raw_file": "stage5_embedding/clip_d_w0.raw.f32"},
+      "snr_db": 6.234882048215998,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": 0.6490535140037537, "mu_e": 0.22464514132589103, "sd_e": 0.14179346040155988, "mu_t": 0.23621312752366067, "sd_t": 0.145975276403653, "s_as": 2.910648848652877, "l": -8.065237963093583, "l_c": -4.0}
+    },
+    {
+      "name": "kat_e_w0_vs_a0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_e_w0.raw.f32", "norm": 20.490273342103574},
+      "template": {"raw_file": "stage5_embedding/clip_a_w0.raw.f32"},
+      "snr_db": 39.945696009120354,
+      "plc": 0.0,
+      "nb": true,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": 0.15761670470237732, "mu_e": 0.15442732591181993, "sd_e": 0.12738615141003065, "mu_t": 0.25715981274843214, "sd_t": 0.1526642645937261, "s_as": -0.31350112963641796, "l": -13.06879970412038, "l_c": -4.0}
+    },
+    {
+      "name": "kat_e_w0_vs_d0",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
+        "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_e_w0.raw.f32", "norm": 20.490273342103574},
+      "template": {"raw_file": "stage5_embedding/clip_d_w0.raw.f32"},
+      "snr_db": 39.945696009120354,
+      "plc": 0.0,
+      "nb": true,
+      "enroll_speech_s": 75.5,
+      "xcond": true,
+      "expected": {"s": 0.23196537792682648, "mu_e": 0.15442732591181993, "sd_e": 0.12738615141003065, "mu_t": 0.23621312752366067, "sd_t": 0.145975276403653, "s_as": 0.2897929973664947, "l": -13.256530330921425, "l_c": -4.0}
+    },
+    {
+      "name": "f0_bias",
+      "kind": "window",
+      "description": "only q0: l = 1.5",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [1.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": 1.5, "l_c": 1.5}
+    },
+    {
+      "name": "f1_s_as",
+      "kind": "window",
+      "description": "only q1: l = 0.5 s_as",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": -1.8855731675384413, "l_c": -1.8855731675384413}
+    },
+    {
+      "name": "f2_snr",
+      "kind": "window",
+      "description": "only q2 with SNR 22 dB: min(SNR, 40) / 10 = 2.2",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": 2.2, "l_c": 2.2}
+    },
+    {
+      "name": "f2_snr_cap",
+      "kind": "window",
+      "description": "SNR 55 dB is capped at 40: 4.0",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 55.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": 4.0, "l_c": 4.0}
+    },
+    {
+      "name": "f2_snr_neg",
+      "kind": "window",
+      "description": "negative SNR: -0.85",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": -8.5,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": -0.85, "l_c": -0.85}
+    },
+    {
+      "name": "f3_ln_norm",
+      "kind": "window",
+      "description": "only q3: ln of the raw norm 70.5",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": 4.255612709818223, "l_c": 4.255612709818223}
+    },
+    {
+      "name": "f3_ln_norm_small",
+      "kind": "window",
+      "description": "raw norm 3.25: a negative log",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 3.25},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": 1.1786549963416462, "l_c": 1.1786549963416462}
+    },
+    {
+      "name": "f4_plc",
+      "kind": "window",
+      "description": "only q4 with plc 0.0375",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0375,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": 0.0375, "l_c": 0.0375}
+    },
+    {
+      "name": "f5_nb",
+      "kind": "window",
+      "description": "only q5 with nb true: 1",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": true,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": 1.0, "l_c": 1.0}
+    },
+    {
+      "name": "f5_wb",
+      "kind": "window",
+      "description": "only q5 with nb false: 0",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": 0.0, "l_c": 0.0}
+    },
+    {
+      "name": "f6_ln_enroll_short",
+      "kind": "window",
+      "description": "only q6 with 30 s of enrollment speech: ln(30 / 120)",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 30.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": -1.3862943611198906, "l_c": -1.3862943611198906}
+    },
+    {
+      "name": "f6_ln_enroll_long",
+      "kind": "window",
+      "description": "300 s: ln(300 / 120)",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 300.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": 0.9162907318741551, "l_c": 0.9162907318741551}
+    },
+    {
+      "name": "f7_xcond",
+      "kind": "window",
+      "description": "only q7 with the route group not covered: 1",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": true,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": 1.0, "l_c": 1.0}
+    },
+    {
+      "name": "all_features",
+      "kind": "window",
+      "description": "all eight coefficients non-zero at once",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [-0.4, 1.1, 0.25, 0.3, -6.0, -0.5, 0.2, -0.75],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 18.5,
+      "plc": 0.02,
+      "nb": true,
+      "enroll_speech_s": 60.0,
+      "xcond": true,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": -4.317706591751094, "l_c": -4.317706591751094}
+    },
+    {
+      "name": "clip_high",
+      "kind": "window",
+      "description": "template = embedding, s = 1, l = 0.15 s_as is about 5.6, above +4: clamps to +4",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 0.15, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 10},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": 1.0, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.04382976540364325, "sd_t": 0.025507219531927736, "s_as": 37.48625887660963, "l": 5.622938831491445, "l_c": 4.0}
+    },
+    {
+      "name": "clip_low",
+      "kind": "window",
+      "description": "template = -embedding, s = -1, l = 0.05 s_as is about -5.6, below -4: clamps to -4",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 12},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -1.0, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05837444122880697, "sd_t": 0.005758861301189593, "s_as": -112.35240462518257, "l": -5.617620231259129, "l_c": -4.0}
+    },
+    {
+      "name": "clip_inside",
+      "kind": "window",
+      "description": "l inside the clip: unchanged",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 0.1, 0, 0, 0, 0, 0, 0],
+        "l_clip": 4.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": -0.37711463350768826, "l_c": -0.37711463350768826}
+    },
+    {
+      "name": "clip_at_limit",
+      "kind": "window",
+      "description": "l = 4.0 exactly = l_clip",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 4.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": 4.0, "l_c": 4.0}
+    },
+    {
+      "name": "clip_other_limit",
+      "kind": "window",
+      "description": "l = -4.5 with l_clip 3.25",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [-4.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 3.25
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -3.7711463350768826, "l": -4.5, "l_c": -3.25}
+    },
+    {
+      "name": "topn_3",
+      "kind": "window",
+      "description": "top-N = 3 of 10 (population sd of three values)",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 3,
+      "qmf": {
+        "q": [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.05511613686879476, "sd_e": 0.01891989096874141, "mu_t": 0.06748285641272862, "sd_t": 0.006485120152953338, "s_as": -9.216505591573098, "l": -9.216505591573098, "l_c": -9.216505591573098}
+    },
+    {
+      "name": "topn_10",
+      "kind": "window",
+      "description": "top-N = K = 10",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 10,
+      "qmf": {
+        "q": [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": -0.014325408171862364, "sd_e": 0.050662920559948685, "mu_t": 0.019996816909406336, "sd_t": 0.04108463871758104, "s_as": -0.6463334040271987, "l": -0.6463334040271987, "l_c": -0.6463334040271987}
+    },
+    {
+      "name": "topn_15_capped",
+      "kind": "window",
+      "description": "top-N above K is capped at K",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 15,
+      "qmf": {
+        "q": [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": -0.014325408171862364, "sd_e": 0.050662920559948685, "mu_t": 0.019996816909406336, "sd_t": 0.04108463871758104, "s_as": -0.6463334040271987, "l": -0.6463334040271987, "l_c": -0.6463334040271987}
+    },
+    {
+      "name": "topn_1_floor",
+      "kind": "window",
+      "description": "top-N = 1: sd = 0, floored at 1e-3 on both sides",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 1,
+      "qmf": {
+        "q": [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.07415894418954849, "sd_e": 0.001, "mu_t": 0.0756751224398613, "sd_t": 0.001, "s_as": -99.61634315550327, "l": -99.61634315550327, "l_c": -99.61634315550327}
+    },
+    {
+      "name": "sd_floor_identical_cohort",
+      "kind": "window",
+      "description": "three identical cohort rows: the top-2 scores are equal, sd = 0: floored at 1e-3",
+      "cohort": {
+        "vectors": [14, 3]
+      },
+      "top_n": 2,
+      "qmf": {
+        "q": [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": -0.024699309840798378, "mu_e": 0.05835391953587532, "sd_e": 0.001, "mu_t": -0.0028955060988664627, "sd_t": 0.001, "s_as": -52.42851655930281, "l": -52.42851655930281, "l_c": -52.42851655930281}
+    },
+    {
+      "name": "e_is_cohort_row",
+      "kind": "window",
+      "description": "the embedding is a cohort row: the top of its scores is 1",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 3, "norm": 70.5},
+      "template": {"vec": 11},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": 0.007818144746124744, "mu_e": 0.24757401645183563, "sd_e": 0.4347373848899503, "mu_t": 0.05817733332514763, "sd_t": 0.017068124306706643, "s_as": -1.7509887889656444, "l": -1.7509887889656444, "l_c": -1.7509887889656444}
+    },
+    {
+      "name": "e_equals_template",
+      "kind": "window",
+      "description": "template = embedding: s = 1",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "l_clip": 100.0
+      },
+      "embedding": {"vec": 10, "norm": 70.5},
+      "template": {"vec": 10},
+      "snr_db": 22.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 120.0,
+      "xcond": false,
+      "expected": {"s": 1.0, "mu_e": 0.04382976540364325, "sd_e": 0.025507219531927736, "mu_t": 0.04382976540364325, "sd_t": 0.025507219531927736, "s_as": 37.48625887660963, "l": 37.48625887660963, "l_c": 37.48625887660963}
+    },
+    {
+      "name": "call_local_reference",
+      "kind": "centroid",
+      "description": "normalise(mean of five unit embeddings): float64 mean rounded once to float32, divided by its float64 norm, rounded once",
+      "inputs": {
+        "vectors": [18, 19, 20, 21, 22]
+      },
+      "expected_vec": 23
+    },
+    {
+      "name": "call_local_window_0",
+      "kind": "window",
+      "description": "scored against the call-local reference with the call_local coefficients; enroll_speech_s = ref_speech_s, xcond = false",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [-0.65, 1.3, 0.2, 0.15, -10.0, -0.4, 0.3, -1.0],
+        "l_clip": 4.5
+      },
+      "embedding": {"vec": 24, "norm": 69.0},
+      "template": {"vec": 23},
+      "snr_db": 17.0,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 20.48,
+      "xcond": false,
+      "expected": {"s": 0.5685111284255981, "mu_e": 0.04675309103913605, "sd_e": 0.04558677930518813, "mu_t": 0.055773782543838024, "sd_t": 0.004851327771348145, "s_as": 58.56774322423254, "l": 75.93276928440866, "l_c": 4.5}
+    },
+    {
+      "name": "call_local_window_1",
+      "kind": "window",
+      "description": "scored against the call-local reference with the call_local coefficients; enroll_speech_s = ref_speech_s, xcond = false",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [-0.65, 1.3, 0.2, 0.15, -10.0, -0.4, 0.3, -1.0],
+        "l_clip": 4.5
+      },
+      "embedding": {"vec": 25, "norm": 70.0},
+      "template": {"vec": 23},
+      "snr_db": 20.0,
+      "plc": 0.01,
+      "nb": true,
+      "enroll_speech_s": 20.48,
+      "xcond": false,
+      "expected": {"s": 0.45781075954437256, "mu_e": 0.03651753650046885, "sd_e": 0.02472268541803021, "mu_t": 0.055773782543838024, "sd_t": 0.004851327771348145, "s_as": 49.956144730729754, "l": 64.29984955347287, "l_c": 4.5}
+    },
+    {
+      "name": "call_local_window_2",
+      "kind": "window",
+      "description": "scored against the call-local reference with the call_local coefficients; enroll_speech_s = ref_speech_s, xcond = false",
+      "cohort": {
+        "vectors": [0, 10]
+      },
+      "top_n": 4,
+      "qmf": {
+        "q": [-0.65, 1.3, 0.2, 0.15, -10.0, -0.4, 0.3, -1.0],
+        "l_clip": 4.5
+      },
+      "embedding": {"vec": 26, "norm": 71.0},
+      "template": {"vec": 23},
+      "snr_db": 23.0,
+      "plc": 0.02,
+      "nb": false,
+      "enroll_speech_s": 20.48,
+      "xcond": false,
+      "expected": {"s": 0.32887253165245056, "mu_e": 0.0492043299600482, "sd_e": 0.01349900730435649, "mu_t": 0.055773782543838024, "sd_t": 0.004851327771348145, "s_as": 38.50564780412401, "l": 49.776331244134184, "l_c": 4.5}
+    },
+    {
+      "name": "call_local_reference_real",
+      "kind": "centroid",
+      "description": "the reference from five real KAT embeddings",
+      "inputs": {
+        "raw_files": ["stage5_embedding/clip_a_w0.raw.f32", "stage5_embedding/clip_a_w1.raw.f32", "stage5_embedding/clip_b_w0.raw.f32", "stage5_embedding/clip_b_w1.raw.f32", "stage5_embedding/clip_c_w0.raw.f32"]
+      },
+      "expected_vec": 27
+    },
+    {
+      "name": "call_local_window_real",
+      "kind": "window",
+      "cohort": "bundle",
+      "top_n": 40,
+      "qmf": {
+        "q": [-0.65, 1.3, 0.2, 0.15, -10.0, -0.4, 0.3, -1.0],
+        "l_clip": 4.5
+      },
+      "embedding": {"raw_file": "stage5_embedding/clip_d_w0.raw.f32", "norm": 21.22026558162984},
+      "template": {"centroid_case": "call_local_reference_real"},
+      "snr_db": 7.924347067003934,
+      "plc": 0.0,
+      "nb": false,
+      "enroll_speech_s": 20.48,
+      "xcond": false,
+      "expected": {"s": 0.24513545632362366, "mu_e": 0.23621312752366067, "sd_e": 0.145975276403653, "mu_t": 0.302157923951745, "sd_t": 0.13062592447245683, "s_as": -0.18770517818145716, "l": -0.8076991757686838, "l_c": -0.8076991757686838}
+    }
+  ]
+}

@@ -1299,6 +1299,8 @@ struct ChatListScreen: View {
                         // "Live" while the user shares their position in this conversation (nothing is drawn otherwise).
                         if item.kind != .group {
                             LocationLiveChip(peerUserId: item.peerUserId)
+                            // The identity shield of the contact: the same badge as the call bar, the contact list and the detail.
+                            ContactShieldBadge(userId: item.peerUserId, size: 20)
                         }
                         Spacer(minLength: 6)
                         Text(formatTime(item.lastActivity))

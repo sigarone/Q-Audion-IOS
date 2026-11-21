@@ -288,9 +288,13 @@ final class CarPlaySceneDelegate: UIResponder, CPTemplateApplicationSceneDelegat
         // CarPlay/Siri state-of-the-art plan S4 — a row tap PUSHES a
         // CPContactTemplate (contact detail: call + optional message
         // button) instead of dialing immediately.
+        // "Verificato" on the car screen is the contact-level identity shield, one enumeration of the pins for the whole list.
+        let stored = contactsStore.load()
+        let shields = ContactShieldEvaluator.shields(for: stored)
         let rows = CarPlayListBuilder.contacts(
-            contactsStore.load(), orphanPeerIds: CarPlayBridge.shared.orphanPeerIds,
-            limits: limits, resolve: nameResolver())
+            stored, orphanPeerIds: CarPlayBridge.shared.orphanPeerIds,
+            limits: limits, resolve: nameResolver(),
+            isVerified: { shields[$0.userId] == .verified })
         let items: [CPListItem] = rows.map { row in
             let item = CPListItem(
                 text: row.title,

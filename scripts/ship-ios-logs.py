@@ -1417,6 +1417,15 @@ _RE_PQLEVEL_FULL = re.compile(
     r" rekey=(?:ok|refused|-) round=(?:[0-9]{1,10}|-)(?: rreason=chain_base)?"
     r"(?: tl=(?:pq|cl|-) kd=(?:pq|cl|-) unk=[0-9]{1,3})?\Z"
 )
+# SHIELD STATE LINE (call / stdout tags): the identity and post-quantum shield state of a call, written when either changes.
+# Every field is a member of a closed set, a flag or the 8 hex characters of the call prefix: no key, name or fingerprint by
+# construction. The generic gate gives the bare line name a budget of zero, so it is accepted here by the whole-line match only:
+# one extra word, a value outside its set or any suffix and it goes through the ordinary gates as before. Pinned by
+# test_ship_ios_shield_vocab.py.
+_RE_SHIELD_FULL = re.compile(
+    r"\AQA-SHIELD call=[0-9a-f]{8} id=(?:pending|verified|to_verify|changed)"
+    r" pq=(?:pending|pq2|pq|reduced|cl) max=[01]\Z"
+)
 
 # CALL KEY STATE LINES (call tag): the fixed-word lines of the per-call key bookkeeping (QAudionCallIntegration, written through
 # CapsBindLog.line to RTLog.info("call", ...)) and the extended capability line. Every value is a decimal number from a closed
@@ -1468,7 +1477,7 @@ def _is_closed_grammar_line(tag, norm_body):
         return bool(_RE_PAIR_BLE_FULL.match(norm_body) or _RE_PAIR_NFC_FULL.match(norm_body))
     if t.startswith(_HANDSHAKE_TAG_PREFIXES):
         return bool(_RE_HANDSHAKE_FULL.match(norm_body) or _RE_PQLEVEL_FULL.match(norm_body)
-                    or _RE_LIVE_FULL.match(norm_body))
+                    or _RE_LIVE_FULL.match(norm_body) or _RE_SHIELD_FULL.match(norm_body))
     return False
 
 

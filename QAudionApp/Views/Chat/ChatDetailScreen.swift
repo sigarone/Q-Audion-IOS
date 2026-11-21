@@ -707,6 +707,11 @@ struct ChatDetailScreen: View {
             // agreement is unconditional in this app, so even a truthful
             // indicator would restate nothing.
 
+            // The identity shield of the contact (1:1 chats only): the same badge as the call bar, the contact list and the detail.
+            if container.viewModel.conversation.kind != .group {
+                ContactShieldBadge(userId: container.viewModel.conversation.peerUserId, size: 28)
+            }
+
             // W445: ephemeral timer button. Tap opens the timer chooser.
             // Accent color signals when a timer is active so the user knows
             // disappearing messages are on. (No confirmed filled SF Symbol

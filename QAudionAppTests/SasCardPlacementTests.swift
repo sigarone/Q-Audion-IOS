@@ -21,43 +21,6 @@ final class SasCardPlacementTests: XCTestCase {
         XCTAssertTrue(SasCardPlacement.isRedundant(sasRequired: false))
     }
 
-    func testNothingClaimsVerifiedBeforeTheVerdictArrives() {
-        XCTAssertFalse(SasCardPlacement.showsVerified(sasVerified: true, verdictKnown: false))
-        XCTAssertTrue(SasCardPlacement.showsVerified(sasVerified: true, verdictKnown: true))
-        XCTAssertFalse(SasCardPlacement.showsVerified(sasVerified: false, verdictKnown: true))
-    }
-
-    // MARK: - A confirmation never carries over to a later call
-
-    private let key = Data(repeating: 7, count: 32)
-
-    private func stored(words: [String], key: Data) -> SasBinding {
-        SasBinding(sasFingerprint: SasVerificationStore.fingerprint(forWords: words),
-                   identityTag: SasVerificationStore.identityTag(forPinnedKey: key))
-    }
-
-    private func isVerified(_ binding: SasBinding, words: [String], key: Data) -> Bool {
-        binding.matches(sasFingerprint: SasVerificationStore.fingerprint(forWords: words),
-                        identityTag: SasVerificationStore.identityTag(forPinnedKey: key))
-    }
-
-    private let earlierCall = ["ALPHA", "BRAVO", "CHARLIE", "DELTA", "ECHO", "FOXTROT"]
-    private let newCall = ["GOLF", "HOTEL", "INDIA", "JULIET", "KILO", "LIMA"]
-
-    func testAStoredConfirmationForTheSameKeyDoesNotMarkANewCallVerified() {
-        let binding = stored(words: earlierCall, key: key)
-        // The contact is still bound to the same pinned key (shown in the contact record) ...
-        XCTAssertTrue(binding.appliesTo(currentIdentityTag: SasVerificationStore.identityTag(forPinnedKey: key)))
-        // ... but the new call has other words, so the call does not read as verified.
-        XCTAssertFalse(isVerified(binding, words: newCall, key: key))
-    }
-
-    func testConfirmingThisCallsWordsMarksItVerified() {
-        XCTAssertTrue(isVerified(stored(words: newCall, key: key), words: newCall, key: key))
-    }
-
-    func testAConfirmationOfThisCallsWordsDoesNotSurviveAKeyChange() {
-        let binding = stored(words: newCall, key: key)
-        XCTAssertFalse(isVerified(binding, words: newCall, key: Data(repeating: 9, count: 32)))
-    }
+    // Whether a call reads as verified is decided by the identity shield (QAudionEngine, `IdentityShieldTests`), from the key the
+    // call was authenticated by and the key-bound record: never by the words of the call and never by this placement type.
 }

@@ -429,8 +429,10 @@ let package = Package(
                 // specification and with the Android tests; VoiceDspVectorTests runs every case through the real
                 // engine. Re-copy it, never edit it.
                 .copy("Analysis/Resources/voicedsp-vectors.json"),
-                // Reference vectors of the voice front-end (resampler, VAD labels, measurements, windows, fbank) with the
-                // audio they use and a NOTICE; MANIFEST.sha256 of the bundle lists every file and VoiceBundleTests checks it.
+                // Reference vectors of the voice engine (resampler, VAD labels, measurements, windows, fbank, embedding,
+                // scoring, evidence) with the audio they use, the pinned cohort file (cohort.bin, test resource only, not in
+                // the app bundle) and a NOTICE; MANIFEST.sha256 of the bundle lists every file and VoiceBundleTests checks it.
+                // The folder is copied whole, so new vector files need no further line here.
                 .copy("Resources/voice-kat")
             ]
         )

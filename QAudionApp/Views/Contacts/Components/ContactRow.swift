@@ -155,15 +155,12 @@ struct ContactRow: View {
         // per-contact badge claiming it is gone, because a chip that is true
         // for everyone teaches the user to stop reading chips.
         //
-        // VOICE stays: `isVerified` is a real per-contact field, written
-        // only by actual verification paths, so it is genuinely false for
-        // most contacts. An unverified contact now renders an empty HStack
-        // that collapses to zero height, which is what Android does too —
-        // do not add a spacer or a minHeight to even the rows out.
+        // The identity shield, the same badge as the call bar, the contact detail and the chats: green when the pinned key of the
+        // contact is verified, purple when it never was, red when the key changed after the verification, grey while no identity
+        // is known. The "VOICE" chip that used to be drawn for any verified contact is gone: it labelled a key verification as
+        // a voice check, which is a different fact.
         HStack(spacing: 6) {
-            if item.isVerified {
-                TrustChip("VOICE", accent: extras.success)
-            }
+            IdentityShieldBadge(shield: item.identityShield, size: 20)
         }
     }
 }

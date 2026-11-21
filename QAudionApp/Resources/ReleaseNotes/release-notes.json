@@ -1,5 +1,40 @@
 [
   {
+    "version": "1.0.1301",
+    "notes": {
+      "it": [
+        "Badge di sicurezza uguali ovunque: verde se verificato, viola da verificare, rosso se la chiave è cambiata, grigio durante il controllo",
+        "Lo stesso badge in chiamata, nell'elenco contatti, nei dettagli e nelle chat",
+        "In chiamata, un nuovo badge di livello massimo con identità e doppia protezione post-quantistica confermate"
+      ],
+      "en": [
+        "Security badges look the same everywhere: green when verified, purple to verify, red if the key changed, grey while checking",
+        "The same badge in calls, the contact list, contact details and chats",
+        "On calls, a new top-level badge when identity and double post-quantum protection are both confirmed"
+      ],
+      "de": [
+        "Überall dieselben Sicherheitsabzeichen: grün verifiziert, violett zu prüfen, rot bei geändertem Schlüssel, grau während der Prüfung",
+        "Dasselbe Abzeichen in Anrufen, Kontaktliste, Kontaktdetails und Chats",
+        "Im Anruf ein neues Top-Abzeichen, wenn Identität und doppelter Post-Quanten-Schutz bestätigt sind"
+      ],
+      "es": [
+        "Insignias de seguridad iguales en todas partes: verde si está verificado, morado por verificar, rojo si su clave cambió, gris al comprobar",
+        "La misma insignia en llamadas, lista de contactos, detalles y chats",
+        "En la llamada, una nueva insignia máxima cuando identidad y doble protección poscuántica están confirmadas"
+      ],
+      "fr": [
+        "Des badges de sécurité identiques partout : vert si vérifié, violet à vérifier, rouge si la clé a changé, gris pendant la vérification",
+        "Le même badge dans les appels, la liste des contacts, leurs détails et les discussions",
+        "Pendant l'appel, un nouveau badge suprême quand identité et double protection post-quantique sont confirmées"
+      ],
+      "pt-BR": [
+        "Selos de segurança iguais em todo lugar: verde se verificado, roxo a verificar, vermelho se a chave mudou, cinza durante a checagem",
+        "O mesmo selo em chamadas, lista de contatos, detalhes e conversas",
+        "Na chamada, um novo selo máximo quando identidade e dupla proteção pós-quântica estão confirmadas"
+      ]
+    }
+  },
+  {
     "version": "1.0.1300",
     "notes": {
       "it": [

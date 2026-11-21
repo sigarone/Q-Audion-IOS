@@ -2074,9 +2074,9 @@ final class CallService: @unchecked Sendable {
     /// Guarded by `relaySlotLock` (written from WebRTC's logging thread); cleared at teardown.
     private var dtlsGroupToken: String?
     private var lastPqLevelLine: String?
-    /// Fired on the main thread with the level and the `auth` word of the protection line each time that line changes, and with
-    /// (nil, "") when the call's state is reset. The same values as the line, not a second computation.
-    var onPqProtectionChanged: ((PqLevel?, String) -> Void)?
+    /// Fired on the main thread with the level, the `auth` word and the `pin` word of the protection line each time that line changes, and with
+    /// (nil, "", "") when the call's state is reset. The same values as the line, not a second computation.
+    var onPqProtectionChanged: ((PqLevel?, String, String, String) -> Void)?
     /// The user confirmed the safety code of this call. Set by AppState, cleared at teardown.
     public var sasConfirmedThisCall: Bool = false
 
@@ -2156,7 +2156,7 @@ final class CallService: @unchecked Sendable {
         let line = out.format()
         guard line != lastPqLevelLine else { return }
         lastPqLevelLine = line
-        onPqProtectionChanged?(level, out.auth)
+        onPqProtectionChanged?(level, out.auth, out.pin, cid)
         RTLog.info("call", line)
     }
 
@@ -5133,7 +5133,7 @@ final class CallService: @unchecked Sendable {
         txFallbackCount = 0
         rxPreBuffer.removeAll()  // W481
         lastPqLevelLine = nil
-        onPqProtectionChanged?(nil, "")
+        onPqProtectionChanged?(nil, "", "", "")
         sasConfirmedThisCall = false
         // W-SETUPRETRY + W-MEDIADEAD — per-call RX liveness state. The
         // one-shot first-decode latch re-arms for the next call, the decode

@@ -108,7 +108,7 @@ private struct ScreenshotDemoCall: View {
             bufMs: 24,
             pqcActive: true,
             sasWords: ["GEIGER", "OBTUSE", "DRUNKEN", "UNEARTH", "WAFFLE", "AFFLICT"],
-            sasVerified: false,
+            identityShield: .toVerify,
             keyInfo: .init(pqcAlgorithm: "ML-KEM-1024 + X25519",
                            sessionFingerprint: "4808f444\u{2026}b1bd",
                            pskMethodLabel: "NFC",

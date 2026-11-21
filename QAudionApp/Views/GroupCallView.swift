@@ -761,8 +761,8 @@ struct GroupCallView: View {
     /// measured level of the hop to the media server is available.
     private var groupTrustBar: some View {
         HStack(spacing: 7) {
-            groupTrustChip(icon: "lock.shield.fill", label: "DTLS 1.3", color: scheme.onSurfaceVariant)
-            groupTrustChip(icon: nil, label: "AES-256", color: scheme.onSurfaceVariant)
+            groupTrustChip(icon: "lock.shield.fill", label: "DTLS 1.3", color: extras.neutral)
+            groupTrustChip(icon: nil, label: "AES-256", color: extras.neutral)
             Spacer(minLength: 0)
             Button {
                 showSecuritySheet = true

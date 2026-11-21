@@ -238,17 +238,17 @@ struct GroupSecuritySheet: View {
     /// alarm).
     private func memberTrustVisual(_ eval: PeerTrustEvaluator.Evaluation?) -> (icon: String, label: String, color: Color) {
         guard let eval else {
-            return (icon: "ellipsis", label: "…", color: scheme.onSurfaceVariant)
+            return (icon: "ellipsis", label: "…", color: extras.neutral)
         }
         switch eval.state {
         case .userVerified:
             return (icon: "checkmark.seal.fill", label: String(localized: "trust.header.verified", defaultValue: "Verificato", comment: "Chip next to a participant in the group call security sheet: identity verified."), color: extras.success)
         case .identityPinnedTofu:
-            return (icon: "lock.fill", label: String(localized: "trust.header.unverified", defaultValue: "Non verificato", comment: "Chip next to a participant in the group call security sheet: identity not verified."), color: scheme.onSurfaceVariant)
+            return (icon: "lock.fill", label: String(localized: "trust.header.unverified", defaultValue: "Non verificato", comment: "Chip next to a participant in the group call security sheet: identity not verified."), color: extras.toVerify)
         case .identityChanged:
             return (icon: "exclamationmark.octagon.fill", label: String(localized: "group_call.security.member.identity_changed", defaultValue: "Identità cambiata", comment: "Chip next to a participant in the group call security sheet: the identity key of this person changed (an alarm)."), color: extras.riskHigh)
         case .unverified:
-            return (icon: "questionmark.circle", label: String(localized: "group_call.security.member.no_relationship", defaultValue: "Nessuna relazione diretta", comment: "Chip next to a participant in the group call security sheet: no direct trust relationship exists with this person yet."), color: scheme.onSurfaceVariant)
+            return (icon: "questionmark.circle", label: String(localized: "group_call.security.member.no_relationship", defaultValue: "Nessuna relazione diretta", comment: "Chip next to a participant in the group call security sheet: no direct trust relationship exists with this person yet."), color: extras.neutral)
         }
     }
 

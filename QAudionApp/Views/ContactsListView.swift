@@ -35,6 +35,7 @@ final class ContactsListContainer: ObservableObject {
         // canonical `DisplayName.forUser` instead, with `contacts: stored`
         // so it also picks up `sc`'s own structured `extension`/
         // `phoneNumber` fields for the bare-digit/phone fallback.
+        let shields = ContactShieldEvaluator.shields(for: stored)
         self.viewModel = ContactsListViewModel(items: stored.map { sc in
             ContactsListViewModel.Item(
                 userId: sc.userId,
@@ -43,7 +44,8 @@ final class ContactsListContainer: ObservableObject {
                 isOnline: false,
                 unreadMessageCount: 0,
                 isVerified: sc.isVerified,
-                extension: sc.`extension`
+                extension: sc.`extension`,
+                identityShield: shields[sc.userId] ?? .pending
             )
         })
         // 2026-07-30 fix (real device evidence: a contact whose ONLY known
@@ -74,6 +76,7 @@ final class ContactsListContainer: ObservableObject {
     /// above and any other "the persisted contacts changed under us" path.
     private func reloadFromStore() {
         let stored = store.load()
+        let shields = ContactShieldEvaluator.shields(for: stored)
         viewModel = ContactsListViewModel(
             items: stored.map { sc in
                 ContactsListViewModel.Item(
@@ -83,7 +86,8 @@ final class ContactsListContainer: ObservableObject {
                     isOnline: false,
                     unreadMessageCount: 0,
                     isVerified: sc.isVerified,
-                    extension: sc.`extension`
+                    extension: sc.`extension`,
+                    identityShield: shields[sc.userId] ?? .pending
                 )
             },
             searchQuery: viewModel.searchQuery
@@ -200,6 +204,9 @@ final class ContactsListContainer: ObservableObject {
         // this one predates that sweep. Look up any existing row first
         // and preserve everything a re-scan isn't actually meant to
         // change; only pubkey/isVerified are this action's real purpose.
+        // Known limit (accepted): a scanned code carries an X25519 key (`pubkey` below), not the Ed25519 identity key, so this path writes
+        // no key-bound verification. A contact added by scan reads as "to verify" until a call or the in-person pairing (which does
+        // write one) verifies its identity key.
         let existing = store.load().first(where: { $0.userId == userId })
         let contact = ContactsStore.StoredContact(
             userId: userId,
@@ -226,7 +233,9 @@ final class ContactsListContainer: ObservableObject {
             // must not wipe a prior in-person record.
             proximityPairedAtMs: proximityPairedAtMs ?? existing?.proximityPairedAtMs,
             proximityServerConfirmed: proximityPairedAtMs != nil
-                ? proximityServerConfirmed : existing?.proximityServerConfirmed
+                ? proximityServerConfirmed : existing?.proximityServerConfirmed,
+            identityChangePendingAtMs: existing?.identityChangePendingAtMs,
+            identityChangePendingFingerprintsHex: existing?.identityChangePendingFingerprintsHex
         )
         store.upsert(contact)
         // W77: kick off the pairwise PSK handshake so future chats with
@@ -338,10 +347,36 @@ final class ContactsListContainer: ObservableObject {
                 outcome = ProximityOutcome(title: title, detail: name, isError: false, kind: .savedUnverified)
             }
         }
+        // An in-person ceremony whose account the server confirmed (it publishes the key just proved) verifies exactly that key: the
+        // verification is written for the Ed25519 key compared, so a contact met in person reads as verified until that key changes.
+        // A NEW contact takes it; a KNOWN contact only when the key proved is one this device already pins for it (a known contact is
+        // never rewritten from here: spec section 12). Without the server's confirmation the claimed account is not proven: nothing is written.
+        if result.serverIdentityConfirmed, outcome.kind != .notAdded {
+            let proved: Data = result.peer.signingPublicKey
+            if outcome.kind == .newContactVerified || PeerIdentityPinStore().allPinnedKeys(contactId: peerUserId).contains(proved) {
+                recordInPersonVerification(peerUserId: peerUserId, key: proved)
+            }
+        }
         ProximityPairingTelemetry.emitCompleted(outcome: outcome.kind,
                                                 serverCheck: result.serverCheckOutcome,
                                                 elapsedMs: result.elapsedMs)
         return outcome
+    }
+
+    /// Key-bound verification of a contact met in person (`StoredContact.withVerification` with the safety number of this account and
+    /// the key that was compared). Writes nothing when the contact is not stored or this account's identity is unavailable.
+    private func recordInPersonVerification(peerUserId: String, key: Data) {
+        let context = ContactShieldEvaluator.currentContext()
+        guard key.count == 32,
+              let selfUserId = context.selfUserId, let selfKey = context.selfIdentityKey,
+              let existing = store.load().first(where: { $0.userId == peerUserId }),
+              let fp = SasPinVerification.fingerprintHex(
+                selfUserId: selfUserId, selfIdentityKey: selfKey, peerUserId: peerUserId, peerIdentityKey: key)
+        else { return }
+        store.upsert(existing.withVerification(
+            fingerprintHex: fp,
+            atMs: Int64(Date().timeIntervalSince1970 * 1000),
+            method: TrustVerificationMethod.inPerson.rawValue).clearingIdentityChangePending(forFingerprintHex: fp))
     }
 
     func refresh() {
@@ -691,7 +726,7 @@ struct ContactsListView: View {
             phoneHash: item.phoneHash,
             fingerprint: fingerprint,
             avatarUrl: item.avatarUrl,
-            trustLevel: item.isVerified ? .sasVerified : .unverified,
+            trustLevel: item.identityShield == .verified ? .sasVerified : .unverified,
             isBlocked: reallyBlocked,
             lastSeen: nil,
             recentCallCount: 0,
@@ -756,11 +791,7 @@ struct ContactsListView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(item.displayName).font(.body.weight(.medium))
-                    if item.isVerified {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.green)
-                    }
+                    IdentityShieldBadge(shield: item.identityShield, size: 16)
                 }
                 // W445: extended presence label — shows "In chiamata",
                 // "Non disturbare", etc. when the server or call-state

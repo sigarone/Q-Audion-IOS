@@ -6111,84 +6111,84 @@
     },
     "sas.accessibility.verified": {
       "extractionState": "manual",
-      "comment": "Accessibility label — SAS identity verification completed",
+      "comment": "Accessibility label — the key of this call is the one the user already verified",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Identità verificata (SAS)"
+            "value": "Identità verificata: la chiave di questa chiamata è quella che hai già verificato"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Identity verified (SAS)"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Identidad verificada (SAS)"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Identité vérifiée (SAS)"
+            "value": "Identity verified: the key of this call is the one you have already verified"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Identität verifiziert (SAS)"
+            "value": "Identität verifiziert: Der Schlüssel dieses Anrufs ist der, den Sie bereits verifiziert haben"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identidad verificada: la clave de esta llamada es la que ya has verificado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identité vérifiée : la clé de cet appel est celle que tu as déjà vérifiée"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Identidade verificada (SAS)"
+            "value": "Identidade verificada: a chave desta chamada é a que você já verificou"
           }
         }
       }
     },
     "sas.accessibility.pending": {
       "extractionState": "manual",
-      "comment": "Accessibility label — SAS identity verification still pending",
+      "comment": "Accessibility label — contact identity check in progress",
       "localizations": {
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verifica identità (SAS) in sospeso"
+            "value": "Identità in verifica"
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Identity verification (SAS) pending"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verificación de identidad (SAS) pendiente"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Vérification d'identité (SAS) en attente"
+            "value": "Identity being checked"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Identitätsprüfung (SAS) ausstehend"
+            "value": "Identität wird geprüft"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identidad en verificación"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identité en cours de vérification"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Verificação de identidade (SAS) pendente"
+            "value": "Identidade em verificação"
           }
         }
       }
@@ -88870,90 +88870,6 @@
         }
       }
     },
-    "incall.shield.pqc_on": {
-      "extractionState": "manual",
-      "comment": "Call screen, VoiceOver label of the post-quantum shield while the exchange is active",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scambio post-quantistico attivo"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Post-quantum exchange active"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Intercambio poscuántico activo"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Échange post-quantique actif"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Post-Quanten-Austausch aktiv"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Troca pós-quântica ativa"
-          }
-        }
-      }
-    },
-    "incall.shield.pqc_off": {
-      "extractionState": "manual",
-      "comment": "Call screen, VoiceOver label of the post-quantum shield while the exchange is not active",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Scambio post-quantistico non attivo"
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Post-quantum exchange not active"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Intercambio poscuántico no activo"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Échange post-quantique non actif"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Post-Quanten-Austausch nicht aktiv"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Troca pós-quântica não ativa"
-          }
-        }
-      }
-    },
     "incall.shield.transport": {
       "extractionState": "manual",
       "comment": "Call screen, VoiceOver label of the network path shield, %@ is the path (P2P SRTP, TURN, RELAY)",
@@ -89370,48 +89286,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Nesta chamada, uma chave pré-compartilhada — de qualquer origem: NFC, QR, KMS ou inserida manualmente — foi misturada à chave de sessão. Ela acrescenta proteção além da troca pós-quântica sozinha."
-          }
-        }
-      }
-    },
-    "incall.trust_body.sas": {
-      "extractionState": "manual",
-      "comment": "Call screen, popup text of the SAS shield",
-      "localizations": {
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "La cerimonia di verifica dell'identità per questa chiamata: tu e il contatto confrontate a voce le stesse parole. Il colore indica se è già stata confermata da entrambi o è ancora in sospeso."
-          }
-        },
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "The identity verification ceremony for this call: you and the contact compare the same words out loud. The color shows whether both of you have already confirmed it or it is still pending."
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "La ceremonia de verificación de identidad de esta llamada: tú y el contacto comparáis de viva voz las mismas palabras. El color indica si ya la habéis confirmado los dos o sigue pendiente."
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "La cérémonie de vérification d'identité pour cet appel : tu compares à voix haute les mêmes mots que le contact. La couleur indique si elle a déjà été confirmée des deux côtés ou si elle est encore en attente."
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Das Verfahren zur Identitätsprüfung für diesen Anruf: Sie und der Kontakt vergleichen mündlich dieselben Wörter. Die Farbe zeigt an, ob beide es bereits bestätigt haben oder ob es noch aussteht."
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "A cerimônia de verificação de identidade desta chamada: você e o contato comparam as mesmas palavras em voz alta. A cor indica se os dois já a confirmaram ou se ainda está pendente."
           }
         }
       }
@@ -101548,6 +101422,1308 @@
           "stringUnit": {
             "state": "translated",
             "value": "As sessões da conta foram encerradas logo após a aprovação. Entre novamente."
+          }
+        }
+      }
+    },
+    "sas.accessibility.to_verify": {
+      "extractionState": "manual",
+      "comment": "Accessibility label — the contact key was never verified",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identità da verificare: non hai mai verificato la chiave di questo contatto"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identity to verify: you have never verified this contact's key"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identität zu verifizieren: Sie haben den Schlüssel dieses Kontakts noch nie verifiziert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identidad por verificar: nunca has verificado la clave de este contacto"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identité à vérifier : tu n'as jamais vérifié la clé de ce contact"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identidade a verificar: você nunca verificou a chave deste contato"
+          }
+        }
+      }
+    },
+    "sas.accessibility.changed": {
+      "extractionState": "manual",
+      "comment": "Accessibility label — the contact key differs from the verified one",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attenzione: la chiave del contatto non è quella che avevi verificato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warning: the contact's key is not the one you had verified"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Achtung: Der Schlüssel des Kontakts ist nicht der, den Sie verifiziert hatten"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atención: la clave del contacto no es la que habías verificado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Attention : la clé du contact n'est pas celle que tu avais vérifiée"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atenção: a chave do contato não é a que você havia verificado"
+          }
+        }
+      }
+    },
+    "incall.trust_body.sas_pending": {
+      "extractionState": "manual",
+      "comment": "Call screen, popup text of the SAS shield while the identity check is in progress",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sto controllando l'identità del contatto per questa chiamata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking the contact's identity for this call."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Identität des Kontakts wird für diesen Anruf geprüft."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estoy comprobando la identidad del contacto para esta llamada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Je vérifie l'identité du contact pour cet appel."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estou verificando a identidade do contato para esta chamada."
+          }
+        }
+      }
+    },
+    "incall.trust_body.sas_verified": {
+      "extractionState": "manual",
+      "comment": "Call screen, popup text of the SAS shield when the contact key is already verified",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La chiave con cui il contatto si è autenticato in questa chiamata è quella che hai già verificato con lui. Non serve confrontare di nuovo le parole."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The key the contact authenticated with in this call is the one you have already verified with them. There is no need to compare the words again."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Schlüssel, mit dem sich der Kontakt in diesem Anruf authentifiziert hat, ist der, den Sie bereits mit ihm verifiziert haben. Die Wörter müssen nicht erneut verglichen werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La clave con la que el contacto se ha autenticado en esta llamada es la que ya has verificado con él. No hace falta comparar de nuevo las palabras."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La clé avec laquelle le contact s'est authentifié dans cet appel est celle que tu as déjà vérifiée avec lui. Pas besoin de comparer à nouveau les mots."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A chave com a qual o contato se autenticou nesta chamada é a que você já verificou com ele. Não é preciso comparar as palavras de novo."
+          }
+        }
+      }
+    },
+    "incall.trust_body.sas_to_verify": {
+      "extractionState": "manual",
+      "comment": "Call screen, popup text of the SAS shield when the contact key was never verified",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La chiamata è autenticata, ma non hai mai verificato la chiave di questo contatto. Confronta le parole a voce con lui e conferma: da quel momento la sua chiave risulta verificata anche nelle chiamate future."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The call is authenticated, but you have never verified this contact's key. Compare the words out loud with them and confirm: from then on their key counts as verified in future calls too."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Anruf ist authentifiziert, aber Sie haben den Schlüssel dieses Kontakts noch nie verifiziert. Vergleichen Sie die Wörter mündlich mit ihm und bestätigen Sie: Ab dann gilt sein Schlüssel auch in künftigen Anrufen als verifiziert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La llamada está autenticada, pero nunca has verificado la clave de este contacto. Compara las palabras de viva voz con él y confirma: desde ese momento su clave figura como verificada también en las llamadas futuras."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'appel est authentifié, mais tu n'as jamais vérifié la clé de ce contact. Compare les mots à voix haute avec lui et confirme : dès ce moment, sa clé est considérée comme vérifiée aussi dans les appels futurs."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A chamada está autenticada, mas você nunca verificou a chave deste contato. Compare as palavras em voz alta com ele e confirme: a partir desse momento a chave dele passa a constar como verificada também nas chamadas futuras."
+          }
+        }
+      }
+    },
+    "incall.trust_body.sas_changed": {
+      "extractionState": "manual",
+      "comment": "Call screen, popup text of the SAS shield when the contact key changed or the call signature is invalid",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La chiave del contatto è diversa da quella che avevi verificato, oppure la firma della chiamata non è valida. Non fidarti finché non confronti le parole a voce e verifichi di nuovo di persona."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The contact's key is different from the one you had verified, or the call signature is not valid. Do not trust it until you compare the words out loud and verify again in person."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Schlüssel des Kontakts unterscheidet sich von dem, den Sie verifiziert hatten, oder die Signatur des Anrufs ist ungültig. Vertrauen Sie nicht, bevor Sie die Wörter mündlich vergleichen und persönlich erneut verifizieren."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La clave del contacto es distinta de la que habías verificado, o la firma de la llamada no es válida. No te fíes hasta que compares las palabras de viva voz y verifiques de nuevo en persona."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La clé du contact est différente de celle que tu avais vérifiée, ou la signature de l'appel n'est pas valide. Ne lui fais pas confiance tant que tu n'as pas comparé les mots à voix haute et vérifié à nouveau en personne."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A chave do contato é diferente da que você havia verificado, ou a assinatura da chamada não é válida. Não confie até comparar as palavras em voz alta e verificar de novo pessoalmente."
+          }
+        }
+      }
+    },
+    "incall.sas_confirm_refused": {
+      "extractionState": "manual",
+      "comment": "Call screen, message when the SAS verification cannot be recorded because the call identity was not authenticated",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile registrare la verifica: l'identità di questa chiamata non è stata autenticata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The verification cannot be recorded: the identity of this call was not authenticated."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Verifizierung kann nicht gespeichert werden: Die Identität dieses Anrufs wurde nicht authentifiziert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se puede registrar la verificación: la identidad de esta llamada no se ha autenticado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d'enregistrer la vérification : l'identité de cet appel n'a pas été authentifiée."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível registrar a verificação: a identidade desta chamada não foi autenticada."
+          }
+        }
+      }
+    },
+    "incall.sas_confirm_conflict": {
+      "extractionState": "manual",
+      "comment": "Call screen, message when the contact already has a different verified key",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo contatto ha già una chiave verificata diversa: nulla è stato registrato."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This contact already has a different verified key: nothing was recorded."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Kontakt hat bereits einen anderen verifizierten Schlüssel: Es wurde nichts gespeichert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este contacto ya tiene una clave verificada distinta: no se ha registrado nada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce contact a déjà une clé vérifiée différente : rien n'a été enregistré."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este contato já tem uma chave verificada diferente: nada foi registrado."
+          }
+        }
+      }
+    },
+    "incall.sas_key_change_warning": {
+      "extractionState": "manual",
+      "comment": "Call screen, warning shown before confirming the SAS when the contact key changed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La chiave di questo contatto è cambiata rispetto a quella che avevi verificato. Confermando solo se le parole coincidono a voce, la nuova chiave sostituisce la precedente e diventa quella verificata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This contact's key has changed from the one you had verified. Confirm only if the words match out loud: the new key then replaces the previous one and becomes the verified one."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Schlüssel dieses Kontakts hat sich gegenüber dem von Ihnen verifizierten geändert. Bestätigen Sie nur, wenn die Wörter mündlich übereinstimmen: Der neue Schlüssel ersetzt dann den bisherigen und gilt als verifiziert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La clave de este contacto ha cambiado respecto a la que habías verificado. Confirma solo si las palabras coinciden de viva voz: la nueva clave sustituye a la anterior y pasa a ser la verificada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La clé de ce contact a changé par rapport à celle que tu avais vérifiée. Ne confirme que si les mots coïncident à voix haute : la nouvelle clé remplace alors la précédente et devient celle qui est vérifiée."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A chave deste contato mudou em relação à que você havia verificado. Confirme somente se as palavras coincidirem em voz alta: a nova chave substitui a anterior e passa a ser a verificada."
+          }
+        }
+      }
+    },
+    "incall.shield.pqc_pending": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the post-quantum shield while the protection is pending",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protezione post-quantistica in attesa"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-quantum protection pending"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-Quanten-Schutz ausstehend"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protección poscuántica en espera"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protection post-quantique en attente"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proteção pós-quântica pendente"
+          }
+        }
+      }
+    },
+    "call.protection.none": {
+      "extractionState": "manual",
+      "comment": "Call security badge — no path of the call uses post-quantum encryption",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessuna protezione post-quantistica"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No post-quantum protection"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kein Post-Quanten-Schutz"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sin protección poscuántica"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucune protection post-quantique"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhuma proteção pós-quântica"
+          }
+        }
+      }
+    },
+    "call.protection.anomaly": {
+      "extractionState": "manual",
+      "comment": "Call security badge — post-quantum protection with an anomaly compared to what the contact device offered before",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protezione post-quantistica con anomalia"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-quantum protection with anomaly"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-Quanten-Schutz mit Auffälligkeit"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protección poscuántica con anomalía"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protection post-quantique avec anomalie"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Proteção pós-quântica com anomalia"
+          }
+        }
+      }
+    },
+    "call.protection.none.body": {
+      "extractionState": "manual",
+      "comment": "Call security badge details — shown when no path of the call is post-quantum",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessun percorso di questa chiamata usa la cifratura post-quantistica."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No path of this call uses post-quantum encryption."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kein Pfad dieses Anrufs nutzt Post-Quanten-Verschlüsselung."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ningún recorrido de esta llamada usa cifrado poscuántico."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucun chemin de cet appel n'utilise le chiffrement post-quantique."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhum caminho desta chamada usa criptografia pós-quântica."
+          }
+        }
+      }
+    },
+    "call.protection.anomaly.body": {
+      "extractionState": "manual",
+      "comment": "Call security badge details — shown when a protection previously offered by the contact device is missing",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Una protezione che questo dispositivo del contatto offriva in passato non è presente in questa chiamata. Confronta le parole a voce."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A protection this contact device used to offer is not present in this call. Compare the words out loud."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein Schutz, den dieses Gerät des Kontakts früher angeboten hat, ist in diesem Anruf nicht vorhanden. Vergleichen Sie die Wörter mündlich."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Una protección que este dispositivo del contacto ofrecía antes no está presente en esta llamada. Compara las palabras de viva voz."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Une protection que cet appareil du contact proposait auparavant n'est pas présente dans cet appel. Compare les mots à voix haute."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uma proteção que este dispositivo do contato oferecia antes não está presente nesta chamada. Compare as palavras em voz alta."
+          }
+        }
+      }
+    },
+    "incall.shield.voice_key_uncertain": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the voice-as-key shield when the contact voice is uncertain against the declared voice profile",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voce del contatto è incerta rispetto al suo profilo vocale dichiarato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The contact's voice is uncertain compared with their declared voice profile"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Stimme des Kontakts ist im Vergleich zu seinem angegebenen Stimmprofil unsicher"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voz del contacto es incierta respecto a su perfil de voz declarado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voix du contact est incertaine par rapport à son profil vocal déclaré"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A voz do contato é incerta em relação ao perfil de voz declarado"
+          }
+        }
+      }
+    },
+    "incall.max_assurance.title": {
+      "extractionState": "manual",
+      "comment": "Call screen, title of the maximum assurance popup",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MASSIMA SICUREZZA"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MAXIMUM SECURITY"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MAXIMALE SICHERHEIT"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "MÁXIMA SEGURIDAD"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SÉCURITÉ MAXIMALE"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SEGURANÇA MÁXIMA"
+          }
+        }
+      }
+    },
+    "incall.max_assurance.body": {
+      "extractionState": "manual",
+      "comment": "Call screen, body of the maximum assurance popup",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identità del contatto verificata, doppia protezione post-quantistica e handshake firmato con firma ibrida (ML-DSA-87 con Ed25519)."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contact identity verified, double post-quantum protection and a handshake signed with a hybrid signature (ML-DSA-87 with Ed25519)."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identität des Kontakts verifiziert, doppelter Post-Quanten-Schutz und Handshake mit hybrider Signatur (ML-DSA-87 mit Ed25519) signiert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identidad del contacto verificada, doble protección poscuántica y handshake firmado con firma híbrida (ML-DSA-87 con Ed25519)."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identité du contact vérifiée, double protection post-quantique et handshake signé avec une signature hybride (ML-DSA-87 avec Ed25519)."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identidade do contato verificada, dupla proteção pós-quântica e handshake assinado com assinatura híbrida (ML-DSA-87 com Ed25519)."
+          }
+        }
+      }
+    },
+    "incall.max_assurance.a11y": {
+      "extractionState": "manual",
+      "comment": "Call screen, VoiceOver label of the maximum assurance badge",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Massima sicurezza: identità verificata e doppia protezione post-quantistica con firma ibrida"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Maximum security: identity verified and double post-quantum protection with hybrid signature"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Maximale Sicherheit: Identität verifiziert und doppelter Post-Quanten-Schutz mit hybrider Signatur"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Máxima seguridad: identidad verificada y doble protección poscuántica con firma híbrida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sécurité maximale : identité vérifiée et double protection post-quantique avec signature hybride"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Segurança máxima: identidade verificada e dupla proteção pós-quântica com assinatura híbrida"
+          }
+        }
+      }
+    },
+    "assurance.s2.title": {
+      "extractionState": "manual",
+      "comment": "Assurance level title — authenticated in person",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autenticato di persona"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authenticated in person"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Persönlich authentifiziert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autenticado en persona"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authentifié en personne"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autenticado pessoalmente"
+          }
+        }
+      }
+    },
+    "trust.state.pending": {
+      "extractionState": "manual",
+      "comment": "Contact trust state label — verification not available",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica non disponibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verification unavailable"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prüfung nicht verfügbar"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificación no disponible"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification indisponible"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificação indisponível"
+          }
+        }
+      }
+    },
+    "trust.state.verified": {
+      "extractionState": "manual",
+      "comment": "Contact trust state label — verified",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verified"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifiziert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérifié"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificado"
+          }
+        }
+      }
+    },
+    "trust.state.to_verify": {
+      "extractionState": "manual",
+      "comment": "Contact trust state label — to be verified",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Da verificare"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To verify"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zu verifizieren"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Por verificar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "À vérifier"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A verificar"
+          }
+        }
+      }
+    },
+    "trust.state.changed": {
+      "extractionState": "manual",
+      "comment": "Contact trust state label — identity changed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identità cambiata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identity changed"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identität geändert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identidad cambiada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identité modifiée"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identidade alterada"
+          }
+        }
+      }
+    },
+    "trust.a11y.pending": {
+      "extractionState": "manual",
+      "comment": "Accessibility label of the contact trust state — verification not available",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica non disponibile"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verification unavailable"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prüfung nicht verfügbar"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificación no disponible"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification indisponible"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificação indisponível"
+          }
+        }
+      }
+    },
+    "trust.a11y.verified": {
+      "extractionState": "manual",
+      "comment": "Accessibility label of the contact trust state — verified",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contatto verificato"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contact verified"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontakt verifiziert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contacto verificado"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contact vérifié"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contato verificado"
+          }
+        }
+      }
+    },
+    "trust.a11y.to_verify": {
+      "extractionState": "manual",
+      "comment": "Accessibility label of the contact trust state — to be verified",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contatto da verificare"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contact to verify"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontakt zu verifizieren"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contacto por verificar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contact à vérifier"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contato a verificar"
+          }
+        }
+      }
+    },
+    "trust.a11y.changed": {
+      "extractionState": "manual",
+      "comment": "Accessibility label of the contact trust state — identity changed",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identità del contatto cambiata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Contact identity changed"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identität des Kontakts geändert"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identidad del contacto cambiada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identité du contact modifiée"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Identidade do contato alterada"
+          }
+        }
+      }
+    },
+    "trust.explain.pending": {
+      "extractionState": "manual",
+      "comment": "Contact trust explanation — identity not yet available",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'identità di questo contatto non è ancora disponibile."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This contact's identity is not available yet."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Identität dieses Kontakts ist noch nicht verfügbar."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La identidad de este contacto aún no está disponible."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L'identité de ce contact n'est pas encore disponible."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A identidade deste contato ainda não está disponível."
+          }
+        }
+      }
+    },
+    "trust.explain.verified": {
+      "extractionState": "manual",
+      "comment": "Contact trust explanation — current key verified",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hai verificato la chiave attuale di questo contatto. Decade da sola se cambia chiave."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You have verified this contact's current key. The verification lapses on its own if the key changes."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sie haben den aktuellen Schlüssel dieses Kontakts verifiziert. Die Verifizierung erlischt von selbst, wenn sich der Schlüssel ändert."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Has verificado la clave actual de este contacto. Caduca sola si la clave cambia."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu as vérifié la clé actuelle de ce contact. La vérification tombe d'elle-même si la clé change."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você verificou a chave atual deste contato. A verificação expira sozinha se a chave mudar."
+          }
+        }
+      }
+    },
+    "trust.explain.to_verify": {
+      "extractionState": "manual",
+      "comment": "Contact trust explanation — key pinned at first contact, never verified",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chiave fissata al primo contatto, mai verificata. Se qualcuno si fosse messo in mezzo fin dall'inizio non te ne accorgeresti: confronta il codice di sicurezza."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Key pinned at first contact, never verified. If someone had intercepted from the very beginning you would not notice: compare the security code."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schlüssel beim ersten Kontakt festgelegt, nie verifiziert. Hätte sich von Anfang an jemand dazwischengeschaltet, würden Sie es nicht bemerken: Vergleichen Sie den Sicherheitscode."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clave fijada en el primer contacto, nunca verificada. Si alguien se hubiera interpuesto desde el principio no lo notarías: compara el código de seguridad."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clé épinglée au premier contact, jamais vérifiée. Si quelqu'un s'était interposé dès le début, tu ne le remarquerais pas : compare le code de sécurité."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chave fixada no primeiro contato, nunca verificada. Se alguém tivesse se interposto desde o início, você não perceberia: compare o código de segurança."
+          }
+        }
+      }
+    },
+    "trust.explain.changed": {
+      "extractionState": "manual",
+      "comment": "Contact trust explanation — key changed after verification",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La chiave di questo contatto è cambiata dopo la tua verifica. Verifica di nuovo prima di fidarti."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This contact's key changed after your verification. Verify again before trusting it."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Schlüssel dieses Kontakts hat sich nach Ihrer Verifizierung geändert. Verifizieren Sie erneut, bevor Sie vertrauen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La clave de este contacto ha cambiado después de tu verificación. Verifica de nuevo antes de fiarte."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La clé de ce contact a changé après ta vérification. Vérifie à nouveau avant de lui faire confiance."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A chave deste contato mudou após a sua verificação. Verifique de novo antes de confiar."
           }
         }
       }

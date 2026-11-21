@@ -63,6 +63,9 @@ struct ContactDetailScreen: View {
     /// 3b24290e). Failures now surface with a message and "Riprova", and are
     /// retried automatically when the persistent socket reconnects.
     @StateObject private var trustModel = TrustEvaluationModel()
+    /// The identity shield of this contact (no call), from the key-bound verification record. Recomputed when the screen opens, after
+    /// every evaluation and whenever the contacts or the pins change; never from `item.isVerified`.
+    @State private var contactShield: IdentityShield = .pending
     /// The last successful evaluation; nil while loading or after a failure.
     /// Carries the peer's raw Ed25519 identity key (`peerIkEdPub`), which
     /// `onAcceptNewFingerprint` needs to re-pin without re-fetching.
@@ -95,7 +98,17 @@ struct ContactDetailScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .blockedContactsDidChange)) { _ in
             isBlocked = BlockedContactsStore.isBlocked(item.userId)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .contactsDidChange)) { _ in
+            contactShield = ContactShieldEvaluator.shield(forUserId: item.userId)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: PeerIdentityPinStore.didChangeNotification)) { _ in
+            contactShield = ContactShieldEvaluator.shield(forUserId: item.userId)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .sasVerificationDidChange)) { _ in
+            contactShield = ContactShieldEvaluator.shield(forUserId: item.userId)
+        }
         .onAppear {
+            contactShield = ContactShieldEvaluator.shield(forUserId: item.userId)
             isBlocked = BlockedContactsStore.isBlocked(item.userId)
             peerExtension = DisplayName.resolvedExtension(
                 for: item.userId, serverDisplay: item.displayName,
@@ -106,6 +119,8 @@ struct ContactDetailScreen: View {
         // which cancels a superseded run and starts the next one.
         .task(id: TrustRunKey(userId: item.userId, token: trustModel.runToken)) {
             await trustModel.run(peerUserId: item.userId, evaluator: trustEvaluator)
+            // The evaluation pins the key it resolved and can record a change: the shield is read after it.
+            contactShield = ContactShieldEvaluator.shield(forUserId: item.userId)
         }
         .onChange(of: appState.wsConnectionState) { newState in
             trustModel.connectionStateChanged(to: newState)
@@ -413,12 +428,20 @@ struct ContactDetailScreen: View {
     /// The risk pill and the meter are gone rather than re-sourced — neither
     /// had a number behind it.
     private var trustBadgesRow: some View {
-        HStack(spacing: 8) {
-            if item.isVerified {
-                TrustChip("SAS VERIFICATO", accent: extras.success)
-            } else {
-                TrustChip("SAS DA VERIFICARE", accent: extras.warning)
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                IdentityShieldBadge(shield: contactShield, size: 36, showsLabel: true)
+                Text(contactShield.stateWord)
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(contactShield.tint(extras))
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(contactShield.contactAccessibilityLabel)
+            Text(contactShield.contactExplanation)
+                .qaudionStyle(type.bodySmall)
+                .foregroundStyle(scheme.onSurfaceVariant)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
         }
     }
 
@@ -527,8 +550,8 @@ struct ContactDetailScreen: View {
     // MARK: - Trust verification card
 
     private var trustVerificationCard: some View {
-        let verified = trustEval?.state == .userVerified
-        let changed = trustEval?.state == .identityChanged
+        // The state of the card is the identity shield of the contact: the same four states, colours and words as the badge above.
+        let verified = contactShield == .verified
         // C-4 (2026-07-30) — was `trustEval != nil`, which is true for EVERY
         // outcome of `PeerTrustEvaluator.evaluate()` including the graceful-
         // degrade `.unverified` fallback (self identity missing, provider
@@ -549,8 +572,10 @@ struct ContactDetailScreen: View {
                     .tracking(1.2)
                     .foregroundStyle(scheme.onSurfaceVariant)
                 Spacer()
-                TrustChip(changed ? "IDENTITÀ CAMBIATA" : (verified ? "SAS VERIFICATO" : "IN ATTESA"),
-                          accent: changed ? extras.riskHigh : (verified ? extras.success : extras.warning))
+                HStack(spacing: 6) {
+                    IdentityShieldBadge(shield: contactShield, size: 20)
+                    TrustChip(verbatim: contactShield.stateWord, accent: contactShield.tint(extras))
+                }
             }
             .padding(.bottom, 12)
 
@@ -604,7 +629,7 @@ struct ContactDetailScreen: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: done ? "checkmark.circle.fill" : "circle")
                 .qaudionScaledFont(size: 18, weight: .semibold)
-                .foregroundStyle(done ? TrustChipColors.jade : TrustChipColors.mutedGrey)
+                .foregroundStyle(done ? extras.success : extras.neutral)
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
                     .qaudionStyle(type.bodyMedium)

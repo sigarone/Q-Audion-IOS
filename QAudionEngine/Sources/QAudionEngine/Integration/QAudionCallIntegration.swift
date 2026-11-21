@@ -1299,6 +1299,18 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// `sig_invalid`, ...): the app keeps it so a call closed while still held reports the right reason.
     public var onHandshakeIdentityUnverified: ((_ callId: String, _ code: String) -> Void)?
 
+    /// Identity shield: what each handshake round proved about the peer's identity key (the key that verified sigV6, or the hold
+    /// with its code and the bundle key). Fired from the same two verdict switches that fire `onHandshakeIdentityUnverified`, on the
+    /// handshake's thread, once per round; for an `identity_key_mismatch` hold a second report of the same round follows when the
+    /// proof of possession could be completed (see `fetchPublishedKeyForDevice`). nil: nothing observes it.
+    public var onIdentityVerdict: ((IdentityVerdictReport) -> Void)?
+
+    /// Proof that a rotated key is the one the server publishes for exactly this peer device: asks the server for the key of
+    /// `(peerId, deviceId)` and returns it ONLY when that request succeeded for that device (nil on a missing network, a timeout, a
+    /// 404, an error or an unusable answer: never a cached value). Used only after sigV6 verified under the bundle key of an
+    /// `identity_key_mismatch` hold; the result decides nothing by itself.
+    public var fetchPublishedKeyForDevice: ((_ peerId: String, _ deviceId: String) async -> Data?)?
+
     /// Has this peer ever had a SIGNED v4 bundle verify (spec §4
     /// `v4_capable_pinned`)? Wired from a UserDefaults-backed set in AppState.
     public var isPeerV4Pinned: ((String) -> Bool)?
@@ -2308,6 +2320,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true, ratchetV5Capable: ratchetV5Capable)
                 offerSigOk = true
             }
+            reportIdentityVerdict(offerCheck, bundle: bundle, callId: callId, peerId: callerId, deviceId: callerDeviceId)
             // The second signature of the OFFER, checked only under a key that verified sigV6.
             let offerPq = await pqVerifyInbound(
                 isOffer: true, bundle: bundle, callId: callId, peerId: callerId, deviceId: callerDeviceId,
@@ -3372,6 +3385,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 applyAuthenticatedSideEffects(peerId: callerId, deviceId: callerDeviceId, tofuPinKey: deviceKey, v4Capable: v4Capable, srtpDirKeyV1Capable: srtpDirKeyV1Capable, setProven: true, ratchetV5Capable: ratchetV5Capable)
                 acceptSigOk = true
             }
+            reportIdentityVerdict(acceptCheck, bundle: bundle, callId: callId, peerId: callerId, deviceId: callerDeviceId)
             // The second signature of the ACCEPT, checked only under a key that verified sigV6: HT binds the acceptor's fingerprint and
             // the fingerprint of this side's OFFER. A refused rekey round is judged before anything of it is used: the waiting attempt
             // is resolved with nil by the defer above, no key is derived, no MAC window is armed and no MAC is sent for it.
@@ -4261,6 +4275,58 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
         }
         return InboundCheck(verdict: verdict, transcript: transcript, peerFingerprint: peerFingerprint)
+    }
+
+    /// Identity shield: publish what this round proved about the peer's identity key. `.authenticated` carries the BUNDLE key that
+    /// verified sigV6 (never the pin or a server key). An abort carries its code and the bundle key. For `identity_key_mismatch` the
+    /// hold is published at once with both proofs false (a confirmation is then release-only); when sigV6 verifies under the bundle
+    /// key and the device is known, a second report of the same round follows once the per-device fetch of the published key has
+    /// answered. Awaiting that fetch here would delay the handshake of a call on a slow network, so it runs on its own task.
+    private func reportIdentityVerdict(
+        _ check: InboundCheck, bundle: AndroidHandshakeBundle, callId: String, peerId: String, deviceId: String?
+    ) {
+        guard let sink = onIdentityVerdict else { return }
+        let round = max(1, bundle.rekeyRound ?? 1)
+        let bundleKey = Self.rawSignerKey(bundle.signerIdentityKey)
+        // The identity of this round: the signature of the bundle received, distinct for every OFFER (a replaced OFFER is another session).
+        let sessionTag = bundle.sigV6 ?? ""
+        switch check.verdict {
+        case .malformed:
+            return
+        case .authenticated, .authenticatedRepinFromPublished:
+            guard let key = bundleKey else { return }
+            sink(IdentityVerdictReport(callId: callId, peerId: peerId, deviceId: deviceId, round: round, kind: .authenticated(key: key), sessionTag: sessionTag))
+        case .abort(let code):
+            sink(IdentityVerdictReport(
+                callId: callId, peerId: peerId, deviceId: deviceId, round: round,
+                kind: .held(code: code, signerKey: bundleKey, bundleSigValid: false, bundleKeyPublishedForDevice: false),
+                sessionTag: sessionTag))
+            guard code == IdentityShieldRules.codeKeyMismatch, round == 1, let key = bundleKey,
+                  let transcript = check.transcript,
+                  let sig = bundle.sigV6.flatMap({ Data(base64Encoded: $0) }), sig.count == 64,
+                  HandshakeTranscript.verify(transcript: transcript, signature: sig, signerIdentityKey: key),
+                  let device = deviceId, !device.isEmpty,
+                  let fetcher = fetchPublishedKeyForDevice else { return }
+            let advertisedV5 = bundle.capabilities?.ratchetV5 ?? false
+            let pinnedV5 = isPeerRatchetV5Pinned?(peerId) ?? false
+            Task { [weak self] in
+                var fetch: MismatchProof.DeviceFetch = .unavailable
+                if let fetched = await fetcher(peerId, device) { fetch = .key(fetched) }
+                // A proof is for the call it was computed for: when the call has ended (or the hold was released) meanwhile, nothing is
+                // published, so a late answer can never reach the state of the next call.
+                guard let self, self.lock.withLock({ self.heldCalls.contains(callId.lowercased()) }) else { return }
+                let proof = MismatchProof.evaluate(
+                    bundleKey: key, sigVerifiedUnderBundleKey: true,
+                    advertisedRatchetV5: advertisedV5, ratchetV5CapablePinned: pinnedV5,
+                    deviceIdKnown: true, fetch: fetch)
+                sink(IdentityVerdictReport(
+                    callId: callId, peerId: peerId, deviceId: deviceId, round: round,
+                    kind: .held(code: code, signerKey: key,
+                                bundleSigValid: proof.bundleSigValid,
+                                bundleKeyPublishedForDevice: proof.bundleKeyPublishedForDevice),
+                    sessionTag: sessionTag))
+            }
+        }
     }
 
     /// Pin the peer's DTLS fingerprint for this call (WIRE_SPEC §3.4 step 5): the first bundle

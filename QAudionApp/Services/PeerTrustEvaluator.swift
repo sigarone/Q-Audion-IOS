@@ -154,6 +154,14 @@ public enum PeerTrustEvaluator {
 
         let pinResult = PeerIdentityPinStore().pinOrMatch(contactId: peerUserId, ed25519Pub: peerIkEdPub)
         if pinResult == .mismatch {
+            // The key the server publishes is not the key this device pinned: record the change, so the contact surfaces show it
+            // (red while a verified key is pinned) until the user settles it (`afterIdentityKeyRotation`, a fresh verification).
+            let changeStore = ContactsStore()
+            if let known = changeStore.load().first(where: { $0.userId == peerUserId }) {
+                let marked = known.withIdentityChangePending(
+                    atMs: Int64(Date().timeIntervalSince1970 * 1000), fingerprintHex: safetyNumber.fingerprintHex.isEmpty ? ContactsStore.StoredContact.unknownChangeFingerprint : safetyNumber.fingerprintHex)
+                if marked != known { changeStore.upsert(marked) }
+            }
             return Evaluation(state: .identityChanged, safetyNumber: safetyNumber, verifiedAt: nil, verificationMethod: nil, peerIkEdPub: peerIkEdPub)
         }
 
@@ -203,11 +211,12 @@ public enum PeerTrustEvaluator {
         // construction; see `PeerTrustEvaluatorTests.test_markVerified_*`
         // (QAudionAppTests) and `ContactsStoreTests.test_withVerification_*`
         // (QAudionEngineTests).
+        // Vouches for exactly the key of this safety number: only a change recorded for that key is settled by it.
         store.upsert(existing.withVerification(
             fingerprintHex: fingerprintHex,
             atMs: Int64(Date().timeIntervalSince1970 * 1000),
             method: method.rawValue
-        ))
+        ).clearingIdentityChangePending(forFingerprintHex: fingerprintHex))
     }
 
     /// User explicitly accepted a rotated identity (`.identityChanged` →

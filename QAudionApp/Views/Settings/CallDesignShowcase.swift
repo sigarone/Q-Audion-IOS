@@ -78,7 +78,7 @@ struct CallDesignShowcase: View {
                         rekeyTotalSeconds: 300,
                         pqcActive: true,
                         sasWords: ["OXYGEN", "ZEPHYR", "GLYPH", "RADIUS", "VESTIGE", "ECHO"],
-                        sasVerified: false,
+                        identityShield: .toVerify,
                         keyInfo: .init(pqcAlgorithm: "ML-KEM-1024 + X25519",
                                        sessionFingerprint: "7f3b…d2e9",
                                        pskMethodLabel: "NFC",
@@ -106,7 +106,7 @@ struct CallDesignShowcase: View {
                         rekeyInSeconds: 78,
                         rekeyTotalSeconds: 300,
                         sasWords: ["OXYGEN", "ZEPHYR", "GLYPH", "RADIUS", "VESTIGE", "ECHO"],
-                        sasVerified: true,
+                        identityShield: .verified,
                         transportMode: .turn,
                         onHangup: {}
                     )

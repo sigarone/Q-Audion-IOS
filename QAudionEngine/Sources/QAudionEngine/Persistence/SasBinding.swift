@@ -25,12 +25,14 @@ public struct SasBinding: Equatable, Sendable {
     /// SHA-256/16 of the SAS words the two users read to each other.
     public let sasFingerprint: String
 
-    /// SHA-256/16 of the identity key PINNED for the peer at confirmation time.
+    /// SHA-256/16 of the identity key the confirmed call was AUTHENTICATED by (the key that verified the handshake signature of
+    /// that call), which a confirmation records only when it is also the key pinned for the peer device.
     ///
-    /// Derived from the pin rather than from the key observed on the call, on
-    /// purpose: the pin is what a rotation has to move, so the check answers "is
-    /// this still the identity I compared" instead of merely "did the bytes on this
-    /// particular call happen to match".
+    /// A rotation moves the pin, so the check answers "is this still the identity I
+    /// compared". The identity shield reads it the other way round as well: a call
+    /// authenticated by a key whose tag is stored is verified; one authenticated by
+    /// another key while this device is verified for a different one is changed
+    /// (`IdentityShieldRules.keyVerification`).
     public let identityTag: String
 
     /// Cannot occur inside either half — both are lowercase hex.
