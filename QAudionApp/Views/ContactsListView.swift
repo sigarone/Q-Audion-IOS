@@ -234,7 +234,8 @@ final class ContactsListContainer: ObservableObject {
             proximityPairedAtMs: proximityPairedAtMs ?? existing?.proximityPairedAtMs,
             proximityServerConfirmed: proximityPairedAtMs != nil
                 ? proximityServerConfirmed : existing?.proximityServerConfirmed,
-            identityChangePendingAtMs: existing?.identityChangePendingAtMs
+            identityChangePendingAtMs: existing?.identityChangePendingAtMs,
+            identityChangePendingFingerprintsHex: existing?.identityChangePendingFingerprintsHex
         )
         store.upsert(contact)
         // W77: kick off the pairwise PSK handshake so future chats with
@@ -375,7 +376,7 @@ final class ContactsListContainer: ObservableObject {
         store.upsert(existing.withVerification(
             fingerprintHex: fp,
             atMs: Int64(Date().timeIntervalSince1970 * 1000),
-            method: TrustVerificationMethod.inPerson.rawValue).clearingIdentityChangePending())
+            method: TrustVerificationMethod.inPerson.rawValue).clearingIdentityChangePending(forFingerprintHex: fp))
     }
 
     func refresh() {

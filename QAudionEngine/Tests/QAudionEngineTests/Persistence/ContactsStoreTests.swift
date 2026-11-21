@@ -604,7 +604,8 @@ final class ContactsStoreTests: XCTestCase {
             callVerifiedPeerIdentityKey: Data(repeating: 0x22, count: 32),
             proximityPairedAtMs: 333,
             proximityServerConfirmed: true,
-            identityChangePendingAtMs: 444
+            identityChangePendingAtMs: 444,
+            identityChangePendingFingerprintsHex: ["fp-fixture"]
         )
     }
 
@@ -625,7 +626,7 @@ final class ContactsStoreTests: XCTestCase {
     /// until the fixture (and the helpers' intent) is updated on purpose.
     func test_copyHelperFixture_populatesEveryStoredField() {
         let children = Mirror(reflecting: fullyPopulatedContact()).children
-        XCTAssertEqual(children.count, 20,
+        XCTAssertEqual(children.count, 21,
                        "StoredContact gained or lost a field: extend fullyPopulatedContact() and decide, per helper, whether the new field is preserved or cleared")
         for child in children {
             XCTAssertNotEqual("\(child.value)", "nil",
@@ -696,7 +697,7 @@ final class ContactsStoreTests: XCTestCase {
             changedFields(seed, rotated),
             ["isVerified", "verifiedFingerprintHex", "verifiedAtMs", "verificationMethod",
              "presenceAuth", "presenceFloor", "proximityPairedAtMs", "proximityServerConfirmed",
-             "callVerifiedPeerIdentityKey", "identityChangePendingAtMs"],
+             "callVerifiedPeerIdentityKey", "identityChangePendingAtMs", "identityChangePendingFingerprintsHex"],
             "a rotation must reset exactly these fields and no others")
         // Kept on purpose.
         XCTAssertEqual(rotated.voiceVerifiedAt, 222, "a voice match is about the person, not the key")
@@ -738,13 +739,13 @@ final class ContactsStoreTests: XCTestCase {
     /// The marker of an unsettled key change keeps its first timestamp, touches nothing else, and is cleared by the single reset point
     /// of the key-bound facts (`afterIdentityKeyRotation`) and by `clearingIdentityChangePending`.
     func test_identityChangePending_isRecordedOnceTouchesNothingElseAndIsClearedByTheResetPoints() {
-        let base = fullyPopulatedContact().clearingIdentityChangePending()
+        let base = fullyPopulatedContact().clearingIdentityChangePending(forFingerprintHex: "fp-fixture")
         XCTAssertNil(base.identityChangePendingAtMs)
-        XCTAssertEqual(changedFields(fullyPopulatedContact(), base), ["identityChangePendingAtMs"])
-        let marked = base.withIdentityChangePending(atMs: 1_000)
+        XCTAssertEqual(changedFields(fullyPopulatedContact(), base), ["identityChangePendingAtMs", "identityChangePendingFingerprintsHex"])
+        let marked = base.withIdentityChangePending(atMs: 1_000, fingerprintHex: "fp-a")
         XCTAssertEqual(marked.identityChangePendingAtMs, 1_000)
-        XCTAssertEqual(changedFields(base, marked), ["identityChangePendingAtMs"], "only the marker changed")
-        XCTAssertEqual(marked.withIdentityChangePending(atMs: 9_999).identityChangePendingAtMs, 1_000, "a repeated observation does not move it")
+        XCTAssertEqual(changedFields(base, marked), ["identityChangePendingAtMs", "identityChangePendingFingerprintsHex"], "only the marker changed")
+        XCTAssertEqual(marked.withIdentityChangePending(atMs: 9_999, fingerprintHex: "fp-a").identityChangePendingAtMs, 1_000, "a repeated observation does not move it")
         XCTAssertNil(marked.afterIdentityKeyRotation().identityChangePendingAtMs, "accepting a rotated key settles the change")
         // an ordinary rename keeps the marker
         XCTAssertEqual(marked.withDisplayName("Mario Rossi").identityChangePendingAtMs, 1_000)
@@ -783,12 +784,82 @@ final class ContactsStoreTests: XCTestCase {
         XCTAssertEqual(store.load().first(where: { $0.userId == "u-2" })?.identityChangePendingAtMs, 7, "setIdentityPubkeyIfAbsent")
     }
 
+    /// Verifying device B (in person, by safety number, by SAS) never clears a pending change of device A; verifying the changed key
+    /// itself does. The marker goes only with the last pending key.
+    func test_identityChangePending_isSettledOnlyByTheKeyItConcerns() {
+        let a = fullyPopulatedContact().clearingIdentityChangePending(forFingerprintHex: "fp-fixture")
+            .withIdentityChangePending(atMs: 1, fingerprintHex: "fp-A")
+        let afterB = a.withVerification(fingerprintHex: "fp-B", atMs: 2, method: "in-person")
+            .clearingIdentityChangePending(forFingerprintHex: "fp-B")
+        XCTAssertEqual(afterB.identityChangePendingAtMs, 1, "verifying device B keeps the pending change of device A")
+        XCTAssertEqual(afterB.identityChangePendingFingerprintsHex, ["fp-A"])
+        let two = afterB.withIdentityChangePending(atMs: 3, fingerprintHex: "fp-C")
+        XCTAssertEqual(two.identityChangePendingFingerprintsHex, ["fp-A", "fp-C"])
+        let afterA = two.clearingIdentityChangePending(forFingerprintHex: "fp-A")
+        XCTAssertNotNil(afterA.identityChangePendingAtMs, "another key is still pending")
+        let none = afterA.clearingIdentityChangePending(forFingerprintHex: "fp-C")
+        XCTAssertNil(none.identityChangePendingAtMs)
+        XCTAssertNil(none.identityChangePendingFingerprintsHex)
+    }
+
+    /// Through the real rules: the contact stays CHANGED after another device is verified, and turns verified-not-changed once the
+    /// changed key itself is settled.
+    func test_identityChangePending_contactShieldStaysChangedUntilTheChangedKeyIsSettled() {
+        let selfId = "11111111-1111-1111-1111-111111111111"
+        let peerId = "22222222-2222-2222-2222-222222222222"
+        let selfKey = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
+        let keyA = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
+        let keyB = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
+        func fp(_ k: Data) -> String {
+            SasPinVerification.fingerprintHex(selfUserId: selfId, selfIdentityKey: selfKey, peerUserId: peerId, peerIdentityKey: k) ?? ""
+        }
+        func shield(_ c: ContactsStore.StoredContact) -> IdentityShield {
+            IdentityShieldRules.contactShield(
+                pinnedKeys: [keyA, keyB],
+                record: IdentityVerificationRecord(bindingTag: nil, verifiedFingerprintHex: c.verifiedFingerprintHex),
+                selfUserId: selfId, selfIdentityKey: selfKey, peerUserId: peerId,
+                pendingChange: c.identityChangePendingAtMs != nil)
+        }
+        // device A verified and then changed (pending for A's NEW key), device A's old key is the verified one
+        let start = ContactsStore.StoredContact(userId: peerId, displayName: "p", phoneHash: "", avatarUrl: nil, lastSeen: nil, isVerified: true,
+                                                verifiedFingerprintHex: fp(keyA))
+            .withIdentityChangePending(atMs: 1, fingerprintHex: "fp-new-key-of-A")
+        XCTAssertEqual(shield(start), .changed)
+        // device B verified in person: the single stored verification moves to B (per-peer limit) but the change of A stays pending
+        let afterB = start.withVerification(fingerprintHex: fp(keyB), atMs: 2, method: "in-person")
+            .clearingIdentityChangePending(forFingerprintHex: fp(keyB))
+        XCTAssertNotNil(afterB.identityChangePendingAtMs)
+        XCTAssertEqual(shield(afterB), .changed, "the contact stays CHANGED while the marker of A remains (never green)")
+        XCTAssertNotNil(afterB.identityChangePendingFingerprintsHex)
+        // the changed key itself verified: the marker goes
+        let settled = afterB.withVerification(fingerprintHex: "fp-new-key-of-A", atMs: 3, method: "in-person")
+            .clearingIdentityChangePending(forFingerprintHex: "fp-new-key-of-A")
+        XCTAssertNil(settled.identityChangePendingAtMs)
+    }
+
+    /// Fail closed: a change whose key could not be fingerprinted is recorded as "unknown", keeps the contact CHANGED, and is cleared
+    /// by a successful verification of the key the contact has now.
+    func test_identityChangePending_unknownSentinelFailsClosedAndClearsOnAVerification() {
+        let c = ContactsStore.StoredContact(userId: "u", displayName: "p", phoneHash: "", avatarUrl: nil, lastSeen: nil, isVerified: true)
+            .withIdentityChangePending(atMs: 1, fingerprintHex: ContactsStore.StoredContact.unknownChangeFingerprint)
+        XCTAssertNotNil(c.identityChangePendingAtMs)
+        let key = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
+        let record = IdentityVerificationRecord(bindingTag: SasBinding.identityTag(forPinnedKey: key), verifiedFingerprintHex: nil)
+        XCTAssertEqual(.changed, IdentityShieldRules.contactShield(
+            pinnedKeys: [key], record: record, selfUserId: nil, selfIdentityKey: nil, peerUserId: "u",
+            pendingChange: c.identityChangePendingAtMs != nil))
+        XCTAssertNil(c.clearingIdentityChangePending(forFingerprintHex: "fp-any").identityChangePendingAtMs)
+        // a known entry is not cleared by another key's verification, the sentinel is
+        let both = c.withIdentityChangePending(atMs: 2, fingerprintHex: "fp-A")
+        XCTAssertEqual(both.clearingIdentityChangePending(forFingerprintHex: "fp-B").identityChangePendingFingerprintsHex, ["fp-A"])
+    }
+
     func test_identityChangePending_roundTripsThroughTheStore() {
-        store.upsert(fullyPopulatedContact().clearingIdentityChangePending())
+        store.upsert(fullyPopulatedContact().clearingIdentityChangePending(forFingerprintHex: "fp-fixture"))
         // swiftlint:disable:next force_unwrapping
         let existing = store.load().first(where: { $0.userId == "u-1" })!
         XCTAssertNil(existing.identityChangePendingAtMs)
-        store.upsert(existing.withIdentityChangePending(atMs: 42))
+        store.upsert(existing.withIdentityChangePending(atMs: 42, fingerprintHex: "fp-a"))
         XCTAssertEqual(store.load().first(where: { $0.userId == "u-1" })?.identityChangePendingAtMs, 42)
     }
 

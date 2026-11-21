@@ -57,8 +57,8 @@ public enum SasPinVerification {
                 selfUserId: selfUserId, selfIdentityKey: selfIdentityKey,
                 peerUserId: peerUserId, peerIdentityKey: confirmedKey)
         else { return false }
-        // This confirmation vouches for the key the contact has now: a change recorded earlier is settled by it.
-        store.upsert(existing.withVerification(fingerprintHex: fp, atMs: nowMs, method: method).clearingIdentityChangePending())
+        // This confirmation vouches for exactly this key: only a change recorded for THIS key is settled by it.
+        store.upsert(existing.withVerification(fingerprintHex: fp, atMs: nowMs, method: method).clearingIdentityChangePending(forFingerprintHex: fp))
         return true
     }
 

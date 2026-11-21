@@ -245,14 +245,15 @@ final class DesignSystemAccessibilityTests: XCTestCase {
     /// shields do not depend on it.
     func testThePostQuantumPopupReadsDifferentlyUnderAnActiveAndAGreyShield() {
         // The language of the phone running the test does not matter: only that the two texts differ.
-        let active = InCallScreen.TrustBadgeInfo.pqc.body(pqcActive: true)
-        let inactive = InCallScreen.TrustBadgeInfo.pqc.body(pqcActive: false)
+        let active = InCallScreen.TrustBadgeInfo.pqc.body(pqcActive: true, identityShield: .verified, pqProtection: nil)
+        let inactive = InCallScreen.TrustBadgeInfo.pqc.body(pqcActive: false, identityShield: .verified, pqProtection: nil)
         XCTAssertFalse(active.isEmpty)
         XCTAssertFalse(inactive.isEmpty)
         XCTAssertNotEqual(active, inactive, "the popup reads the same under an active and a grey shield")
         let others: [InCallScreen.TrustBadgeInfo] = [.voiceKey, .speakerChange, .nfc, .psk, .sas, .transport]
         for info in others {
-            XCTAssertEqual(info.body(pqcActive: true), info.body(pqcActive: false), "\(info)")
+            XCTAssertEqual(info.body(pqcActive: true, identityShield: .verified, pqProtection: nil),
+                           info.body(pqcActive: false, identityShield: .verified, pqProtection: nil), "\(info)")
         }
     }
 

@@ -254,6 +254,29 @@ final class IdentityShieldTests: XCTestCase {
         XCTAssertNotEqual(.adoptHeldRotation(c), SasConfirmPolicy.action(auth: s, callId: callId, candidate: c))
     }
 
+    /// The contact-level marker is recorded for every verdict that shows a changed key, whatever call it belongs to.
+    func testChangeMarker_recordsTheChangedKeyForAnyCall() {
+        let signer = newKey(), k1 = newKey(), k2 = newKey()
+        let mismatch = report(.held(code: "identity_key_mismatch", signerKey: signer, bundleSigValid: false, bundleKeyPublishedForDevice: false),
+                              round: 1, call: "a-call-that-is-not-active")
+        XCTAssertEqual(.key(signer), ChangeMarker.keyToRecord(report: mismatch, devicePin: nil))
+        XCTAssertEqual(.key(k2), ChangeMarker.keyToRecord(report: report(.authenticated(key: k2), round: 1, call: "other"), devicePin: k1))
+        // any round: a rekey round verified under another key than the pin marks the contact, and the call is lost (red)
+        let rekey = report(.authenticated(key: k2), round: 2)
+        XCTAssertEqual(.key(k2), ChangeMarker.keyToRecord(report: rekey, devicePin: k1))
+        let state = CallIdentityReducer.apply(rekey, to: CallIdentityReducer.apply(report(.authenticated(key: k1), round: 1), to: .pending))
+        XCTAssertEqual(.lost(callId: callId), state)
+        XCTAssertEqual(.changed, IdentityShieldRules.callShield(auth: state, callId: callId, record: .forKey))
+        let contact = IdentityShieldRules.contactShield(
+            pinnedKeys: [k1], record: tagRecord(for: k1), selfUserId: selfId, selfIdentityKey: selfKey, peerUserId: peerId, pendingChange: true)
+        XCTAssertEqual(.changed, contact)
+        XCTAssertEqual(.key(signer), ChangeMarker.keyToRecord(report: report(.held(code: "identity_key_mismatch", signerKey: signer, bundleSigValid: false, bundleKeyPublishedForDevice: false), round: 3), devicePin: k1))
+        XCTAssertEqual(.unknown, ChangeMarker.keyToRecord(report: report(.held(code: "identity_key_mismatch", signerKey: nil, bundleSigValid: false, bundleKeyPublishedForDevice: false), round: 2), devicePin: k1))
+        XCTAssertNil(ChangeMarker.keyToRecord(report: report(.authenticated(key: k1), round: 1), devicePin: k1))
+        XCTAssertNil(ChangeMarker.keyToRecord(report: report(.authenticated(key: k2), round: 1), devicePin: nil))
+        XCTAssertNil(ChangeMarker.keyToRecord(report: report(.held(code: "sig_invalid", signerKey: signer, bundleSigValid: false, bundleKeyPublishedForDevice: false), round: 1), devicePin: k1))
+    }
+
     /// A late genuine round-1 OFFER never turns an attacker's hold green.
     func test_review_aLateRound1OfferNeverTurnsAHoldGreen() {
         let ka = newKey(), k1 = newKey()

@@ -115,7 +115,8 @@ struct PhoneContactImportView: View {
                     callVerifiedPeerIdentityKey: existing?.callVerifiedPeerIdentityKey,
                     proximityPairedAtMs: existing?.proximityPairedAtMs,
                     proximityServerConfirmed: existing?.proximityServerConfirmed,
-                    identityChangePendingAtMs: existing?.identityChangePendingAtMs
+                    identityChangePendingAtMs: existing?.identityChangePendingAtMs,
+                    identityChangePendingFingerprintsHex: existing?.identityChangePendingFingerprintsHex
                 )
                 store.upsert(merged)
                 selectedCandidate = nil

@@ -1464,6 +1464,17 @@ final class AppState: ObservableObject {
         guard !cid.isEmpty else { return }
         // A verdict or a proof of a call that is not the live one (a late answer of a call that ended) is dropped. While no call id is
         // bound yet (ring time) the report is taken; the state itself is tagged with its call and reset at every call start.
+        // Recording a changed key on the CONTACT is a fact about the contact, not call state: it is done for every verdict, before the
+        // active-call filter (a second incoming call while busy, a report just after hang-up). The one path for the marker.
+        if let changed = ChangeMarker.keyToRecord(
+            report: report,
+            devicePin: PeerIdentityPinStore().pinnedKey(contactId: report.peerId, deviceId: report.deviceId)) {
+            if case .key(let changedKey) = changed {
+                markIdentityChangePending(peerId: report.peerId, key: changedKey)
+            } else {
+                markIdentityChangePending(peerId: report.peerId, key: nil)
+            }
+        }
         if let live = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(), !live.isEmpty,
            live.lowercased() != cid { return }
         // A proof belongs to the session (round-1 OFFER) it was computed for.
@@ -1489,7 +1500,6 @@ final class AppState: ObservableObject {
                 pendingIdentityRotation = IdentityRotationCandidate(
                     callId: cid, peerId: report.peerId, deviceId: report.deviceId, key: key)
                 callIdentityRotationAwaitingSas = true
-                markIdentityChangePending(peerId: report.peerId)
             }
         case .held:
             if let candidate = CallIdentityReducer.candidate(from: report),
@@ -1497,7 +1507,6 @@ final class AppState: ObservableObject {
                id == cid, code == IdentityShieldRules.codeKeyMismatch, signer == candidate.key {
                 pendingIdentityRotation = candidate
                 callHeldRotationAdoptable = true
-                markIdentityChangePending(peerId: report.peerId)
             }
         }
         recomputeCallIdentityShield()
@@ -1550,20 +1559,31 @@ final class AppState: ObservableObject {
     /// A confirmation of the words for the key the call authenticated vouches for the key the contact has now: it settles a change
     /// recorded earlier (the counterpart of the pending-change marker cleared by a SAS-confirmed pin).
     @MainActor
-    private func clearIdentityChangePending(peerId: String) {
+    private func clearIdentityChangePending(peerId: String, key: Data) {
+        guard let fingerprint = changeFingerprint(peerId: peerId, key: key) else { return }
         let store = ContactsStore()
         guard let existing = store.load().first(where: { $0.userId == peerId }) else { return }
-        let settled = existing.clearingIdentityChangePending()
+        let settled = existing.clearingIdentityChangePending(forFingerprintHex: fingerprint)
         if settled != existing { store.upsert(settled) }
+    }
+
+    /// The safety-number fingerprint of `key` for `peerId` (the identity of the key a pending change concerns), or nil when this
+    /// account's identity is unavailable.
+    private func changeFingerprint(peerId: String, key: Data) -> String? {
+        let context = ContactShieldEvaluator.currentContext()
+        guard let me = context.selfUserId, let mine = context.selfIdentityKey else { return nil }
+        return SasPinVerification.fingerprintHex(selfUserId: me, selfIdentityKey: mine, peerUserId: peerId, peerIdentityKey: key)
     }
 
     /// Record that this device saw a change of the contact's identity key that nobody has settled (see
     /// `StoredContact.identityChangePendingAtMs`); the contact surfaces turn red while a verified key is pinned.
     @MainActor
-    private func markIdentityChangePending(peerId: String) {
+    private func markIdentityChangePending(peerId: String, key: Data?) {
+        // Fail closed: when the key cannot be fingerprinted (own identity unavailable) the change is still recorded, as "unknown".
+        let fingerprint = key.flatMap { changeFingerprint(peerId: peerId, key: $0) } ?? ContactsStore.StoredContact.unknownChangeFingerprint
         let store = ContactsStore()
         guard let existing = store.load().first(where: { $0.userId == peerId }) else { return }
-        let updated = existing.withIdentityChangePending(atMs: Int64(Date().timeIntervalSince1970 * 1000))
+        let updated = existing.withIdentityChangePending(atMs: Int64(Date().timeIntervalSince1970 * 1000), fingerprintHex: fingerprint)
         if updated != existing { store.upsert(updated) }
     }
 
@@ -1670,7 +1690,7 @@ final class AppState: ObservableObject {
                 peerUserId: peer, fingerprint: fp,
                 identityTag: SasVerificationStore.identityTag(forPinnedKey: key))
             RTLog.info("call", "sasConfirm ok=1")
-            clearIdentityChangePending(peerId: peer)
+            clearIdentityChangePending(peerId: peer, key: key)
             // A pin warning of this call goes with the confirmation (the record of the contact device drops the capability).
             confirmCapsPinWarning()
             // Release whatever media AppState held back for this call's unverified handshake identity, if any was.
@@ -18610,8 +18630,7 @@ final class AppState: ObservableObject {
                     RTLog.warn("call", "tofupin repin=0 blocked=1")
                     Task { @MainActor [weak self] in
                         guard let self else { return }
-                        // The change is a fact about the contact whatever call is on screen: the contact surfaces show it.
-                        self.markIdentityChangePending(peerId: peerId)
+                        // The contact-level change is recorded by the identity verdict (handleIdentityVerdict), the one path.
                         if self.callContactId == nil || self.callContactId == peerId {
                             self.callIdentityUnauthenticatedChange = true
                             // The refused key is remembered by the identity verdict of this very call
@@ -18670,7 +18689,7 @@ final class AppState: ObservableObject {
         integration.onUnauthenticatedIdentityChange = { [weak self] peerId in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                self.markIdentityChangePending(peerId: peerId)
+                // The change is recorded per key by the verdict of the call (`handleIdentityVerdict`), which knows the key.
                 // Only surface the alert for the peer of the active call to avoid
                 // a stale banner from a late/duplicate envelope of another call.
                 if self.callContactId == nil || self.callContactId == peerId {
@@ -21191,8 +21210,7 @@ final class AppState: ObservableObject {
                 integration.onUnauthenticatedIdentityChange = { [weak self] peerId in
                     Task { @MainActor [weak self] in
                         guard let self = self else { return }
-                        // As on incoming calls: the change is a fact about the contact, recorded for the contact surfaces.
-                        self.markIdentityChangePending(peerId: peerId)
+                        // As on incoming calls, the change is recorded per key by the verdict of the call (`handleIdentityVerdict`).
                         if self.callContactId == nil || self.callContactId == peerId {
                             self.callIdentityUnauthenticatedChange = true
                         }

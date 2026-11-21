@@ -532,6 +532,32 @@ public enum SasConfirmPolicy {
     }
 }
 
+// MARK: - The contact-level change marker
+
+public enum ChangeMarker {
+    /// The key whose change a verdict shows, to be recorded on the CONTACT (a fact about the contact, not call state: it is recorded
+    /// whatever call the verdict belongs to, the live one or not): a key-mismatch hold carries the signer key; an authenticated key that
+    /// is not the pin of the device is a rotated key. nil when the verdict shows no changed key.
+    /// Every round counts (a rekey round verified under another key than the pin is the same finding as round 1). A key-mismatch hold
+    /// without a usable signer key is recorded as unknown (fail closed).
+    public enum Recorded: Equatable {
+        case key(Data)
+        case unknown
+    }
+
+    public static func keyToRecord(report: IdentityVerdictReport, devicePin: Data?) -> Recorded? {
+        switch report.kind {
+        case .authenticated(let key):
+            guard let pin = devicePin, pin != key else { return nil }
+            return .key(key)
+        case .held(let code, let signerKey, _, _):
+            guard code == IdentityShieldRules.codeKeyMismatch else { return nil }
+            if let signerKey, signerKey.count == 32 { return .key(signerKey) }
+            return .unknown
+        }
+    }
+}
+
 // MARK: - The silent re-pin gate
 
 public enum RepinGate {

@@ -190,9 +190,13 @@ public final class ContactsStore {
         /// is not in the published set, or a safety-number evaluation that found the key different from the pin. Read only by the
         /// contact-level identity shield (`IdentityShieldRules.contactShield`), which turns red when this is set AND a pinned
         /// key of the contact is verified. Cleared by `afterIdentityKeyRotation()` (the single reset point of the key-bound
-        /// facts) and by the verifications that vouch for the key the contact now has (`clearingIdentityChangePending()`).
+        /// facts) and by the verifications that vouch for the key the change concerns (`clearingIdentityChangePending(forFingerprintHex:)`).
         /// `nil` for every row written before this field existed.
         public private(set) var identityChangePendingAtMs: Int64?
+        /// The safety-number fingerprints of the keys the unsettled changes concern, one per changed key (a contact has several
+        /// devices). A verification, a confirmation or an adoption settles ONLY the change of exactly the key it concerns: verifying
+        /// device B must not clear a pending change of device A.
+        public private(set) var identityChangePendingFingerprintsHex: [String]?
 
         public init(userId: String, displayName: String, phoneHash: String,
                     avatarUrl: URL?, lastSeen: Date?, isVerified: Bool,
@@ -209,7 +213,8 @@ public final class ContactsStore {
                     callVerifiedPeerIdentityKey: Data? = nil,
                     proximityPairedAtMs: Int64? = nil,
                     proximityServerConfirmed: Bool? = nil,
-                    identityChangePendingAtMs: Int64? = nil) {
+                    identityChangePendingAtMs: Int64? = nil,
+                    identityChangePendingFingerprintsHex: [String]? = nil) {
             self.userId = userId
             self.displayName = displayName
             self.phoneHash = phoneHash
@@ -230,6 +235,7 @@ public final class ContactsStore {
             self.proximityPairedAtMs = proximityPairedAtMs
             self.proximityServerConfirmed = proximityServerConfirmed
             self.identityChangePendingAtMs = identityChangePendingAtMs
+            self.identityChangePendingFingerprintsHex = identityChangePendingFingerprintsHex
         }
 
         // MARK: Field-preserving copies
@@ -285,11 +291,23 @@ public final class ContactsStore {
             return copy
         }
 
-        /// Returns a copy with the recorded identity change settled (see `identityChangePendingAtMs`). Used by the verifications that
-        /// vouch for the key the contact now has (the SAS-confirmed adoption of a rotated key, an in-person ceremony).
-        public func clearingIdentityChangePending() -> StoredContact {
+        /// Returns a copy with the identity change of the key `fingerprintHex` settled (see `identityChangePendingAtMs`). Used by the
+        /// verifications that vouch for exactly that key (the SAS-confirmed adoption of a rotated key, a confirmation for the key of
+        /// the call, a safety-number or in-person verification). A change of ANOTHER key stays: the marker (and with it the red
+        /// contact shield) goes only when the last pending key is settled.
+        ///
+        /// Known limit (the per-peer store): `verifiedFingerprintHex` holds ONE verification per contact, so verifying a second
+        /// device overwrites the first device's record and the contact reads "to verify" (purple) until that device is verified
+        /// again. That fails safe and is not changed here.
+        public static let unknownChangeFingerprint = "unknown"
+
+        public func clearingIdentityChangePending(forFingerprintHex fingerprintHex: String) -> StoredContact {
             var copy = self
-            copy.identityChangePendingAtMs = nil
+            // The "unknown" entry (a change whose key could not be fingerprinted) is cleared by ANY successful verification: it cannot be
+            // matched to a key, and the contact must not stay red forever once the user verified the key it has now.
+            let left = (copy.identityChangePendingFingerprintsHex ?? []).filter { $0 != fingerprintHex && $0 != Self.unknownChangeFingerprint }
+            copy.identityChangePendingFingerprintsHex = left.isEmpty ? nil : left
+            if left.isEmpty { copy.identityChangePendingAtMs = nil }
             return copy
         }
 
@@ -334,9 +352,13 @@ public final class ContactsStore {
 
         /// Returns a copy that records an unsettled change of the contact's identity key (see `identityChangePendingAtMs`).
         /// Keeps the first timestamp when one is already recorded, so a repeated observation does not move it.
-        public func withIdentityChangePending(atMs: Int64) -> StoredContact {
+        /// `fingerprintHex` is the safety number of the key the change concerns; each changed key is kept.
+        public func withIdentityChangePending(atMs: Int64, fingerprintHex: String) -> StoredContact {
             var copy = self
             if copy.identityChangePendingAtMs == nil { copy.identityChangePendingAtMs = atMs }
+            var list = copy.identityChangePendingFingerprintsHex ?? []
+            if !list.contains(fingerprintHex) { list.append(fingerprintHex) }
+            copy.identityChangePendingFingerprintsHex = list
             return copy
         }
 
@@ -373,7 +395,9 @@ public final class ContactsStore {
             copy.callVerifiedPeerIdentityKey = nil
             copy.proximityPairedAtMs = nil
             copy.proximityServerConfirmed = nil
+            // Accepting the rotated key wipes every verification (above), so no verified key is left for a pending change to concern.
             copy.identityChangePendingAtMs = nil
+            copy.identityChangePendingFingerprintsHex = nil
             return copy
         }
     }
@@ -1092,7 +1116,8 @@ public final class ContactsStore {
             callVerifiedPeerIdentityKey: base.callVerifiedPeerIdentityKey,
             proximityPairedAtMs: base.proximityPairedAtMs,
             proximityServerConfirmed: base.proximityServerConfirmed,
-            identityChangePendingAtMs: base.identityChangePendingAtMs
+            identityChangePendingAtMs: base.identityChangePendingAtMs,
+            identityChangePendingFingerprintsHex: base.identityChangePendingFingerprintsHex
         )
     }
 }
