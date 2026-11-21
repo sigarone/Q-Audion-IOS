@@ -1,5 +1,5 @@
 {
-  "description": "Labeller only (design 3.1): the hysteresis, the offline rule and the streaming labeller with its resets on synthetic probability sequences. A case is a list of [p, count] runs from chunk 0 and labeller events positioned before chunk at_chunk; expected: h and the final labels of every chunk (positions after the last chunk count as non-speech).",
+  "description": "Labeller only: the hysteresis, the offline rule and the streaming labeller with its resets on synthetic probability sequences. A case is a list of [p, count] runs from chunk 0 and labeller events positioned before chunk at_chunk; expected: h and the final labels of every chunk (positions after the last chunk count as non-speech).",
   "p_margin_rule": "no p within 5e-3 of 0.50 or 0.35",
   "min_threshold_margin": 0.06,
   "cases": [

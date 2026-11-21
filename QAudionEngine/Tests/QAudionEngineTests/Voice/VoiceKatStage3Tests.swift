@@ -3,7 +3,8 @@ import Foundation
 @testable import QAudionEngine
 
 /// Measurements and windows: the clips fed to the streaming front-end in tap-clock order (blocks, stats deliveries, mute
-/// changes and events interleaved), the stats track alone, and the window assembler on synthetic chunk tables.
+/// changes and events interleaved), the stats stream alone on every case of the stats vector, and the window assembler on
+/// synthetic chunk tables.
 final class VoiceKatStage3Tests: XCTestCase {
 
     private struct TapSegment {
@@ -17,6 +18,16 @@ final class VoiceKatStage3Tests: XCTestCase {
     private struct ClipEvent {
         var kind: VoiceFrontEndEvent
         var atInput: Int
+        var atChunk: Int
+    }
+
+    /// One input of the timeline of a clip: tap-clock time, kind (RX blocks, then mute changes, then deliveries at the same
+    /// time) and the order of the lists.
+    private struct TimelineItem {
+        var tNs: Int64
+        var priority: Int
+        var seq: Int
+        var run: () -> Void
     }
 
     private func eventKind(_ name: String) -> VoiceFrontEndEvent {
@@ -51,83 +62,116 @@ final class VoiceKatStage3Tests: XCTestCase {
             passThrough[j] = VoiceKat.scaled(audio)
         }
         var eventsByTap: [Int: [ClipEvent]] = [:]
+        var rateChangeAtChunk: [Int: Int] = [:]
         for e in inputs["events"].array {
             let tap = e["tap"].int
             if e["kind"].string == "reset" && e["at_input"].int == 0 && tap > 0 {
+                rateChangeAtChunk[tap] = e["at_chunk"].int
                 continue
             }
-            eventsByTap[tap, default: []].append(ClipEvent(kind: eventKind(e["kind"].string), atInput: e["at_input"].int))
+            eventsByTap[tap, default: []].append(ClipEvent(
+                kind: eventKind(e["kind"].string), atInput: e["at_input"].int, atChunk: e["at_chunk"].int))
         }
         let snapshots = inputs["stats"]["snapshots"].array.map { VoiceStatsSnapshot(json: $0) }
         let mutes = inputs["mutes"].array.map { VoiceMute(tNs: $0["t_ns"].int64, muted: $0["muted"].flag) }
 
         var records: [VoiceChunkRecord] = []
         var windows: [VoiceWindowResult] = []
+        var intervals: [VoiceStatsInterval] = []
         let engine = VoiceFrontEnd(bundle: bundle, vad: StoredProbabilityVad(storedP))
         engine.onChunk = { records.append($0) }
         engine.onWindow = { windows.append($0) }
+        engine.statsStream.intervalListener = { intervals.append($0) }
 
-        var nextSnapshot = 0
-        var nextMute = 0
-        func deliverStats(before limit: Int64?) {
-            while nextSnapshot < snapshots.count {
-                let snapshot = snapshots[nextSnapshot]
-                if let bound = limit, snapshot.arriveNs >= bound {
-                    break
-                }
-                while nextMute < mutes.count && mutes[nextMute].tNs <= snapshot.arriveNs {
-                    engine.onMute(tNs: mutes[nextMute].tNs, muted: mutes[nextMute].muted)
-                    nextMute += 1
-                }
-                engine.onStats(snapshot)
-                nextSnapshot += 1
-            }
-        }
-
+        // The whole call as one timeline by tap-clock time: at the same time RX blocks, then mute changes, then deliveries.
+        var timeline: [TimelineItem] = []
+        var seq = 0
         for (j, seg) in segments.enumerated() {
             let events = (eventsByTap[j] ?? []).sorted { $0.atInput < $1.atInput }
+            var eventIndex = 0
             var position = 0
             for (b, length) in seg.blockLengths.enumerated() {
-                deliverStats(before: seg.clock[b])
-                while nextMute < mutes.count && mutes[nextMute].tNs <= seg.clock[b] {
-                    engine.onMute(tNs: mutes[nextMute].tNs, muted: mutes[nextMute].muted)
-                    nextMute += 1
-                }
                 let start = position
                 let end = position + length
-                if b == 0 {
-                    for e in events where e.atInput == 0 {
-                        engine.onEvent(e.kind)
+                var atStart: [ClipEvent] = []
+                while eventIndex < events.count && events[eventIndex].atInput <= start {
+                    atStart.append(events[eventIndex])
+                    eventIndex += 1
+                }
+                var inside: [ClipEvent] = []
+                while eventIndex < events.count && events[eventIndex].atInput < end {
+                    inside.append(events[eventIndex])
+                    eventIndex += 1
+                }
+                var trailing: [ClipEvent] = []
+                if b == seg.blockLengths.count - 1 {
+                    while eventIndex < events.count {
+                        trailing.append(events[eventIndex])
+                        eventIndex += 1
                     }
                 }
-                engine.registerTapBlock(count: length, rateHz: seg.rate, tNs: seg.clock[b], tapTicks: seg.ticks[b])
-                var cursor = start
-                var positions: [Int] = []
-                for e in events where e.atInput > start && e.atInput <= end && !positions.contains(e.atInput) {
-                    positions.append(e.atInput)
-                }
-                for pos in positions {
-                    try engine.push(seg.audio[cursor..<pos])
-                    cursor = pos
-                    for e in events where e.atInput == pos {
+                let rate = seg.rate
+                let tNs = seg.clock[b]
+                let ticks = seg.ticks[b]
+                let audio = seg.audio
+                timeline.append(TimelineItem(tNs: tNs, priority: 0, seq: seq) {
+                    for e in atStart {
+                        XCTAssertEqual(engine.nextChunkIndex, e.atChunk, "clip \(name): at_chunk of an event at input \(e.atInput)")
+                        engine.onEvent(e.kind)
+                    }
+                    if b == 0 && j > 0 {
+                        XCTAssertEqual(
+                            engine.nextChunkIndex, rateChangeAtChunk[j], "clip \(name): at_chunk of the rate change of tap segment \(j)")
+                    }
+                    engine.registerTapBlock(count: length, rateHz: rate, tNs: tNs, tapTicks: ticks)
+                    var cursor = start
+                    for e in inside {
+                        if e.atInput > cursor {
+                            engine.push(audio[cursor..<e.atInput])
+                            cursor = e.atInput
+                        }
+                        XCTAssertEqual(engine.nextChunkIndex, e.atChunk, "clip \(name): at_chunk of an event at input \(e.atInput)")
                         if e.kind == .reset {
-                            XCTAssertEqual(engine.inputPosition, pos, "clip \(name): reset position")
+                            XCTAssertEqual(engine.inputPosition, e.atInput, "clip \(name): reset position")
                         }
                         engine.onEvent(e.kind)
                     }
-                }
-                try engine.push(seg.audio[cursor..<end])
+                    if end > cursor {
+                        engine.push(audio[cursor..<end])
+                    }
+                    for e in trailing {
+                        XCTAssertEqual(engine.nextChunkIndex, e.atChunk, "clip \(name): at_chunk of an event at input \(e.atInput)")
+                        engine.onEvent(e.kind)
+                    }
+                })
+                seq += 1
                 position = end
             }
         }
-        deliverStats(before: nil)
-        while nextMute < mutes.count {
-            engine.onMute(tNs: mutes[nextMute].tNs, muted: mutes[nextMute].muted)
-            nextMute += 1
+        for m in mutes {
+            timeline.append(TimelineItem(tNs: m.tNs, priority: 1, seq: seq) {
+                engine.onMute(tNs: m.tNs, muted: m.muted)
+            })
+            seq += 1
+        }
+        for s in snapshots {
+            timeline.append(TimelineItem(tNs: s.arriveNs, priority: 2, seq: seq) {
+                engine.onStats(s)
+            })
+            seq += 1
+        }
+        timeline.sort { a, b in
+            if a.tNs != b.tNs { return a.tNs < b.tNs }
+            if a.priority != b.priority { return a.priority < b.priority }
+            return a.seq < b.seq
+        }
+        for item in timeline {
+            item.run()
         }
         let releasedBeforeEnd = records.count
-        engine.finish()
+        engine.finish(endNs: inputs["end_ns"].int64)
         XCTAssertGreaterThan(releasedBeforeEnd, records.count / 2, "clip \(name): chunks are released while the call runs")
+        XCTAssertFalse(engine.isInactive)
 
         XCTAssertEqual(engine.mediaStartNs, expected["t_media_ns"].int64, "clip \(name) media start")
 
@@ -152,6 +196,8 @@ final class VoiceKatStage3Tests: XCTestCase {
             XCTAssertEqual(r.concUnknown, columns["conc_unknown"][i].flag, "\(at) conc_unknown")
             XCTAssertEqual(r.touchConcealment, columns["touch_conc"][i].flag, "\(at) touch_conc")
             XCTAssertEqual(r.touchStretch, columns["touch_stretch"][i].flag, "\(at) touch_stretch")
+            XCTAssertEqual(r.overdue, columns["overdue"][i].flag, "\(at) overdue")
+            XCTAssertEqual(r.releaseNs, columns["release_ns"][i].int64, "\(at) release_ns")
             XCTAssertEqual(r.label, Int(storedLabels[i]), "\(at) label")
             var worst: Float = 0
             let base = i * VoiceChunker.chunkLength
@@ -161,7 +207,7 @@ final class VoiceKatStage3Tests: XCTestCase {
             XCTAssertLessThanOrEqual(worst, 1e-5, "\(at) samples")
         }
 
-        assertIntervalColumns(engine.statsTrack.intervals, expected["intervals"], "clip \(name)")
+        assertIntervalColumns(intervals, expected["intervals"], "clip \(name)")
         assertWindows(windows, expected["windows"], "clip \(name)")
     }
 
@@ -193,91 +239,99 @@ final class VoiceKatStage3Tests: XCTestCase {
         return out
     }
 
-    /// Every case of the stats vector, delivered in order (a tap block at or before a delivery goes first); each probe
-    /// chunk is read the moment its flags are final, and the final intervals are compared at the end.
+    /// Every case of the stats vector (76), fed as the contract says: RX blocks, mute changes and deliveries by tap-clock
+    /// time (at the same time in that order), the end of the call last, and, for a case with `late` entries, the inputs that
+    /// reach the engine late or never behind the ones the worker has fed by then. After every input the chunks that were
+    /// released are collected; for each the five flags, `overdue` and the clock at its release are compared. A case without
+    /// an input that really arrives late also compares the intervals and the dropped deliveries with the stored ones.
     func testStatsVector() throws {
         let gates = try VoiceKat.bundle().constants.gates
         let doc = try VoiceKat.json("stage3_measure/stats_cases.json")
         let mediaStart = doc["t_media_ns"].int64
         let chunkNs = doc["chunk_ns"].int64
-        let probes = doc["n_chunks"].int
-        XCTAssertEqual(doc["cases"].count, 44)
+        let holdNs = doc["reorder_hold_ns"].int64
+        XCTAssertEqual(holdNs, 100_000_000)
+        XCTAssertEqual(doc["cases"].count, 76)
+        var lateCases = 0
 
         for testCase in doc["cases"].array {
             let name = testCase["name"].string
+            let probes = testCase["n_chunks"].int
+            let endNs = testCase["end_ns"].int64
+            let snapshots = testCase["snapshots"].array.map { VoiceStatsSnapshot(json: $0) }
+
             let stream = VoiceStatsStream(gates: gates)
-            var blocks: [(t: Int64, ticks: Int64)] = []
-            for run in testCase["tap"].array {
-                for j in 0..<run["n"].int {
-                    blocks.append((
-                        t: run["t_ns"].int64 + Int64(j) * run["period_ns"].int64,
-                        ticks: run["ticks"].int64 + Int64(j) * run["step"].int64))
+            var intervals: [VoiceStatsInterval] = []
+            stream.intervalListener = { intervals.append($0) }
+            var dropped: [String] = []
+            stream.dropListener = { snapshot, rule in
+                if rule != "late" && rule != "cap" {
+                    let index = snapshots.firstIndex { $0.arriveNs == snapshot.arriveNs } ?? -1
+                    dropped.append("\(index):\(rule)")
                 }
             }
-            blocks = blocks.enumerated().sorted { a, b in
-                a.element.t != b.element.t ? a.element.t < b.element.t : a.offset < b.offset
-            }.map { $0.element }
-            for m in testCase["mutes"].array {
-                stream.addMute(tNs: m["t_ns"].int64, muted: m["muted"].flag)
-            }
-
-            var excluded = [Bool](repeating: false, count: probes)
-            var txUnknown = excluded
-            var concUnknown = excluded
-            var touchConcealment = excluded
-            var touchStretch = excluded
-            var next = 0
-            func drain() {
-                while next < probes {
-                    let t0 = mediaStart + Int64(next) * chunkNs
-                    let t1 = t0 + chunkNs
-                    if !stream.isConcealmentFinal(t1: t1) || !stream.isTxFinal(t1: t1) {
-                        return
-                    }
-                    let tx = stream.track.txFlags(t0: t0, t1: t1, mediaStart: mediaStart)
-                    let conc = stream.track.concFlags(t0: t0, t1: t1, mediaStart: mediaStart)
-                    excluded[next] = tx.excluded
-                    txUnknown[next] = tx.unknown
-                    concUnknown[next] = conc.unknown
-                    touchConcealment[next] = conc.concealment
-                    touchStretch[next] = conc.stretch
-                    next += 1
+            stream.setMediaStart(mediaStart)
+            // Every probe chunk is registered from the start: it cannot be final before its end.
+            for i in 0..<probes {
+                let t0 = mediaStart + Int64(i) * chunkNs
+                if t0 + chunkNs <= endNs {
+                    stream.addChunk(index: i, t0Ns: t0, t1Ns: t0 + chunkNs)
                 }
             }
-
-            var b = 0
-            for snapshotJson in testCase["snapshots"].array {
-                let snapshot = VoiceStatsSnapshot(json: snapshotJson)
-                while b < blocks.count && blocks[b].t <= snapshot.arriveNs {
-                    stream.addTapBlock(tNs: blocks[b].t, ticks: blocks[b].ticks)
-                    b += 1
-                    drain()
+            var released = [VoiceChunkFlags?](repeating: nil, count: probes)
+            func poll() {
+                while let f = stream.pollFinal() {
+                    XCTAssertNil(released[f.index], "case \(name): chunk \(f.index) released twice")
+                    released[f.index] = f
                 }
-                stream.addSnapshot(snapshot)
-                drain()
             }
-            while b < blocks.count {
-                stream.addTapBlock(tNs: blocks[b].t, ticks: blocks[b].ticks)
-                b += 1
-                drain()
+            for step in VoiceStatsFeed.sequence(testCase, snapshots: snapshots, mediaStartNs: mediaStart, holdNs: holdNs) {
+                VoiceStatsFeed.feed(stream, step)
+                poll()
             }
-            let releasedBeforeEnd = next
-            stream.finish()
-            drain()
-            XCTAssertEqual(next, probes, "case \(name): every probe chunk is released")
-            if name == "steady" {
-                XCTAssertEqual(releasedBeforeEnd, probes, "the steady case releases every probe before the call ends")
-            }
+            stream.finish(endNs: endNs)
+            poll()
 
             let want = testCase["expected"]
-            assertIntervalColumns(stream.track.intervals, want["intervals"], "case \(name)")
+            let late = stream.lateRxCount + stream.lateMuteCount + stream.lateDeliveryCount + stream.lostMuteCount
+            if !testCase["late"].isNull {
+                lateCases += 1
+            } else {
+                XCTAssertEqual(late, 0, "case \(name): nothing is late in a case without late entries")
+            }
+            if late == 0 {
+                assertIntervalColumns(intervals, want["intervals"], "case \(name)")
+                let wantDropped = want["dropped"].array.map { "\($0[0].int):\($0[1].string)" }
+                XCTAssertEqual(dropped, wantDropped, "case \(name): dropped")
+            }
+            XCTAssertEqual(stream.capDroppedCount, 0, "case \(name): the cap decides nothing in the vector")
+
+            guard released.allSatisfy({ $0 != nil }) else {
+                XCTFail("case \(name): a chunk never became final")
+                continue
+            }
+            let all = released.compactMap { $0 }
             let flags = want["chunks"]
-            XCTAssertEqual(runs(of: excluded), flags["excl"].array.map { $0.ints }, "case \(name) excl")
-            XCTAssertEqual(runs(of: txUnknown), flags["tx_unknown"].array.map { $0.ints }, "case \(name) tx_unknown")
-            XCTAssertEqual(runs(of: concUnknown), flags["conc_unknown"].array.map { $0.ints }, "case \(name) conc_unknown")
-            XCTAssertEqual(runs(of: touchConcealment), flags["touch_conc"].array.map { $0.ints }, "case \(name) touch_conc")
-            XCTAssertEqual(runs(of: touchStretch), flags["touch_stretch"].array.map { $0.ints }, "case \(name) touch_stretch")
+            XCTAssertEqual(runs(of: all.map { $0.excluded }), flags["excl"].array.map { $0.ints }, "case \(name) excl")
+            XCTAssertEqual(runs(of: all.map { $0.txUnknown }), flags["tx_unknown"].array.map { $0.ints }, "case \(name) tx_unknown")
+            XCTAssertEqual(runs(of: all.map { $0.concUnknown }), flags["conc_unknown"].array.map { $0.ints }, "case \(name) conc_unknown")
+            XCTAssertEqual(runs(of: all.map { $0.touchConcealment }), flags["touch_conc"].array.map { $0.ints }, "case \(name) touch_conc")
+            XCTAssertEqual(runs(of: all.map { $0.touchStretch }), flags["touch_stretch"].array.map { $0.ints }, "case \(name) touch_stretch")
+            XCTAssertEqual(runs(of: all.map { $0.overdue }), flags["overdue"].array.map { $0.ints }, "case \(name) overdue")
+
+            // The clock at which each chunk was released: runs [first chunk, count, release_ns].
+            var wantRelease = [Int64](repeating: -1, count: probes)
+            for run in flags["release_ns"].array {
+                let first = run[0].int
+                for i in first..<(first + run[1].int) {
+                    wantRelease[i] = run[2].int64
+                }
+            }
+            for i in 0..<probes {
+                XCTAssertEqual(all[i].releaseNs, wantRelease[i], "case \(name): release_ns of chunk \(i)")
+            }
         }
+        XCTAssertEqual(lateCases, 21, "the late cases of the vector")
     }
 
     // MARK: window vector
@@ -327,6 +381,7 @@ final class VoiceKatStage3Tests: XCTestCase {
                     let t0 = run["t0_ns"].int64 + Int64(j) * chunkNs
                     let label = run["label"].int
                     let excl = run["excl"].flag
+                    let overdue = run["overdue"].flag
                     let accepted = label == 1 && !excl
                     var samples: [Float] = []
                     if !run["src"].isNull {
@@ -350,7 +405,9 @@ final class VoiceKatStage3Tests: XCTestCase {
                         touchConcealment: false,
                         touchStretch: false,
                         samples: samples,
-                        overlaps: accepted ? track.overlappingKnown(t0: t0, t1: t0 + chunkNs) : [])
+                        // A chunk released as overdue contributes no interval to the window ratios.
+                        overlaps: accepted && !overdue ? track.overlappingKnown(t0: t0, t1: t0 + chunkNs) : [],
+                        overdue: overdue)
                     if let window = assembler.push(record) {
                         windows.append(window)
                     }

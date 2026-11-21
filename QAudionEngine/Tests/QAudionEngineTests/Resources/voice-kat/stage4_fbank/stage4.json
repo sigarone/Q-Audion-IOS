@@ -1,6 +1,8 @@
 {
   "tolerance": {"abs": 0.005},
-  "shape": [408, 80],
+  "input_samples": 64240,
+  "window_samples": 65536,
+  "shape": [400, 80],
   "dtype": "float32 little endian, row-major, after CMN",
   "windows": [
     {"clip": "a", "window": 0, "first_chunk": 62, "last_chunk": 189, "file": "stage4_fbank/clip_a_w0.f32"},

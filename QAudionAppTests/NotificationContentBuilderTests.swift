@@ -230,7 +230,9 @@ final class NotificationContentBuilderTests: XCTestCase {
         lease.begin()
         // Something removes the lease; the running share writes it again.
         prefs.setSharingScreen(false)
-        Thread.sleep(forTimeInterval: 0.25)
+        // A loaded runner can delay a utility-QoS timer well past one period: wait for the renewal, up to 5 s.
+        let deadline = Date().addingTimeInterval(5)
+        while !prefs.isSharingScreen() && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
         XCTAssertTrue(prefs.isSharingScreen(), "renewed while the share runs")
 
         lease.end()

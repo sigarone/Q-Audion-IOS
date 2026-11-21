@@ -1,0 +1,17 @@
+{
+  "description": "CAM++ on the stage 4 expected fbank windows ([400, 80] float32 after CMN): the RAW 512-vector (float32 little endian) and its norm. e = raw / norm is what the later stages use.",
+  "model": {"file": "campplus_sv_voxceleb_16k.onnx", "bytes": 29596978, "sha256": "357a834f702b80161e5b981182c038e18553c1f2ca752ed6cec2052365d4129b", "input": "x [1, 400, 80] float32", "output": "embedding [1, 512] float32", "not_in_the_bundle": "the file ships with the app; the tests read their own copy and check the SHA-256"},
+  "runtime": {"execution_provider": "CPU only", "intra_op_threads": 1, "inter_op_threads": 1, "xnnpack": false, "graph_optimization": "any level (the reference runs the ONNX Runtime default; BASIC and ALL are covered by the tolerance)", "stored_vectors_made_with": "ONNX Runtime 1.28.0 on x86-64 (the vectors are stored, the apps never regenerate them)"},
+  "tolerance": {"cosine_min": 0.999999, "norm_rel": 0.001, "rule": "cos(got_raw, expected_raw) >= cosine_min and abs(got_norm - norm) <= norm_rel x norm"},
+  "windows": [
+    {"clip": "a", "window": 0, "input": "stage4_fbank/clip_a_w0.f32", "raw_file": "stage5_embedding/clip_a_w0.raw.f32", "norm": 23.564039353502423},
+    {"clip": "a", "window": 1, "input": "stage4_fbank/clip_a_w1.f32", "raw_file": "stage5_embedding/clip_a_w1.raw.f32", "norm": 22.509132033938325},
+    {"clip": "b", "window": 0, "input": "stage4_fbank/clip_b_w0.f32", "raw_file": "stage5_embedding/clip_b_w0.raw.f32", "norm": 22.67107413651265},
+    {"clip": "b", "window": 1, "input": "stage4_fbank/clip_b_w1.f32", "raw_file": "stage5_embedding/clip_b_w1.raw.f32", "norm": 22.035108936738197},
+    {"clip": "c", "window": 0, "input": "stage4_fbank/clip_c_w0.f32", "raw_file": "stage5_embedding/clip_c_w0.raw.f32", "norm": 19.277900032699115},
+    {"clip": "d", "window": 0, "input": "stage4_fbank/clip_d_w0.f32", "raw_file": "stage5_embedding/clip_d_w0.raw.f32", "norm": 21.22026558162984},
+    {"clip": "d", "window": 1, "input": "stage4_fbank/clip_d_w1.f32", "raw_file": "stage5_embedding/clip_d_w1.raw.f32", "norm": 20.661559828417648},
+    {"clip": "d", "window": 2, "input": "stage4_fbank/clip_d_w2.f32", "raw_file": "stage5_embedding/clip_d_w2.raw.f32", "norm": 21.4215930524231},
+    {"clip": "e", "window": 0, "input": "stage4_fbank/clip_e_w0.f32", "raw_file": "stage5_embedding/clip_e_w0.raw.f32", "norm": 20.490273342103574}
+  ]
+}

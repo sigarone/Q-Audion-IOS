@@ -133,238 +133,33 @@ struct VoiceIntervalRef: Equatable {
     var stretch: Int64
 }
 
-/// The tap position as a step function of the tap clock: cumulative ticks of the last block called at or before a time.
-struct VoiceTapTrack {
-    private(set) var times: [Int64] = []
-    private(set) var ticks: [Int64] = []
-
-    var lastTimeNs: Int64? { times.last }
-
-    mutating func append(tNs: Int64, ticks position: Int64) {
-        if let last = times.last, tNs < last {
-            let at = VoiceSearch.upperBound(times, tNs)
-            times.insert(tNs, at: at)
-            ticks.insert(position, at: at)
-        } else {
-            times.append(tNs)
-            ticks.append(position)
-        }
-    }
-
-    /// Position after the last block called at or before `t` (0 before the first block).
-    func position(at t: Int64) -> Int64 {
-        let i = VoiceSearch.upperBound(times, t)
-        return i == 0 ? 0 : ticks[i - 1]
-    }
-
-    /// False after the last block: the tap ended and there is nothing to compare with.
-    func covers(_ t: Int64) -> Bool {
-        guard let last = times.last else { return false }
-        return t <= last
+extension VoiceStatsInterval {
+    /// The same span as an unknown interval: every derived column is 0.
+    func asUnknown() -> VoiceStatsInterval {
+        VoiceStatsInterval(key: key, startNs: startNs, endNs: endNs, known: false, isGuard: isGuard)
     }
 }
 
-/// Binary searches over sorted values: first index whose value is not below / above the key.
-enum VoiceSearch {
-    static func lowerBound(_ values: [Int64], _ key: Int64) -> Int {
-        var low = 0
-        var high = values.count
-        while low < high {
-            let mid = (low + high) / 2
-            if values[mid] < key {
-                low = mid + 1
-            } else {
-                high = mid
-            }
-        }
-        return low
-    }
-
-    static func upperBound(_ values: [Int64], _ key: Int64) -> Int {
-        var low = 0
-        var high = values.count
-        while low < high {
-            let mid = (low + high) / 2
-            if values[mid] <= key {
-                low = mid + 1
-            } else {
-                high = mid
-            }
-        }
-        return low
-    }
-}
-
-/// The intervals of one call, the tap cross-checks that can invalidate them, and the per-chunk flags read from them.
+/// A list of intervals and the per-chunk flags read from it. The stream keeps the few intervals that a waiting chunk can
+/// still reach (nine or so at one report per second), so the queries scan the list.
 struct VoiceStatsTrack {
     /// Tap position unit: ticks of 1/96,000 s, exact for every supported tap rate.
     static let tickRate = 96_000
-    private static let nsPerThreeTicks: Int64 = 31_250
-    private static let txPowerFloor = 1e-12
 
-    private(set) var intervals: [VoiceStatsInterval]
+    var intervals: [VoiceStatsInterval] = []
     private let widenNs: Int64
     private let postNs: Int64
     private let preFloorNs: Int64
-    private var order: [Int] = []
-    private var starts: [Int64] = []
-    private var maxEnds: [Int64] = []
 
-    /// Request-stamp bound of the interval a snapshot opens: the earliest the counters of the snapshot can have been
-    /// sampled.
-    static func lowerBoundNs(_ snapshot: VoiceStatsSnapshot, gates: VoiceConstants.Gates) -> Int64 {
-        let cache = Int64(gates.stats.cacheMs) * 1_000_000
-        return min(snapshot.reqNs - cache, snapshot.oldestNs)
-    }
-
-    /// Whether `ticks` ticks are more than `ns` nanoseconds (3 ticks are exactly 31,250 ns).
-    private static func ticksExceed(_ ticks: Int64, _ ns: Int64) -> Bool {
-        abs(ticks) * nsPerThreeTicks > ns * 3
-    }
-
-    /// Indices (into `snapshots`) whose interval the tap cross-checks mark unknown. A snapshot without a sample counter,
-    /// or one that arrives after the last tap block, is skipped, and the neighbour checks do not look across it.
-    static func tapDiscontinuities(
-        snapshots: [VoiceStatsSnapshot],
-        lower: [Int64],
-        tap: VoiceTapTrack,
-        stats: VoiceConstants.Gates.Stats
-    ) -> Set<Int> {
-        var bad = Set<Int>()
-        let ticksPerSample = Int64(tickRate / stats.rxRateHz)
-        let slack = Int64(stats.tapLagMs + stats.tapTolMs) * 1_000_000
-        var maximum: Int64?
-        var previous: (total: Int64, position: Int64, wide: Int64, index: Int)?
-        for k in 0..<snapshots.count {
-            let s = snapshots[k]
-            guard let total = s.totalSamples, tap.covers(s.arriveNs) else {
-                previous = nil
-                continue
-            }
-            let position = tap.position(at: s.arriveNs)
-            let wide = s.arriveNs - lower[k]
-            let b = total * ticksPerSample - position
-            if let m = maximum {
-                if ticksExceed(max(m - b, 0), wide + slack) {
-                    bad.insert(k)
-                    maximum = b
-                } else {
-                    maximum = max(m, b)
-                }
-            } else {
-                maximum = b
-            }
-            if let p = previous {
-                let x = (total - p.total) * ticksPerSample - (position - p.position)
-                if ticksExceed(x, wide + p.wide + slack) {
-                    bad.insert(k)
-                }
-                if x > 0 && ticksExceed(x, p.wide + slack) {
-                    bad.insert(p.index)
-                }
-            }
-            previous = (total: total, position: position, wide: wide, index: k)
-        }
-        return bad
-    }
-
-    /// The echo look-back in ms from the round trip and the jitter-buffer delay (both in seconds).
-    private static func echoLookBackMs(rttS: Double, jbS: Double, tx: VoiceConstants.Gates.Tx) -> Double {
-        min(max(1000.0 * (rttS + jbS) + tx.remoteMarginMs, tx.preMsFloor), tx.preMsCap)
-    }
-
-    private static func roundHalfUp(_ x: Double) -> Int64 {
-        Int64((x + 0.5).rounded(.down))
-    }
-
-    /// Builds the track from snapshots in request order, their lower bounds and the set of intervals the tap
-    /// cross-checks invalidated.
-    init(
-        snapshots: [VoiceStatsSnapshot],
-        lower: [Int64],
-        tapBad: Set<Int>,
-        mutes: [VoiceMute],
-        gates: VoiceConstants.Gates
-    ) {
-        let st = gates.stats
-        let tx = gates.tx
-        widenNs = Int64(st.widenMs) * 1_000_000
-        postNs = Int64(tx.postMs) * 1_000_000
-        preFloorNs = Int64(tx.preMsFloor) * 1_000_000
-        let lateNs = Int64(st.lateMs) * 1_000_000
-        let spanNs = Int64(st.spanMs) * 1_000_000
-        let txSpanS = st.txSpanMs / 1000.0
-        let sortedMutes = mutes.enumerated().sorted { a, b in
-            a.element.tNs != b.element.tNs ? a.element.tNs < b.element.tNs : a.offset < b.offset
-        }.map { $0.element }
-
-        var list: [VoiceStatsInterval] = []
-        if let first = snapshots.first {
-            list.append(VoiceStatsInterval(
-                key: first.reqNs, startNs: lower[0], endNs: first.arriveNs, known: false, isGuard: true))
-        }
-        var floorDb: Double?
-        if snapshots.count > 1 {
-            for k in 1..<snapshots.count {
-                let a = snapshots[k - 1]
-                let b = snapshots[k]
-                let deltas = VoiceCounterDeltas.between(a, b)
-                var known = false
-                if let d = deltas {
-                    known = b.arriveNs - b.reqNs <= lateNs
-                        && b.reqNs > a.reqNs
-                        && b.rxSsrc == a.rxSsrc
-                        && b.arriveNs - lower[k - 1] <= spanNs
-                        && d.txDurationS <= txSpanS
-                        && !tapBad.contains(k)
-                }
-                let start = lower[k - 1]
-                let end = b.arriveNs
-                var iv = VoiceStatsInterval(key: b.reqNs, startNs: start, endNs: end, known: known, isGuard: false)
-                if known, let d = deltas {
-                    iv.audible = d.concealed - d.silentConcealed
-                    iv.silent = d.silentConcealed
-                    iv.events = d.events
-                    iv.conc = iv.audible > 0 || iv.events > 0
-                    iv.total = d.totalSamples
-                    iv.stretch = d.stretch
-                    iv.jbS = d.jbEmitted > 0 ? d.jbDelayS / Double(d.jbEmitted) : 0.0
-                    var rtt = 0.0
-                    if let remote = b.rttRemoteS {
-                        rtt = remote
-                    } else if let pair = b.rttPairS {
-                        rtt = pair
-                    }
-                    iv.rttS = rtt
-                    let preMs = Self.echoLookBackMs(rttS: rtt, jbS: iv.jbS, tx: tx)
-                    iv.preNs = Self.roundHalfUp(preMs * 1_000_000.0)
-                    iv.pTx = d.txDurationS > 0 ? d.txEnergy / d.txDurationS : 0.0
-                    let pdb = 10.0 * log10(max(iv.pTx, Self.txPowerFloor))
-                    let dt = Double(b.arriveNs - a.arriveNs) / 1e9
-                    if let current = floorDb {
-                        floorDb = pdb < current ? pdb : current + tx.riseDbPerS * dt
-                    } else {
-                        floorDb = pdb
-                    }
-                    let level = floorDb ?? pdb
-                    iv.muted = Self.mutedWhole(sortedMutes, start: start, end: end)
-                    iv.txActive = !iv.muted && pdb >= level + tx.marginDb && pdb >= tx.floorDbfs
-                }
-                list.append(iv)
-            }
-            let n = snapshots.count - 1
-            list.append(VoiceStatsInterval(
-                key: snapshots[n].reqNs, startNs: lower[n], endNs: snapshots[n].arriveNs, known: false, isGuard: true))
-        }
-        intervals = list
-        buildIndex()
+    init(gates: VoiceConstants.Gates) {
+        widenNs = Int64(gates.stats.widenMs) * 1_000_000
+        postNs = Int64(gates.tx.postMs) * 1_000_000
+        preFloorNs = Int64(gates.tx.preMsFloor) * 1_000_000
     }
 
     /// A track from given intervals (the window vector): only the concealment side is used.
     init(intervals given: [VoiceStatsInterval], gates: VoiceConstants.Gates) {
-        widenNs = Int64(gates.stats.widenMs) * 1_000_000
-        postNs = Int64(gates.tx.postMs) * 1_000_000
-        preFloorNs = Int64(gates.tx.preMsFloor) * 1_000_000
+        self.init(gates: gates)
         var list = given
         for i in 0..<list.count {
             list[i].key = Int64(i + 1)
@@ -373,65 +168,26 @@ struct VoiceStatsTrack {
             }
         }
         intervals = list
-        buildIndex()
-    }
-
-    private static func mutedWhole(_ mutes: [VoiceMute], start: Int64, end: Int64) -> Bool {
-        var state = false
-        for m in mutes where m.tNs <= start {
-            state = m.muted
-        }
-        if !state {
-            return false
-        }
-        for m in mutes where m.tNs > start && m.tNs < end && !m.muted {
-            return false
-        }
-        return true
     }
 
     // MARK: spans
 
-    /// Spans may overlap and their ends need not grow with their starts, so the intervals are kept ordered by start with
-    /// a running maximum of the ends.
-    private mutating func buildIndex() {
-        let ivs = intervals
-        order = (0..<ivs.count).sorted { a, b in
-            ivs[a].startNs != ivs[b].startNs ? ivs[a].startNs < ivs[b].startNs : a < b
-        }
-        starts = order.map { ivs[$0].startNs }
-        var running: Int64?
-        var maxima: [Int64] = []
-        for i in order {
-            let e = ivs[i].endNs
-            if let r = running, r >= e {
-                maxima.append(r)
-            } else {
-                running = e
-                maxima.append(e)
-            }
-        }
-        maxEnds = maxima
-    }
-
-    /// Indices of the intervals whose span, widened by `widen` on both sides, overlaps [q0, q1), ordered by start.
+    /// Indices of the intervals whose span, widened by `widen` on both sides, overlaps [q0, q1), ordered by start (a tie
+    /// keeps the order of the list).
     private func overlapping(_ q0: Int64, _ q1: Int64, widen: Int64) -> [Int] {
-        let high = VoiceSearch.lowerBound(starts, q1 + widen)
-        let low = VoiceSearch.upperBound(maxEnds, q0 - widen)
-        if low >= high {
-            return []
-        }
         var out: [Int] = []
-        for position in low..<high {
-            let i = order[position]
-            if intervals[i].endNs + widen > q0 {
-                out.append(i)
+        for i in 0..<intervals.count where intervals[i].startNs - widen < q1 && intervals[i].endNs + widen > q0 {
+            out.append(i)
+        }
+        if out.count > 1 {
+            out.sort { a, b in
+                intervals[a].startNs != intervals[b].startNs ? intervals[a].startNs < intervals[b].startNs : a < b
             }
         }
         return out
     }
 
-    /// Whether [q0, q1) lies inside the union of the intervals (all of them known when `requireKnown`).
+    /// Whether [q0, q1) lies inside the union of the intervals as they are stored (all of them known when `requireKnown`).
     private func covered(_ q0: Int64, _ q1: Int64, requireKnown: Bool) -> Bool {
         if q1 <= q0 {
             return true

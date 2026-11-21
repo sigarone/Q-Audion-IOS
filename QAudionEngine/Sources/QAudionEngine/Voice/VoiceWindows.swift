@@ -20,6 +20,10 @@ struct VoiceChunkRecord {
     var samples: [Float]
     /// Known intervals whose widened span overlaps the chunk (kept for chunks that can enter a window).
     var overlaps: [VoiceIntervalRef]
+    /// The clock at which the stats flags were released.
+    var releaseNs: Int64 = 0
+    /// Released as an unknown chunk (no snapshot settled it in time): it has no intervals, so it adds nothing to the window ratios.
+    var overdue: Bool = false
 }
 
 /// One 128-chunk window with its measurements and flags.
@@ -121,6 +125,12 @@ final class VoiceWindowAssembler {
             acceptedBase += release
         }
         return result
+    }
+
+    /// The front-end went inactive: everything that is held is dropped.
+    func discard() {
+        clearAccumulator()
+        recent.removeAll()
     }
 
     private func clearAccumulator() {

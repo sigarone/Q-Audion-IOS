@@ -1,5 +1,5 @@
 {
-  "schema": "qaudion.voice.constants",
+  "schema": "voice.constants",
   "constants_version": 0,
   "frontend_version": 1,
   "display": {"differs": false, "change": false},
@@ -40,7 +40,9 @@
     "tables": "fbank_tables.bin",
     "tables_sha256": "5a0751f6fa9f9c6119f8aaa98bb1f108aa4e941febe1bd455c3763d33f948d21",
     "nb_hi_bins": [64, 79],
-    "nb_lo_bins": [27, 56]
+    "nb_lo_bins": [27, 56],
+    "embed_samples": 64240,
+    "embed_frames": 400
   },
   "gates": {
     "enroll": {"mean_p_min": 0.8, "snr_db_min": 15.0, "clip_frac_max": 0.001, "plc_events_max": 0, "stretch_events_max": 0, "wb_only": true},
@@ -54,21 +56,21 @@
       "clip": [-10.0, 60.0]
     },
     "tx": {"rise_db_per_s": 0.5, "margin_db": 12.0, "floor_dbfs": -50.0, "pre_ms_floor": 1000, "pre_ms_cap": 2500, "remote_margin_ms": 300, "post_ms": 100},
-    "stats": {"poll_ms": 1000, "widen_ms": 100, "late_ms": 1500, "cache_ms": 50, "span_ms": 2600, "tx_span_ms": 1750, "rx_rate_hz": 48000, "tap_lag_ms": 20, "tap_tol_ms": 20},
+    "stats": {"poll_ms": 1000, "widen_ms": 100, "late_ms": 1500, "cache_ms": 50, "span_ms": 2600, "tx_span_ms": 1750, "rx_rate_hz": 48000, "tap_lag_ms": 20, "tap_tol_ms": 20, "overdue_ms": 5500},
     "beta_nb": -7.0
   },
-  "cohort": {"file": "cohort.bin", "sha256": "", "count": 80, "dim": 512, "dtype": "f32", "top_n": 40},
+  "cohort": {"file": "cohort.bin", "sha256": "e5ff93a8fcd08560427c5f7de998bf02c87e189e06660000fddd0e258d18c221", "count": 80, "dim": 512, "dtype": "f32", "top_n": 40},
   "qmf": {
     "features": ["bias", "s_as", "snr10", "ln_norm", "plc", "nb", "ln_enroll", "xcond"],
-    "q": [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "q": [-12.8, 1.5, 0.1, 0.1, -10.0, -0.5, 0.2, -1.0],
     "l_clip": 4.0
   },
   "evidence": {"block_windows": 6, "t_differs": 11.5, "tail_slope": 1.0, "neg_min": 4, "m_min": 3.0, "max_block": 4, "delta_new": 3.0, "t_match": 6.0, "recent_windows": 6, "match_min_windows": 2, "match_partial_floor": 0.25, "weak_frac": 0.5, "dwell_ms": 10000, "differs_hold_ms": 20000, "nover_lookback_ms": 30000, "nover_min_vad_ms": 8000},
   "call_local": {
     "ref_windows": 5,
     "ref_speech_s": 20.48,
-    "q": [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-    "l_clip": 4.0,
+    "q": [-0.65, 1.3, 0.2, 0.15, -10.0, -0.4, 0.3, -1.0],
+    "l_clip": 4.5,
     "t_change": 11.5,
     "tail_slope": 1.0,
     "neg_min": 4,
@@ -77,6 +79,7 @@
   },
   "conditions": {
     "route_groups": {"unknown": 0, "ear": 1, "wired": 1, "speaker": 2, "bt": 3, "car": 3},
+    "route_class_codes": {"unknown": 0, "ear": 1, "speaker": 2, "bt": 3, "wired": 4, "car": 5},
     "slots": 2,
     "tau_slot_anchor": 0.45,
     "slot_min_sessions": 2,
@@ -86,7 +89,8 @@
   },
   "enroll": {"session_min_ms": 8192, "session_cap_ms": 60000, "tau_win": 0.4, "mixed_frac_max": 0.3, "tau_sess": 0.5, "tau_loo": 0.55, "delta_jk": 0.05, "prov_ms": 40000, "enr_ms": 120000, "enr_sessions": 3, "enr_days": 3, "enr_span_s": 259200, "merge_gap_s": 7200, "max_share": 0.4, "max_sessions": 8, "purge_days": 30},
   "update": {"w_max": 0.05, "theta": 6.0, "b": 20.0, "rho_min": 0.95, "max_per_7d": 3, "min_windows": 3, "min_match_frac": 0.5, "max_speech_ms": 60000},
-  "refresh": {"neg_streak": 3, "gate_frac_min": 0.5, "gap_days": 365, "reprompt_days": 30},
+  "refresh": {"neg_streak": 3, "min_windows": 3, "gate_frac_min": 0.5, "gap_days": 365, "reprompt_days": 30},
   "retention_days": 730,
-  "cpu": {"budget_total_core": 0.3, "window_s": 30, "max_pending": 3, "post_call_max_s": 10}
+  "cpu": {"budget_total_core": 0.3, "window_s": 30, "max_pending": 3, "post_call_max_s": 10},
+  "status": {"resampler": "measured", "vad": "default", "window": "default", "fbank": "measured", "gates": "default", "gates.stats.overdue_ms": "derived", "cohort": "placeholder", "qmf": "placeholder", "evidence": "default", "call_local": "placeholder", "conditions": "default", "enroll": "default", "update": "default", "refresh": "default", "retention_days": "default", "cpu": "default"}
 }

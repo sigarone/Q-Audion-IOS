@@ -41,7 +41,17 @@ public final class OwnerVoiceLearner: @unchecked Sendable {
     private let templates: VoiceprintStore
     private let progress: OwnerVoiceProgressBacking
     private static let sharedLock = NSLock()
+    /// Bumped, under `sharedLock`, by every `wipe()`/`reset()`. A call remembers the value it started with and hands it
+    /// back with its windows (`record(windows:userId:generation:)`), so windows that were collected before a wipe
+    /// (logout, account deletion, remote wipe, the Settings reset) are refused afterwards instead of being written back.
+    private static nonisolated(unsafe) var generationValue: UInt64 = 0
     private var lock: NSLock { Self.sharedLock }
+
+    /// The current generation (see `generationValue`): read it before `prepare`, when a call starts.
+    public var generation: UInt64 {
+        lock.lock(); defer { lock.unlock() }
+        return Self.generationValue
+    }
 
     /// The learner of the app: the Keychain items described above.
     public convenience init() {
@@ -163,10 +173,18 @@ public final class OwnerVoiceLearner: @unchecked Sendable {
     /// medoid trim still means something and the result does not depend on the order of the calls. Once the material
     /// reaches REFINED the template is final: the windows are dropped and the record is marked, so later calls stop
     /// paying for the embeddings and do not start the collection again.
+    ///
+    /// The stage returned is what reached the Keychain: REFINED only when the final mark was written, MIN only when a
+    /// template is stored, and `nil` when nothing of this call was kept (the record could not be written, or a wipe
+    /// came in between: pass the `generation` read when the call started and windows of an earlier one are refused).
     @discardableResult
-    public func record(windows: [OwnerVoiceLearning.Window], userId: String) -> OwnerVoiceLearning.Stage? {
+    public func record(
+        windows: [OwnerVoiceLearning.Window], userId: String, generation: UInt64? = nil
+    ) -> OwnerVoiceLearning.Stage? {
         guard !userId.isEmpty, let first = windows.first else { return nil }
         lock.lock(); defer { lock.unlock() }
+        // A wipe or a reset ran since the call started: these windows belong to what was removed.
+        if let generation, generation != Self.generationValue { return nil }
 
         var base = OwnerVoiceRecord(userId: userId, embeddingVersion: VoiceprintCodec.formatVersion,
                                     refined: false, windows: [])
@@ -207,37 +225,81 @@ public final class OwnerVoiceLearner: @unchecked Sendable {
 
         var next = base
         next.windows = merged
+        // In the three branches below the final mark is not set in `next`, so no stage above MIN can have reached the
+        // Keychain there; and none at all when the record itself could not be written.
+        let withoutFinalMark: OwnerVoiceLearning.Stage = {
+            let stage = OwnerVoiceLearning.stage(status)
+            return stage == .refined ? .min : stage
+        }()
         guard status.met, let fusion = OwnerVoiceLearning.fuse(merged) else {
-            _ = writeRecord(next)
-            return current == nil ? .learning : OwnerVoiceLearning.stage(status)
+            guard writeRecord(next) else { return nil }
+            return current == nil ? .learning : withoutFinalMark
         }
         // A fused template far from the one in use is not trusted to replace it: the windows may include another
         // voice. The current template stays, the windows are kept, and the line says so without a score.
         if let current, (OwnerVoiceLearning.cosine(current, fusion.centroid) + 1) / 2 < OwnerContinuityMonitor.uncertainThreshold {
-            _ = writeRecord(next)
-            print("[OwnerCont] learn_stage=keep")
+            if writeRecord(next) {
+                print("[OwnerCont] learn_stage=keep")
+            }
             return nil
         }
         guard templates.save(contactId: VoiceprintStore.deviceOwnerId, template: fusion.centroid) else {
             // The template could not be stored: keep collecting.
-            _ = writeRecord(next)
-            return current == nil ? .learning : OwnerVoiceLearning.stage(status)
+            guard writeRecord(next) else { return nil }
+            return current == nil ? .learning : withoutFinalMark
         }
         if !OwnerVoiceLearning.shouldRefine(status) {
             next.refined = true
             next.windows = []
         }
-        _ = writeRecord(next)
+        // The template is stored. When the record is not, the final mark did not reach the Keychain either: the stage
+        // is MIN and the learning goes on.
+        guard writeRecord(next) else { return .min }
         return OwnerVoiceLearning.stage(status)
     }
 
-    /// Removes the template and everything the learning kept. The learning then starts again from the next call.
+    /// What a `wipe()` could not remove.
+    public enum Leftover: String, Sendable {
+        /// The template of the owner's voice is still in the Keychain, or the Keychain cannot be read to tell.
+        case template
+        /// The learning record (the windows, the account, the final mark) is still there, or cannot be read to tell.
+        case record
+    }
+
+    /// Removes everything of the owner's voice that this device keeps: the template and the learning record (the windows
+    /// kept so far, the account they belong to and the final mark). Both removals are tried whatever the first one
+    /// answers, then each item is checked again (the template by whether the Keychain item exists at all, so an unusable
+    /// item that is still there counts), and what is still there or cannot be checked is returned: empty means nothing
+    /// is left. Bumps the generation first, in the same critical section, so a call that is running keeps no window of
+    /// the account that leaves. The learning then starts again from the next call.
+    ///
+    /// A template that cannot be removed must not be adopted by the next account: a template without a record is taken as
+    /// one made before the record existed. So in that case the record is not deleted but replaced by an empty one that
+    /// belongs to no account, and the next `prepare` for any account removes the template first.
+    public func wipe() -> [Leftover] {
+        lock.lock(); defer { lock.unlock() }
+        Self.generationValue &+= 1
+        _ = templates.delete(contactId: VoiceprintStore.deviceOwnerId)
+        let templateLeft = templates.itemExists(contactId: VoiceprintStore.deviceOwnerId) != false
+        var purgeMarker = false
+        if templateLeft {
+            purgeMarker = writeRecord(OwnerVoiceRecord(
+                userId: "", embeddingVersion: VoiceprintCodec.formatVersion, refined: false, windows: []))
+        } else {
+            _ = progress.delete()
+        }
+        var left: [Leftover] = []
+        if templateLeft { left.append(.template) }
+        if !purgeMarker {
+            if case .absent = progress.read() {} else { left.append(.record) }
+        }
+        return left
+    }
+
+    /// `wipe()` as a yes or no: `true` when nothing of the owner's voice is left.
     @discardableResult
     public func reset() -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        let template = templates.delete(contactId: VoiceprintStore.deviceOwnerId)
-        let record = progress.delete()
-        return template && record
+        wipe().isEmpty
     }
 
     // MARK: - Record

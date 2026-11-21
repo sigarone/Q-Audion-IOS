@@ -58,6 +58,10 @@ enum LocalCryptoWipe {
         // store, which is the one thing that takes the ids of the starts with it (WIRE_SPEC 14.6.2 step 1).
         GRDBLocationShareStore.wipeEverything()
         ThreatReportLogStore().wipeAll()
+        // The owner voice ("Voce come chiave") learned from the account that is leaving: the template, the learning record
+        // (windows, account, final mark) and, through the learner's generation, the windows of a call that is still running.
+        // The next account must not start from this account's voice. Reported like any other failed step.
+        wipeOwnerVoice()
         // The call history of the account that is leaving: without this the next account on the
         // device saw the previous account's calls (the encrypted file and its copies, the Keychain
         // key and the legacy UserDefaults copy were all left alone).
@@ -83,6 +87,18 @@ enum LocalCryptoWipe {
         // The decrypted attachment copies on disk (caches and temporary files) of the account that is leaving.
         AttachmentCacheCleaner.clearAllCaches()
         print("[LocalCryptoWipe] wipeAll completed")
+    }
+
+    /// Removes everything of the owner's voice that the phone keeps and reads each item again. Every removal is tried; what is
+    /// still there (or cannot be read to tell) is printed like any failed step of the wipe. `true` when nothing is left. The
+    /// learner is a parameter so a test can aim it at memory.
+    @discardableResult
+    static func wipeOwnerVoice(_ learner: OwnerVoiceLearner = OwnerVoiceLearner()) -> Bool {
+        let left = learner.wipe()
+        if !left.isEmpty {
+            print("[LocalCryptoWipe] OwnerVoiceLearner.wipe left: \(left.map(\.rawValue).joined(separator: ","))")
+        }
+        return left.isEmpty
     }
 
     /// Deletes the saved log queue so lines of the account that leaves cannot be uploaded under the next one.

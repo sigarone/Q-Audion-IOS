@@ -31,5 +31,6 @@
   "mutes": [],
   "events": [
     {"kind": "reset", "at_chunk": 68, "at_input": 70001, "tap": 0}
-  ]
+  ],
+  "end_ns": 6789018047000000
 }

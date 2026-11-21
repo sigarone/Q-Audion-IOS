@@ -2,92 +2,141 @@ import XCTest
 import Foundation
 @testable import QAudionEngine
 
-/// Deliveries the stats vector does not contain: a report that arrives out of order and later than `late_ms` behind its
-/// request, after newer ones have settled.
+/// Behaviour of the stats stream that the stats vector does not pin: late inputs move nothing, and the retained state stays
+/// bounded while the tap is silent.
 final class VoiceStatsStreamTests: XCTestCase {
 
-    private struct Flags: Equatable {
-        var excluded: Bool
-        var txUnknown: Bool
-        var concUnknown: Bool
-        var touchConcealment: Bool
-        var touchStretch: Bool
+    private let second: Int64 = 1_000_000_000
+
+    private func snapshot(
+        req: Int64, arrive: Int64, report: Int64, total: Int64, ssrc: Int64 = 1
+    ) -> VoiceStatsSnapshot {
+        VoiceStatsSnapshot(
+            reqNs: req, arriveNs: arrive, oldestNs: req, reportNs: report, rxSsrc: ssrc, concealed: 0, silentConcealed: 0,
+            concealmentEvents: 0, totalSamples: total, insertedDecel: 0, removedAccel: 0, jbDelayS: 0, jbEmitted: total,
+            txEnergy: 0, txDurationS: 0)
     }
 
-    private func flags(_ track: VoiceStatsTrack, t0: Int64, t1: Int64, mediaStart: Int64) -> Flags {
-        let tx = track.txFlags(t0: t0, t1: t1, mediaStart: mediaStart)
-        let conc = track.concFlags(t0: t0, t1: t1, mediaStart: mediaStart)
-        return Flags(
-            excluded: tx.excluded,
-            txUnknown: tx.unknown,
-            concUnknown: conc.unknown,
-            touchConcealment: conc.concealment,
-            touchStretch: conc.stretch)
-    }
-
-    /// The steady case with one report delayed by 3 s, 3.6 s and 6 s, fed in arrival order. Every probe chunk is read
-    /// the moment its flags are final; those flags must be the ones of the track once the call has ended.
-    func testLateReportBehindSettledOnes() throws {
+    /// An input whose time and kind are below those of the latest input fed is late and moves nothing, the clock included.
+    /// A late mute change is kept at its own time, a late delivery is dropped, a lost mute change is a late unmute.
+    func testALateInputMovesNothing() throws {
         let gates = try VoiceKat.bundle().constants.gates
-        let doc = try VoiceKat.json("stage3_measure/stats_cases.json")
-        let mediaStart = doc["t_media_ns"].int64
-        let chunkNs = doc["chunk_ns"].int64
-        let probes = doc["n_chunks"].int
-        let steady = try XCTUnwrap(doc["cases"].array.first { $0["name"].string == "steady" })
+        let stream = VoiceStatsStream(gates: gates)
+        stream.setMediaStart(0)
+        stream.addTapBlock(tNs: 10 * second, ticks: 960_000)
+        stream.addChunk(index: 0, t0Ns: 9_900_000_000, t1Ns: 9_932_000_000) // waiting: neither final nor overdue at this clock
+        XCTAssertNil(stream.pollFinal())
+        XCTAssertEqual(stream.clockTime, 10 * second)
 
-        var blocks: [(t: Int64, ticks: Int64)] = []
-        for run in steady["tap"].array {
-            for j in 0..<run["n"].int {
-                blocks.append((
-                    t: run["t_ns"].int64 + Int64(j) * run["period_ns"].int64,
-                    ticks: run["ticks"].int64 + Int64(j) * run["step"].int64))
+        // A mute change below the clock is kept at its own time, and the clock stays.
+        stream.addMute(tNs: 3 * second, muted: true)
+        stream.addMute(tNs: 10 * second, muted: false) // the same time as the block, after it in the feed order: not late
+        stream.addMute(tNs: 3_500_000_000, muted: false)
+        XCTAssertEqual(stream.lateMuteCount, 2)
+        XCTAssertEqual(stream.clockTime, 10 * second)
+        XCTAssertEqual(stream.retainedMutes, [
+            VoiceMute(tNs: 3 * second, muted: true),
+            VoiceMute(tNs: 3_500_000_000, muted: false),
+            VoiceMute(tNs: 10 * second, muted: false)
+        ])
+
+        // A block below the clock is late.
+        stream.addTapBlock(tNs: 9_990_000_000, ticks: 959_000)
+        XCTAssertEqual(stream.lateRxCount, 1)
+
+        // So is a delivery below it: dropped.
+        var dropped: [String] = []
+        stream.dropListener = { _, rule in dropped.append(rule) }
+        stream.addSnapshot(snapshot(req: 5 * second, arrive: 5_020_000_000, report: 1, total: 1))
+        XCTAssertEqual(dropped, ["late"])
+        XCTAssertEqual(stream.lateDeliveryCount, 1)
+        XCTAssertEqual(stream.clockTime, 10 * second)
+        XCTAssertNil(stream.pollFinal(), "nothing was released by a late input")
+
+        // A block at the same time as a delivery that was fed first is late: its kind is below the delivery's.
+        stream.addSnapshot(snapshot(req: 10 * second, arrive: 10_100_000_000, report: 2, total: 2))
+        XCTAssertEqual(stream.clockTime, 10_100_000_000)
+        stream.addTapBlock(tNs: 10_100_000_000, ticks: 970_000)
+        XCTAssertEqual(stream.lateRxCount, 2)
+
+        // A lost mute change is a late unmute at the time given.
+        stream.addLostMute(tNs: 2 * second)
+        XCTAssertEqual(stream.lostMuteCount, 1)
+        XCTAssertEqual(stream.retainedMutes.first, VoiceMute(tNs: 2 * second, muted: false))
+        XCTAssertEqual(stream.clockTime, 10_100_000_000)
+    }
+
+    /// A call whose tap ends at 10 s while the deliveries go on for 100 s: the snapshots that wait for an RX block pile up,
+    /// one per poll. At most 64 wait, the oldest of a 65th is dropped (the interval that spans it is unknown), and the chunks
+    /// that wait for them are released as overdue 5.5 s after their end, so everything stays bounded.
+    func testASilentTapKeepsTheRetainedStateBounded() throws {
+        let gates = try VoiceKat.bundle().constants.gates
+        let chunkNs: Int64 = 32_000_000
+        let stream = VoiceStatsStream(gates: gates)
+        stream.setMediaStart(0)
+
+        struct Item {
+            var t: Int64
+            var rank: Int
+            var run: () -> Void
+        }
+        var items: [Item] = []
+        for j in 1...1000 { // the tap ends at 10 s
+            let t = Int64(j) * 10_000_000
+            items.append(Item(t: t, rank: 0) { stream.addTapBlock(tNs: t, ticks: Int64(j) * 960) })
+        }
+        var after = 0
+        var lastArrival: Int64 = 0
+        for k in 0..<100 {
+            let req = second / 2 + Int64(k) * second
+            let s = VoiceStatsSnapshot(
+                reqNs: req, arriveNs: req + 20_000_000, oldestNs: req, reportNs: Int64(k), rxSsrc: 7, concealed: 0,
+                silentConcealed: 0, concealmentEvents: 0, totalSamples: 48_000 * Int64(k), insertedDecel: 0,
+                removedAccel: 0, jbDelayS: 0.01 * Double(k), jbEmitted: 48_000 * Int64(k), txEnergy: 1e-6 * Double(k),
+                txDurationS: Double(k), rttPairS: 0.08)
+            if s.arriveNs > 10 * second {
+                after += 1
+            }
+            lastArrival = max(lastArrival, s.arriveNs)
+            items.append(Item(t: s.arriveNs, rank: 2) { stream.addSnapshot(s) })
+        }
+        let chunkCount = 3125 // 100 s
+        for i in 0..<chunkCount {
+            let t0 = Int64(i) * chunkNs
+            items.append(Item(t: t0 + chunkNs, rank: 3) { stream.addChunk(index: i, t0Ns: t0, t1Ns: t0 + chunkNs) })
+        }
+        items.sort { a, b in a.t != b.t ? a.t < b.t : a.rank < b.rank }
+
+        var released: [Int: VoiceChunkFlags] = [:]
+        func poll() {
+            while let f = stream.pollFinal() {
+                released[f.index] = f
             }
         }
-        let reports = steady["snapshots"].array.map { VoiceStatsSnapshot(json: $0) }
-        let late = 10
-
-        for delayMs in [3000, 3600, 6000] {
-            var delivered = reports
-            delivered[late].arriveNs = delivered[late].reqNs + Int64(delayMs) * 1_000_000
-            delivered = delivered.enumerated().sorted { a, b in
-                a.element.arriveNs != b.element.arriveNs ? a.element.arriveNs < b.element.arriveNs : a.offset < b.offset
-            }.map { $0.element }
-
-            let stream = VoiceStatsStream(gates: gates)
-            var early: [Flags] = []
-            func drain() {
-                while early.count < probes {
-                    let t0 = mediaStart + Int64(early.count) * chunkNs
-                    let t1 = t0 + chunkNs
-                    if !stream.isConcealmentFinal(t1: t1) || !stream.isTxFinal(t1: t1) {
-                        return
-                    }
-                    early.append(flags(stream.track, t0: t0, t1: t1, mediaStart: mediaStart))
-                }
-            }
-            var b = 0
-            for report in delivered {
-                while b < blocks.count && blocks[b].t <= report.arriveNs {
-                    stream.addTapBlock(tNs: blocks[b].t, ticks: blocks[b].ticks)
-                    b += 1
-                    drain()
-                }
-                stream.addSnapshot(report)
-                drain()
-            }
-            while b < blocks.count {
-                stream.addTapBlock(tNs: blocks[b].t, ticks: blocks[b].ticks)
-                b += 1
-                drain()
-            }
-            XCTAssertEqual(early.count, probes, "delay \(delayMs) ms: every probe is released before the call ends")
-            XCTAssertEqual(stream.keptCount, reports.count - 1, "delay \(delayMs) ms: the late report is dropped")
-            stream.finish()
-            for i in 0..<early.count {
-                let t0 = mediaStart + Int64(i) * chunkNs
-                let end = flags(stream.track, t0: t0, t1: t0 + chunkNs, mediaStart: mediaStart)
-                XCTAssertEqual(early[i], end, "delay \(delayMs) ms: probe \(i)")
-            }
+        for item in items {
+            item.run()
+            poll()
         }
+        stream.finish(endNs: lastArrival)
+        poll()
+
+        XCTAssertEqual(after, 90)
+        XCTAssertEqual(stream.capDroppedCount, after - 64, "the 65th waiting snapshot drops the oldest")
+        XCTAssertEqual(stream.peakUnresolved, 64)
+        XCTAssertLessThanOrEqual(stream.peakKept, 64 + 4)
+        XCTAssertLessThanOrEqual(stream.peakIntervals, 20)
+        XCTAssertLessThanOrEqual(stream.peakPending, (5500 + 1100) / 32 + 6)
+        XCTAssertEqual(released.count, chunkCount)
+
+        // A chunk behind the silent tap is released as overdue, within one input of 5.5 s after its end.
+        guard let f = released[1000] else {
+            XCTFail("chunk 1000 was not released")
+            return
+        }
+        XCTAssertTrue(f.overdue)
+        XCTAssertTrue(f.txUnknown && f.concUnknown && !f.excluded && f.overlaps.isEmpty)
+        let t1 = 1001 * chunkNs
+        XCTAssertGreaterThanOrEqual(f.releaseNs, t1 + 5_500_000_000)
+        XCTAssertLessThan(f.releaseNs, t1 + 5_500_000_000 + 1_100_000_000)
     }
 }

@@ -77,5 +77,6 @@
     {"kind": "hold", "at_chunk": 580, "at_input": 296960, "tap": 0},
     {"kind": "resume", "at_chunk": 600, "at_input": 307200, "tap": 0},
     {"kind": "reset", "at_chunk": 650, "at_input": 332800, "tap": 0}
-  ]
+  ],
+  "end_ns": 4567937017000000
 }
