@@ -27,6 +27,18 @@ final class IdentityVerdictWiringTests: XCTestCase {
         throw NSError(domain: "IdentityVerdictWiringTests", code: 1)
     }
 
+    private func sourceDirectory(_ relativePath: String, file: StaticString = #filePath) throws -> URL {
+        var dir = URL(fileURLWithPath: "\(file)")
+        for _ in 0..<10 {
+            dir = dir.deletingLastPathComponent()
+            let candidate = dir.appendingPathComponent(relativePath)
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: candidate.path, isDirectory: &isDir), isDir.boolValue { return candidate }
+        }
+        XCTFail("\(relativePath) not found: the wiring invariants cannot run")
+        throw NSError(domain: "IdentityVerdictWiringTests", code: 2)
+    }
+
     private func count(of needle: String, in source: String) -> Int {
         source.components(separatedBy: needle).count - 1
     }
@@ -58,10 +70,28 @@ final class IdentityVerdictWiringTests: XCTestCase {
         XCTAssertTrue(app.contains("if let integration = callService.callIntegration, let provider = liveProvider {"))
         XCTAssertTrue(app.contains("wireHandshakeSigning(on: integration) integration.sendCallProcessing"),
                       "the outgoing integration is wired with the same function")
-        // nothing else creates one (group legs and video use the same two)
-        for path in ["QAudionApp/Views/VideoCallView.swift", "QAudionApp/Views/GroupCallView.swift"] {
-            XCTAssertEqual(0, count(of: "QAudionCallIntegration(", in: try code(path)), path)
+        // nothing else creates one: every .swift file of the app and of the engine is scanned, so a new construction anywhere
+        // (a group leg, a video view, a new service) fails here until it goes through wireHandshakeSigning(on:)
+        let allowed = ["QAudionApp/AppState.swift": 1, "QAudionApp/Services/CallService.swift": 1]
+        var scanned = 0
+        for root in ["QAudionApp", "QAudionEngine/Sources"] {
+            let dir = try sourceDirectory(root)
+            let walker = try XCTUnwrap(FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil), "cannot enumerate \(dir.path)")
+            for case let url as URL in walker where url.pathExtension == "swift" {
+                scanned += 1
+                let relative = root + String(url.path.dropFirst(dir.path.count))
+                let text = try String(contentsOf: url, encoding: .utf8)
+                    .split(separator: "\n", omittingEmptySubsequences: false)
+                    .map { line -> Substring in
+                        if let r = line.range(of: "//") { return line[line.startIndex..<r.lowerBound] }
+                        return line
+                    }
+                    .joined(separator: "\n")
+                XCTAssertEqual(allowed[relative] ?? 0, count(of: "QAudionCallIntegration(", in: text),
+                               "\(relative): a call integration must be built only where wireHandshakeSigning(on:) follows it")
+            }
         }
+        XCTAssertGreaterThan(scanned, 50, "the scan found almost no source files: the directory lookup is broken")
         // the engine never assigns a call integration to another holder
         XCTAssertEqual(2, count(of: "self.callIntegration = integration", in: service),
                        "a new place that stores a call integration must be wired too: update this test with its wiring")

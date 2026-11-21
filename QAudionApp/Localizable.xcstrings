@@ -2708,7 +2708,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Sortie audio : %@. Touchez pour changer"
+            "value": "Sortie audio : %@. Touche pour changer"
           }
         },
         "de": {
@@ -3601,7 +3601,7 @@
       "localizations": {
         "it": { "stringUnit": { "state": "translated", "value": "Vengono inviati solo gli ultimi minuti del registro tecnico dell'app (eventi, stato di rete e audio, errori), con i dati personali oscurati. Nessun messaggio, nessun contenuto di chiamata. Se lo disattivi non parte nessuna riga di log." } },
         "en": { "stringUnit": { "state": "translated", "value": "Only the last minutes of the app's technical log are sent (events, network and audio state, errors), with personal data masked. No messages, no call content. If you turn it off, no log line is sent." } },
-        "fr": { "stringUnit": { "state": "translated", "value": "Seules les dernières minutes du journal technique de l'app sont envoyées (événements, état du réseau et de l'audio, erreurs), avec les données personnelles masquées. Aucun message, aucun contenu d'appel. Si vous le désactivez, aucune ligne de journal n'est envoyée." } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Seules les dernières minutes du journal technique de l'app sont envoyées (événements, état du réseau et de l'audio, erreurs), avec les données personnelles masquées. Aucun message, aucun contenu d'appel. Si tu le désactives, aucune ligne de journal n'est envoyée." } },
         "de": { "stringUnit": { "state": "translated", "value": "Gesendet werden nur die letzten Minuten des technischen Protokolls der App (Ereignisse, Netzwerk- und Audiostatus, Fehler), personenbezogene Daten sind maskiert. Keine Nachrichten, keine Anrufinhalte. Wenn du es ausschaltest, wird keine Protokollzeile gesendet." } },
         "es": { "stringUnit": { "state": "translated", "value": "Solo se envían los últimos minutos del registro técnico de la app (eventos, estado de red y audio, errores), con los datos personales ocultos. Ningún mensaje, ningún contenido de llamada. Si lo desactivas, no se envía ninguna línea de registro." } },
         "pt-BR": { "stringUnit": { "state": "translated", "value": "Somente os últimos minutos do registro técnico do app são enviados (eventos, estado de rede e áudio, erros), com os dados pessoais ocultados. Nenhuma mensagem, nenhum conteúdo de chamada. Se você desativar, nenhuma linha de log é enviada." } }
@@ -5030,7 +5030,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Votre numéro a été associé à un autre compte. Si ce n'était pas vous, contactez l'assistance."
+            "value": "Ton numéro a été associé à un autre compte. Si ce n'était pas toi, contacte l'assistance."
           }
         },
         "de": {
@@ -5114,7 +5114,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Votre numéro a été associé à un autre compte. Si ce n'était pas vous, contactez l'assistance."
+            "value": "Ton numéro a été associé à un autre compte. Si ce n'était pas toi, contacte l'assistance."
           }
         },
         "de": {
@@ -43306,7 +43306,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le serveur indiqué dans les données lues (%@) ne fait pas partie des adresses connues de %@. Vérifiez que les données proviennent du serveur de production et réessayez ; si le problème persiste, contactez l'administrateur."
+            "value": "Le serveur indiqué dans les données lues (%@) ne fait pas partie des adresses connues de %@. Vérifie que les données proviennent du serveur de production et réessaie ; si le problème persiste, contacte l'administrateur."
           }
         },
         "de": {
@@ -53877,7 +53877,7 @@
         "en": { "stringUnit": { "state": "translated", "value": "Voice learned from your calls" } },
         "de": { "stringUnit": { "state": "translated", "value": "Stimme aus Ihren Anrufen gelernt" } },
         "es": { "stringUnit": { "state": "translated", "value": "Voz aprendida de tus llamadas" } },
-        "fr": { "stringUnit": { "state": "translated", "value": "Voix apprise à partir de vos appels" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Voix apprise à partir de tes appels" } },
         "pt-BR": { "stringUnit": { "state": "translated", "value": "Voz aprendida das suas chamadas" } }
       }
     },
@@ -53888,7 +53888,7 @@
         "en": { "stringUnit": { "state": "translated", "value": "Your voice is being learned during your calls" } },
         "de": { "stringUnit": { "state": "translated", "value": "Ihre Stimme wird während Ihrer Anrufe gelernt" } },
         "es": { "stringUnit": { "state": "translated", "value": "Tu voz se aprende durante tus llamadas" } },
-        "fr": { "stringUnit": { "state": "translated", "value": "Votre voix est apprise pendant vos appels" } },
+        "fr": { "stringUnit": { "state": "translated", "value": "Ta voix est apprise pendant tes appels" } },
         "pt-BR": { "stringUnit": { "state": "translated", "value": "Sua voz está sendo aprendida durante suas chamadas" } }
       }
     },
@@ -66584,7 +66584,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Reconnectez-vous pour associer un appareil."
+            "value": "Reconnecte-toi pour associer un appareil."
           }
         },
         "de": {
@@ -76928,7 +76928,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "La VPN ne s'est pas connectée à temps. Réessayez."
+            "value": "La VPN ne s'est pas connectée à temps. Réessaie."
           }
         },
         "de": {
@@ -76970,7 +76970,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "La connexion VPN précédente se ferme encore. Réessayez dans un instant."
+            "value": "La connexion VPN précédente se ferme encore. Réessaie dans un instant."
           }
         },
         "de": {
@@ -78188,7 +78188,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pour les comptes créés pour vous par l'administrateur de votre organisation. Saisissez le poste et le mot de passe que vous avez reçus."
+            "value": "Pour les comptes créés pour toi par l'administrateur de ton organisation. Saisis le poste et le mot de passe que tu as reçus."
           }
         },
         "de": {
@@ -78482,7 +78482,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Vérifiez les caractères du mot de passe en position %@ : la lecture a pu les confondre (0 et O, 1 et I ou L)."
+            "value": "Vérifie les caractères du mot de passe en position %@ : la lecture a pu les confondre (0 et O, 1 et I ou L)."
           }
         },
         "de": {
@@ -78524,7 +78524,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Je n'ai trouvé ni poste ni mot de passe. Saisissez-les à la main."
+            "value": "Je n'ai trouvé ni poste ni mot de passe. Saisis-les à la main."
           }
         },
         "de": {
@@ -78565,7 +78565,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ce QR ne correspond à aucun format Q-Audion. Assurez-vous de scanner un code généré par Q-Audion (liaison d'appareil ou invitation à un groupe)."
+            "value": "Ce QR ne correspond à aucun format Q-Audion. Assure-toi de scanner un code généré par Q-Audion (liaison d'appareil ou invitation à un groupe)."
           }
         },
         "de": {
@@ -85830,7 +85830,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Envoie les métriques du pipeline d'appel (audio, réseau, auto-test) chiffrées avec X25519+AES-GCM, déchiffrables uniquement côté serveur. ID de session temporaire, ne collecte ni messages ni contacts. Si un autre participant signale un problème lors d'un appel avec vous, les journaux de cet appel peuvent aussi être envoyés, chiffrés. Désactivé par défaut."
+            "value": "Envoie les métriques du pipeline d'appel (audio, réseau, auto-test) chiffrées avec X25519+AES-GCM, déchiffrables uniquement côté serveur. ID de session temporaire, ne collecte ni messages ni contacts. Si un autre participant signale un problème lors d'un appel avec toi, les journaux de cet appel peuvent aussi être envoyés, chiffrés. Désactivé par défaut."
           }
         },
         "de": {
@@ -97671,7 +97671,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Confirmez la connexion"
+            "value": "Confirme la connexion"
           }
         },
         "de": {
@@ -97713,7 +97713,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Confirmez depuis un autre de vos appareils en choisissant le numéro %@"
+            "value": "Confirme depuis un autre de tes appareils en choisissant le numéro %@"
           }
         },
         "de": {
@@ -97965,7 +97965,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Vous n'avez plus l'autre appareil ? Demandez le code %@ à l'administrateur"
+            "value": "Tu n'as plus l'autre appareil ? Demande le code %@ à l'administrateur"
           }
         },
         "de": {
@@ -98007,7 +98007,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nous vous avons envoyé un code à 6 chiffres par e-mail."
+            "value": "Nous t'avons envoyé un code à 6 chiffres par e-mail."
           }
         },
         "de": {
@@ -98049,7 +98049,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nous vous avons envoyé un code à 6 chiffres par SMS."
+            "value": "Nous t'avons envoyé un code à 6 chiffres par SMS."
           }
         },
         "de": {
@@ -98175,7 +98175,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Code incorrect. Réessayez."
+            "value": "Code incorrect. Réessaie."
           }
         },
         "de": {
@@ -98217,7 +98217,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Trop de tentatives. Demandez un nouveau code."
+            "value": "Trop de tentatives. Demande un nouveau code."
           }
         },
         "de": {
@@ -98259,7 +98259,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Trop de demandes. Réessayez dans un instant."
+            "value": "Trop de demandes. Réessaie dans un instant."
           }
         },
         "de": {
@@ -98301,7 +98301,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cette méthode n'est pas disponible pour votre compte."
+            "value": "Cette méthode n'est pas disponible pour ton compte."
           }
         },
         "de": {
@@ -98343,7 +98343,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "La demande n'a pas pu aboutir. Réessayez."
+            "value": "La demande n'a pas pu aboutir. Réessaie."
           }
         },
         "de": {
@@ -98427,7 +98427,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Un autre de vos appareils a refusé cette demande de connexion."
+            "value": "Un autre de tes appareils a refusé cette demande de connexion."
           }
         },
         "de": {
@@ -98511,7 +98511,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Personne n'a confirmé la connexion à temps. Vous pouvez réessayer."
+            "value": "Personne n'a confirmé la connexion à temps. Tu peux réessayer."
           }
         },
         "de": {
@@ -98679,7 +98679,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Un appareil essaie d'accéder à votre compte. Choisissez le numéro affiché sur le nouvel appareil."
+            "value": "Un appareil essaie d'accéder à ton compte. Choisis le numéro affiché sur le nouvel appareil."
           }
         },
         "de": {
@@ -98889,7 +98889,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Si vous n'essayez pas de vous connecter, refusez la demande."
+            "value": "Si tu n'essaies pas de te connecter, refuse la demande."
           }
         },
         "de": {
@@ -99141,7 +99141,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mauvais numéro : la demande a été rejetée. Si la nouvelle connexion est la vôtre, réessayez depuis le nouvel appareil."
+            "value": "Mauvais numéro : la demande a été rejetée. Si la nouvelle connexion est la tienne, réessaie depuis le nouvel appareil."
           }
         },
         "de": {
@@ -99225,7 +99225,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "La réponse n'a pas pu être envoyée. Réessayez."
+            "value": "La réponse n'a pas pu être envoyée. Réessaie."
           }
         },
         "de": {
@@ -99351,7 +99351,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Voulez-vous déconnecter vos autres appareils ?"
+            "value": "Veux-tu déconnecter tes autres appareils ?"
           }
         },
         "de": {
@@ -99393,7 +99393,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Vous venez de vous connecter sur cet appareil. Choisissez ce qu'il faut faire des autres."
+            "value": "Tu viens de te connecter sur cet appareil. Choisis ce qu'il faut faire des autres."
           }
         },
         "de": {
@@ -99603,7 +99603,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Les autres appareils n'ont pas pu être déconnectés. Réessayez."
+            "value": "Les autres appareils n'ont pas pu être déconnectés. Réessaie."
           }
         },
         "de": {
@@ -99813,7 +99813,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Une demande de connexion à votre compte a été refusée."
+            "value": "Une demande de connexion à ton compte a été refusée."
           }
         },
         "de": {
@@ -99855,7 +99855,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Une demande de connexion à votre compte a expiré sans réponse."
+            "value": "Une demande de connexion à ton compte a expiré sans réponse."
           }
         },
         "de": {
@@ -99897,7 +99897,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Un nouvel appareil a été approuvé avec un code envoyé par e-mail ou SMS, ou par l'administrateur. Si ce n'était pas vous, contactez l'administrateur."
+            "value": "Un nouvel appareil a été approuvé avec un code envoyé par e-mail ou SMS, ou par l'administrateur. Si ce n'était pas toi, contacte l'administrateur."
           }
         },
         "de": {
@@ -99939,7 +99939,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Cet appareil a été déconnecté par une nouvelle connexion de votre part. Si ce n'était pas vous, contactez l'administrateur."
+            "value": "Cet appareil a été déconnecté par une nouvelle connexion de ta part. Si ce n'était pas toi, contacte l'administrateur."
           }
         },
         "de": {
@@ -99981,7 +99981,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "L'e-mail ou le numéro de récupération de votre compte a été modifié. Si ce n'était pas vous, contactez l'administrateur."
+            "value": "L'e-mail ou le numéro de récupération de ton compte a été modifié. Si ce n'était pas toi, contacte l'administrateur."
           }
         },
         "de": {
@@ -100065,7 +100065,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Utiles uniquement si vous perdez votre téléphone"
+            "value": "Utiles uniquement si tu perds ton téléphone"
           }
         },
         "de": {
@@ -100611,7 +100611,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Nous vous avons envoyé un code à 6 chiffres. Saisissez-le ci-dessous."
+            "value": "Nous t'avons envoyé un code à 6 chiffres. Saisis-le ci-dessous."
           }
         },
         "de": {
@@ -100779,7 +100779,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Valeur non valide. Vérifiez et réessayez."
+            "value": "Valeur non valide. Vérifie et réessaie."
           }
         },
         "de": {
@@ -100821,7 +100821,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Code incorrect. Réessayez."
+            "value": "Code incorrect. Réessaie."
           }
         },
         "de": {
@@ -100863,7 +100863,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Trop de demandes. Réessayez dans un instant."
+            "value": "Trop de demandes. Réessaie dans un instant."
           }
         },
         "de": {
@@ -100905,7 +100905,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "L'opération n'a pas pu aboutir. Réessayez."
+            "value": "L'opération n'a pas pu aboutir. Réessaie."
           }
         },
         "de": {
@@ -100947,7 +100947,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "La date ou l'heure de cet appareil est incorrecte. Activez la date et l'heure automatiques puis réessayez."
+            "value": "La date ou l'heure de cet appareil est incorrecte. Active la date et l'heure automatiques puis réessaie."
           }
         },
         "de": {
@@ -101031,7 +101031,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "La liste des appareils n'a pas pu être lue. Vous pouvez réessayer, les garder ou tous les déconnecter."
+            "value": "La liste des appareils n'a pas pu être lue. Tu peux réessayer, les garder ou tous les déconnecter."
           }
         },
         "de": {
@@ -101073,7 +101073,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Choisissez les appareils à déconnecter"
+            "value": "Choisis les appareils à déconnecter"
           }
         },
         "de": {
@@ -101241,7 +101241,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Certains appareils n'ont pas pu être déconnectés. Réessayez."
+            "value": "Certains appareils n'ont pas pu être déconnectés. Réessaie."
           }
         },
         "de": {
@@ -101325,7 +101325,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le code a expiré. Demandez un nouveau code."
+            "value": "Le code a expiré. Demande un nouveau code."
           }
         },
         "de": {
@@ -101409,7 +101409,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Les sessions du compte ont été fermées juste après l'approbation. Connectez-vous à nouveau."
+            "value": "Les sessions du compte ont été fermées juste après l'approbation. Connecte-toi à nouveau."
           }
         },
         "de": {
@@ -103005,7 +103005,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "S'active toute seule pendant vos appels"
+            "value": "S'active toute seule pendant tes appels"
           }
         },
         "de": {
@@ -103215,7 +103215,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Apprentissage de votre voix"
+            "value": "Apprentissage de ta voix"
           }
         },
         "de": {
@@ -103299,7 +103299,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Elle commence à apprendre votre voix dès le prochain appel où vous parlez."
+            "value": "Elle commence à apprendre ta voix dès le prochain appel où tu parles."
           }
         },
         "de": {
@@ -103341,7 +103341,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Elle s'active après au moins %1$lld appels, avec environ %2$lld secondes de votre voix au total."
+            "value": "Elle s'active après au moins %1$lld appels, avec environ %2$lld secondes de ta voix au total."
           }
         },
         "de": {
@@ -103425,7 +103425,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Votre voix est reconnue. Le modèle continue de s'améliorer au fil de vos prochains appels."
+            "value": "Ta voix est reconnue. Le modèle continue de s'améliorer au fil de tes prochains appels."
           }
         },
         "de": {
@@ -103509,7 +103509,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le modèle de votre voix est complet : l'application ne collecte plus d'échantillons."
+            "value": "Le modèle de ta voix est complet : l'application ne collecte plus d'échantillons."
           }
         },
         "de": {
@@ -103635,7 +103635,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pendant les appels, l'application utilise uniquement votre microphone et, quand vous parlez, construit un modèle numérique de votre voix. Vous n'avez rien à enregistrer : après quelques appels, Voice-as-Key s'active, puis continue de s'affiner pendant quelques jours."
+            "value": "Pendant les appels, l'application utilise uniquement ton microphone et, quand tu parles, construit un modèle numérique de ta voix. Tu n'as rien à enregistrer : après quelques appels, Voice-as-Key s'active, puis continue de s'affiner pendant quelques jours."
           }
         },
         "de": {
@@ -103677,7 +103677,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ce que voit votre contact"
+            "value": "Ce que voit ton contact"
           }
         },
         "de": {
@@ -103719,7 +103719,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Pendant un appel, votre téléphone compare la voix qui parle dans le microphone à votre modèle et n'envoie à votre contact que le résultat, chiffré de bout en bout. Sur l'écran d'appel, votre contact voit un bouclier avec un microphone : vert tant que la voix correspond, violet si la comparaison est incertaine, rouge si une autre personne parle, par exemple parce que le téléphone a changé de mains. Vous voyez le même bouclier pour les contacts qui ont activé Voice-as-Key."
+            "value": "Pendant un appel, ton téléphone compare la voix qui parle dans le microphone à ton modèle et n'envoie à ton contact que le résultat, chiffré de bout en bout. Sur l'écran d'appel, ton contact voit un bouclier avec un microphone : vert tant que la voix correspond, violet si la comparaison est incertaine, rouge si une autre personne parle, par exemple parce que le téléphone a changé de mains. Tu vois le même bouclier pour les contacts qui ont activé Voice-as-Key."
           }
         },
         "de": {
@@ -103887,7 +103887,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le modèle reste uniquement sur cet appareil, chiffré, et n'est jamais envoyé au serveur ni à vos contacts. L'audio des appels n'est pas enregistré : pour apprendre, l'application ne conserve que des valeurs numériques tirées de votre voix, jamais la voix elle-même."
+            "value": "Le modèle reste uniquement sur cet appareil, chiffré, et n'est jamais envoyé au serveur ni à tes contacts. L'audio des appels n'est pas enregistré : pour apprendre, l'application ne conserve que des valeurs numériques tirées de ta voix, jamais la voix elle-même."
           }
         },
         "de": {
@@ -103929,7 +103929,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Si l'application a appris une mauvaise voix, par exemple celle d'une personne à côté de vous ou de quelqu'un qui a utilisé votre téléphone, réinitialisez-la : elle recommencera à apprendre lors de vos prochains appels."
+            "value": "Si l'application a appris une mauvaise voix, par exemple celle d'une personne à côté de toi ou de quelqu'un qui a utilisé ton téléphone, réinitialise-la : elle recommencera à apprendre lors de tes prochains appels."
           }
         },
         "de": {
@@ -104055,7 +104055,7 @@
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le modèle vocal enregistré sur cet appareil est supprimé. Votre voix sera de nouveau apprise automatiquement pendant vos appels."
+            "value": "Le modèle vocal enregistré sur cet appareil est supprimé. Ta voix sera de nouveau apprise automatiquement pendant tes appels."
           }
         },
         "de": {
