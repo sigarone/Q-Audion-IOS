@@ -27,6 +27,17 @@ import QAudionEngine
 /// We never fall back to a server-derivable key (FIX H1): there is no
 /// silent confidentiality downgrade. The user retries once the exchange
 /// completes.
+/// The user's explicit "send over the internet" answer for ONE message, the only thing that lets user content reach the network in a
+/// Bluetooth-only conversation. Created only by the tap handlers of the prompt (`UserNetworkChoice.tapped`); a source check
+/// (`scripts/ci/check_user_content_send_gate.py`) keeps it that way.
+struct UserNetworkChoice {
+    let messageId: UUID
+
+    static func tapped(messageId: UUID) -> UserNetworkChoice {
+        UserNetworkChoice(messageId: messageId)
+    }
+}
+
 @MainActor
 final class ChatMessageSendService {
 
@@ -74,8 +85,13 @@ final class ChatMessageSendService {
         messageId: UUID,
         peerUserId: String,
         plaintext: String,
-        payloadClass: PayloadClass = .userContent
+        payloadClass: PayloadClass = .userContent,
+        userChoice: UserNetworkChoice? = nil
     ) async -> Outcome {
+        // The choke point of the Bluetooth-only rule: user content goes to the network only with the user's answer.
+        if payloadClass == .userContent, refusesForBluetoothOnly(messageId: messageId, peerUserId: peerUserId, userChoice: userChoice) {
+            return .failed(reason: .bluetoothOnlyHeld)
+        }
         // Authentication gate — without a token we can't talk to the
         // server. The container will surface `.notAuthenticated`.
         guard let token = appState.authService.loadToken(), !token.isEmpty else {
@@ -121,6 +137,7 @@ final class ChatMessageSendService {
             // echoes the exact same UUID the recipient uses to reconstruct
             // the AAD for AEAD verification. Previously BCryptoMessageApiImpl
             // generated a NEW UUID here → AAD mismatch → every decrypt failed.
+            // gate-exempt: inside the choke point, after the Bluetooth-only refusal
             let serverMsgId = try await live.messageApi.sendMessage(
                 recipientId: peerUserId,
                 content: wireBlob,
@@ -176,6 +193,17 @@ final class ChatMessageSendService {
         }
     }
 
+    /// True when this user-content send must not go to the network: the conversation is Bluetooth only and there is no user choice.
+    /// The message is then held with its prompt (never dropped, never sent).
+    private func refusesForBluetoothOnly(messageId: UUID, peerUserId: String, userChoice: UserNetworkChoice?) -> Bool {
+        let decision = MeshFallbackPolicy.userContentSend(
+            hasUserChoice: userChoice?.messageId == messageId,
+            bluetoothOnly: BluetoothOnlyGate.isBluetoothOnly(peerUserId: peerUserId))
+        guard decision == .holdAndPrompt else { return false }
+        BluetoothOnlyGate.holdRefused(messageId: messageId)
+        return true
+    }
+
     /// W-MSGOUTBOX (2026-09-01) — outcome of the durable text send.
     /// `queued` is the one case `Outcome` cannot express: a retry entry is
     /// persisted in `ChatOutboxStore` and `ChatOutboxDrain` re-seals and
@@ -214,8 +242,12 @@ final class ChatMessageSendService {
         messageId: UUID,
         conversationId: UUID,
         peerUserId: String,
-        plaintext: String
+        plaintext: String,
+        userChoice: UserNetworkChoice? = nil
     ) async -> DurableOutcome {
+        if refusesForBluetoothOnly(messageId: messageId, peerUserId: peerUserId, userChoice: userChoice) {
+            return .failed(reason: .bluetoothOnlyHeld)
+        }
         let isLocationBody: Bool = LocationCodec.hasLocationPrefix(plaintext)
         guard let token = appState.authService.loadToken(), !token.isEmpty else {
             return .failed(reason: .notAuthenticated)
@@ -247,6 +279,7 @@ final class ChatMessageSendService {
             if isLocationBody, !LocationShareCenter.shared.startBeingSent(clientMsgId: messageId.uuidString) {
                 return .queued
             }
+            // gate-exempt: inside the choke point, after the Bluetooth-only refusal
             let serverMsgId = try await live.messageApi.sendMessage(
                 recipientId: peerUserId,
                 content: wireBlob,

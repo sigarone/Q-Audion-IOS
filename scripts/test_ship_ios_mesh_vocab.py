@@ -110,7 +110,7 @@ DOWN_REASONS = sorted(set(re.findall(r'(?:tearDown|disconnect)\([^)]*reason: "([
 APP_RESULTS = sorted(set(re.findall(r'logMeshRx\([^)]*result: "([a-z_]+)"\)', appstate_src)))
 APP_STATES = sorted(set(re.findall(r'logApp\([^)]*state: "([a-z]+)"', drain_src)))
 
-check(len(EVENTS) == 22, "expected 20 events in MeshLog.Event, found %r" % (EVENTS,))
+check(len(EVENTS) == 23, "expected 23 events in MeshLog.Event, found %r" % (EVENTS,))
 check({"radio.pause", "radio.resume", "connect.backoff"} <= set(EVENTS), "the pause / backoff events are missing: %r" % (EVENTS,))
 check(PAUSE_REASONS == ["bt_call_route"], "radio.pause reasons: %r" % (PAUSE_REASONS,))
 check(sorted(RESUME_REASONS) == ["call_ended", "route_changed"], "radio.resume reasons: %r" % (RESUME_REASONS,))
@@ -151,6 +151,12 @@ LINES = [
     "relay ph=%s ttl=4 p=800 fwd=2 okLinks=2" % PH,
     "relay ph=%s ttl=3 p=1000 fwd=1 okLinks=0" % PH,
     "outbox pending=3 retried=1 gaveUp=0",
+    # A message handed from the Bluetooth outbox to the network outbox (one line per hand-over)
+    "fallback ph=%s reason=deadline" % PH,
+    "fallback ph=%s reason=radio_off" % PH,
+    "fallback ph=%s reason=giveup" % PH,
+    "fallback ph=%s reason=reconnect" % PH,
+    "fallback ph=%s reason=user_choice" % PH,
     # Section 2.1 / 3.5 (Bluetooth call pause, connect backoff)
     "connect.backoff link=c31 failures=1 waitMs=14213",
     "connect.backoff link=c2 failures=12 waitMs=359999",

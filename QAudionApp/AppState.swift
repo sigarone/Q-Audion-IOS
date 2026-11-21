@@ -6549,6 +6549,12 @@ final class AppState: ObservableObject {
                 guard let live = await self.ensurePersistentProviderConnected() else {
                     throw ChatOutboxDrain.TransportError.unavailable
                 }
+                // The second line of the Bluetooth-only rule: a row for a Bluetooth-only contact goes only with the user's answer.
+                if BluetoothOnlyGate.isBluetoothOnly(peerUserId: peerUserId),
+                   !UserNetworkApprovalStore.shared.isApproved(messageId: clientMsgId) {
+                    if let id = UUID(uuidString: clientMsgId) { BluetoothOnlyGate.holdRefused(messageId: id) }
+                    throw ChatOutboxDrain.TransportError.unavailable
+                }
                 _ = try await live.messageApi.sendMessage(
                     recipientId: peerUserId, content: wireBlob, clientMsgId: clientMsgId)
             },
@@ -6556,6 +6562,7 @@ final class AppState: ObservableObject {
                 guard let live = self?.liveProvider else {
                     throw ChatOutboxDrain.TransportError.unavailable
                 }
+                // The server transport ack: always sent (`MeshChatTraffic.serverAck`).
                 if let senderUserId, !senderUserId.isEmpty {
                     try await live.messageApi.sendDeliveryReceipt(
                         messageId: serverMessageId, recipientId: senderUserId)
@@ -7564,6 +7571,8 @@ final class AppState: ObservableObject {
                     if prev != .authenticated {
                         Task { @MainActor in
                             ChatOutboxDrain.shared.kick(reason: "ws-authenticated")
+                            // A message waiting on Bluetooth past its deadline goes to the server now.
+                            MeshOutboxDrain.shared.networkReconnected()
                             // 2026-09-19 service-message root fix — held service
                             // payloads (CONTROL only) flush once a socket exists.
                             ServiceSendHub.shared.socketBecameReady()
@@ -15056,6 +15065,9 @@ final class AppState: ObservableObject {
     /// silently drops the id-only form, which is why every message to this device stayed in
     /// the server's pending queue and was replayed at each reconnect.
     private func sendOrQueueDeliveryReceipt(serverMsgId: String, senderId: String? = nil) {
+        // This is the SERVER transport ack of a message that arrived over the network: it lets the server drop the message from
+        // its pending queue and reveals nothing new. It is always sent, in a Bluetooth-only conversation too
+        // (`MeshChatTraffic.serverAck`). The end-to-end receipts to the contact are the ones the Bluetooth-only rule skips.
         let socketUp = liveProvider?.persistentConnection.state == .authenticated
         if OutboxRetryPolicy.enabled, !socketUp {
             ChatOutboxStore().enqueueDeliveryReceipt(
@@ -15834,6 +15846,8 @@ final class AppState: ObservableObject {
     @MainActor
     func sendAttachmentReceipt(recipientId: String, wireId: String, status: String) async {
         guard !wireId.isEmpty else { return }
+        // A Bluetooth-only conversation sends no attachment receipt over the internet.
+        guard BluetoothOnlyGate.networkAllowed(.attachmentReceipt, peerUserId: recipientId) else { return }
         do {
             let envelope = AttachmentReceiptEnvelope(
                 id: wireId, status: status, ts: Int64(Date().timeIntervalSince1970 * 1000))
@@ -19679,6 +19693,11 @@ final class AppState: ObservableObject {
             print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… is not in the conversation with the nacking peer — ignoring")
             return
         }
+        // A message held for Bluetooth only is never sent again through the server on a nack: only the user's answer does that.
+        guard original.bluetoothHold != true, !BluetoothOnlyGate.isBluetoothOnly(peerUserId: peerUserId) else {
+            print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… is Bluetooth only — not resent over the network")
+            return
+        }
         guard original.direction == .outgoing, original.mediaLocalPath == nil else {
             print("[AppState] W-DECRYPTNACK: target \(targetClientMsgId.prefix(8))… not our own text send — ignoring")
             return
@@ -19714,6 +19733,7 @@ final class AppState: ObservableObject {
         let plaintext = original.plaintext
         let sendService = ChatMessageSendService(appState: self)
         Task { @MainActor in
+            // gate-exempt: held rows and Bluetooth-only peers return before this (decrypt nack resend)
             let outcome = await sendService.sendEncrypted(messageId: resendId, peerUserId: peerUserId, plaintext: plaintext)
             guard case .failed = outcome else {
                 print("[AppState] W-DECRYPTNACK resent target=\(targetClientMsgId.prefix(8))… peer=\(peerUserId.prefix(8))… (same id, no new row) conv=\(convId.uuidString.prefix(8))…")

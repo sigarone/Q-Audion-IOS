@@ -38,6 +38,8 @@ enum FileV2OutboundRunner {
         let ex: Int64?
         /// The descriptor's `xp`: 0 export blocked; `nil` = allowed.
         let xp: Int64?
+        /// The user's "send over the internet" answer, when the chat is Bluetooth only; nil otherwise.
+        var userChoice: UserNetworkChoice? = nil
     }
 
     /// The rows of the sends running in THIS process (a 1:1 message id, or the id of a group row). A row of a file that is still
@@ -160,7 +162,8 @@ enum FileV2OutboundRunner {
         // Claims the row for this live attempt so the outbox drain never seals and sends the same message a second time.
         ChatOutboxDrain.shared.beginLiveSend(clientMsgId: msgId.uuidString)
         let outcome = await sendService.sendEncryptedDurable(
-            messageId: msgId, conversationId: context.conversationId, peerUserId: context.peerUserId, plaintext: body)
+            messageId: msgId, conversationId: context.conversationId, peerUserId: context.peerUserId, plaintext: body,
+            userChoice: context.userChoice)
         ChatOutboxDrain.shared.endLiveSend(clientMsgId: msgId.uuidString)
         switch outcome {
         case .delivered(let serverMessageId):
