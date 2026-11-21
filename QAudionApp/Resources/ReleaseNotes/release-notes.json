@@ -1,5 +1,40 @@
 [
   {
+    "version": "1.0.1302",
+    "notes": {
+      "it": [
+        "Con «Solo Bluetooth», se il Bluetooth non riesce a consegnare il messaggio, ti chiediamo se inviarlo via internet: decidi tu",
+        "Con «Preferisci Bluetooth», i messaggi che il Bluetooth non riesce a consegnare partono da soli via internet",
+        "Collegamento più stabile nei primi secondi di ogni chiamata"
+      ],
+      "en": [
+        "With \"Bluetooth only\", if Bluetooth can't deliver the message, we ask whether to send it over the internet: you decide",
+        "With \"Prefer Bluetooth\", messages Bluetooth can't deliver go out over the internet on their own",
+        "A steadier connection in the first seconds of every call"
+      ],
+      "de": [
+        "Mit „Nur Bluetooth“ fragen wir, ob die Nachricht übers Internet gehen soll, wenn Bluetooth sie nicht zustellen kann: Sie entscheiden",
+        "Mit „Bluetooth bevorzugen“ werden Nachrichten, die Bluetooth nicht zustellen kann, automatisch übers Internet gesendet",
+        "Stabilere Verbindung in den ersten Sekunden jedes Anrufs"
+      ],
+      "es": [
+        "Con «Solo Bluetooth», si el Bluetooth no logra entregar el mensaje, te preguntamos si enviarlo por internet: tú decides",
+        "Con «Preferir Bluetooth», los mensajes que el Bluetooth no logra entregar salen solos por internet",
+        "Conexión más estable en los primeros segundos de cada llamada"
+      ],
+      "fr": [
+        "Avec « Bluetooth uniquement », si le Bluetooth ne parvient pas à transmettre le message, on te demande s'il faut passer par internet",
+        "Avec « Préférer le Bluetooth », les messages que le Bluetooth ne parvient pas à transmettre partent tout seuls par internet",
+        "Une connexion plus stable dans les premières secondes de chaque appel"
+      ],
+      "pt-BR": [
+        "Com \"Somente Bluetooth\", se o Bluetooth não conseguir entregar a mensagem, perguntamos se você quer enviá-la pela internet",
+        "Com \"Preferir Bluetooth\", as mensagens que o Bluetooth não consegue entregar saem sozinhas pela internet",
+        "Conexão mais estável nos primeiros segundos de cada chamada"
+      ]
+    }
+  },
+  {
     "version": "1.0.1301",
     "notes": {
       "it": [

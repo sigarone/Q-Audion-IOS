@@ -801,6 +801,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
     /// hammer: a flapping interface (WiFi roaming, elevator) can emit many path
     /// updates per second; we kick at most one path-driven reconnect per window.
     private var lastPathReconnectAt: TimeInterval = 0
+    /// Times of the flag-driven path-edge reconnects made during a call (`calls.ice_fastswitch`),
+    /// guarded by `lock`; only the last `FastSwitchDecisions.socketKickWindowSec` seconds matter.
+    private var fastPathKickTimes: [TimeInterval] = []
     // 15 s (was 2 s): a VPN / flaky path can storm NWPathMonitor with
     // satisfied↔unsatisfied edges every ~3 s. With the live-task bail in the
     // handler this is belt-and-suspenders, but it also caps a non-live reconnect
@@ -2753,8 +2756,28 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // owns re-onboarding in that case.
         if rejected { return }
 
+        // Faster switch (flag `calls.ice_fastswitch`): during an ACTIVE call a path edge on a
+        // socket that has no live authenticated task reconnects at once, so the ICE restart offer
+        // does not wait for the keepalive timeout. Outside a call, or with the flag off, the
+        // legacy rules below apply unchanged. The decision (debounce, live-task bail, kick cap)
+        // is the pure `FastSwitchDecisions.pathEdgeAction`.
+        let fastFlagOn = CallFastSwitchGate.shared.isEnabled
+        var inActiveCall = false
+        if let liveCallId = activeCallIdProvider?(), !liveCallId.isEmpty { inActiveCall = true }
+        lock.lock()
+        fastPathKickTimes.removeAll { now - $0 > FastSwitchDecisions.socketKickWindowSec }
+        let recentFastKicks = fastPathKickTimes.count
+        lock.unlock()
+        let action = FastSwitchDecisions.pathEdgeAction(
+            flagOn: fastFlagOn,
+            inActiveCall: inActiveCall,
+            hasLiveAuthenticatedTask: hasLiveAuthenticatedTask(),
+            interfaceTypeChanged: transportSwitched,
+            sinceLastKickSec: sinceLastKick,
+            legacyDebounceSec: pathReconnectDebounceSec,
+            recentKicks: recentFastKicks)
         // Debounce: ignore a flapping interface storming path updates.
-        if sinceLastKick < pathReconnectDebounceSec { return }
+        if action == .ignore { return }
 
         // CRITICAL anti-flap: a "recovered"/"switched" path event must NOT tear
         // down a socket that still has a LIVE authenticated task. On VPN/Tor/
@@ -2772,10 +2795,9 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // socket is recovered by the ping/pong staleness detector (pongTimeout)
         // and by AppState.willEnterForeground, NOT by churning it on every phantom
         // path edge. Mirrors Android KeepAlive (never force-reconnect a live socket).
-        if hasLiveAuthenticatedTask() { return }
-
         lock.lock()
         lastPathReconnectAt = now
+        if action == .reconnectNow { fastPathKickTimes.append(now) }
         lock.unlock()
 
         // W-PATHFLAP 2026-06-25: do NOT forceReconnect() on a path edge.
@@ -2794,6 +2816,11 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
         // none of which self-loop. The path handler now ONLY retunes adaptive ping
         // timing (applyAdaptiveTiming, above) and tracks state for logging.
         let reason: String = networkRecovered ? "network-recovered" : "transport-switch"
+        if action == .reconnectNow {
+            print("[BCryptoWS] path edge (" + reason + ") during a call — reconnecting now (fast switch)")
+            forceReconnect()
+            return
+        }
         print("[BCryptoWS] path edge (" + reason + ") — adaptive-timing only, NOT reconnecting (ping/pong owns recovery)")
     }
 

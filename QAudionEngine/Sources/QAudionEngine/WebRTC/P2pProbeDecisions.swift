@@ -102,4 +102,11 @@ public enum P2pProbeDecisions {
         }
         return true
     }
+
+    /// The pair kind the probe gate must use: a latest classification of the SELECTED pair that
+    /// says direct wins over a committed relay that is still waiting out its dwell, so a call
+    /// already on a direct pair never restarts ICE to look for one.
+    public static func effectivePairKind(committed: RouteTier, latestSelected: RouteTier) -> RouteTier {
+        latestSelected == .direct ? .direct : committed
+    }
 }
