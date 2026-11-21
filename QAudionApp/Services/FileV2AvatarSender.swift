@@ -33,6 +33,10 @@ enum FileV2AvatarSender {
     /// Uploads `avatarFile` (the self-avatar JPEG, left where it is: it is only read) and announces it to `peerId`.
     static func send(avatarFile: URL, to peerId: String, appState: AppState) async -> Outcome {
         let sendService = ChatMessageSendService(appState: appState)
+        // A technical announce: not sent over the network to a Bluetooth-only contact.
+        guard await MainActor.run(body: { BluetoothOnlyGate.networkAllowed(.avatarAnnounce, peerUserId: peerId) }) else {
+            return .failed(code: "bluetooth_only")
+        }
         guard sendService.hasTextChannel(peerUserId: peerId) else { return .noChannel }
         let server = FileV2AppServices.makeServer(appState: appState)
         let request = FileV2Sender.Request(
@@ -40,6 +44,7 @@ enum FileV2AvatarSender {
         var announcedBody: String?
         do {
             try await FileV2Sender(server: server).send(request) { body in
+                // gate-exempt: technical announce, skipped for Bluetooth-only peers above and refused by the choke point
                 let outcome = await sendService.sendEncrypted(messageId: UUID(), peerUserId: peerId, plaintext: body)
                 switch outcome {
                 case .delivered, .sent:

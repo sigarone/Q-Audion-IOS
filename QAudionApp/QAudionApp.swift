@@ -508,6 +508,8 @@ struct QAudionApp: App {
         }
         // W441: sweep expired messages immediately + every 60s.
         EphemeralMessageJanitor.shared.start()
+        // Held-file copies without a held row (sent, deleted, expired) are removed at startup.
+        Task { @MainActor in BluetoothHeldFiles.sweepOrphans() }
         // Once per install: remove the contact voice templates earlier versions kept in the Keychain.
         Task.detached(priority: .utility) {
             _ = LegacyContactVoiceCleanup.runIfNeeded()

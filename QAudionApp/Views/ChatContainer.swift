@@ -24,6 +24,9 @@ final class ChatContainer: ObservableObject {
         /// (`ServiceSendCoordinator`) instead of ever falling back to the CHAT
         /// ladder. Never shown to the user: service sends have no UI.
         case noControlSession = "no_control_session"
+        /// The send was refused because the conversation is Bluetooth only: the message is held and the user is asked. Never shown as
+        /// a failure.
+        case bluetoothOnlyHeld = "bluetooth_only_held"
 
         // W-L10N-BATCH1 (2026-09-08) — this drives a plain-String error
         // banner (not a SwiftUI Text literal at the display site), so it
@@ -42,7 +45,7 @@ final class ChatContainer: ObservableObject {
                 return String(localized: "chat.send_error.upload_failure", defaultValue: "Caricamento allegato fallito. Riprova.", comment: "Message-send failure banner — attachment upload failed")
             case .fileTransfer:
                 return String(localized: "chat.send_error.file_transfer", defaultValue: "Invio del file non riuscito. Riprova.", comment: "Message-send failure banner — a file could not be sent")
-            case .generic, .noControlSession:
+            case .generic, .noControlSession, .bluetoothOnlyHeld:
                 return String(localized: "chat.send_error.generic", defaultValue: "Invio fallito. Riprova più tardi.", comment: "Message-send failure banner — generic send failure")
             }
         }
@@ -395,7 +398,10 @@ final class ChatContainer: ObservableObject {
     /// the plaintext of the message (the row keeps it, the outbox re-seals it, the wire carries it); `preview` is what the conversation
     /// list shows (the typed text, never the object). This is the former tail of `sendMessage()`, unchanged except for these two names.
     @discardableResult
-    private func dispatchOutboundText(body: String, preview: String, clearsComposer: Bool, messageId: UUID? = nil) -> UUID {
+    private func dispatchOutboundText(body: String, preview: String, clearsComposer: Bool, messageId: UUID? = nil, forceNetwork: Bool = false) -> UUID {
+        // A retry always takes the network, whatever the routing preference says (a one-shot flag set by `retryFailedMessage`).
+        let forceNetwork = forceNetwork || forceNetworkOnNextSend
+        forceNetworkOnNextSend = false
         let text = body
         // W114: soft haptic tap so the user feels the send fire.
         HapticFeedback.messageSent()
@@ -415,6 +421,11 @@ final class ChatContainer: ObservableObject {
         // When the conversation timer is -1, every outgoing message is view-once.
         let convTimerSec = viewModel.conversation.ephemeralTimerSeconds ?? 0
         let isViewOnce = convTimerSec == -1 && !isLocationBody
+        // A message set to Bluetooth only is held on the row itself, from the moment the row is written: nothing on the network
+        // path sends it unless the user's "send over the internet" answer clears the hold.
+        let heldForBluetooth: Bool = !isLiveStartBody && !forceNetwork && MeshFallbackPolicy.isBluetoothOnly(
+            preference: MeshRoutingPreferenceStore().preference(for: peerUserId),
+            armedMeshTarget: MeshRuntime.shared.activeTarget(for: conversationId.uuidString) != nil)
         let msg = Message(
             id: outboundId,
             conversationId: conversationId,
@@ -426,7 +437,8 @@ final class ChatContainer: ObservableObject {
             status: .sending,
             clientMsgId: outboundId.uuidString,
             expiresAt: ephExpiry,
-            isViewOnce: isViewOnce ? true : nil
+            isViewOnce: isViewOnce ? true : nil,
+            bluetoothHold: heldForBluetooth ? true : nil
         )
         let wireText = text
         store.appendMessage(msg)
@@ -456,12 +468,25 @@ final class ChatContainer: ObservableObject {
         // WS pipeline below. Mirrors the Android sibling's
         // `SendMessageUseCase` mesh pre-flight branch.
         if !isLiveStartBody,
+           !forceNetwork,
            let sender = sendService,
            let target = resolveMeshRoute() {
             sendViaMesh(
                 sender: sender, target: target,
                 messageId: msg.id, wireText: wireText
             )
+            return outboundId
+        }
+
+        // "Solo BT" never goes through the internet on its own. When the mesh cannot take this message at all (no mesh
+        // address for the contact, no identity, the feature off) it is not sent: the row waits and the prompt on the message
+        // asks whether to send it through the internet (`MeshOutboxDrain.userChoseInternet`).
+        if !isLiveStartBody, !forceNetwork,
+           MeshFallbackPolicy.isBluetoothOnly(
+               preference: MeshRoutingPreferenceStore().preference(for: peerUserId),
+               armedMeshTarget: MeshRuntime.shared.activeTarget(for: conversationId.uuidString) != nil) {
+            MeshBtPromptStore.shared.set(.prompted, messageId: outboundId.uuidString)
+            refreshFromStore()
             return outboundId
         }
 
@@ -477,6 +502,7 @@ final class ChatContainer: ObservableObject {
             // this Task is still in flight. Released in the MainActor tail.
             ChatOutboxDrain.shared.beginLiveSend(clientMsgId: msg.id.uuidString)
             Task { [conversationId, peerUserId, msgId = msg.id, wireText] in
+                // gate-exempt: typed message; a Bluetooth-only chat is held before this and the choke point refuses it
                 let outcome = await sender.sendEncryptedDurable(
                     messageId: msgId,
                     conversationId: conversationId,
@@ -563,6 +589,14 @@ final class ChatContainer: ObservableObject {
     /// share (key, counter, ticks) belongs to `LocationShareCenter`. Returns `nil` on success, otherwise the sentence that says why not.
     func startLiveLocation(_ reading: LocationReading, duration: Int64) -> String? {
         guard viewModel.conversation.kind == .oneToOne else { return LocationCardStrings.notAvailable }
+        // A live share streams over the network and the mesh cannot carry it: in a Bluetooth-only chat it does not start, and nothing
+        // is sent.
+        if MeshFallbackPolicy.holdsContent(
+            kind: .liveLocation,
+            preference: MeshRoutingPreferenceStore().preference(for: peerUserId),
+            armedMeshTarget: MeshRuntime.shared.activeTarget(for: conversationId.uuidString) != nil) {
+            return String(localized: "mesh.bt.live_blocked", defaultValue: "La posizione in tempo reale non può essere condivisa via Bluetooth. Cambia la rete di questo contatto per usarla.", comment: "Shown when a live location share is started in a conversation set to Bluetooth only: nothing is sent.")
+        }
         let result = LocationShareCenter.shared.startLive(
             reading: reading, duration: duration, peerUserId: peerUserId, conversationId: conversationId,
             dispatch: { body, preview, messageId in
@@ -618,9 +652,13 @@ final class ChatContainer: ObservableObject {
         // through to the network (or queued forever, under mesh-only) for
         // any contact that was one hop away rather than directly visible.
         // A directly connected hex still wins over a bridged one.
-        let directPeer = MeshRuntime.shared.peers.first { nodeHexes.contains($0.nodeHex) && $0.connected }
-        let bridgedHex: String? = nodeHexes.first(where: { MeshRuntime.shared.reach(toNodeHex: $0).reachable })
-        let reachableHex: String? = directPeer?.nodeHex ?? bridgedHex
+        // The answer is read from the transport's live links at this instant (`MeshRuntime.reach`), never from the
+        // published peer list, which can still name a peer whose link has just dropped.
+        let reaches: [(hex: String, bridged: Bool)] = nodeHexes.sorted().compactMap { hex in
+            let r = MeshRuntime.shared.reach(toNodeHex: hex)
+            return r.reachable ? (hex: hex, bridged: r.viaBridgeNodeHex != nil) : nil
+        }
+        let reachableHex: String? = reaches.first(where: { !$0.bridged })?.hex ?? reaches.first?.hex
         switch meshRoutingDecision(
             preference: preference, armedMeshTarget: false, peerReachableOverMesh: reachableHex != nil
         ) {
@@ -740,7 +778,11 @@ final class ChatContainer: ObservableObject {
                 peerUserId: peerUserId,
                 targetNodeHex: target.nodeHex,
                 payloadB64: shellBytes.base64EncodedString(),
-                createdAtMs: Int64(Date().timeIntervalSince1970 * 1000)
+                createdAtMs: Int64(Date().timeIntervalSince1970 * 1000),
+                bluetoothOnly: MeshFallbackPolicy.isBluetoothOnly(
+                    preference: MeshRoutingPreferenceStore().preference(for: peerUserId),
+                    armedMeshTarget: MeshRuntime.shared.activeTarget(for: conversationId.uuidString) != nil
+                )
             )
             MeshOutboxDrain.shared.submit(entry)
         }
@@ -761,7 +803,8 @@ final class ChatContainer: ObservableObject {
         // Chat settings, we keep the local typingActive bookkeeping
         // (so a future enable doesn't immediately fire a stale envelope)
         // but skip the actual sendTypingIndicator call.
-        let typingEnabled = PrivacyGate.typingIndicatorEnabled
+        // A Bluetooth-only conversation sends no typing indicator over the internet.
+        let typingEnabled = PrivacyGate.typingIndicatorEnabled && BluetoothOnlyGate.networkAllowed(.typing, peerUserId: peerUserId)
         guard let provider = self.appState?.liveProvider else { return }
         let peerId = peerUserId
         // Send typing=true once per "session of typing".
@@ -802,7 +845,7 @@ final class ChatContainer: ObservableObject {
         // W404: also gated. Without this the user could ship a "stop
         // typing" without ever having shipped a "start typing" — server
         // would just ignore but the privacy contract is still violated.
-        guard PrivacyGate.typingIndicatorEnabled else { return }
+        guard PrivacyGate.typingIndicatorEnabled, BluetoothOnlyGate.networkAllowed(.typing, peerUserId: peerUserId) else { return }
         let peerId = peerUserId
         Task {
             try? await provider.messageApi.sendTypingIndicator(
@@ -831,6 +874,7 @@ final class ChatContainer: ObservableObject {
         // row so the chat stays in the list. See `deleteConversation` for
         // the full-conversation counterpart.
         store.deleteMessages(conversationId: conversationId)
+        BluetoothHeldFiles.sweepOrphans()
         // The shares of this conversation end and their keys, positions and cards go (WIRE_SPEC 14.6.6).
         LocationShareCenter.shared.conversationCleared(peerUserId: peerUserId)
         // W137: hard-clear nukes the composer draft too — any unsent
@@ -945,7 +989,7 @@ final class ChatContainer: ObservableObject {
             target: cmid,
             ts: ChatControlEnvelope.nowTsSeconds()
         )
-        emitControlEnvelope(envelope)
+        emitControlEnvelope(envelope, holdAs: MeshHeldAction(kind: .deleteForEveryone, targetClientMsgId: cmid))
     }
 
     /// W326: delete-local. Tombstone the message in our local store
@@ -965,6 +1009,7 @@ final class ChatContainer: ObservableObject {
         }
         // Apply tombstone locally — no peer envelope.
         store.applyDeleteByClientMsgId(cmid)
+        BluetoothHeldFiles.sweepOrphans()
         // A location row: the share it started ends and its card goes; the two ids stay for the duplicate test (WIRE_SPEC 14.6.2).
         LocationShareCenter.shared.rowDeletedForMe(clientMsgId: cmid, peerUserId: peerUserId)
         refreshFromStore()
@@ -1021,7 +1066,7 @@ final class ChatContainer: ObservableObject {
             newBody: trimmed,
             ts: ChatControlEnvelope.nowTsSeconds()
         )
-        emitControlEnvelope(envelope)
+        emitControlEnvelope(envelope, holdAs: MeshHeldAction(kind: .edit, targetClientMsgId: cmid))
         return true
     }
 
@@ -1088,7 +1133,7 @@ final class ChatContainer: ObservableObject {
             emoji: trimmed,
             ts: ChatControlEnvelope.nowTsSeconds()
         )
-        emitControlEnvelope(envelope)
+        emitControlEnvelope(envelope, holdAs: MeshHeldAction(kind: .reaction, targetClientMsgId: cmid, emoji: trimmed))
     }
 
     /// W86: shared envelope-emission tail for delete/edit/reaction.
@@ -1096,7 +1141,43 @@ final class ChatContainer: ObservableObject {
     /// a `msg_send` (server is unaware — sees ciphertext only). Fire-and-
     /// forget; held and retried by `ServiceSendCoordinator` when it cannot go
     /// now, failures log only.
-    private func emitControlEnvelope(_ envelope: ChatControlEnvelope) {
+    private func emitControlEnvelope(_ envelope: ChatControlEnvelope, holdAs held: MeshHeldAction) {
+        // User content (an edit, a reaction, a delete for everyone) in a Bluetooth-only conversation: the mesh cannot carry it, so
+        // it is held, persisted per message, and the user is asked. It is sent only by `sendHeldActions`.
+        let traffic: MeshChatTraffic = held.kind == .edit ? .edit : held.kind == .reaction ? .reaction : .deleteForEveryone
+        if MeshFallbackPolicy.route(for: traffic, bluetoothOnly: BluetoothOnlyGate.isBluetoothOnly(peerUserId: peerUserId)) == .hold {
+            MeshHeldActionStore.shared.hold(held)
+            refreshFromStore()
+            return
+        }
+        sendEnvelopeNow(envelope)
+    }
+
+    /// "Invia via internet" on a message with held actions: each is rebuilt (an edit from the current text of the row) and sent.
+    func sendHeldActions(target: String) {
+        guard !target.isEmpty else { return }
+        for held in MeshHeldActionStore.shared.release(target: target) {
+            switch held.kind {
+            case .reaction:
+                guard let emoji = held.emoji else { continue }
+                sendEnvelopeNow(ChatControlEnvelope.reaction(target: target, emoji: emoji, ts: ChatControlEnvelope.nowTsSeconds()))
+            case .deleteForEveryone:
+                sendEnvelopeNow(ChatControlEnvelope.delete(target: target, ts: ChatControlEnvelope.nowTsSeconds()))
+            case .edit:
+                guard let row = store.loadMessages(conversationId: conversationId).first(where: { $0.clientMsgId == target }) else { continue }
+                sendEnvelopeNow(ChatControlEnvelope.edit(target: target, newBody: row.plaintext, ts: ChatControlEnvelope.nowTsSeconds()))
+            }
+        }
+        refreshFromStore()
+    }
+
+    /// "No" on held actions: they stay unsent, with a visible state and the same action to send them later.
+    func keepActionsUnsent(target: String) {
+        MeshHeldActionStore.shared.setState(.undelivered, target: target)
+        refreshFromStore()
+    }
+
+    private func sendEnvelopeNow(_ envelope: ChatControlEnvelope) {
         guard let sendService = self.sendService else {
             print("[ChatContainer] emitControlEnvelope: no sendService bound")
             return
@@ -1147,6 +1228,8 @@ final class ChatContainer: ObservableObject {
         // transport that has no server to ask. They are acknowledged back over
         // the same radio instead, under this same privacy gate.
         emitMeshReadReceipts()
+        // A Bluetooth-only conversation sends no read receipt over the internet.
+        guard BluetoothOnlyGate.networkAllowed(.readReceipt, peerUserId: peerUserId) else { return }
         guard let provider = self.appState?.liveProvider else { return }
         let peerId = peerUserId
         let inboundServerIds = store.loadMessages(conversationId: conversationId)
@@ -1222,6 +1305,11 @@ final class ChatContainer: ObservableObject {
     /// è una test fixture in `simulateFailure(messageId:reason:)` finché
     /// la real send pipeline non è wired.
     func markFailed(messageId: UUID, reason: SendFailureReason) {
+        // A send the Bluetooth-only rule refused is held with its prompt (`BluetoothOnlyGate.holdRefused`), not failed.
+        if reason == .bluetoothOnlyHeld {
+            refreshFromStore()
+            return
+        }
         // The start of a live share that could not be sent: the share ends and the row, which holds the key, goes.
         LocationShareCenter.shared.startFailed(clientMsgId: messageId.uuidString)
         store.updateMessageStatus(
@@ -1248,6 +1336,76 @@ final class ChatContainer: ObservableObject {
     ///
     /// In every branch the OLD failed row is hard-removed (or, for a descriptor, reused) so the chat doesn't show two bubbles for
     /// the same message.
+    /// Set by `retryFailedMessage` for the one send it triggers: that send skips the mesh (a retry uses the network path).
+    private var forceNetworkOnNextSend = false
+
+    /// A retry takes the network, except for a message set to Bluetooth only: that one goes through the normal routing again
+    /// and reaches the internet only by the user's answer on the message.
+    private var retryForcesNetwork: Bool {
+        MeshFallbackPolicy.retryForcesNetwork(
+            preference: MeshRoutingPreferenceStore().preference(for: peerUserId),
+            armedMeshTarget: MeshRuntime.shared.activeTarget(for: conversationId.uuidString) != nil)
+    }
+
+    /// Rows of content (a file, a picture, a voice note, a video) whose send was released by the user, by row id; and a flag for the
+    /// synchronous resend of a document, whose new row has a new id. Each lets exactly the next matching send past the hold.
+    private var bypassHoldChoices: [UUID: UserNetworkChoice] = [:]
+    private var bypassNextSyncChoice: UserNetworkChoice?
+
+    /// "Invia via internet" on held content: the hold on the row is cleared and the content is sent through the same path a failed
+    /// file takes (the row is replaced by a new send of the same content). Nothing else clears the hold.
+    func sendHeldContent(messageId: UUID) {
+        let key = messageId.uuidString
+        guard let row = store.loadMessages(conversationId: conversationId).first(where: { $0.id == messageId }),
+              row.direction == .outgoing, row.bluetoothHold == true else { return }
+        store.setBluetoothHold(id: messageId, hold: false)
+        MeshBtPromptStore.shared.set(.idle, messageId: key)
+        // The only place a user's answer for content becomes a token: it travels with the send.
+        let choice = UserNetworkChoice.tapped(messageId: messageId)
+        if FileV2ChatBody.pendingKind(mime: row.mediaMimeType) == "file" {
+            bypassNextSyncChoice = choice
+        } else {
+            bypassHoldChoices[messageId] = choice
+        }
+        defer { bypassNextSyncChoice = nil }
+        retryFileV2Send(row, releasedByUser: true)
+    }
+
+    /// "No" on held content: it stays unsent in the chat, with a visible state and the same action to send it later.
+    func keepContentUnsent(messageId: UUID) {
+        MeshBtPromptStore.shared.set(.undelivered, messageId: messageId.uuidString)
+        refreshFromStore()
+    }
+
+    /// "No, continua via Bluetooth" / "Riprova via Bluetooth" on a message set to Bluetooth only. With an entry in the Bluetooth
+    /// outbox the drain keeps it there. Without one (no mesh address or identity at send time, the feature off, an unreadable
+    /// payload) the routing runs again from the stored row, with the same id, and the text is sealed again; if there is still
+    /// no route the message stays held and the state stays on the bubble. Never the network.
+    func keepOnBluetooth(messageId: UUID) {
+        let key = messageId.uuidString
+        let hasEntry = MeshOutboxDrain.shared.hasEntry(messageId: key)
+        let row = store.loadMessages(conversationId: conversationId).first(where: { $0.id == messageId })
+        let sender = sendService
+        let target: MeshTargetSelection? = hasEntry ? nil : resolveMeshRoute()
+        let routable = row?.direction == .outgoing && row?.bluetoothHold == true && sender != nil && target != nil
+        switch MeshFallbackPolicy.keepPlan(hasEntry: hasEntry, routeAvailable: routable) {
+        case .keepEntry:
+            MeshOutboxDrain.shared.userKeptBluetooth(messageId: key)
+            refreshFromStore()
+            return
+        case .stayHeld:
+            MeshBtPromptStore.shared.set(.undelivered, messageId: key)
+            refreshFromStore()
+            return
+        case .reroute:
+            break
+        }
+        guard let row, let sender, let target else { return }
+        MeshBtPromptStore.shared.set(.declined, messageId: key)
+        sendViaMesh(sender: sender, target: target, messageId: messageId, wireText: row.plaintext)
+        refreshFromStore()
+    }
+
     func retryFailedMessage() {
         guard let id = failedMessageId,
               let msg = store.loadMessages(conversationId: conversationId)
@@ -1292,7 +1450,7 @@ final class ChatContainer: ObservableObject {
             store.removeMessage(id: id, conversationId: conversationId)
             refreshFromStore()
             if LocationRowForm.pin(of: msg.plaintext) != nil {
-                dispatchOutboundText(body: msg.plaintext, preview: LocationLabels.text(.pin), clearsComposer: false)
+                dispatchOutboundText(body: msg.plaintext, preview: LocationLabels.text(.pin), clearsComposer: false, forceNetwork: retryForcesNetwork)
             }
             return
         }
@@ -1301,7 +1459,7 @@ final class ChatContainer: ObservableObject {
         if case .reply(let failedReply) = MessageReplyCodec.recognize(msg.plaintext) {
             store.removeMessage(id: id, conversationId: conversationId)
             refreshFromStore()
-            dispatchOutboundText(body: msg.plaintext, preview: failedReply.body, clearsComposer: false)
+            dispatchOutboundText(body: msg.plaintext, preview: failedReply.body, clearsComposer: false, forceNetwork: retryForcesNetwork)
             return
         }
         // Text fallback: pop the body back into the composer and ship
@@ -1310,7 +1468,9 @@ final class ChatContainer: ObservableObject {
         store.removeMessage(id: id, conversationId: conversationId)
         refreshFromStore()
         composerText = msg.plaintext
+        forceNetworkOnNextSend = retryForcesNetwork
         sendMessage()
+        forceNetworkOnNextSend = false
     }
 
     /// Test/dev hook per simulare un fallimento di invio. Da rimuovere
@@ -1377,6 +1537,10 @@ final class ChatContainer: ObservableObject {
         }
         let targetPeerId = targetConv.peerUserId
         let msgId = UUID()
+        // Forwarding into a Bluetooth-only chat: the row is written held and the user is asked, exactly as for a typed message.
+        let heldForBluetooth: Bool = MeshFallbackPolicy.isBluetoothOnly(
+            preference: MeshRoutingPreferenceStore().preference(for: targetPeerId),
+            armedMeshTarget: MeshRuntime.shared.activeTarget(for: targetConversationId.uuidString) != nil)
         let local = Message(
             id: msgId,
             conversationId: targetConversationId,
@@ -1386,7 +1550,8 @@ final class ChatContainer: ObservableObject {
             deliveredAt: nil,
             readAt: nil,
             status: .sending,
-            clientMsgId: msgId.uuidString
+            clientMsgId: msgId.uuidString,
+            bluetoothHold: heldForBluetooth ? true : nil
         )
         store.appendMessage(local)
         store.recordNewMessage(
@@ -1395,7 +1560,13 @@ final class ChatContainer: ObservableObject {
             lastActivity: Date(),
             incrementUnread: false
         )
+        if heldForBluetooth {
+            MeshBtPromptStore.shared.set(.prompted, messageId: msgId.uuidString)
+            refreshFromStore()
+            return
+        }
         Task { [targetPeerId, msgId, targetConversationId, text] in
+            // gate-exempt: forward; a Bluetooth-only target is held before this and the choke point refuses it
             let outcome = await sendService.sendEncrypted(
                 messageId: msgId,
                 peerUserId: targetPeerId,
@@ -1420,10 +1591,13 @@ final class ChatContainer: ObservableObject {
                     )
                 case .failed(let reason):
                     print("[ChatContainer] forwardMessage send failed: \(reason)")
-                    self.store.updateMessageStatus(
-                        id: msgId, conversationId: targetConversationId,
-                        newStatus: .failed
-                    )
+                    // Refused by the Bluetooth-only rule: held with its prompt, not failed.
+                    if reason != .bluetoothOnlyHeld {
+                        self.store.updateMessageStatus(
+                            id: msgId, conversationId: targetConversationId,
+                            newStatus: .failed
+                        )
+                    }
                 }
                 self.refreshFromStore()
             }
@@ -1447,7 +1621,7 @@ final class ChatContainer: ObservableObject {
     /// - Parameter exportBlocked: export-permission choice from the pre-send dialog; `true` becomes the descriptor's `xp: 0`.
     /// - Returns: `nil` when the send started; the failure that says why it did not otherwise.
     @discardableResult
-    func sendFileAttachment(url: URL, overrideTimerSeconds: Int? = nil, exportBlocked: Bool = false) -> FileV2Failure? {
+    func sendFileAttachment(url: URL, overrideTimerSeconds: Int? = nil, exportBlocked: Bool = false, heldCleanupRowId: UUID? = nil) -> FileV2Failure? {
         // Security-scoped access for files outside the app sandbox, held for the whole send (the pipeline reads the file again for
         // every part) and released when it ends.
         let scoped = url.startAccessingSecurityScopedResource()
@@ -1470,8 +1644,9 @@ final class ChatContainer: ObservableObject {
         let displayText = FileV2ChatBody.glyph + FileV2LocalName.sanitised(pickedName)
         let msgId = UUID()
         let started = startMediaSend(prepared, msgId: msgId, displayText: displayText, overrideTimerSeconds: overrideTimerSeconds,
-                                     exportBlocked: exportBlocked, keepsLocalCopy: false, scoped: scopedURL)
-        if started == nil {
+                                     exportBlocked: exportBlocked, keepsLocalCopy: false, scoped: scopedURL,
+                                     heldCleanupRowId: heldCleanupRowId)
+        if started == nil, BluetoothHeldFiles.heldURL(rowId: msgId) == nil {
             fileV2Retry[msgId] = FileV2RetrySource(url: url, overrideTimerSeconds: overrideTimerSeconds, exportBlocked: exportBlocked)
         }
         return started
@@ -1568,7 +1743,7 @@ final class ChatContainer: ObservableObject {
 
     /// The common tail of an image or a voice note: the row, the progress and the run. A failure to start is told to the user.
     private func startPreparedMedia(_ prepared: FileV2MediaPreparer.Prepared, msgId: UUID, overrideTimerSeconds: Int?,
-                                    exportBlocked: Bool, discardsOnFailure: Bool = true) -> Bool {
+                                    exportBlocked: Bool, discardsOnFailure: Bool = true, heldCleanupRowId: UUID? = nil) -> Bool {
         let label: String
         switch prepared.kind {
         case .voice: label = FileV2ChatBody.kindLabelText(.voice)
@@ -1576,7 +1751,9 @@ final class ChatContainer: ObservableObject {
         default: label = FileV2ChatBody.kindLabelText(.image)
         }
         if let failure = startMediaSend(prepared, msgId: msgId, displayText: label, overrideTimerSeconds: overrideTimerSeconds,
-                                        exportBlocked: exportBlocked, keepsLocalCopy: true, scoped: nil) {
+                                        exportBlocked: exportBlocked, keepsLocalCopy: true, scoped: nil,
+                                        heldCleanupRowId: heldCleanupRowId) {
+            if let heldCleanupRowId { BluetoothHeldFiles.endUse(rowId: heldCleanupRowId) }
             transientNotice = FileV2FailureText.message(for: failure)
             // A retry keeps what it was asked to send again (the copy of a video lives in the row's directory).
             if discardsOnFailure { discardPrepared(msgId: msgId) }
@@ -1591,7 +1768,7 @@ final class ChatContainer: ObservableObject {
     /// - Returns: `nil` when the send started; the failure that says why it did not otherwise.
     private func startMediaSend(_ prepared: FileV2MediaPreparer.Prepared, msgId: UUID, displayText: String,
                                 overrideTimerSeconds: Int?, exportBlocked: Bool, keepsLocalCopy: Bool,
-                                scoped: URL?) -> FileV2Failure? {
+                                scoped: URL?, heldCleanupRowId: UUID? = nil) -> FileV2Failure? {
         guard let sendService = self.sendService, let appState = self.appState else {
             // Preview / unit-test fallback: no backend to send with.
             scoped?.stopAccessingSecurityScopedResource()
@@ -1619,6 +1796,14 @@ final class ChatContainer: ObservableObject {
         let (ephExpiry, isViewOnce) = resolveOutboundAttachmentTimer(
             overrideSeconds: overrideTimerSeconds, now: Date()
         )
+        // In a Bluetooth-only chat the mesh cannot carry this content: the row is written held and the send does not start. The user
+        // is asked (`sendHeldContent` is the "send over the internet" answer).
+        let choice: UserNetworkChoice? = bypassNextSyncChoice ?? bypassHoldChoices.removeValue(forKey: msgId)
+        if choice != nil { UserNetworkApprovalStore.shared.approve(messageId: msgId.uuidString) }
+        let heldForBluetooth: Bool = choice == nil && MeshFallbackPolicy.holdsContent(
+            kind: MeshFallbackPolicy.ContentKind.ofFileKind(kind.rawValue),
+            preference: MeshRoutingPreferenceStore().preference(for: peerUserId),
+            armedMeshTarget: MeshRuntime.shared.activeTarget(for: conversationId.uuidString) != nil)
         let local = Message(
             id: msgId,
             conversationId: convId,
@@ -1634,7 +1819,8 @@ final class ChatContainer: ObservableObject {
             clientMsgId: msgId.uuidString,
             expiresAt: ephExpiry,
             isViewOnce: isViewOnce ? true : nil,
-            exportBlocked: exportBlocked ? true : nil
+            exportBlocked: exportBlocked ? true : nil,
+            bluetoothHold: heldForBluetooth ? true : nil
         )
         store.appendMessage(local)
         store.recordNewMessage(
@@ -1644,6 +1830,17 @@ final class ChatContainer: ObservableObject {
             incrementUnread: false,
             selfDestructing: ephExpiry != nil || isViewOnce
         )
+        if heldForBluetooth {
+            MeshBtPromptStore.shared.set(.prompted, messageId: msgId.uuidString)
+            // The file is kept on disk (app-private, not backed up) so the held message survives a restart.
+            if let kept = BluetoothHeldFiles.keep(sourceURL: prepared.sourceURL, rowId: msgId), kind == .file {
+                fileV2Retry[msgId] = FileV2RetrySource(url: kept, overrideTimerSeconds: overrideTimerSeconds, exportBlocked: exportBlocked)
+            }
+            scoped?.stopAccessingSecurityScopedResource()
+            refreshFromStore()
+            if prepared.thumbnailURL != nil { FileV2DownloadCenter.shared.markThumbnailReady(msgId.uuidString) }
+            return nil
+        }
         uploadProgress[msgId] = 0
         refreshFromStore()
         if prepared.thumbnailURL != nil { FileV2DownloadCenter.shared.markThumbnailReady(msgId.uuidString) }
@@ -1654,7 +1851,10 @@ final class ChatContainer: ObservableObject {
             messageId: msgId, conversationId: convId, peerUserId: peerId, displayText: displayText,
             pendingMime: FileV2ChatBody.pendingMime(kind: kind.rawValue), kind: kind, sourceURL: prepared.sourceURL,
             name: prepared.name, mimeType: prepared.mimeType, media: prepared.media, preview: prepared.preview,
-            thumbnailURL: prepared.thumbnailURL, ex: timerValue, xp: exportBlocked ? 0 : nil)
+            thumbnailURL: prepared.thumbnailURL, ex: timerValue, xp: exportBlocked ? 0 : nil, userChoice: choice)
+        let heldCleanup = heldCleanupRowId
+        // An upload from a kept copy marks it in use for as long as it runs: the sweep never takes the file from under it.
+        if let heldCleanup { BluetoothHeldFiles.beginUse(rowId: heldCleanup) }
         Task { [weak self] in
             await BackgroundUploadTask.run(name: "file-v2-upload") {
                 let failure = await FileV2OutboundRunner.run(
@@ -1663,6 +1863,19 @@ final class ChatContainer: ObservableObject {
                         self?.updateUploadProgress(messageId: msgId, bytesUploaded: done, totalBytes: total)
                     })
                 scoped?.stopAccessingSecurityScopedResource()
+                // The kept copy is deleted only after a successful send. A failed upload keeps it (moved to the failed row's own
+                // directory) so Retry still has its file.
+                if let heldCleanup {
+                    if failure == nil {
+                        BluetoothHeldFiles.finish(rowId: heldCleanup)
+                    } else {
+                        BluetoothHeldFiles.endUse(rowId: heldCleanup)
+                        if let moved = BluetoothHeldFiles.adopt(from: heldCleanup, to: msgId) {
+                            self?.fileV2Retry[msgId] = FileV2RetrySource(
+                                url: moved, overrideTimerSeconds: overrideTimerSeconds, exportBlocked: exportBlocked)
+                        }
+                    }
+                }
                 if failure != nil {
                     // Recorded in the store even when the screen is gone, so the row never stays "sending" for ever.
                     ConversationStore().updateMessageStatus(id: msgId, conversationId: convId, newStatus: .failed)
@@ -1689,13 +1902,16 @@ final class ChatContainer: ObservableObject {
     /// "Riprova" on a file that failed before it had a descriptor: the row goes, and the file is sent again as a new message. A
     /// document is sent again from the picked file (the app keeps no copy: if it was closed in between, the user attaches the file
     /// again); an image, a voice note and a video are sent again from the copy the row keeps in the caches directory.
-    private func retryFileV2Send(_ msg: Message) {
+    private func retryFileV2Send(_ msg: Message, releasedByUser: Bool = false) {
         let kind = FileV2ChatBody.pendingKind(mime: msg.mediaMimeType)
         let localPath = msg.mediaLocalPath
         let durationMs = msg.mediaDurationMs
         let exportBlocked = msg.exportBlocked ?? false
         store.removeMessage(id: msg.id, conversationId: conversationId)
+        // A document that was held survives a restart: its kept copy is the source when the in-memory one is gone.
+        let heldCopy = BluetoothHeldFiles.heldURL(rowId: msg.id)
         let source = fileV2Retry.removeValue(forKey: msg.id)
+            ?? heldCopy.map { FileV2RetrySource(url: $0, overrideTimerSeconds: nil, exportBlocked: exportBlocked) }
         refreshFromStore()
         let goneText = String(localized: "file_v2.retry_source_gone", defaultValue: "Il file non è più disponibile: allegalo di nuovo.", comment: "Shown when a failed file cannot be retried because the app no longer has the picked file.")
         if kind == "file" {
@@ -1704,27 +1920,31 @@ final class ChatContainer: ObservableObject {
                 return
             }
             if let failure = sendFileAttachment(url: source.url, overrideTimerSeconds: source.overrideTimerSeconds,
-                                                exportBlocked: source.exportBlocked) {
+                                                exportBlocked: source.exportBlocked,
+                                                heldCleanupRowId: heldCopy != nil ? msg.id : nil) {
                 transientNotice = FileV2FailureText.message(for: failure)
             }
             return
         }
-        guard let localPath, FileManager.default.fileExists(atPath: localPath) else {
+        let heldOtherCopy = heldCopy
+        guard let usablePath = (localPath.flatMap { FileManager.default.fileExists(atPath: $0) ? $0 : nil }) ?? heldOtherCopy?.path else {
             transientNotice = goneText
             return
         }
-        let url = URL(fileURLWithPath: localPath)
+        let url = URL(fileURLWithPath: usablePath)
         // The row never had a descriptor, so nothing was announced under its id: the new row takes it, and the copy of the file and
         // the thumbnail stay where the row's other files are.
         let rowId = msg.id
         Task { [weak self] in
-            await self?.resendPreparedFile(kind: kind, url: url, durationMs: durationMs, key: rowId, exportBlocked: exportBlocked)
+            await self?.resendPreparedFile(kind: kind, url: url, durationMs: durationMs, key: rowId, exportBlocked: exportBlocked,
+                                           heldCleanupRowId: heldCopy != nil ? rowId : nil)
         }
     }
 
     /// The retry of an image, a voice note or a video from its copy in the caches directory: the pieces (dimensions, preview,
     /// thumbnail) are made again and a new row is sent.
-    private func resendPreparedFile(kind: String, url: URL, durationMs: Int64?, key: UUID, exportBlocked: Bool) async {
+    private func resendPreparedFile(kind: String, url: URL, durationMs: Int64?, key: UUID, exportBlocked: Bool,
+                                    heldCleanupRowId: UUID? = nil) async {
         let prepared: FileV2MediaPreparer.Prepared
         do {
             switch kind {
@@ -1740,12 +1960,13 @@ final class ChatContainer: ObservableObject {
             return
         }
         _ = startPreparedMedia(prepared, msgId: key, overrideTimerSeconds: nil, exportBlocked: exportBlocked,
-                               discardsOnFailure: false)
+                               discardsOnFailure: false, heldCleanupRowId: heldCleanupRowId)
     }
 
     /// "Riprova" on a file whose descriptor could not be sent: the same message again (same row, same id), the file is still on
     /// the server. It goes through the durable text send, exactly like any text.
     private func resendFileV2Descriptor(_ msg: Message) {
+        guard msg.bluetoothHold != true else { return }
         guard let sendService = self.sendService else { return }
         let convId = conversationId
         let peerId = peerUserId
@@ -1755,6 +1976,7 @@ final class ChatContainer: ObservableObject {
         refreshFromStore()
         ChatOutboxDrain.shared.beginLiveSend(clientMsgId: msgId.uuidString)
         Task { [weak self] in
+            // gate-exempt: descriptor resend; a held row returns before this and the choke point refuses it
             let outcome = await sendService.sendEncryptedDurable(
                 messageId: msgId, conversationId: convId, peerUserId: peerId, plaintext: body)
             ChatOutboxDrain.shared.endLiveSend(clientMsgId: msgId.uuidString)
@@ -1877,6 +2099,9 @@ final class ChatContainer: ObservableObject {
     /// forever in the sender's own chat, exactly the "manda un messaggio
     /// cifrato sulla chat e rimane lì" the user reported.
     private func sendControlEnvelope(payload: String) {
+        // Screenshot permission and timer envelopes are not sent over the internet in a Bluetooth-only conversation (the timer
+        // itself still applies on this device: it is stored before this is called).
+        guard BluetoothOnlyGate.networkAllowed(.timerEnvelope, peerUserId: peerUserId) else { return }
         guard let sender = sendService else { return }
         Task { [peerUserId = peerUserId] in
             // 2026-09-19 service-message root fix — screenshot-lock and

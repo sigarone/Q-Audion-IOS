@@ -88,6 +88,11 @@ final class MeshRuntime: ObservableObject {
     /// required.
     private(set) var requestedMode: MeshAntennaMode?
 
+    /// True once the app has decided about the antenna since launch: the stored choice was applied (or refused, or the user
+    /// changed it). Until then "no requested mode" only means the restore has not run yet, which is not "radio off"
+    /// (`MeshFallbackPolicy.radioIsOff`). Not settled while the identity is still unknown: the restore is retried then.
+    private(set) var antennaDecisionSettled = false
+
     /// Whether a phone in the current mode can be reached while the app is in the
     /// background (see `MeshModePolicy.reachableInBackground`): false only for "Visibile".
     var reachableInBackground: Bool {
@@ -429,6 +434,7 @@ final class MeshRuntime: ObservableObject {
     /// visible-only advertises but never scans or connects out, so two visible-only
     /// phones sit next to each other seeing nothing.
     func autoStartIfEnabled() {
+        if !startAllowed || hasIdentity { antennaDecisionSettled = true }
         guard startAllowed, hasIdentity else { return }
         if UserDefaults.standard.object(forKey: Self.autoStartKey) != nil,
            UserDefaults.standard.bool(forKey: Self.autoStartKey) == false {
@@ -455,6 +461,7 @@ final class MeshRuntime: ObservableObject {
     /// declined relaying never ends up in full mesh), so a stray call cannot bypass
     /// the gate.
     func setAntenna(mode: MeshAntennaMode?) {
+        antennaDecisionSettled = true
         guard let mode else {
             let wasRunning = requestedMode != nil
             stopRadio(reason: "stop")
@@ -462,6 +469,8 @@ final class MeshRuntime: ObservableObject {
             requestedMode = nil
             activeTargets.removeAll()
             if wasRunning { MeshOutboxDrain.shared.stop() }
+            // Nothing will send a queued message over Bluetooth any more: it goes to the network path.
+            MeshOutboxDrain.shared.radioTurnedOff()
             return
         }
         guard startAllowed, let allowed = MeshModePolicy.allowedMode(mode, consent: consent.state) else { return }
@@ -522,6 +531,10 @@ final class MeshRuntime: ObservableObject {
 
     func selectTarget(conversationId: String, nodeHex: String, displayName: String) {
         activeTargets[conversationId] = MeshTargetSelection(nodeHex: nodeHex, displayName: displayName)
+        // Arming a target makes the chat Bluetooth only: a live share of that chat stops.
+        if let conversation = ConversationStore().loadConversations().first(where: { $0.id.uuidString == conversationId }) {
+            BluetoothOnlyGate.chatBecameBluetoothOnly(peerUserId: conversation.peerUserId)
+        }
     }
 
     func clearTarget(conversationId: String) {
@@ -556,10 +569,11 @@ final class MeshRuntime: ObservableObject {
     /// accumulated `topology` graph from a stale ANNOUNCE is not evidence
     /// the bridge is still in range.
     ///
-    /// No new engine state: this is a read over `peers`, which was already
-    /// published with everything it needs.
+    /// The answer comes from the transport's LIVE links at the moment of the call (`MeshLiveReach`), not from `peers`:
+    /// `peers` is published to the main thread a moment after the radio changes, and a send decided in that gap was
+    /// queued on a mesh with no links. No transport (radio off) means nothing is reachable.
     func reach(toNodeHex targetNodeHex: String) -> (reachable: Bool, viaBridgeNodeHex: String?) {
-        Self.reach(toNodeHex: targetNodeHex, in: peers)
+        MeshLiveReach.reach(toNodeHex: targetNodeHex, liveLinks: slot.existingTransport?.liveLinks() ?? [])
     }
 
     /// The rule behind `reach(toNodeHex:)`, over an explicit peer list so it

@@ -50,6 +50,7 @@ public enum MeshLog {
         case radioPause = "radio.pause"
         case radioResume = "radio.resume"
         case connectBackoff = "connect.backoff"
+        case fallback
 
         /// The events the specification marks WARN.
         public var level: Level {

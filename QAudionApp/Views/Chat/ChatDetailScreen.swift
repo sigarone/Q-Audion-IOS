@@ -1111,6 +1111,7 @@ struct ChatDetailScreen: View {
         // never enter the tap-to-reveal flow — that flow is what arms the
         // 5s deletion timer in ConversationStore.markViewOnceOpened, and
         // the sender should keep their own copy like any other message.
+        let heldActionState = MeshHeldActionStore.shared.state(target: msg.clientMsgId)
         let isVO = msg.isViewOnce == true && msg.direction != .outgoing
         let voOpened = msg.viewOnceOpened == true
 
@@ -1127,7 +1128,29 @@ struct ChatDetailScreen: View {
                 // the local user already reacted with removes it.
                 container.toggleReaction(msg, emoji: emoji)
             },
-            viaMesh: msg.viaMesh == true
+            viaMesh: msg.viaMesh == true,
+            btPrompt: heldActionState != .idle ? heldActionState
+                : (msg.direction == .outgoing ? MeshBtPromptStore.shared.state(messageId: msg.id.uuidString) : .idle),
+            btContent: heldActionState == .idle && (msg.mediaMimeType != nil || msg.mediaLocalPath != nil),
+            btAction: heldActionState != .idle,
+            onBtInternet: {
+                if heldActionState != .idle {
+                    container.sendHeldActions(target: msg.clientMsgId ?? "")
+                } else if msg.mediaMimeType != nil || msg.mediaLocalPath != nil {
+                    container.sendHeldContent(messageId: msg.id)
+                } else {
+                    MeshOutboxDrain.shared.userChoseInternet(messageId: msg.id.uuidString)
+                }
+            },
+            onBtKeep: {
+                if heldActionState != .idle {
+                    container.keepActionsUnsent(target: msg.clientMsgId ?? "")
+                } else if msg.mediaMimeType != nil || msg.mediaLocalPath != nil {
+                    container.keepContentUnsent(messageId: msg.id)
+                } else {
+                    container.keepOnBluetooth(messageId: msg.id)
+                }
+            }
         ) {
             if isVO && !voOpened {
                 // View-once: hidden until tapped. Show eye-slash pill.

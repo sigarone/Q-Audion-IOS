@@ -33,11 +33,16 @@ public struct MeshOutboxEntry: Codable, Equatable, Sendable {
     public var lastAttemptMs: Int64?
     /// True once a first hop accepted the packet at least once.
     public var firstHopAccepted: Bool
+    /// True when the sender chose Bluetooth only for this message (the contact is set to Bluetooth only, or a target is
+    /// armed on the radar): it never goes through the internet unless the user says so. Optional so an entry stored by
+    /// an earlier build still decodes (nil reads as false).
+    public var bluetoothOnly: Bool?
 
     public init(
         id: String, kind: Kind, messageId: String, conversationId: String, peerUserId: String,
         targetNodeHex: String, payloadB64: String, createdAtMs: Int64,
-        attempts: Int = 0, lastAttemptMs: Int64? = nil, firstHopAccepted: Bool = false
+        attempts: Int = 0, lastAttemptMs: Int64? = nil, firstHopAccepted: Bool = false,
+        bluetoothOnly: Bool = false
     ) {
         self.id = id
         self.kind = kind
@@ -50,6 +55,7 @@ public struct MeshOutboxEntry: Codable, Equatable, Sendable {
         self.attempts = attempts
         self.lastAttemptMs = lastAttemptMs
         self.firstHopAccepted = firstHopAccepted
+        self.bluetoothOnly = bluetoothOnly
     }
 
     /// A newer receipt for the same message and kind replaces a queued one, so they share a key.
@@ -90,6 +96,12 @@ public struct MeshOutboxQueue: Codable, Equatable, Sendable {
 
     public func entry(id: String) -> MeshOutboxEntry? {
         entries.first { $0.id == id }
+    }
+
+    /// Sets whether the entry is Bluetooth only (the app works out the value for an entry stored by an earlier build).
+    public mutating func setBluetoothOnly(id: String, _ value: Bool) {
+        guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[index].bluetoothOnly = value
     }
 
     /// Replaces any existing entry with the same id (an enqueue is idempotent, not a duplicate).

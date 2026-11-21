@@ -49,6 +49,8 @@ final class EphemeralMessageJanitor {
         // this one call.
         Task { @MainActor in
             GroupMessageStore.shared.deleteExpiredMessages()
+            // The kept files of held messages that expired or were deleted go too.
+            BluetoothHeldFiles.sweepOrphans()
         }
     }
 }
