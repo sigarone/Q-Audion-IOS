@@ -131,6 +131,19 @@ public final class PeerIdentityPinStore {
         return keys
     }
 
+    /// Every pinned key of every peer, grouped by the peer id, from ONE enumeration of the Keychain service: the contact list
+    /// shows an identity shield per row and must not scan the Keychain once per contact. Read-only; empty when the Keychain is
+    /// locked. A per-device account is `"<contactId>|<deviceId>"`, the legacy one the bare `contactId`.
+    public func allPinnedKeysByContact() -> [String: [Data]] {
+        var out: [String: [Data]] = [:]
+        for account in allAccounts() {
+            guard let key = rawPinnedKey(account: account), key.count == 32 else { continue }
+            let contactId: String = account.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? account
+            out[contactId, default: []].append(key)
+        }
+        return out
+    }
+
     /// Raw single-account Keychain read (no migration fallback).
     private func rawPinnedKey(account: String) -> Data? {
         #if canImport(Security)

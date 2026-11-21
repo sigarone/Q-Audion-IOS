@@ -1,4 +1,5 @@
 import XCTest
+import CryptoKit
 @testable import QAudionEngine
 
 final class ContactsStoreTests: XCTestCase {
@@ -602,7 +603,8 @@ final class ContactsStoreTests: XCTestCase {
             voiceVerifiedAt: 222,
             callVerifiedPeerIdentityKey: Data(repeating: 0x22, count: 32),
             proximityPairedAtMs: 333,
-            proximityServerConfirmed: true
+            proximityServerConfirmed: true,
+            identityChangePendingAtMs: 444
         )
     }
 
@@ -623,7 +625,7 @@ final class ContactsStoreTests: XCTestCase {
     /// until the fixture (and the helpers' intent) is updated on purpose.
     func test_copyHelperFixture_populatesEveryStoredField() {
         let children = Mirror(reflecting: fullyPopulatedContact()).children
-        XCTAssertEqual(children.count, 19,
+        XCTAssertEqual(children.count, 20,
                        "StoredContact gained or lost a field: extend fullyPopulatedContact() and decide, per helper, whether the new field is preserved or cleared")
         for child in children {
             XCTAssertNotEqual("\(child.value)", "nil",
@@ -689,11 +691,12 @@ final class ContactsStoreTests: XCTestCase {
         XCTAssertNil(rotated.proximityPairedAtMs)
         XCTAssertNil(rotated.proximityServerConfirmed)
         XCTAssertNil(rotated.callVerifiedPeerIdentityKey)
+        XCTAssertNil(rotated.identityChangePendingAtMs, "accepting a rotated key settles a recorded change of it")
         XCTAssertEqual(
             changedFields(seed, rotated),
             ["isVerified", "verifiedFingerprintHex", "verifiedAtMs", "verificationMethod",
              "presenceAuth", "presenceFloor", "proximityPairedAtMs", "proximityServerConfirmed",
-             "callVerifiedPeerIdentityKey"],
+             "callVerifiedPeerIdentityKey", "identityChangePendingAtMs"],
             "a rotation must reset exactly these fields and no others")
         // Kept on purpose.
         XCTAssertEqual(rotated.voiceVerifiedAt, 222, "a voice match is about the person, not the key")
@@ -728,6 +731,83 @@ final class ContactsStoreTests: XCTestCase {
         XCTAssertEqual(rotated?.isVerified, false)
         XCTAssertNil(rotated?.callVerifiedPeerIdentityKey)
         XCTAssertEqual(rotated?.voiceVerifiedAt, 222)
+    }
+
+    // MARK: - Identity change marker (contact-level identity shield)
+
+    /// The marker of an unsettled key change keeps its first timestamp, touches nothing else, and is cleared by the single reset point
+    /// of the key-bound facts (`afterIdentityKeyRotation`) and by `clearingIdentityChangePending`.
+    func test_identityChangePending_isRecordedOnceTouchesNothingElseAndIsClearedByTheResetPoints() {
+        let base = fullyPopulatedContact().clearingIdentityChangePending()
+        XCTAssertNil(base.identityChangePendingAtMs)
+        XCTAssertEqual(changedFields(fullyPopulatedContact(), base), ["identityChangePendingAtMs"])
+        let marked = base.withIdentityChangePending(atMs: 1_000)
+        XCTAssertEqual(marked.identityChangePendingAtMs, 1_000)
+        XCTAssertEqual(changedFields(base, marked), ["identityChangePendingAtMs"], "only the marker changed")
+        XCTAssertEqual(marked.withIdentityChangePending(atMs: 9_999).identityChangePendingAtMs, 1_000, "a repeated observation does not move it")
+        XCTAssertNil(marked.afterIdentityKeyRotation().identityChangePendingAtMs, "accepting a rotated key settles the change")
+        // an ordinary rename keeps the marker
+        XCTAssertEqual(marked.withDisplayName("Mario Rossi").identityChangePendingAtMs, 1_000)
+        // a verification of the stored pin (manual) does not settle a change by itself: the card offers it only after the key is accepted
+        XCTAssertEqual(marked.withVerification(fingerprintHex: String(repeating: "ab", count: 30), atMs: 5, method: "qr").identityChangePendingAtMs, 1_000)
+    }
+
+    func test_review_setCallVerifiedIdentityKey_keepsTheIdentityChangeMarker() {
+        store.upsert(fullyPopulatedContact())
+        let updated = store.setCallVerifiedIdentityKey(peerUserId: "u-1", key: Data(repeating: 0x33, count: 32))
+        XCTAssertEqual(updated?.identityChangePendingAtMs, 444)
+        XCTAssertEqual(store.load().first(where: { $0.userId == "u-1" })?.identityChangePendingAtMs, 444)
+    }
+
+    func test_review_overwriteDisplayName_keepsTheIdentityChangeMarker() {
+        store.upsert(fullyPopulatedContact())
+        XCTAssertTrue(store.overwriteDisplayName(userId: "u-1", to: "Mario Rossi"))
+        XCTAssertEqual(store.load().first(where: { $0.userId == "u-1" })?.identityChangePendingAtMs, 444)
+    }
+
+    /// Every other write path that patches an existing row keeps the marker too.
+    func test_review_everyPatchingWritePathKeepsTheIdentityChangeMarker() {
+        func marker() -> Int64? { store.load().first(where: { $0.userId == "u-1" })?.identityChangePendingAtMs }
+        store.upsert(fullyPopulatedContact())
+        _ = store.insertIfAbsentOrFillBlanks(userId: "u-1", fallbackDisplayName: "x", extensionNumber: "9", phoneNumber: "1", avatarUrl: nil)
+        XCTAssertEqual(marker(), 444, "insertIfAbsentOrFillBlanks")
+        XCTAssertTrue(store.setProximityPairing(userId: "u-1", pairedAtMs: 5, serverConfirmed: true))
+        XCTAssertEqual(marker(), 444, "setProximityPairing")
+        XCTAssertTrue(store.setAvatarLocalPath(userId: "u-1", path: URL(fileURLWithPath: "/tmp/a.jpg"), version: 99))
+        XCTAssertEqual(marker(), 444, "setAvatarLocalPath")
+        // a row with no key yet takes the key and keeps the marker
+        let noKey = ContactsStore.StoredContact(userId: "u-2", displayName: "n", phoneHash: "", avatarUrl: nil, lastSeen: nil,
+                                            isVerified: false, identityChangePendingAtMs: 7)
+        store.upsert(noKey)
+        XCTAssertEqual(store.setIdentityPubkeyIfAbsent(userId: "u-2", pubkey: Data(repeating: 0x44, count: 32)), .filled)
+        XCTAssertEqual(store.load().first(where: { $0.userId == "u-2" })?.identityChangePendingAtMs, 7, "setIdentityPubkeyIfAbsent")
+    }
+
+    func test_identityChangePending_roundTripsThroughTheStore() {
+        store.upsert(fullyPopulatedContact().clearingIdentityChangePending())
+        // swiftlint:disable:next force_unwrapping
+        let existing = store.load().first(where: { $0.userId == "u-1" })!
+        XCTAssertNil(existing.identityChangePendingAtMs)
+        store.upsert(existing.withIdentityChangePending(atMs: 42))
+        XCTAssertEqual(store.load().first(where: { $0.userId == "u-1" })?.identityChangePendingAtMs, 42)
+    }
+
+    /// The SAS-confirmed adoption of a rotated key vouches for the key the contact has now: it settles the recorded change.
+    func test_sasPinVerification_markVerified_settlesARecordedChange() {
+        let selfId = "11111111-1111-1111-1111-111111111111"
+        let peerId = "22222222-2222-2222-2222-222222222222"
+        let selfKey = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
+        let peerKey = Curve25519.Signing.PrivateKey().publicKey.rawRepresentation
+        store.upsert(ContactsStore.StoredContact(
+            userId: peerId, displayName: "Peer", phoneHash: "", avatarUrl: nil, lastSeen: nil,
+            isVerified: false, identityChangePendingAtMs: 5))
+        XCTAssertTrue(SasPinVerification.markVerified(
+            store: store, peerUserId: peerId, selfUserId: selfId, selfIdentityKey: selfKey, confirmedKey: peerKey, nowMs: 10))
+        let after = store.load().first(where: { $0.userId == peerId })
+        XCTAssertEqual(after?.isVerified, true)
+        XCTAssertNil(after?.identityChangePendingAtMs)
+        XCTAssertEqual(after?.verifiedFingerprintHex,
+                       SasPinVerification.fingerprintHex(selfUserId: selfId, selfIdentityKey: selfKey, peerUserId: peerId, peerIdentityKey: peerKey))
     }
 
     // MARK: - W-AUTOSAVE — insertIfAbsentOrFillBlanks

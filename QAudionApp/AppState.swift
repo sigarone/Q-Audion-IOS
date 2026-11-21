@@ -1162,14 +1162,24 @@ final class AppState: ObservableObject {
     /// the previous key. Drives the banner copy (the key IS published, and one SAS confirmation resolves
     /// it). Cleared when the key is adopted or the next call starts.
     @Published var callIdentityRotationAwaitingSas: Bool = false
-    /// The key behind `callIdentityRotationAwaitingSas`: exactly what THIS call's verified handshake
-    /// presented, kept only until the user confirms the SAS (adoption) or the next call starts. In memory only.
-    private struct PendingIdentityRotation {
-        let peerId: String
-        let deviceId: String?
-        let key: Data
-    }
-    private var pendingIdentityRotation: PendingIdentityRotation?
+    /// The key behind `callIdentityRotationAwaitingSas` (or behind a held `identity_key_mismatch` whose bundle key proved possession and
+    /// is published for the peer device): exactly what THIS call's handshake presented, tagged with the call, created only from the
+    /// verdict of that handshake and kept only until the user confirms the words (adoption) or the call ends. In memory only.
+    private var pendingIdentityRotation: IdentityRotationCandidate?
+    /// Identity shield, input 1: what round 1 of THIS call's handshake proved about the peer's identity key (the BUNDLE key that
+    /// verified sigV6, never the pin), or the hold with its code. Reset at the start and at the end of every call.
+    @Published var callIdentityAuth: CallIdentityAuth = .pending
+    /// True while confirming the words of the held call would adopt a rotated key that this call's handshake proved: the confirmation
+    /// surface shows the key-change warning first.
+    @Published var callHeldRotationAdoptable: Bool = false
+    /// The identity shield of the live call, recomputed from `callIdentityAuth` and the key-bound verification record every time
+    /// either changes. Nothing else feeds the shield: never the words, never a contact-level flag.
+    @Published private(set) var callIdentityShield: IdentityShield = .pending
+    /// The last `QA-SHIELD` line written for this call, so a line is written only when the identity or the post-quantum shield changes.
+    private var lastShieldLogLine: String?
+    /// Identity of the round-1 session the held state and the rotation candidate belong to (`IdentityVerdictReport.sessionTag`): a
+    /// replaced OFFER is another session, and a proof computed for one never enables an adoption in another.
+    private var heldSessionTag: String = ""
     /// XC-1 (2026-08-05, post-remediation audit follow-up) — true when the
     /// active call's peer presented a signature that FAILED to verify UNDER
     /// THE KEY WE ALREADY TRUST (pin or server-fetched) — i.e. NOT a key
@@ -1249,50 +1259,89 @@ final class AppState: ObservableObject {
     // atomicity argument and why `teardownAudioStack()` must never bump the
     // counter.
 
-    /// 2026-09-19 — the user is confirming the SAS of the ACTIVE call. If that call's verified handshake
-    /// presented a ROTATED identity key (one the server publishes for the peer) that
-    /// `commitSetProvenRepinForDevice` refused only because the previous key had been SAS-verified, this
-    /// confirmation IS the fresh out-of-band verification that refusal was waiting for: adopt the new key now
-    /// (re-pin it, drop the SAS record bound to the old key) and let the caller bind the confirmation to the
-    /// new key. Nothing else ever adopted it: tapping CONFERMA used to re-record the verification against
-    /// the OLD pin, so the banner came back on every call.
+    /// A rotated identity key adopted by the confirmation of the call that presented it.
     ///
-    /// Anti-substitution: only for the peer of this call, only for the key this call's own handshake
-    /// presented and verified, and only when the session key (hence the SAS words) is bound to the signed
-    /// handshake transcript, which contains the signer identity key: a relay that swapped that key would
-    /// have produced different words on the two ends. Without that binding the words say nothing about the
-    /// identity key and the refusal stays. Call it BEFORE the confirmation is recorded.
-    @discardableResult
-    func adoptPendingIdentityRotationIfEligible() -> Bool {
-        guard let pending = pendingIdentityRotation else { return false }
-        let activeCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()
-        let bound: Bool = activeCallId.flatMap {
-            callService.callIntegration?.isSessionKeyTranscriptBound(callId: $0)
-        } ?? false
-        guard IdentityRotationAdoptionPolicy.mayAdopt(
-            pendingPeerId: pending.peerId,
-            activePeerId: callContactId,
-            sessionKeyTranscriptBound: bound
-        ) else {
-            RTLog.warn("call", "tofupin adopt=0 gate=1 bound=\(bound ? 1 : 0)")
-            return false
+    /// The case: this call's round 1 verified sigV6 under a key K2 (published by the server for the peer) while this peer device is
+    /// pinned to K1 and the user had verified K1, so `commitSetProvenRepinForDevice` refused to swap the pin silently; or the call is
+    /// held on `identity_key_mismatch` and the bundle key signed sigV6 and is the key the server publishes for exactly this device.
+    /// The words compare the session that sigV6 binds, so confirming them is the fresh out-of-band verification the refusal was
+    /// waiting for: K2 becomes the pin AND the verified key of the device.
+    ///
+    /// Guards, in this order (`RotationAdoption.guardOutcome`): well-formed peer and key; own user id known and not the peer; own
+    /// identity key available; a pin exists for this device; the pin already is K2 (nothing rewritten); a candidate created by THIS call's
+    /// handshake for exactly (peer, device, K2) and tagged with this call; K2 in the server-published set RIGHT NOW (fetched just
+    /// before the write). Only for a session key bound to the signed handshake transcript. After the network step the whole
+    /// decision is taken again against the state of the call, so a `.lost` published meanwhile, a changed candidate or another
+    /// call writes nothing.
+    @MainActor
+    private func adoptIdentityRotation(_ candidate: IdentityRotationCandidate) async -> SasPinOutcome {
+        let peer = candidate.peerId
+        let activeCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() ?? ""
+        let store = PeerIdentityPinStore()
+        let selfUserId = AppState.currentUserIdSnapshot
+        let selfKey = SovereignIdentityManager().loadIdentity()?.signingPublic
+        func decide(published: Bool) -> SasPinOutcome? {
+            RotationAdoption.guardOutcome(
+                peerUserId: peer, selfUserId: selfUserId, key: candidate.key,
+                selfIdentityKeyAvailable: selfKey != nil, deviceId: candidate.deviceId,
+                pinnedKeyForDevice: store.pinnedKey(contactId: peer, deviceId: candidate.deviceId),
+                candidate: pendingIdentityRotation, callId: activeCallId, keyPublishedNow: published)
         }
-        let replacedKey = PeerIdentityPinStore().pinnedKey(contactId: pending.peerId, deviceId: pending.deviceId)
-        let adoptOutcome = PeerIdentityPinStore().repin(
-            contactId: pending.peerId, ed25519Pub: pending.key, deviceId: pending.deviceId)
+        // Guards 1 to 6 need no network; the seventh passes provisionally here and is decided below.
+        if let early = decide(published: true) {
+            RTLog.warn("call", "tofupin adopt=0 guard=1 out=\(early == .alreadyPinned ? 2 : (early == .conflict ? 3 : 4))")
+            return early
+        }
+        let bound: Bool = [callService.callIntegration, responderCallIntegration].compactMap({ $0 }).contains {
+            $0.isSessionKeyTranscriptBound(callId: activeCallId)
+        }
+        guard IdentityRotationAdoptionPolicy.mayAdopt(
+            pendingPeerId: peer, activePeerId: callContactId, sessionKeyTranscriptBound: bound) else {
+            RTLog.warn("call", "tofupin adopt=0 gate=1 bound=\(bound ? 1 : 0)")
+            return .conflict
+        }
+        var published = false
+        if let kms = liveProvider?.kmsClient {
+            published = await kms.fetchUserIdentityKeySet(userId: peer).contains(candidate.key)
+        }
+        // Compare-and-set: everything is judged again after the network step.
+        let stillExpected: Bool
+        switch callIdentityAuth {
+        case .authenticated(let id, let key):
+            stillExpected = id.lowercased() == candidate.callId.lowercased() && key == candidate.key
+        case .held(let id, let code, _, let signer):
+            stillExpected = id.lowercased() == candidate.callId.lowercased()
+                && code == IdentityShieldRules.codeKeyMismatch && signer == candidate.key
+        default:
+            stillExpected = false
+        }
+        let activeNow = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() ?? ""
+        guard stillExpected, activeNow.lowercased() == activeCallId.lowercased(), pendingIdentityRotation == candidate else {
+            RTLog.warn("call", "tofupin adopt=0 cas=1")
+            return .conflict
+        }
+        if let late = decide(published: published) {
+            RTLog.warn("call", "tofupin adopt=0 guard=7 out=\(late == .alreadyPinned ? 2 : (late == .conflict ? 3 : 4))")
+            return late
+        }
+        let replacedKey = store.pinnedKey(contactId: peer, deviceId: candidate.deviceId)
+        let outcome = store.repin(contactId: peer, ed25519Pub: candidate.key, deviceId: candidate.deviceId)
         // Only an overwrite of this exact (peer, device) entry replaces a key: its capability record goes with it.
-        CapsPinBook.shared.noteRepin(adoptOutcome, peerUserId: pending.peerId, replacedKey: replacedKey, newKey: pending.key)
-        switch adoptOutcome {
+        CapsPinBook.shared.noteRepin(outcome, peerUserId: peer, replacedKey: replacedKey, newKey: candidate.key)
+        switch outcome {
         case .overwritten, .added, .unchanged:
-            SasVerificationStore.shared.clear(peerUserId: pending.peerId)
+            // The confirmation bound to the replaced key says nothing about the new one; the new verification is written next.
+            SasVerificationStore.shared.clear(peerUserId: peer)
+            markContactVerifiedBySas(peerUserId: peer, confirmedKey: candidate.key)
             pendingIdentityRotation = nil
             callIdentityUnauthenticatedChange = false
             callIdentityRotationAwaitingSas = false
+            callHeldRotationAdoptable = false
             RTLog.info("call", "tofupin adopt=1 sas=1")
-            return true
+            return .pinned
         case .failed:
             RTLog.warn("call", "tofupin adopt=0 fail=1")
-            return false
+            return .unavailable
         }
     }
 
@@ -1377,6 +1426,258 @@ final class AppState: ObservableObject {
             selfIdentityKey: selfIdentityKey, confirmedKey: confirmedKey,
             nowMs: Int64(Date().timeIntervalSince1970 * 1000))
         RTLog.info("call", "saspin mark=\(written ? 1 : 0)")
+    }
+
+    // MARK: - Identity shield
+
+    /// What confirming the words of the live call did.
+    enum SasConfirmResult: Equatable {
+        /// The confirmation was recorded for the key this call authenticated.
+        case recorded
+        /// The media was released and NOTHING was written (a hold no signature vouches for).
+        case releasedOnly
+        /// This key conflicts with the verified key of the device: nothing was recorded.
+        case conflict
+        /// Nothing was recorded or released. `reason` is the numeric marker of the log line: 1 no words, 2 no call peer, 4 SAS-pin
+        /// conflict, 5 the identity of this call was not authenticated.
+        case refused(reason: Int)
+
+        /// The notice the call screens show for this result (nil: nothing to say). One place for the audio and the video call screen.
+        var notice: String? {
+            switch self {
+            case .recorded, .releasedOnly:
+                return nil
+            case .conflict:
+                return String(localized: "incall.sas_confirm_conflict", defaultValue: "Questo contatto ha già una chiave verificata diversa: nulla è stato registrato.", comment: "Call screen notice: the confirmation was not recorded because this contact already has another verified key")
+            case .refused(let reason):
+                guard reason == 5 else { return nil }
+                return String(localized: "incall.sas_confirm_refused", defaultValue: "Impossibile registrare la verifica: l'identità di questa chiamata non è stata autenticata.", comment: "Call screen notice: the confirmation was not recorded because the identity of this call was not authenticated")
+            }
+        }
+    }
+
+    /// Fold one handshake round's report into the call's identity state. Marshalled to the main actor by the integration callback.
+    /// Creates the rotation candidate ONLY here, from the verdict of this call's handshake.
+    @MainActor
+    func handleIdentityVerdict(_ report: IdentityVerdictReport) {
+        let cid = report.callId.lowercased()
+        guard !cid.isEmpty else { return }
+        // A verdict or a proof of a call that is not the live one (a late answer of a call that ended) is dropped. While no call id is
+        // bound yet (ring time) the report is taken; the state itself is tagged with its call and reset at every call start.
+        if let live = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId(), !live.isEmpty,
+           live.lowercased() != cid { return }
+        // A proof belongs to the session (round-1 OFFER) it was computed for.
+        if report.round <= 1, report.isProofReport, report.sessionTag != heldSessionTag { return }
+        let next = CallIdentityReducer.apply(report, to: callIdentityAuth)
+        if next != callIdentityAuth { callIdentityAuth = next }
+        // A round-1 verdict that is not a proof starts (or replaces) the session: nothing of an earlier one stays adoptable.
+        if report.round <= 1, !report.isProofReport {
+            if heldSessionTag != report.sessionTag {
+                pendingIdentityRotation = nil
+                callHeldRotationAdoptable = false
+            }
+            heldSessionTag = report.sessionTag
+        }
+        switch report.kind {
+        case .authenticated(let key):
+            // The pin of the device is final here (the re-pin of a verified pin was refused synchronously before this report): a pin
+            // that differs from the key this call stands on is a rotated key waiting for the confirmation of the words.
+            if report.round <= 1,
+               let pin = PeerIdentityPinStore().pinnedKey(contactId: report.peerId, deviceId: report.deviceId),
+               pin != key,
+               case .authenticated(let id, let tracked) = callIdentityAuth, id == cid, tracked == key {
+                pendingIdentityRotation = IdentityRotationCandidate(
+                    callId: cid, peerId: report.peerId, deviceId: report.deviceId, key: key)
+                callIdentityRotationAwaitingSas = true
+                markIdentityChangePending(peerId: report.peerId)
+            }
+        case .held:
+            if let candidate = CallIdentityReducer.candidate(from: report),
+               case .held(let id, let code, _, let signer) = callIdentityAuth,
+               id == cid, code == IdentityShieldRules.codeKeyMismatch, signer == candidate.key {
+                pendingIdentityRotation = candidate
+                callHeldRotationAdoptable = true
+                markIdentityChangePending(peerId: report.peerId)
+            }
+        }
+        recomputeCallIdentityShield()
+    }
+
+    /// Recompute `callIdentityShield` from the published identity state and the key-bound record, and write the `QA-SHIELD` line when
+    /// the identity or the post-quantum shield changed. Event driven: called when the verdict, a confirmation or the protection line changes.
+    @MainActor
+    func recomputeCallIdentityShield() {
+        let activeId = ((liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() ?? "").lowercased()
+        let callId = activeId.isEmpty ? (callIdentityAuth.callIdOrNil ?? "") : activeId
+        var record: KeyVerification = .none
+        if case .authenticated(_, let key) = callIdentityAuth, let peer = callContactId {
+            record = ContactShieldEvaluator.keyVerification(
+                authKey: key, peerUserId: peer, deviceId: callPinDeviceId(for: peer))
+        }
+        let shield = IdentityShieldRules.callShield(auth: callIdentityAuth, callId: callId, record: record)
+        if shield != callIdentityShield { callIdentityShield = shield }
+        emitShieldLogIfChanged(callId: callId)
+    }
+
+    /// The protection line of THIS call: a value tagged with another call (a late value of the call that just ended) is no value yet.
+    var livePqProtection: CallPqProtection? {
+        let active = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() ?? callIdentityAuth.callIdOrNil ?? ""
+        return IdentityShieldRules.protection(callPqProtection, forCall: active)
+    }
+
+    /// One closed-vocabulary line per change of the identity or the post-quantum shield: no key, name or fingerprint.
+    @MainActor
+    private func emitShieldLogIfChanged(callId: String) {
+        guard !callId.isEmpty else { return }
+        let line = IdentityShieldRules.logLine(callId: callId, shield: callIdentityShield, protection: livePqProtection)
+        guard line != lastShieldLogLine else { return }
+        lastShieldLogLine = line
+        RTLog.info("call", line)
+    }
+
+    /// The identity state of a call does not outlive it, and the next call starts from nothing.
+    @MainActor
+    func resetCallIdentityShield() {
+        callIdentityAuth = .pending
+        callHeldRotationAdoptable = false
+        pendingIdentityRotation = nil
+        heldSessionTag = ""
+        callIdentityShield = .pending
+        lastShieldLogLine = nil
+        callPqProtection = nil
+    }
+
+    /// A confirmation of the words for the key the call authenticated vouches for the key the contact has now: it settles a change
+    /// recorded earlier (the counterpart of the pending-change marker cleared by a SAS-confirmed pin).
+    @MainActor
+    private func clearIdentityChangePending(peerId: String) {
+        let store = ContactsStore()
+        guard let existing = store.load().first(where: { $0.userId == peerId }) else { return }
+        let settled = existing.clearingIdentityChangePending()
+        if settled != existing { store.upsert(settled) }
+    }
+
+    /// Record that this device saw a change of the contact's identity key that nobody has settled (see
+    /// `StoredContact.identityChangePendingAtMs`); the contact surfaces turn red while a verified key is pinned.
+    @MainActor
+    private func markIdentityChangePending(peerId: String) {
+        let store = ContactsStore()
+        guard let existing = store.load().first(where: { $0.userId == peerId }) else { return }
+        let updated = existing.withIdentityChangePending(atMs: Int64(Date().timeIntervalSince1970 * 1000))
+        if updated != existing { store.upsert(updated) }
+    }
+
+    /// The user confirms the words of the live call. What it may write depends ONLY on what this call's handshake proved
+    /// (`SasConfirmPolicy.action`):
+    ///  - authenticated by key K: record the confirmation for K (after adopting a proven rotated key, when K is not the pin yet);
+    ///  - held on `identity_unresolved`: the existing SAS-pin of the signer key, then the record;
+    ///  - held on `identity_key_mismatch` with a rotation candidate proven by THIS call (sigV6 valid under the bundle key, the key
+    ///    published for exactly this device): release the media, then adopt the candidate under the adoption guards;
+    ///  - held on anything else (`identity_key_mismatch` without proof, `sig_invalid`, `ratchet_v5_downgrade`): release the media
+    ///    and write NOTHING, not even `sasConfirmedThisCall`;
+    ///  - pending, lost or without identity: refuse.
+    @MainActor
+    func confirmSasForActiveCall() async -> SasConfirmResult {
+        let words = callSasWords
+        guard !words.isEmpty else {
+            RTLog.warn("call", "sasConfirm noop=1 reason=1")  // 1 = no SAS words yet
+            return .refused(reason: 1)
+        }
+        guard let peer = callContactId,
+              let activeCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() else {
+            RTLog.warn("call", "sasConfirm noop=1 reason=2")  // 2 = no call peer
+            return .refused(reason: 2)
+        }
+        let cid = activeCallId.lowercased()
+        let fp = SasVerificationStore.fingerprint(forWords: words)
+        let store = PeerIdentityPinStore()
+        switch SasConfirmPolicy.action(auth: callIdentityAuth, callId: cid, candidate: pendingIdentityRotation) {
+        case .refuse:
+            RTLog.warn("call", "sasConfirm noop=1 reason=5")  // 5 = this call's identity was not authenticated
+            return .refused(reason: 5)
+
+        case .releaseOnly:
+            RTLog.info("call", "sasConfirm release=1 rec=0")
+            confirmIdentityAndReleaseMedia(markSasConfirmed: false)
+            return .releasedOnly
+
+        case .adoptHeldRotation(let candidate):
+            confirmIdentityAndReleaseMedia(markSasConfirmed: false)
+            let outcome = await adoptIdentityRotation(candidate)
+            guard outcome == .pinned || outcome == .alreadyPinned else {
+                RTLog.warn("call", "sasConfirm release=1 rec=0 rot=0")
+                return .releasedOnly
+            }
+            // Compare-and-set: authenticated only if the call is STILL the hold of this key.
+            let next = CallIdentityReducer.adoptedRotation(callIdentityAuth, candidate: candidate)
+            guard case .authenticated = next else {
+                RTLog.warn("call", "sasConfirm release=1 rec=0 cas=1")
+                return .releasedOnly
+            }
+            callIdentityAuth = next
+            SasVerificationStore.shared.recordVerified(
+                peerUserId: peer, fingerprint: fp,
+                identityTag: SasVerificationStore.identityTag(forPinnedKey: candidate.key))
+            RTLog.info("call", "sasConfirm ok=1 rot=1")
+            callService.sasConfirmedThisCall = true
+            confirmCapsPinWarning()
+            recomputeCallIdentityShield()
+            return .recorded
+
+        case .adoptUnresolvedSigner:
+            // SAS-PIN — with no pin and no server key this confirmation pins the signer key of the compared round.
+            let adoption = adoptSasConfirmedSignerKeyIfUnresolved()
+            if adoption == .refused {
+                RTLog.warn("call", "sasConfirm noop=1 reason=4")  // 4 = SAS-PIN conflict
+                return .refused(reason: 4)
+            }
+            // Green only when the durable pin of the device is now exactly the adopted signer key.
+            guard let key = adoption.adoptedKey,
+                  store.pinnedKey(contactId: peer, deviceId: peerDeviceId(for: peer)) == key,
+                  SasConfirmPolicy.mayRecord(auth: callIdentityAuth, callId: cid, pinnedKey: nil, adoptedSignerKey: key) else {
+                RTLog.info("call", "sasConfirm release=1 rec=0")
+                confirmIdentityAndReleaseMedia(markSasConfirmed: false)
+                return .releasedOnly
+            }
+            SasVerificationStore.shared.recordVerified(
+                peerUserId: peer, fingerprint: fp,
+                identityTag: SasVerificationStore.identityTag(forPinnedKey: key))
+            RTLog.info("call", "sasConfirm ok=1")
+            confirmCapsPinWarning()
+            confirmIdentityAndReleaseMedia()
+            callIdentityAuth = CallIdentityReducer.markReleasedAdopted(callIdentityAuth, callId: cid, signerKey: key)
+            recomputeCallIdentityShield()
+            return .recorded
+
+        case .recordForAuthenticatedKey(let key):
+            let deviceId = callPinDeviceId(for: peer)
+            var pin = store.pinnedKey(contactId: peer, deviceId: deviceId)
+            if pin != key, let candidate = pendingIdentityRotation, candidate.key == key {
+                _ = await adoptIdentityRotation(candidate)
+                pin = store.pinnedKey(contactId: peer, deviceId: deviceId)
+            }
+            // After the awaited step the call must still stand on this key.
+            guard case .authenticated(_, let stillKey) = callIdentityAuth, stillKey == key else {
+                RTLog.warn("call", "sasConfirm noop=1 reason=5")
+                return .refused(reason: 5)
+            }
+            guard SasConfirmPolicy.mayRecord(auth: callIdentityAuth, callId: cid, pinnedKey: pin, adoptedSignerKey: nil) else {
+                // The pin of this device is another key and no proven rotation applies: nothing is bound to a key the call did not use.
+                RTLog.warn("call", "sasConfirm noop=1 reason=5 conflict=1")
+                return .conflict
+            }
+            SasVerificationStore.shared.recordVerified(
+                peerUserId: peer, fingerprint: fp,
+                identityTag: SasVerificationStore.identityTag(forPinnedKey: key))
+            RTLog.info("call", "sasConfirm ok=1")
+            clearIdentityChangePending(peerId: peer)
+            // A pin warning of this call goes with the confirmation (the record of the contact device drops the capability).
+            confirmCapsPinWarning()
+            // Release whatever media AppState held back for this call's unverified handshake identity, if any was.
+            confirmIdentityAndReleaseMedia()
+            recomputeCallIdentityShield()
+            return .recorded
+        }
     }
 
     // MARK: - Capability pins (the safety-code warning)
@@ -1584,14 +1885,15 @@ final class AppState: ObservableObject {
     /// back for the active call's identity-unverified gate. No-op (safe to
     /// call unconditionally) when the gate was never engaged for this call.
     @MainActor
-    func confirmIdentityAndReleaseMedia() {
+    func confirmIdentityAndReleaseMedia(markSasConfirmed: Bool = true) {
         guard let activeCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() else {
             return
         }
         let cid = activeCallId.lowercased()
         identityUnverifiedCallIds.remove(cid)
         identityHoldCodeByCallId.removeValue(forKey: cid)
-        callService.sasConfirmedThisCall = true
+        // A release that vouches for nothing (a hold no signature of this call stands behind) records nothing, this flag included.
+        if markSasConfirmed { callService.sasConfirmedThisCall = true }
         awaitingIdentityConfirmation = false
         let actions = pendingIdentityGatedMedia.removeValue(forKey: cid) ?? []
         for action in actions { action() }
@@ -1648,6 +1950,9 @@ final class AppState: ObservableObject {
     /// Badge of the post-quantum protection of this call, from the level the call service computes for the protection line
     /// (nil: no level yet, or none to show). Read by `CallSecurityBadge`.
     @Published var callPqBadge: CallPqBadge?
+    /// The level, the `auth` word and the `pin` word of the call's protection line, for the post-quantum shield and "Massima
+    /// sicurezza". nil until a level exists (the shield is grey, never green, before that).
+    @Published var callPqProtection: CallPqProtection?
     /// "Voce come chiave" cross-device attestation (item 2, 2026-07-31
     /// InCallScreen Android→iOS port) — `true` once the PEER has announced,
     /// over the `<callId>|VOICE_KEY:1` opaque_message piggy-back
@@ -6478,11 +6783,16 @@ final class AppState: ObservableObject {
         // WIRE_SPEC 16.3 privacy — while this side is HELD, whatever the cause (CallKit hold, audio interruption, session
         // deactivation), the camera is paused as well; it is restored only when the LAST cause is removed, and only if the
         // video was active and not paused by the user before. `CallHoldPolicy` is the pure decision.
-        callService.onPqProtectionChanged = { [weak self] level, auth in
+        callService.onPqProtectionChanged = { [weak self] level, auth, pin, callId in
             let badge = CallPqBadge(level: level, auth: auth)
+            // The shield reads the level itself (a level of "CL" is a value, no level yet is none), the auth word and the pin word,
+            // tagged with the call they belong to (the value of another call is never read for this one).
+            let protection: CallPqProtection? = level.map { CallPqProtection(levelToken: $0.token, auth: auth, pin: pin, callId: callId) }
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 if self.callPqBadge != badge { self.callPqBadge = badge }
+                if self.callPqProtection != protection { self.callPqProtection = protection }
+                self.recomputeCallIdentityShield()
             }
         }
         callService.onLocalHoldActiveChanged = { [weak self] held in
@@ -8074,6 +8384,7 @@ final class AppState: ObservableObject {
             self.callIdentityUnauthenticatedChange = false
             self.callIdentityRotationAwaitingSas = false
             self.pendingIdentityRotation = nil
+            self.resetCallIdentityShield()
             self.resetCapsPinWarningForNewCall(callId: callIdStr)
             // XC-1: same reset for the sibling sig_invalid banner.
             self.callHandshakeSignatureInvalid = false
@@ -16925,6 +17236,8 @@ final class AppState: ObservableObject {
         let cid = callId.lowercased()
         pendingAcceptGatedActions[cid] = nil
         pendingIdentityGatedMedia[cid] = nil
+        // The replaced round's verdict, rotation candidate and proof go with it: the words now come from the replacing round.
+        if callIdentityAuth.callIdOrNil == nil || callIdentityAuth.callIdOrNil == cid { resetCallIdentityShield() }
         identityUnverifiedCallIds.remove(cid)
         identityHoldCodeByCallId[cid] = nil
         if identityUnverifiedCallIds.isEmpty { awaitingIdentityConfirmation = false }
@@ -18286,17 +18599,24 @@ final class AppState: ObservableObject {
         integration.commitSetProvenRepinForDevice = { [weak self] peerId, key, deviceId in
             let priorKey = pinStore.pinnedKey(contactId: peerId, deviceId: deviceId)
             if let prior = priorKey, prior != key {
-                let priorTag = SasVerificationStore.identityTag(forPinnedKey: prior)
-                if SasVerificationStore.shared.hasVerifiedBinding(peerUserId: peerId, currentIdentityTag: priorTag) {
+                // EVERY form of verification of the pin being replaced counts: the in-call confirmation, the safety number attested on
+                // the contact screen, an in-person ceremony (`RepinGate`).
+                let context = ContactShieldEvaluator.currentContext()
+                let record = ContactShieldEvaluator.record(
+                    peerUserId: peerId, contact: ContactsStore().load().first(where: { $0.userId == peerId }))
+                if RepinGate.refusesSilentRepin(
+                    priorPin: prior, newKey: key, record: record,
+                    selfUserId: context.selfUserId, selfIdentityKey: context.selfIdentityKey, peerUserId: peerId) {
                     RTLog.warn("call", "tofupin repin=0 blocked=1")
                     Task { @MainActor [weak self] in
                         guard let self else { return }
+                        // The change is a fact about the contact whatever call is on screen: the contact surfaces show it.
+                        self.markIdentityChangePending(peerId: peerId)
                         if self.callContactId == nil || self.callContactId == peerId {
                             self.callIdentityUnauthenticatedChange = true
-                            // Remember the refused key so the SAS confirmation of this call can adopt it
-                            // (`adoptPendingIdentityRotationIfEligible`); before, nothing ever did.
-                            self.pendingIdentityRotation = PendingIdentityRotation(
-                                peerId: peerId, deviceId: deviceId, key: key)
+                            // The refused key is remembered by the identity verdict of this very call
+                            // (`handleIdentityVerdict`), which tags it with the call; the confirmation of the words adopts it
+                            // under the guards of `adoptIdentityRotation`.
                             self.callIdentityRotationAwaitingSas = true
                         }
                     }
@@ -18350,6 +18670,7 @@ final class AppState: ObservableObject {
         integration.onUnauthenticatedIdentityChange = { [weak self] peerId in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
+                self.markIdentityChangePending(peerId: peerId)
                 // Only surface the alert for the peer of the active call to avoid
                 // a stale banner from a late/duplicate envelope of another call.
                 if self.callContactId == nil || self.callContactId == peerId {
@@ -18378,6 +18699,24 @@ final class AppState: ObservableObject {
             Task { @MainActor [weak self] in
                 self?.handleHandshakeIdentityUnverified(callId: cid, code: code)
             }
+        }
+        // Identity shield: what each round proved about the peer's identity key.
+        integration.onIdentityVerdict = { [weak self] report in
+            Task { @MainActor [weak self] in
+                self?.handleIdentityVerdict(report)
+            }
+        }
+        // Proof of possession of a rotated key: the key the server publishes for exactly this peer device, only from a successful
+        // request for that device (the closure returns nil offline, on a timeout, a 404 or an error, never a cached value).
+        // Known limit (accepted): the endpoint answers with the best key the server has for the pair, and falls back to the latest key
+        // of the account when that device never published, so "published for this device" is as strong as the server's per-device
+        // answer. Offline, a timeout, a 404 or an error give nil, never a cached value.
+        integration.fetchPublishedKeyForDevice = { [weak self] peerId, deviceId in
+            guard let kms = await MainActor.run(body: { self?.liveProvider?.kmsClient }) else { return nil }
+            if case .key(let raw) = await kms.fetchUserIdentityKeyOutcome(userId: peerId, deviceId: deviceId), raw.count == 32 {
+                return raw
+            }
+            return nil
         }
 
         // v4_capable_pinned set (spec §4), persisted in UserDefaults (thread-safe).
@@ -20397,6 +20736,7 @@ final class AppState: ObservableObject {
         callIdentityUnauthenticatedChange = false
         callIdentityRotationAwaitingSas = false
         pendingIdentityRotation = nil
+        resetCallIdentityShield()
         resetCapsPinWarningForNewCall(callId: nil)
         // XC-1: same reset for the sibling sig_invalid banner.
         callHandshakeSignatureInvalid = false
@@ -20851,6 +21191,8 @@ final class AppState: ObservableObject {
                 integration.onUnauthenticatedIdentityChange = { [weak self] peerId in
                     Task { @MainActor [weak self] in
                         guard let self = self else { return }
+                        // As on incoming calls: the change is a fact about the contact, recorded for the contact surfaces.
+                        self.markIdentityChangePending(peerId: peerId)
                         if self.callContactId == nil || self.callContactId == peerId {
                             self.callIdentityUnauthenticatedChange = true
                         }
@@ -23744,6 +24086,7 @@ extension AppState {
         // 2026-09-19 — a rotated identity key awaiting this call's SAS confirmation does not outlive the call.
         pendingIdentityRotation = nil
         callIdentityRotationAwaitingSas = false
+        resetCallIdentityShield()
 
         // W-DCHANGUP (2026-08-25) — third, fastest hangup channel: a sealed
         // control frame on the active media leg (DataChannel when open, WS

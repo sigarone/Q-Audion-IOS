@@ -4,7 +4,11 @@ import SwiftUI
 /// 1:1 port of Android `QAudionColorsExtra` from QAudionColors.kt.
 ///
 /// Trust / risk semantics for the security UI: `riskLow / riskMedium /
-/// riskHigh`, `trustUnverified / trustSas / trustVoice / trustEnterprise`.
+/// riskHigh`, `trustUnverified / trustEnterprise`.
+///
+/// One colour language on every badge: green `success` = active or verified, purple `toVerify`
+/// (= `pqcAccent`) = to verify or pending only, amber `warning`, red `riskHigh` = risk or changed,
+/// grey `neutral` (= `trustUnverified`) = not applicable, not connected or not known yet.
 /// PQC accent color drives the "ML-KEM 1024" feature pill on Welcome
 /// and any security-emphasis surface.
 public struct QAudionColorsExtra: Equatable {
@@ -23,9 +27,12 @@ public struct QAudionColorsExtra: Equatable {
     /// radio made "reachable over Bluetooth" read as a crypto state.
     public let bluetoothAccent: Color
     public let trustUnverified: Color
-    public let trustSas: Color
-    public let trustVoice: Color
     public let trustEnterprise: Color
+
+    /// Purple, "to verify / pending" only: the same value as `pqcAccent`, named for what it means on a badge.
+    public var toVerify: Color { pqcAccent }
+    /// Grey, "not applicable, not connected, not known yet": the same value as `trustUnverified`.
+    public var neutral: Color { trustUnverified }
 
     public static let dark = QAudionColorsExtra(
         success:           Color(hex: 0x3DD598),
@@ -38,8 +45,6 @@ public struct QAudionColorsExtra: Equatable {
         pqcAccent:         Color(hex: 0xB388FF),
         bluetoothAccent:   Color(hex: 0x2F9BFF),
         trustUnverified:   Color(hex: 0x8892A6),
-        trustSas:          Color(hex: 0x6EE7C5),
-        trustVoice:        Color(hex: 0x3DD598),
         trustEnterprise:   Color(hex: 0x3E7BFF)
     )
 
@@ -54,8 +59,6 @@ public struct QAudionColorsExtra: Equatable {
         pqcAccent:         Color(hex: 0x6A3DDB),
         bluetoothAccent:   Color(hex: 0x0A6ED1),
         trustUnverified:   Color(hex: 0x5E6677),
-        trustSas:          Color(hex: 0x00A381),
-        trustVoice:        Color(hex: 0x00A381),
         trustEnterprise:   Color(hex: 0x3E7BFF)
     )
 }
@@ -74,16 +77,4 @@ public extension EnvironmentValues {
         get { self[QAudionExtrasKey.self] }
         set { self[QAudionExtrasKey.self] = newValue }
     }
-}
-
-// MARK: - TrustChipColors (scheme-independent)
-
-/// Phase-14d trust-chip swatches shared with Desktop. AAA against
-/// `#141B22` (Q-Audion dark surface). Same value light + dark.
-/// Source: Android `TrustChipColors.kt`.
-public enum TrustChipColors {
-    public static let cyan       = Color(hex: 0x00DAF3)
-    public static let jade       = Color(hex: 0x52E3A5)
-    public static let gold       = Color(hex: 0xF2B552)
-    public static let mutedGrey  = Color(hex: 0x8892A0)
 }

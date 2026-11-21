@@ -21,10 +21,4 @@ enum SasCardPlacement {
     static func isRedundant(sasRequired: Bool?) -> Bool {
         sasRequired == false
     }
-
-    /// True when the screen may say the code is confirmed: this call's words were confirmed AND this call's assurance
-    /// verdict has arrived. While the verdict is still `nil` nothing on the call screen claims a verification.
-    static func showsVerified(sasVerified: Bool, verdictKnown: Bool) -> Bool {
-        sasVerified && verdictKnown
-    }
 }

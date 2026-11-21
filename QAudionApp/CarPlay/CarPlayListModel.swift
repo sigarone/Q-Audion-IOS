@@ -152,18 +152,22 @@ enum CarPlayListBuilder {
 
     /// Verified contacts first, then by name. Accounts that no longer exist on the server are left out: these rows
     /// dial on a tap (W-ORPHANPEER).
+    /// `isVerified` says whether a contact reads as verified on the car screen. The screen passes the contact-level identity shield
+    /// (`IdentityShield.verified`), the same answer as the contact list and the call bar; the default keeps the stored flag for callers
+    /// that have no key-bound record to read.
     static func contacts(
         _ contacts: [ContactsStore.StoredContact],
         orphanPeerIds: Set<String>,
         limits: CarPlayListLimits,
-        resolve: (String) -> String
+        resolve: (String) -> String,
+        isVerified: (ContactsStore.StoredContact) -> Bool = { $0.isVerified }
     ) -> [CarPlayContactRow] {
         let rows: [CarPlayContactRow] = contacts
             .filter { !shouldHideContact(orphanPeerIds.contains($0.userId)) }
             .map { c in
                 // W-EXTPREFIX: a stale "Phone #100" / "New User" name goes through the canonical resolver.
                 CarPlayContactRow(
-                    userId: c.userId, title: resolve(c.userId), isVerified: c.isVerified, phoneNumber: c.phoneNumber)
+                    userId: c.userId, title: resolve(c.userId), isVerified: isVerified(c), phoneNumber: c.phoneNumber)
             }
             .sorted { lhs, rhs in
                 if lhs.isVerified != rhs.isVerified { return lhs.isVerified }

@@ -221,9 +221,9 @@ public struct TrustVerificationCard: View {
         case .ready:   break
         }
         switch state {
-        case .unverified:          return scheme.onSurfaceVariant
-        case .identityPinnedTofu:  return scheme.tertiary
-        case .userVerified:        return scheme.primary
+        case .unverified:          return extras.neutral
+        case .identityPinnedTofu:  return extras.toVerify
+        case .userVerified:        return extras.success
         case .identityChanged:     return extras.riskHigh
         }
     }
@@ -235,7 +235,7 @@ public struct TrustVerificationCard: View {
         case .ready:   break
         }
         switch state {
-        case .userVerified:    return scheme.primary
+        case .userVerified:    return extras.success
         case .identityChanged: return extras.riskHigh
         default:               return scheme.outline
         }

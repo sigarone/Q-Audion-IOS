@@ -16,11 +16,15 @@ public struct ContactsListViewModel: ViewModelProtocol {
         /// slot (separate from `displayName`, e.g. a metadata row) never
         /// has to re-derive it by parsing `displayName`.
         public let `extension`: String?
+        /// The identity shield of the contact (no call): from the key-bound verification record only, never from `isVerified`.
+        /// `.pending` until a surface computes it (`ContactShieldEvaluator`).
+        public let identityShield: IdentityShield
 
         public init(userId: String, displayName: String, phoneHash: String,
                     avatarUrl: URL?, isOnline: Bool,
                     unreadMessageCount: Int, isVerified: Bool,
-                    `extension`: String? = nil) {
+                    `extension`: String? = nil,
+                    identityShield: IdentityShield = .pending) {
             self.userId = userId
             self.displayName = displayName
             self.phoneHash = phoneHash
@@ -29,6 +33,7 @@ public struct ContactsListViewModel: ViewModelProtocol {
             self.unreadMessageCount = unreadMessageCount
             self.isVerified = isVerified
             self.`extension` = `extension`
+            self.identityShield = identityShield
         }
     }
 

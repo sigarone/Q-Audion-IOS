@@ -281,16 +281,18 @@ final class CallMinimizeWiringTests: XCTestCase {
     /// the screen, and coming back loses nothing. No `@State` of either screen is about the SAS.
     func testTheSasConfirmationDoesNotLiveInTheScreen() throws {
         let live = try code("QAudionApp/Views/Call/LiveInCallScreen.swift")
-        XCTAssertTrue(live.contains("SasVerificationStore.shared.recordVerified("))
-        // The decision is read from the shared store on every tick, from the words of THIS call only: no earlier
-        // confirmation carries over, on either screen.
+        // Both call screens confirm through ONE entry point of AppState, which decides what may be recorded from what the call's
+        // handshake proved, and neither writes the store or releases the hold itself. The shield is read from AppState, not
+        // recomputed from the words of the call.
         for source in [live, try code("QAudionApp/Views/VideoCallView.swift")] {
-            XCTAssertTrue(source.contains("SasVerificationStore.shared.isVerified("))
+            XCTAssertTrue(source.contains("appState.confirmSasForActiveCall()"))
+            XCTAssertFalse(source.contains("SasVerificationStore"), "a call screen must not touch the verification store")
+            XCTAssertFalse(source.contains("confirmIdentityAndReleaseMedia"), "a call screen must not release the hold itself")
+            XCTAssertTrue(source.contains("callIdentityShield"))
             XCTAssertFalse(source.contains("hasVerifiedBinding"))
             XCTAssertFalse(source.contains("isConfirmedForThisCall"))
             XCTAssertFalse(source.contains("callIdentityAuthenticated"))
         }
-        XCTAssertTrue(live.contains("appState.confirmIdentityAndReleaseMedia()"))
         for path in ["QAudionApp/Views/Call/LiveInCallScreen.swift", "QAudionApp/Views/Call/InCallScreen.swift"] {
             let names = try stateVariableNames(in: try code(path))
             XCTAssertFalse(names.isEmpty, "\(path): the scan found no @State at all")

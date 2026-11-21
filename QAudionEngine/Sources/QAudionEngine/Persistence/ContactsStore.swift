@@ -185,6 +185,14 @@ public final class ContactsStore {
         /// never upgrades `isVerified` itself, which keeps its own,
         /// independently-computed value.
         public private(set) var proximityServerConfirmed: Bool?
+        /// Epoch ms when this device last saw a change of this contact's identity key that the user has not settled:
+        /// a rotated key the server publishes that the app refused to pin over a verified one, a key presented by a call that
+        /// is not in the published set, or a safety-number evaluation that found the key different from the pin. Read only by the
+        /// contact-level identity shield (`IdentityShieldRules.contactShield`), which turns red when this is set AND a pinned
+        /// key of the contact is verified. Cleared by `afterIdentityKeyRotation()` (the single reset point of the key-bound
+        /// facts) and by the verifications that vouch for the key the contact now has (`clearingIdentityChangePending()`).
+        /// `nil` for every row written before this field existed.
+        public private(set) var identityChangePendingAtMs: Int64?
 
         public init(userId: String, displayName: String, phoneHash: String,
                     avatarUrl: URL?, lastSeen: Date?, isVerified: Bool,
@@ -200,7 +208,8 @@ public final class ContactsStore {
                     voiceVerifiedAt: Int64? = nil,
                     callVerifiedPeerIdentityKey: Data? = nil,
                     proximityPairedAtMs: Int64? = nil,
-                    proximityServerConfirmed: Bool? = nil) {
+                    proximityServerConfirmed: Bool? = nil,
+                    identityChangePendingAtMs: Int64? = nil) {
             self.userId = userId
             self.displayName = displayName
             self.phoneHash = phoneHash
@@ -220,6 +229,7 @@ public final class ContactsStore {
             self.callVerifiedPeerIdentityKey = callVerifiedPeerIdentityKey
             self.proximityPairedAtMs = proximityPairedAtMs
             self.proximityServerConfirmed = proximityServerConfirmed
+            self.identityChangePendingAtMs = identityChangePendingAtMs
         }
 
         // MARK: Field-preserving copies
@@ -275,6 +285,61 @@ public final class ContactsStore {
             return copy
         }
 
+        /// Returns a copy with the recorded identity change settled (see `identityChangePendingAtMs`). Used by the verifications that
+        /// vouch for the key the contact now has (the SAS-confirmed adoption of a rotated key, an in-person ceremony).
+        public func clearingIdentityChangePending() -> StoredContact {
+            var copy = self
+            copy.identityChangePendingAtMs = nil
+            return copy
+        }
+
+        // The helpers below exist so no write path rebuilds a stored contact field by field: a copy carries EVERY field, and a
+        // helper only states what it changes (a rebuild that forgot `identityChangePendingAtMs` would erase a recorded key change).
+
+        /// Fills only blank slots of an existing row (avatar, phone number, extension); never replaces a set value.
+        public func withFilledBlanks(avatarUrl: URL?, phoneNumber: String?, extensionNumber: String?) -> StoredContact {
+            var copy = self
+            copy.avatarUrl = self.avatarUrl ?? avatarUrl
+            copy.phoneNumber = self.phoneNumber ?? phoneNumber
+            copy.`extension` = self.`extension` ?? extensionNumber
+            return copy
+        }
+
+        /// The decrypted avatar cached for the contact, with the sender's version counter.
+        public func withAvatar(path: URL, version: Int) -> StoredContact {
+            var copy = self
+            copy.avatarUrl = path
+            copy.avatarVersion = version
+            return copy
+        }
+
+        public func withPubkey(_ key: Data) -> StoredContact {
+            var copy = self
+            copy.pubkey = key
+            return copy
+        }
+
+        public func withCallVerifiedIdentityKey(_ key: Data) -> StoredContact {
+            var copy = self
+            copy.callVerifiedPeerIdentityKey = key
+            return copy
+        }
+
+        public func withProximityPairing(atMs: Int64, serverConfirmed: Bool) -> StoredContact {
+            var copy = self
+            copy.proximityPairedAtMs = atMs
+            copy.proximityServerConfirmed = serverConfirmed
+            return copy
+        }
+
+        /// Returns a copy that records an unsettled change of the contact's identity key (see `identityChangePendingAtMs`).
+        /// Keeps the first timestamp when one is already recorded, so a repeated observation does not move it.
+        public func withIdentityChangePending(atMs: Int64) -> StoredContact {
+            var copy = self
+            if copy.identityChangePendingAtMs == nil { copy.identityChangePendingAtMs = atMs }
+            return copy
+        }
+
         /// Returns a copy for the moment the user ACCEPTS a rotated peer
         /// identity key. Clearing verification here is the correct security
         /// behaviour, not a bug: a safety-number comparison, an NFC presence
@@ -308,6 +373,7 @@ public final class ContactsStore {
             copy.callVerifiedPeerIdentityKey = nil
             copy.proximityPairedAtMs = nil
             copy.proximityServerConfirmed = nil
+            copy.identityChangePendingAtMs = nil
             return copy
         }
     }
@@ -671,27 +737,7 @@ public final class ContactsStore {
         var current = load()
         if let idx = current.firstIndex(where: { $0.userId == userId }) {
             let existing = current[idx]
-            let patched = StoredContact(
-                userId: existing.userId,
-                displayName: existing.displayName,
-                phoneHash: existing.phoneHash,
-                avatarUrl: existing.avatarUrl ?? avatarUrl,
-                lastSeen: existing.lastSeen,
-                isVerified: existing.isVerified,
-                pubkey: existing.pubkey,
-                verifiedFingerprintHex: existing.verifiedFingerprintHex,
-                verifiedAtMs: existing.verifiedAtMs,
-                verificationMethod: existing.verificationMethod,
-                presenceAuth: existing.presenceAuth,
-                presenceFloor: existing.presenceFloor,
-                phoneNumber: existing.phoneNumber ?? phoneNumber,
-                extension: existing.`extension` ?? extensionNumber,
-                avatarVersion: existing.avatarVersion,
-                voiceVerifiedAt: existing.voiceVerifiedAt,
-                callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey,
-                proximityPairedAtMs: existing.proximityPairedAtMs,
-                proximityServerConfirmed: existing.proximityServerConfirmed
-            )
+            let patched = existing.withFilledBlanks(avatarUrl: avatarUrl, phoneNumber: phoneNumber, extensionNumber: extensionNumber)
             current[idx] = patched
             save(current)
             return patched
@@ -730,27 +776,7 @@ public final class ContactsStore {
         var current = load()
         guard let idx = current.firstIndex(where: { $0.userId == userId }) else { return false }
         let existing = current[idx]
-        current[idx] = StoredContact(
-            userId: existing.userId,
-            displayName: newName,
-            phoneHash: existing.phoneHash,
-            avatarUrl: existing.avatarUrl,
-            lastSeen: existing.lastSeen,
-            isVerified: existing.isVerified,
-            pubkey: existing.pubkey,
-            verifiedFingerprintHex: existing.verifiedFingerprintHex,
-            verifiedAtMs: existing.verifiedAtMs,
-            verificationMethod: existing.verificationMethod,
-            presenceAuth: existing.presenceAuth,
-            presenceFloor: existing.presenceFloor,
-            phoneNumber: existing.phoneNumber,
-            extension: existing.`extension`,
-            avatarVersion: existing.avatarVersion,
-            voiceVerifiedAt: existing.voiceVerifiedAt,
-            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey,
-            proximityPairedAtMs: existing.proximityPairedAtMs,
-            proximityServerConfirmed: existing.proximityServerConfirmed
-        )
+        current[idx] = existing.withDisplayName(newName)
         save(current)
         return true
     }
@@ -829,27 +855,7 @@ public final class ContactsStore {
         }
         let existing = current[idx]
         guard version > (existing.avatarVersion ?? -1) else { return false }
-        current[idx] = StoredContact(
-            userId: existing.userId,
-            displayName: existing.displayName,
-            phoneHash: existing.phoneHash,
-            avatarUrl: path,
-            lastSeen: existing.lastSeen,
-            isVerified: existing.isVerified,
-            pubkey: existing.pubkey,
-            verifiedFingerprintHex: existing.verifiedFingerprintHex,
-            verifiedAtMs: existing.verifiedAtMs,
-            verificationMethod: existing.verificationMethod,
-            presenceAuth: existing.presenceAuth,
-            presenceFloor: existing.presenceFloor,
-            phoneNumber: existing.phoneNumber,
-            extension: existing.`extension`,
-            avatarVersion: version,
-            voiceVerifiedAt: existing.voiceVerifiedAt,
-            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey,
-            proximityPairedAtMs: existing.proximityPairedAtMs,
-            proximityServerConfirmed: existing.proximityServerConfirmed
-        )
+        current[idx] = existing.withAvatar(path: path, version: version)
         save(current)
         return Self.persisted(userId: userId, version: version, in: self)
     }
@@ -870,27 +876,7 @@ public final class ContactsStore {
         var current = load()
         guard let idx = current.firstIndex(where: { $0.userId == userId }) else { return false }
         let existing = current[idx]
-        current[idx] = StoredContact(
-            userId: existing.userId,
-            displayName: existing.displayName,
-            phoneHash: existing.phoneHash,
-            avatarUrl: existing.avatarUrl,
-            lastSeen: existing.lastSeen,
-            isVerified: existing.isVerified,
-            pubkey: existing.pubkey,
-            verifiedFingerprintHex: existing.verifiedFingerprintHex,
-            verifiedAtMs: existing.verifiedAtMs,
-            verificationMethod: existing.verificationMethod,
-            presenceAuth: existing.presenceAuth,
-            presenceFloor: existing.presenceFloor,
-            phoneNumber: existing.phoneNumber,
-            extension: existing.`extension`,
-            avatarVersion: existing.avatarVersion,
-            voiceVerifiedAt: existing.voiceVerifiedAt,
-            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey,
-            proximityPairedAtMs: pairedAtMs,
-            proximityServerConfirmed: serverConfirmed
-        )
+        current[idx] = existing.withProximityPairing(atMs: pairedAtMs, serverConfirmed: serverConfirmed)
         save(current)
         return true
     }
@@ -946,27 +932,7 @@ public final class ContactsStore {
         if let held = existing.pubkey, !held.isEmpty {
             return held == pubkey ? .alreadyPresent : .mismatch
         }
-        current[idx] = StoredContact(
-            userId: existing.userId,
-            displayName: existing.displayName,
-            phoneHash: existing.phoneHash,
-            avatarUrl: existing.avatarUrl,
-            lastSeen: existing.lastSeen,
-            isVerified: existing.isVerified,
-            pubkey: pubkey,
-            verifiedFingerprintHex: existing.verifiedFingerprintHex,
-            verifiedAtMs: existing.verifiedAtMs,
-            verificationMethod: existing.verificationMethod,
-            presenceAuth: existing.presenceAuth,
-            presenceFloor: existing.presenceFloor,
-            phoneNumber: existing.phoneNumber,
-            extension: existing.`extension`,
-            avatarVersion: existing.avatarVersion,
-            voiceVerifiedAt: existing.voiceVerifiedAt,
-            callVerifiedPeerIdentityKey: existing.callVerifiedPeerIdentityKey,
-            proximityPairedAtMs: existing.proximityPairedAtMs,
-            proximityServerConfirmed: existing.proximityServerConfirmed
-        )
+        current[idx] = existing.withPubkey(pubkey)
         save(current)
         return .filled
     }
@@ -1093,27 +1059,7 @@ public final class ContactsStore {
     public func setCallVerifiedIdentityKey(peerUserId: String, key: Data) -> StoredContact? {
         guard let existing = load().first(where: { $0.userId == peerUserId }) else { return nil }
         guard existing.callVerifiedPeerIdentityKey != key else { return existing }
-        let updated = StoredContact(
-            userId: existing.userId,
-            displayName: existing.displayName,
-            phoneHash: existing.phoneHash,
-            avatarUrl: existing.avatarUrl,
-            lastSeen: existing.lastSeen,
-            isVerified: existing.isVerified,
-            pubkey: existing.pubkey,
-            verifiedFingerprintHex: existing.verifiedFingerprintHex,
-            verifiedAtMs: existing.verifiedAtMs,
-            verificationMethod: existing.verificationMethod,
-            presenceAuth: existing.presenceAuth,
-            presenceFloor: existing.presenceFloor,
-            phoneNumber: existing.phoneNumber,
-            extension: existing.`extension`,
-            avatarVersion: existing.avatarVersion,
-            voiceVerifiedAt: existing.voiceVerifiedAt,
-            callVerifiedPeerIdentityKey: key,
-            proximityPairedAtMs: existing.proximityPairedAtMs,
-            proximityServerConfirmed: existing.proximityServerConfirmed
-        )
+        let updated = existing.withCallVerifiedIdentityKey(key)
         upsert(updated)
         return updated
     }
@@ -1145,7 +1091,8 @@ public final class ContactsStore {
             voiceVerifiedAt: base.voiceVerifiedAt,
             callVerifiedPeerIdentityKey: base.callVerifiedPeerIdentityKey,
             proximityPairedAtMs: base.proximityPairedAtMs,
-            proximityServerConfirmed: base.proximityServerConfirmed
+            proximityServerConfirmed: base.proximityServerConfirmed,
+            identityChangePendingAtMs: base.identityChangePendingAtMs
         )
     }
 }

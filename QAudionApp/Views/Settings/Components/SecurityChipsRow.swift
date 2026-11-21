@@ -1,18 +1,19 @@
 import SwiftUI
+import QAudionEngine
 
 /// Horizontal strip of security status chips rendered just below the
 /// `ProfileHeroCard` on the Settings root. 1:1 port of the Android
 /// `SecurityChips` component.
 ///
-/// Default chips (matches Android root):
-///   - "PSK HW-BOUND"  — `extras.success`
-///   - "VOICE n/n"     — `extras.success`
+/// Default chips:
+///   - "VOICE <state>" — the owner voice-key state, from the same source as the Voice-as-Key row below
+///     (`OwnerVoiceLearner.Status`): grey before anything is learned, purple while it learns, green once it is on
 ///   - "OTA <version>" — `extras.trustEnterprise`
 ///
-/// The PQC chip that used to sit second is gone: post-quantum key agreement
-/// is on for every account, so a badge announcing it distinguished no user
-/// from any other. The three that remain each say something with a value in
-/// it, which is the difference between a status chip and decoration.
+/// Two chips that used to sit here said nothing about the account. "PSK HW-BOUND" was a fixed claim with no source, and
+/// "VOICE 5/5" was a fixed text drawn green for everyone, whatever the state of the learning. The PQC chip is gone for the
+/// same reason: post-quantum key agreement is on for every account. What remains says something with a value in it, which
+/// is the difference between a status chip and decoration.
 ///
 /// Each chip is a capsule, monospace `labelSmall`, 1.0sp tracking,
 /// 1pt border at `accent @ 0.45α`, padding 8pt h / 2pt v. Pass
@@ -28,9 +29,12 @@ struct SecurityChipsRow: View {
     }
 
     let chips: [Chip]?
+    /// The state of the owner's voice key; nil while it is still being read (no voice chip is drawn until it is known).
+    let voiceKeyStatus: OwnerVoiceLearner.Status?
 
-    init(chips: [Chip]? = nil) {
+    init(chips: [Chip]? = nil, voiceKeyStatus: OwnerVoiceLearner.Status? = nil) {
         self.chips = chips
+        self.voiceKeyStatus = voiceKeyStatus
     }
 
     var body: some View {
@@ -61,11 +65,23 @@ struct SecurityChipsRow: View {
     }
 
     private func defaultChips() -> [Chip] {
-        [
-            .init(label: "PSK HW-BOUND", accent: extras.success),
-            .init(label: "VOICE 5/5",    accent: extras.success),
-            .init(label: "OTA \(Self.buildString)", accent: extras.trustEnterprise)
-        ]
+        var chips: [Chip] = []
+        if let voice = voiceChip(for: voiceKeyStatus) { chips.append(voice) }
+        chips.append(.init(label: "OTA \(Self.buildString)", accent: extras.trustEnterprise))
+        return chips
+    }
+
+    /// The voice-key chip for the state the Voice-as-Key row shows. Green only once the voice key is on.
+    func voiceChip(for status: OwnerVoiceLearner.Status?) -> Chip? {
+        guard let status else { return nil }
+        switch status {
+        case .notStarted:
+            return .init(label: "VOICE 0%", accent: extras.neutral)
+        case .learning(let percent, _, _):
+            return .init(label: "VOICE \(percent)%", accent: extras.toVerify)
+        case .active, .refined:
+            return .init(label: "VOICE ON", accent: extras.success)
+        }
     }
 
     /// The running bundle's marketing version — the one value on this strip

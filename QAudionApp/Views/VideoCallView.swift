@@ -436,12 +436,8 @@ struct VideoCallView: View {
                         .foregroundColor(sasVerified ? .green : .white)
                 }
                 .padding(.trailing, 8)
-                // W-L10N-BATCH1 — ternary-in-.accessibilityLabel(variable);
-                // explicit lookup to avoid relying on overload-resolution
-                // ambiguity between the LocalizedStringKey and String forms.
-                .accessibilityLabel(sasVerified
-                    ? String(localized: "sas.accessibility.verified", defaultValue: "Identità verificata (SAS)", comment: "Accessibility label — SAS identity verification completed")
-                    : String(localized: "sas.accessibility.pending", defaultValue: "Verifica identità (SAS) in sospeso", comment: "Accessibility label — SAS identity verification still pending"))
+                // The same sentence per state as the call bar's SAS shield (one string per state of the identity shield).
+                .accessibilityLabel(appState.callIdentityShield.callAccessibilityLabel)
             }
 
             // W502: diagnostics toggle button.
@@ -582,6 +578,14 @@ struct VideoCallView: View {
                     .tracking(0.8)
                     .qaudionScaledFont(size: 10, weight: .semibold, family: .label, maxSize: .xLarge)
                     .foregroundColor(sasVerified ? .green : .cyan)
+            }
+
+            // A key change that this confirmation would adopt: said first, as on the audio call screen.
+            if appState.callIdentityRotationAwaitingSas || appState.callHeldRotationAdoptable {
+                Text(String(localized: "incall.sas_key_change_warning", defaultValue: "La chiave di questo contatto è cambiata rispetto a quella che avevi verificato. Confermando solo se le parole coincidono a voce, la nuova chiave sostituisce la precedente e diventa quella verificata.", comment: "SAS card warning shown before the confirmation when the contact key changed: confirming adopts the new key as the verified one"))
+                    .qaudionScaledFont(size: 10, weight: .semibold, family: .label, maxSize: .xLarge)
+                    .foregroundColor(.yellow)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if words.count == 6 {
@@ -891,48 +895,16 @@ struct VideoCallView: View {
         CallSessionKeyShown.realKey(appState.callPqcSessionKey, source: appState.callSasKeySource)
     }
 
-    // D11 fix — same bug as LiveInCallScreen.sasIdentityTag: commitTofuPinForDevice
-    // pins under the composite "<peer>|<deviceId>" account whenever the server
-    // stamped one, so a lookup with no deviceId checks the wrong account and
-    // silently misses a pin that genuinely exists. Both call sites below now
-    // pass appState.peerDeviceId(for:) — see that accessor's kdoc.
     private var sasVerified: Bool {
-        // Nothing here claims a verification before this call's assurance verdict is in.
-        guard SasCardPlacement.showsVerified(sasVerified: true, verdictKnown: appState.callAssuranceState != nil) else { return false }
-        let words = appState.callSasWords
-        guard !words.isEmpty, let peer = appState.callContactId else { return false }
-        guard let pinned = PeerIdentityPinStore().pinnedKey(
-            contactId: peer, deviceId: appState.callPinDeviceId(for: peer)
-        ) else { return false }
-        let fp = SasVerificationStore.fingerprint(forWords: words)
-        // The words of THIS call must have been confirmed, against the identity key still pinned.
-        return SasVerificationStore.shared.isVerified(
-            peerUserId: peer, currentFingerprint: fp,
-            currentIdentityTag: SasVerificationStore.identityTag(forPinnedKey: pinned))
+        // The identity shield of the call: the key this call was authenticated by is the one the user verified.
+        appState.callIdentityShield == .verified
     }
 
     private func confirmSas() {
-        let words = appState.callSasWords
-        // C-3 — a confirmation with no pinned identity to bind it to is exactly the
-        // record this finding was about, so refuse to write one.
-        guard !words.isEmpty, let peer = appState.callContactId else { return }
-        // 2026-09-19 — adopt a rotated key this call presented BEFORE binding the confirmation to a pin.
-        appState.adoptPendingIdentityRotationIfEligible()
-        // SAS-PIN — see LiveInCallScreen.handleConfirmSas: an `identity_unresolved` call gets its signer key
-        // pinned by this explicit confirmation.
-        let adoption = appState.adoptSasConfirmedSignerKeyIfUnresolved()
-        // A round of this call was not signed by its unresolved signer key: record and release nothing.
-        guard adoption != .refused else { return }
-        let adoptedSignerKey = adoption.adoptedKey
-        guard let pinned = PeerIdentityPinStore().pinnedKey(
-            contactId: peer, deviceId: appState.peerDeviceId(for: peer)
-        ) ?? adoptedSignerKey else { return }
-        let fp = SasVerificationStore.fingerprint(forWords: words)
-        SasVerificationStore.shared.recordVerified(
-            peerUserId: peer, fingerprint: fp,
-            identityTag: SasVerificationStore.identityTag(forPinnedKey: pinned))
-        // Release the media held for an unverified handshake identity (no-op when never engaged).
-        appState.confirmIdentityAndReleaseMedia()
+        // What confirming may record is decided by what this call's handshake proved, in one place shared with the call screen.
+        Task { @MainActor in
+            if let notice = await appState.confirmSasForActiveCall().notice { appState.errorMessage = notice }
+        }
     }
 
     /// W-EXTPREFIX consolidation (2026-07-29): this used to be ANOTHER

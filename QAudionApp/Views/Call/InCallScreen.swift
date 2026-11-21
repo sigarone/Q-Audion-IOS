@@ -44,7 +44,7 @@ import QAudionEngine
 ///      last cell of the top row.
 ///
 /// Stub fields (not yet wired through `AppState` / engine call state):
-/// `confidence`, `sasWords`, `sasVerified`, `keyInfo`,
+/// `confidence`, `sasWords`, `identityShield`, `keyInfo`,
 /// `transportMode`. Defaults render the screen for design preview; the
 /// real wiring lands once `AppState.callState`/`InCallContainer` exposes
 /// the equivalent fields.
@@ -245,7 +245,14 @@ struct InCallScreen: View {
     /// verified (WIRE_SPEC §3.7.4). The panel shows "waiting for the security code" and no confirmation
     /// is possible until the words appear.
     let sasWaiting: Bool
-    let sasVerified: Bool
+    /// The identity shield of the call (see `IdentityShieldRules`): grey while the check runs, green when the key this call was
+    /// authenticated by is the one the user verified, purple when it never was, red when it changed. Not the words of this call.
+    let identityShield: IdentityShield
+    /// Level, `auth` word and `pin` word of the protection line: the post-quantum shield and "Massima sicurezza" read this; nil
+    /// until a level exists.
+    let pqProtection: CallPqProtection?
+    /// A key change is waiting for the confirmation of the words: the confirmation surface warns first.
+    let keyChangeWarning: Bool
     let keyInfo: KeyInfo?
     /// The call is a live one with real data. `keyInfo` is narrower
     /// (it names ML-KEM and prints the fingerprint, so it exists only for the real ML-KEM key), and the "DEMO" badge
@@ -483,7 +490,9 @@ struct InCallScreen: View {
          pqBadge: CallPqBadge? = nil,
          sasWords: [String] = [],
          sasWaiting: Bool = false,
-         sasVerified: Bool = false,
+         identityShield: IdentityShield = .pending,
+         pqProtection: CallPqProtection? = nil,
+         keyChangeWarning: Bool = false,
          keyInfo: KeyInfo? = nil,
          hasSessionKey: Bool = false,
          transportMode: TransportMode = .p2pSrtp,
@@ -547,7 +556,9 @@ struct InCallScreen: View {
         self.pqBadge = pqBadge
         self.sasWords = sasWords
         self.sasWaiting = sasWaiting
-        self.sasVerified = sasVerified
+        self.identityShield = identityShield
+        self.pqProtection = pqProtection
+        self.keyChangeWarning = keyChangeWarning
         self.keyInfo = keyInfo
         self.hasSessionKey = hasSessionKey
         self.transportMode = transportMode
@@ -660,7 +671,7 @@ struct InCallScreen: View {
         ) {
             Button("Ho capito") { trustBadgeInfo = nil }
         } message: {
-            Text(trustBadgeInfo?.body(pqcActive: pqcActive) ?? "")
+            Text(trustBadgeInfo?.body(pqcActive: pqcActive, identityShield: identityShield, pqProtection: pqProtection) ?? "")
         }
     }
 
@@ -1002,11 +1013,14 @@ struct InCallScreen: View {
     /// (W-NOBRICK) — no control here, same as the generic branch.
     private func physicalPresenceBadge(_ presentation: AssuranceStateUI.Presentation) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "checkmark.seal.fill")
-                .qaudionScaledFont(size: 26, weight: .bold, family: .headline, maxSize: .xLarge)
+            Image("qa.contactless")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 26, height: 26)
                 .foregroundStyle(extras.success)
             VStack(alignment: .leading, spacing: 3) {
-                Text("PRESENZA FISICA VERIFICATA")
+                Text(String(localized: "assurance.s2.title", defaultValue: "Autenticato di persona", comment: "In-call banner title when the contact was authenticated in person with the NFC key exchange"))
                     .qaudionStyle(type.labelSmall)
                     .tracking(1.0)
                     .foregroundStyle(extras.success)
@@ -1027,7 +1041,7 @@ struct InCallScreen: View {
                 )
         )
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Presenza fisica verificata. \(presentation.message)")
+        .accessibilityLabel(String(localized: "assurance.s2.title", defaultValue: "Autenticato di persona", comment: "In-call banner title when the contact was authenticated in person with the NFC key exchange") + ". " + presentation.message)
     }
 
     // MARK: - Scroll content (everything above the pinned action row)
@@ -1091,6 +1105,11 @@ struct InCallScreen: View {
                 Spacer().frame(height: 12)
 
                 trustBar.padding(.horizontal, 20)
+
+                if maxAssuranceShown {
+                    Spacer().frame(height: 8)
+                    maximumAssuranceBadge.padding(.horizontal, 20)
+                }
 
                 Spacer().frame(height: 8)
 
@@ -1177,10 +1196,35 @@ struct InCallScreen: View {
         }
     }
 
-    /// The code counts as confirmed on screen only once this call's assurance verdict is in. Until then (the first
-    /// seconds of a call) the header, the shield and the identity cell stay in the neutral pending state.
+    /// The identity of this call is verified: the key it was authenticated by is the one the user verified. The shield is drawn
+    /// from the first frame (grey while the check runs), so nothing waits for the assurance verdict any more.
     private var sasVerifiedShown: Bool {
-        SasCardPlacement.showsVerified(sasVerified: sasVerified, verdictKnown: assurancePresentation != nil)
+        identityShield == .verified
+    }
+
+    /// Accent of the SAS card: green verified, red when the key changed, purple (to verify) otherwise.
+    private var sasAccent: Color {
+        switch identityShield {
+        case .verified: return extras.success
+        case .changed: return extras.riskHigh
+        case .pending, .toVerify: return extras.toVerify
+        }
+    }
+
+    /// "Massima sicurezza": verified identity, two post-quantum layers, a verified hybrid signature and no pin anomaly. Crypto only.
+    private var maxAssuranceShown: Bool {
+        IdentityShieldRules.massimaSicurezza(shield: identityShield, protection: pqProtection)
+    }
+
+    /// Colour of a badge that is not the identity shield.
+    private func toneColor(_ tone: ShieldTone) -> Color {
+        switch tone {
+        case .grey: return extras.neutral
+        case .green: return extras.success
+        case .purple: return extras.toVerify
+        case .amber: return extras.warning
+        case .red: return extras.riskHigh
+        }
     }
 
     /// The "DEMO" badge is shown only when neither the key panel nor the live-call flag is set. The panel exists only
@@ -1389,7 +1433,7 @@ struct InCallScreen: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke((sasVerifiedShown ? extras.success : scheme.primary).opacity(sasCeremonyRedundant ? 0.3 : 0.6),
+                .stroke(sasAccent.opacity(sasCeremonyRedundant ? 0.3 : 0.6),
                         lineWidth: 1)
         )
         // Reduced visual weight ONLY — every control above stays fully
@@ -1413,9 +1457,9 @@ struct InCallScreen: View {
             }
 
             HStack(spacing: 6) {
-                Image(systemName: sasVerifiedShown ? "checkmark.seal.fill" : "lock.fill")
+                Image(systemName: sasVerifiedShown ? "checkmark.seal.fill" : (identityShield == .changed ? "exclamationmark.triangle.fill" : "lock.fill"))
                     .qaudionScaledFont(size: 14, weight: .semibold, maxSize: .xLarge)
-                    .foregroundStyle(sasVerifiedShown ? extras.success : scheme.primary)
+                    .foregroundStyle(sasAccent)
                 // W-L10N-BATCH1 (2026-09-08) — ternary-in-Text(variable) does
                 // NOT auto-localize (confirmed for this codebase); explicit
                 // lookup. Shared key with VideoCallView's SAS mini panel —
@@ -1427,7 +1471,23 @@ struct InCallScreen: View {
                      : String(localized: "sas.header.compare_words", defaultValue: "CONFRONTA PAROLE", comment: "SAS verification panel header — prompts the user to compare the 6 SAS words with the other party"))
                     .qaudionStyle(type.labelSmall)
                     .tracking(1.2)
-                    .foregroundStyle(sasVerifiedShown ? extras.success : scheme.primary)
+                    .foregroundStyle(sasAccent)
+            }
+
+            // A key change that this confirmation would adopt: said first, inside the confirmation surface.
+            if keyChangeWarning {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .qaudionScaledFont(size: 14, weight: .semibold, maxSize: .xLarge)
+                        .foregroundStyle(extras.warning)
+                    Text(String(localized: "incall.sas_key_change_warning", defaultValue: "La chiave di questo contatto è cambiata rispetto a quella che avevi verificato. Confermando solo se le parole coincidono a voce, la nuova chiave sostituisce la precedente e diventa quella verificata.", comment: "SAS card warning shown before the confirmation when the contact key changed: confirming adopts the new key as the verified one"))
+                        .qaudionStyle(type.labelMedium)
+                        .foregroundStyle(scheme.onSurface)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(extras.warning.opacity(0.14)))
+                .accessibilityElement(children: .combine)
             }
 
             VStack(spacing: 10) {
@@ -1552,119 +1612,79 @@ struct InCallScreen: View {
     /// security sheet. Mirrors Android's `TrustBar`/`ShieldBadge`
     /// (`GuardianRibbon.kt`) 1:1 — same six facts, same conditions.
     private var trustBar: some View {
-        HStack(spacing: 7) {
-            // "Voce come chiave" (item 2) — the PEER's own device,
-            // self-declared. Independent of every other fact here; see
-            // `peerVoiceKeyEnrolled`'s doc. Placed first, ahead of NFC, to
-            // match Android's ordering.
-            // 2026-08-01 3-tier voice-auth design: this shield is now a
-            // SUPERSET of the old static-only version — it shows whenever
-            // there's anything to say at all (the static `peerVoiceKeyEnrolled`
-            // fact, OR a real live `peerOwnerContinuityLevel` tri-state once
-            // the peer's device has ever signalled a transition — most calls
-            // never do, in which case this renders exactly as before: a flat
-            // green "enrolled" shield). Matches Android's `GuardianRibbon`
-            // merged shield exactly (same single `TrustBadgeInfo.voiceKey`
-            // popup for both facts) — do NOT split this into two shields,
-            // that was this file's own first draft and diverged from the
-            // validated Android UI before being corrected against real
-            // Android source.
-            if peerVoiceKeyEnrolled || peerOwnerContinuityLevel != .unknown {
+        HStack(alignment: .top, spacing: 7) {
+            // Every shield is wrapped over as many lines as the width needs, so five or more never overflow a narrow phone.
+            WrapLayout(spacing: 7, lineSpacing: 7) {
+                // "Voce come chiave" — the PEER's own device, self-declared. Independent of every other fact here; see
+                // `peerVoiceKeyEnrolled`'s doc. It shows whenever there is anything to say: the static enrolled fact, or a live
+                // `peerOwnerContinuityLevel` once the peer's device has signalled a transition (one shield, one popup, for both facts).
+                // Uncertain stays purple (the colour language of the voice-key screen); a mismatch is red.
+                if peerVoiceKeyEnrolled || peerOwnerContinuityLevel != .unknown {
+                    trustShield(
+                        tint: peerOwnerContinuityLevel == .mismatch ? extras.riskHigh
+                            : (peerOwnerContinuityLevel == .uncertain ? extras.toVerify : extras.success),
+                        icon: "mic.fill",
+                        info: .voiceKey,
+                        accessibilityLabel: peerOwnerContinuityLevel == .mismatch
+                            ? String(localized: "incall.shield.voice_key_mismatch", defaultValue: "Attenzione: la voce del contatto non corrisponde più al suo profilo vocale dichiarato", comment: "Call screen, VoiceOver label of the voice-as-key shield when the contact voice no longer matches the declared voice profile")
+                            : (peerOwnerContinuityLevel == .uncertain
+                                ? String(localized: "incall.shield.voice_key_uncertain", defaultValue: "La voce del contatto è incerta rispetto al suo profilo vocale dichiarato", comment: "Call screen, VoiceOver label of the voice-as-key shield while the contact voice is uncertain against the declared voice profile")
+                                : String(localized: "incall.shield.voice_key_enabled", defaultValue: "Il contatto ha attivato la Voce-come-chiave sul proprio dispositivo", comment: "Call screen, VoiceOver label of the voice-as-key shield when the contact turned voice-as-key on"))
+                    )
+                }
+                // Voice change during this call — shown only once there is something to say. Amber for a possible change, red once
+                // it is confirmed. It follows the same local verdict as the voice check card and says the same words.
+                if let line = VoiceGuard.shieldLine(forChange: speakerChange.level) {
+                    trustShield(
+                        tint: line == .changed ? extras.riskHigh : extras.warning,
+                        asset: "qa.swap",
+                        info: .speakerChange,
+                        accessibilityLabel: VoiceGuardCopy.text(for: line)
+                    )
+                }
+                // An NFC key held in common with this peer, independent of which secret THIS call's session key mixes.
+                if mutualNfcInCommon {
+                    trustShield(
+                        tint: extras.success,
+                        asset: "qa.contactless",
+                        info: .nfc,
+                        accessibilityLabel: String(localized: "incall.shield.nfc_common", defaultValue: "Chiave di persona in comune con il contatto", comment: "Call screen, VoiceOver label of the shield shown when a key exchanged in person is shared with the contact")
+                    )
+                }
+                // A pre-shared key of ANY origin is mixed into this call's session key (`pskMixedThisCall`, n >= 1): shown in every
+                // state a PSK was mixed, warning states included; it answers only "does a shared secret exist for this call".
+                if pskMixedThisCall {
+                    trustShield(
+                        tint: extras.success,
+                        label: "PSK",
+                        info: .psk,
+                        accessibilityLabel: String(localized: "incall.shield.psk_mixed", defaultValue: "Chiave pre-condivisa mescolata in questa chiamata", comment: "Call screen, VoiceOver label of the PSK shield: a pre-shared key is mixed into this call")
+                    )
+                }
+                // The identity shield: drawn from the first frame of the call. Grey while the check runs, green when the key this call
+                // was authenticated by is the one the user verified, purple when it never was, red when it changed.
                 trustShield(
-                    tint: peerOwnerContinuityLevel == .mismatch ? extras.riskHigh
-                        : (peerOwnerContinuityLevel == .uncertain ? extras.pqcAccent : extras.success),
-                    icon: "mic.fill",
-                    info: .voiceKey,
-                    accessibilityLabel: peerOwnerContinuityLevel == .mismatch
-                        ? String(localized: "incall.shield.voice_key_mismatch", defaultValue: "Attenzione: la voce del contatto non corrisponde più al suo profilo vocale dichiarato", comment: "Call screen, VoiceOver label of the voice-as-key shield when the contact voice no longer matches the declared voice profile")
-                        : String(localized: "incall.shield.voice_key_enabled", defaultValue: "Il contatto ha attivato la Voce-come-chiave sul proprio dispositivo", comment: "Call screen, VoiceOver label of the voice-as-key shield when the contact turned voice-as-key on")
-                )
-            }
-            // Voice change during this call — shown only once there is
-            // something to say. Amber for a possible change, red once it is
-            // confirmed. It follows the same local verdict as the voice check
-            // card and says the same words; what the far end reports about
-            // its own detector is about our own voice and never reaches it.
-            if let line = VoiceGuard.shieldLine(forChange: speakerChange.level) {
-                trustShield(
-                    tint: line == .changed ? extras.riskHigh : extras.warning,
-                    icon: "arrow.left.arrow.right",
-                    info: .speakerChange,
-                    accessibilityLabel: VoiceGuardCopy.text(for: line)
-                )
-            }
-            // W-NFCVISIBLE / W-NFCCOMMON — Pavel: an NFC key held in common with
-            // this peer must be visible on the always-on trust bar, not only
-            // inside the tap-to-open security sheet. Same "wave.3.right.circle"
-            // glyph `NfcExchangeView` already uses for NFC elsewhere in this app
-            // — this platform's own established NFC icon. Independent fact
-            // (`mutualNfcInCommon`, NOT `assurancePresentation?.isPhysicalPresenceProof`
-            // anymore): true whenever the peer's OFFER/ACCEPT key-list exchange shows
-            // a mutual NFC-tier fingerprint, regardless of which secret THIS call's
-            // session key ends up mixing (could be KMS/QR/plain PSK). Never implies
-            // nor requires the PSK shield below — both render independently.
-            if mutualNfcInCommon {
-                trustShield(
-                    tint: extras.success,
-                    icon: "wave.3.right.circle.fill",
-                    info: .nfc,
-                    accessibilityLabel: String(localized: "incall.shield.nfc_common", defaultValue: "Chiave di persona in comune con il contatto", comment: "Call screen, VoiceOver label of the shield shown when a key exchanged in person is shared with the contact")
-                )
-            }
-            // W-NFCVISIBLE / W-NFCCOMMON follow-up (2026-07-24, Pavel DECISION) — "a
-            // pre-shared key of ANY origin (KMS/NFC/QR/manual) is mixed into this call's
-            // session key", driven directly by `pskMixedThisCall` (n>=1) — no longer by
-            // `assurancePresentation` at all. Pavel's explicit choice: this shield shows
-            // in EVERY state a PSK was mixed, INCLUDING warning states (S1 active-attack,
-            // S3-S7 NFC-specific problems) — it answers only "does a shared secret exist
-            // for this call", never "is everything about it fine" (the warning banner's
-            // job). WHICH tier was actually mixed (NFC/KMS/other) is what
-            // `KeyInfoPanel`'s detail row is for, not this compact shield.
-            if pskMixedThisCall {
-                trustShield(
-                    tint: extras.success,
-                    label: "PSK",
-                    info: .psk,
-                    accessibilityLabel: String(localized: "incall.shield.psk_mixed", defaultValue: "Chiave pre-condivisa mescolata in questa chiamata", comment: "Call screen, VoiceOver label of the PSK shield: a pre-shared key is mixed into this call")
-                )
-            }
-            // W-UNIFORMKEYINFO — canonical spec (2026-07-24, cross-platform audit):
-            // the SAS shield must be visible as soon as the 6-word code EXISTS
-            // (mirrors Android's `hasSas = sasWords.size == 6` gate and Desktop's
-            // TrustBar.svelte, both of which always render it), with only the
-            // COLOR toggling on verification (green once verified, pqcAccent while
-            // pending) — showing it early is what invites the user to actually go
-            // verify. Gating the whole shield on `sasVerified` (previous behavior)
-            // hid it entirely pre-verification, a real cross-platform divergence.
-            if sasWords.count == 6 {
-                trustShield(
-                    tint: sasVerifiedShown ? extras.success : extras.pqcAccent,
+                    tint: identityShield.tint(extras),
                     label: "SAS",
                     info: .sas,
-                    accessibilityLabel: sasVerifiedShown
-                        ? String(localized: "sas.accessibility.verified", defaultValue: "Identità verificata (SAS)", comment: "Call screen, VoiceOver label of the SAS shield once the identity is verified")
-                        : String(localized: "sas.accessibility.pending", defaultValue: "Verifica identità (SAS) in sospeso", comment: "Call screen, VoiceOver label of the SAS shield while the verification is pending")
+                    accessibilityLabel: identityShield.callAccessibilityLabel
+                )
+                // Post-quantum: drawn from the first frame too. Grey until a level exists; green for two layers (or the
+                // single-signature double layer), amber for a reduced level, no layer, or a pin anomaly.
+                trustShield(
+                    tint: toneColor(IdentityShieldRules.pqcShield(pqProtection)),
+                    label: pqBadge?.tag ?? "PQC",
+                    info: .pqc,
+                    accessibilityLabel: pqShieldAccessibilityLabel
+                )
+                trustShield(
+                    tint: transportMode == .disconnected ? extras.neutral : extras.success,
+                    label: transportMode.shortLabel,
+                    info: .transport,
+                    accessibilityLabel: String(localized: "incall.shield.transport", defaultValue: "Percorso di rete: \(transportMode.label)", comment: "Call screen, VoiceOver label of the network path shield, %@ is the path (P2P SRTP, TURN, RELAY)")
                 )
             }
-            // PQC — ALWAYS rendered now (the old `if pqcActive` gate + a
-            // separate "PQC off" text variant are both gone): the shield's
-            // color alone carries active-vs-inactive, matching every other
-            // shield on this bar and Android's identical change.
-            trustShield(
-                tint: pqcActive ? extras.pqcAccent : scheme.onSurfaceVariant,
-                label: pqBadge?.tag ?? "PQC",
-                info: .pqc,
-                accessibilityLabel: pqcActive
-                    ? String(localized: "incall.shield.pqc_on", defaultValue: "Scambio post-quantistico attivo", comment: "Call screen, VoiceOver label of the post-quantum shield while the exchange is active")
-                    : String(localized: "incall.shield.pqc_off", defaultValue: "Scambio post-quantistico non attivo", comment: "Call screen, VoiceOver label of the post-quantum shield while the exchange is not active")
-            )
-            trustShield(
-                tint: transportMode == .disconnected ? scheme.onSurfaceVariant : extras.success,
-                label: transportMode.shortLabel,
-                info: .transport,
-                accessibilityLabel: String(localized: "incall.shield.transport", defaultValue: "Percorso di rete: \(transportMode.label)", comment: "Call screen, VoiceOver label of the network path shield, %@ is the path (P2P SRTP, TURN, RELAY)")
-            )
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
             Button {
                 showSecuritySheet = true
             } label: {
@@ -1692,84 +1712,75 @@ struct InCallScreen: View {
         )
     }
 
-    /// The real Google Material "shield" filled-icon outline (24x24 grid),
-    /// as a `Shape` rather than the SF Symbol `shield.fill` — needed so the
-    /// SAME outline can be filled with `tint` AND stroked with a second
-    /// gold color at once (a `Shape` supports independent `.fill`/`.stroke`
-    /// modifiers; an `Image(systemName:)` can only be tinted as one flat
-    /// color). Same path data used on Android (`SHIELD_PATH_DATA` in
-    /// `GuardianRibbon.kt`) for pixel-identical shape cross-platform.
-    private struct TrustShieldOutline: Shape {
-        func path(in rect: CGRect) -> Path {
-            let s = rect.width / 24
-            func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-                CGPoint(x: rect.minX + x * s, y: rect.minY + y * s)
-            }
-            var p = Path()
-            p.move(to: pt(12, 1))
-            p.addLine(to: pt(3, 5))
-            p.addLine(to: pt(3, 11))
-            p.addCurve(to: pt(12, 23), control1: pt(3, 16.55), control2: pt(6.84, 21.74))
-            p.addCurve(to: pt(21, 11), control1: pt(17.16, 21.74), control2: pt(21, 16.55))
-            p.addLine(to: pt(21, 5))
-            p.addLine(to: pt(12, 1))
-            p.closeSubpath()
-            return p
+    /// VoiceOver sentence of the post-quantum shield, from the same facts as its colour.
+    private var pqShieldAccessibilityLabel: String {
+        guard let protection = pqProtection else {
+            return String(localized: "incall.shield.pqc_pending", defaultValue: "Protezione post-quantistica in attesa", comment: "Call screen, VoiceOver label of the post-quantum shield while no protection level is known yet")
         }
+        if protection.pin == "anomaly" {
+            return String(localized: "call.protection.anomaly", defaultValue: "Protezione post-quantistica con anomalia", comment: "Call security badge — protection of the call: a protection this contact device offered before is missing in this call")
+        }
+        if let pqBadge { return pqBadge.word }
+        return String(localized: "call.protection.none", defaultValue: "Nessuna protezione post-quantistica", comment: "Call security badge — protection of the call: no path of this call uses post-quantum encryption")
     }
 
-    private static let trustShieldGold = LinearGradient(
-        colors: [Color(red: 0.953, green: 0.824, blue: 0.478), Color(red: 0.831, green: 0.686, blue: 0.216), Color(red: 0.592, green: 0.443, blue: 0.106)],
-        startPoint: .top,
-        endPoint: .bottom
-    )
+    /// "Massima sicurezza": a green banner, shown only when the identity is verified AND the protection is two post-quantum layers with a
+    /// verified hybrid signature and no pin anomaly. Crypto only: no PSK, no NFC, no voice term.
+    private var maximumAssuranceBadge: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "checkmark.shield.fill")
+                .qaudionScaledFont(size: 26, weight: .bold, family: .headline, maxSize: .xLarge)
+                .foregroundStyle(extras.success)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(String(localized: "incall.max_assurance.title", defaultValue: "MASSIMA SICUREZZA", comment: "In-call banner title: identity verified and double post-quantum protection with a hybrid signature"))
+                    .qaudionStyle(type.labelSmall)
+                    .tracking(1.0)
+                    .foregroundStyle(extras.success)
+                Text(String(localized: "incall.max_assurance.body", defaultValue: "Identità del contatto verificata, doppia protezione post-quantistica e handshake firmato con firma ibrida (ML-DSA-87 con Ed25519).", comment: "In-call banner text under the maximum assurance title"))
+                    .qaudionStyle(type.labelMedium)
+                    .foregroundStyle(scheme.onSurface)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(extras.success.opacity(0.14))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(extras.success.opacity(0.8), lineWidth: 1.5)
+                )
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(String(localized: "incall.max_assurance.a11y", defaultValue: "Massima sicurezza: identità verificata e doppia protezione post-quantistica con firma ibrida", comment: "VoiceOver label of the maximum assurance banner"))
+    }
 
-    /// One trust-bar fact: a colored shield with a small black icon or
-    /// short black label centered on top, tappable to open `info`'s
-    /// tap-to-explain `.alert`. Shape/color language shared by every badge
-    /// on `trustBar` — only `tint`/`icon`/`label`/`info` differ per fact,
-    /// and `tint` ALONE carries the verified/pending/absent state (no
-    /// separate checkmark).
-    ///
-    /// W-SHIELDGOLD (2026-08-04, Pavel pick "C" from the gold proposal) —
-    /// back to the plain Material shield silhouette (not the ornate Stitch
-    /// artwork from the previous attempt, which read as "worse than the
-    /// original"). Bigger than before (30pt → 36pt) and finished as a
-    /// small medal: `tint` still fills the shield exactly like the old
-    /// `shield.fill` SF Symbol did, plus a gold gradient stroke around the
-    /// rim and two gold studs at the top shoulders. The inner icon/label
-    /// is now BLACK instead of white — white on top of pale/desaturated
-    /// tints was hard to read; black holds contrast against every tint in
-    /// the palette.
+    /// One trust-bar fact: a colored shield with a small black icon, template image or short label centered on top, tappable to open
+    /// `info`'s tap-to-explain `.alert`. The shape and the colour language are shared by every badge of the app (`ShieldGlyph`);
+    /// only `tint`, the glyph and `info` differ per fact, and `tint` ALONE carries the state.
     private func trustShield(
         tint: Color,
         icon: String? = nil,
+        asset: String? = nil,
         label: String? = nil,
         info: TrustBadgeInfo,
         accessibilityLabel: String
     ) -> some View {
-        Button {
+        let content: ShieldGlyph.Content
+        if let icon {
+            content = .symbol(icon)
+        } else if let asset {
+            content = .asset(asset)
+        } else if let label {
+            content = .text(label)
+        } else {
+            content = .none
+        }
+        return Button {
             trustBadgeInfo = info
         } label: {
-            ZStack {
-                TrustShieldOutline().fill(tint)
-                TrustShieldOutline().stroke(Self.trustShieldGold, lineWidth: 1.6)
-                Circle().fill(Self.trustShieldGold).frame(width: 3.4, height: 3.4).offset(x: -12.6, y: -10.2)
-                Circle().fill(Self.trustShieldGold).frame(width: 3.4, height: 3.4).offset(x: 12.6, y: -10.2)
-                if let icon {
-                    Image(systemName: icon)
-                        .qaudionScaledFont(size: 15, weight: .bold, maxSize: .xLarge)
-                        .foregroundStyle(.black)
-                } else if let label {
-                    Text(label)
-                        .qaudionScaledFont(size: 9, weight: .bold, design: .monospaced, family: .label, maxSize: .xLarge)
-                        .tracking(0.2)
-                        .foregroundStyle(.black)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                }
-            }
-            .frame(width: 36, height: 36)
+            ShieldGlyph(tint: tint, content: content, size: 36)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
@@ -1805,7 +1816,7 @@ struct InCallScreen: View {
         /// The two texts of the post-quantum shield come from the catalog (the popup
         /// shows a plain `String`, which SwiftUI does not localize by itself), so they
         /// follow the language of the phone, and so do the titles and the other popups.
-        func body(pqcActive: Bool) -> String {
+        func body(pqcActive: Bool, identityShield: IdentityShield, pqProtection: CallPqProtection?) -> String {
             switch self {
             case .voiceKey:
                 return String(localized: "incall.trust_body.voice_key",
@@ -1822,10 +1833,35 @@ struct InCallScreen: View {
                               defaultValue: "In questa chiamata è stata mescolata una chiave pre-condivisa — di qualunque origine: NFC, QR, KMS o inserita a mano — nella chiave di sessione. Aggiunge protezione oltre al solo scambio post-quantistico.",
                               comment: "Call screen, popup text of the PSK shield")
             case .sas:
-                return String(localized: "incall.trust_body.sas",
-                              defaultValue: "La cerimonia di verifica dell'identità per questa chiamata: tu e il contatto confrontate a voce le stesse parole. Il colore indica se è già stata confermata da entrambi o è ancora in sospeso.",
-                              comment: "Call screen, popup text of the SAS shield")
+                switch identityShield {
+                case .pending:
+                    return String(localized: "incall.trust_body.sas_pending",
+                                  defaultValue: "Sto controllando l'identità del contatto per questa chiamata.",
+                                  comment: "Call screen, popup text of the SAS shield while the identity check is running")
+                case .verified:
+                    return String(localized: "incall.trust_body.sas_verified",
+                                  defaultValue: "La chiave con cui il contatto si è autenticato in questa chiamata è quella che hai già verificato con lui. Non serve confrontare di nuovo le parole.",
+                                  comment: "Call screen, popup text of the SAS shield: the key of this call is the verified one")
+                case .toVerify:
+                    return String(localized: "incall.trust_body.sas_to_verify",
+                                  defaultValue: "La chiamata è autenticata, ma non hai mai verificato la chiave di questo contatto. Confronta le parole a voce con lui e conferma: da quel momento la sua chiave risulta verificata anche nelle chiamate future.",
+                                  comment: "Call screen, popup text of the SAS shield: the key was never verified")
+                case .changed:
+                    return String(localized: "incall.trust_body.sas_changed",
+                                  defaultValue: "La chiave del contatto è diversa da quella che avevi verificato, oppure la firma della chiamata non è valida. Non fidarti finché non confronti le parole a voce e verifichi di nuovo di persona.",
+                                  comment: "Call screen, popup text of the SAS shield: the key is not the verified one or the signature is not valid")
+                }
             case .pqc:
+                if let protection = pqProtection, protection.pin == "anomaly" {
+                    return String(localized: "call.protection.anomaly.body",
+                                  defaultValue: "Una protezione che questo dispositivo del contatto offriva in passato non è presente in questa chiamata. Confronta le parole a voce.",
+                                  comment: "Call screen, popup of the post-quantum shield: a protection this contact device offered before is missing in this call")
+                }
+                if let protection = pqProtection, protection.levelToken == "CL" {
+                    return String(localized: "call.protection.none.body",
+                                  defaultValue: "Nessun percorso di questa chiamata usa la cifratura post-quantistica.",
+                                  comment: "Call screen, popup of the post-quantum shield: no path of this call uses post-quantum encryption")
+                }
                 if pqcActive {
                     return String(localized: "in_call.trust_info.pqc",
                                   defaultValue: "Lo scambio di chiavi post-quantistico (ML-KEM) è attivo per questa chiamata: protegge anche se un computer quantistico del futuro intercettasse oggi il traffico cifrato e provasse a decifrarlo più avanti.",
@@ -2024,7 +2060,7 @@ struct InCallScreen: View {
     // `drawMiniSpectrum` above) — cheap, stable across frames, paused under
     // Reduce Motion exactly like the spectrum/cipher-tube visuals.
     //
-    // All data is real: `sasVerified`/`pqcActive`/`transportMode` already
+    // All data is real: `identityShield`/`pqcActive`/`transportMode` already
     // stored on this view for the trust bar above.
 
     /// Protection-envelope start fraction: the seal happens on the phone,
@@ -2345,7 +2381,7 @@ struct InCallScreen: View {
     /// Row of 4 stat cells (icon + label + value), wired to REAL state
     /// already threaded to this view for the trust bar above — no new
     /// state invented. Informational badges of already-real values:
-    ///  - Identity      → `sasVerified` (same flag the trust bar's "SAS ✓" chip uses)
+    ///  - Identity      → `identityShield` (same state the trust bar SAS shield uses)
     ///  - Post-quantum  → `pqcActive` (same flag the trust bar's "PQC" chip uses)
     ///  - Cipher        → static "AES-256" label (the one algorithm string this
     ///                     screen already commits to elsewhere — see
@@ -2790,7 +2826,7 @@ struct InCallScreen: View {
         rekeyTotalSeconds: 300,
         pqcActive: true,
         sasWords: ["OXYGEN", "ZEPHYR", "GLYPH", "RADIUS", "VESTIGE", "ECHO"],
-        sasVerified: false,
+        identityShield: .toVerify,
         keyInfo: .init(pqcAlgorithm: "ML-KEM-1024 + X25519",
                        sessionFingerprint: "7f3b…d2e9",
                        pskMethodLabel: "NFC",

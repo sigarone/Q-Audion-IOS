@@ -62,6 +62,7 @@ public final class SasVerificationStore {
     public func recordVerified(peerUserId: String, fingerprint: String, identityTag: String) {
         let binding = SasBinding(sasFingerprint: fingerprint, identityTag: identityTag)
         Self.keychainSet(account: prefix + peerUserId, value: binding.encoded)
+        NotificationCenter.default.post(name: .sasVerificationDidChange, object: nil)
     }
 
     /// The identity binding for a pinned Ed25519 key. Forwards to [SasBinding] —
@@ -130,6 +131,7 @@ public final class SasVerificationStore {
         Self.keychainDelete(account: account)
         // Also clear any not-yet-migrated legacy value.
         UserDefaults.standard.removeObject(forKey: account)
+        NotificationCenter.default.post(name: .sasVerificationDidChange, object: nil)
     }
 
     /// Compute the canonical fingerprint for a SAS-words bundle.
@@ -259,4 +261,10 @@ extension Data {
     /// Named `hexString` to avoid collision with the private `hexEncodedString()`
     /// extensions used in test files.
     var hexString: String { map { String(format: "%02x", $0) }.joined() }
+}
+
+extension Notification.Name {
+    /// Posted when a stored in-call confirmation was written or cleared (the forged-signature clear included): the surfaces that show
+    /// the contact-level identity shield recompute, so none keeps showing a verification that no longer exists.
+    static let sasVerificationDidChange = Notification.Name("qaudion.sasVerificationDidChange")
 }

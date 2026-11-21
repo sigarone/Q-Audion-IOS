@@ -15,7 +15,7 @@ import QAudionEngine
 /// Layout (top → bottom):
 ///   1. Top bar — "Impostazioni" title + ⋯ menu (placeholder)
 ///   2. ProfileHeroCard — avatar + display name + handle + status + EDIT
-///   3. SecurityChipsRow — PSK HW-BOUND / VOICE n/n / OTA <version> badges
+///   3. SecurityChipsRow — VOICE <state> / OTA <version> badges
 ///   4. ACCOUNT — Profilo / Numero di telefono / Dispositivi / Esci
 ///   5. SICUREZZA — Security / Voice-as-Key / Gestione chiavi /
 ///                  Trasporto / Scambio NFC
@@ -206,7 +206,7 @@ struct SettingsScreen: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 4)
 
-                    SecurityChipsRow()
+                    SecurityChipsRow(voiceKeyStatus: voiceKeyStatus)
                         .padding(.top, 8)
 
                     if recoveryReminderNeeded {

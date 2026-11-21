@@ -86,6 +86,9 @@ struct LiveInCallScreen: View {
     /// with the video call screen and live in `InCallChatHost` (see `InCallChatCover`); nil = no host or no peer, no button.
     @Environment(\.inCallChat) private var inCallChat
 
+    /// The snackbar host, when the screen is shown under one: refusals of the SAS confirmation are said there.
+    @Environment(\.qaudionSnackbar) private var snackbar
+
     /// With Reduce Motion on, the swap to the "call in progress" bar is not animated.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -373,11 +376,12 @@ struct LiveInCallScreen: View {
                 // builds) the array is empty and the panel hides.
                 sasWords: appState.callSasWords,
                 sasWaiting: appState.callSasWaiting,
-                // W368: surface SAS verification persistence — if the
-                // user already confirmed coincidence with this peer
-                // for the current SAS-words fingerprint, render the
-                // panel as VERIFIED and disable the confirm button.
-                sasVerified: liveSasVerified,
+                // The identity shield of this call: grey while the check runs, green when the key this call was authenticated
+                // by is the one the user verified, purple when it never was, red when it changed. Never the words of this call.
+                identityShield: appState.callIdentityShield,
+                pqProtection: appState.livePqProtection,
+                // A key change that confirming the words would adopt: the SAS card warns before the confirmation.
+                keyChangeWarning: appState.callIdentityRotationAwaitingSas || appState.callHeldRotationAdoptable,
                 // W502: KeyInfo built from live session key when available.
                 keyInfo: liveKeyInfo,
                 // This is a live call, never placeholder data: the "DEMO" badge stays
@@ -568,76 +572,22 @@ struct LiveInCallScreen: View {
     }
 
     private func handleConfirmSas() {
-        // W-SASNOFEEDBACK (2026-09-08) — live-reported: tapping the confirm
-        // button does nothing visible (no D11-style "SAS verificato" text,
-        // shield stays whatever color it was). D11 (2026-09-07) fixed ONE way
-        // this guard could silently no-op (wrong pinned-account lookup) but
-        // every branch below still returns with zero signal on failure — the
-        // tap either worked invisibly-but-correctly (liveSasVerified recomputes
-        // every TimelineView tick, so a genuine success should repaint within
-        // ~1s) or one of these three preconditions failed, and there was no
-        // way to tell which from a remote log pull. Numeric-only markers
-        // (matches the redactor's numeric-survives rule) so the next repro is
-        // conclusive instead of another dead end.
-        let words = appState.callSasWords
-        guard !words.isEmpty else {
-            RTLog.warn("call", "sasConfirm noop=1 reason=1")  // 1 = no SAS words yet
-            return
+        // What confirming may record is decided by what THIS call's handshake proved (`AppState.confirmSasForActiveCall`), never by the
+        // words alone. Numeric-only markers in the log (the redactor lets numbers through): 1 no words yet, 2 no call peer,
+        // 4 SAS-pin conflict, 5 the identity of this call was not authenticated.
+        Task { @MainActor in
+            if let notice = await appState.confirmSasForActiveCall().notice { showSasNotice(notice) }
         }
-        guard let peer = appState.callContactId else {
-            RTLog.warn("call", "sasConfirm noop=1 reason=2")  // 2 = no call peer
-            return
-        }
-        // 2026-09-19 — a rotated key the server published and this call's handshake presented is adopted
-        // by THIS confirmation, before it is bound to a key below (see the AppState function's doc).
-        appState.adoptPendingIdentityRotationIfEligible()
-        // SAS-PIN — with no pin and no server key (`identity_unresolved`) this confirmation is what
-        // pins the signer key of the compared round (call-scoped and durable); see the AppState function.
-        let adoption = appState.adoptSasConfirmedSignerKeyIfUnresolved()
-        guard adoption != .refused else {
-            // 4 = SAS-PIN conflict: a round of this call was not signed by its unresolved signer key, so the
-            // words cannot vouch for the live keys. Nothing is recorded, pinned or released.
-            RTLog.warn("call", "sasConfirm noop=1 reason=4")
-            return
-        }
-        let adoptedSignerKey = adoption.adoptedKey
-        guard let identityTag = sasIdentityTag(for: peer)
-                ?? adoptedSignerKey.map({ SasVerificationStore.identityTag(forPinnedKey: $0) }) else {
-            RTLog.warn("call", "sasConfirm noop=1 reason=3")  // 3 = no pinned identity tag
-            return
-        }
-        let fp = SasVerificationStore.fingerprint(forWords: words)
-        SasVerificationStore.shared.recordVerified(
-            peerUserId: peer, fingerprint: fp, identityTag: identityTag)
-        RTLog.info("call", "sasConfirm ok=1")
-        // A pin warning of this call goes with the confirmation (the record of the contact device drops the capability).
-        appState.confirmCapsPinWarning()
-        // P0-3 — release whatever media (relay sealers / v4 bootstrap) AppState
-        // held back for this call's unverified handshake identity, if any was.
-        // No-op when the gate was never engaged (the common case).
-        appState.confirmIdentityAndReleaseMedia()
     }
 
-    /// C-3 — the identity binding for the SAS record, from the key currently
-    /// pinned for the call's peer. `nil` when there is no pin, in which case
-    /// nothing may be recorded or trusted: a confirmation with no identity to bind
-    /// to is the state this finding was about.
-    ///
-    /// D11 fix — MUST pass the peer's device id: `commitTofuPinForDevice`
-    /// pins under the composite `"<peerId>|<deviceId>"` account whenever the
-    /// server stamped one (the normal case), and the bare-contactId lookup
-    /// this used to do checks a DIFFERENT account than the one the
-    /// handshake actually wrote to. That mismatch is why "CONFERMA
-    /// COINCIDONO" looked live but did nothing on every repeat call with an
-    /// already-trusted peer (2026-09-07 live report): the pin was there,
-    /// just under an account this lookup never checked.
-    private func sasIdentityTag(for peerId: String) -> String? {
-        guard let pinned = PeerIdentityPinStore().pinnedKey(
-            contactId: peerId, deviceId: appState.callPinDeviceId(for: peerId)
-        ) else { return nil }
-        return SasVerificationStore.identityTag(forPinnedKey: pinned)
+    /// A short notice over the call: the snackbar when the host provides one, the app's message line otherwise.
+    private func showSasNotice(_ text: String) {
+        if let snackbar {
+            snackbar.show(.init(text: text, severity: .warning))
+        } else {
+            appState.errorMessage = text
+        }
     }
-
 
     private func handleToggleDiagnostics() {
         showDiagnostics.toggle()
@@ -699,19 +649,6 @@ struct LiveInCallScreen: View {
     /// once the encoder has actually been reconfigured, never before.
     private var liveCodecKbps: Int {
         CallLiveStats.appliedAudioCodecKbps(appState)
-    }
-
-    /// Live SAS verification flag. True only when the words of THIS call were confirmed: they change on every call,
-    /// so a confirmation made on an earlier call never matches. Computed every TimelineView tick, cheap (one
-    /// Keychain read).
-    private var liveSasVerified: Bool {
-        let words = appState.callSasWords
-        guard !words.isEmpty,
-              let peer = appState.callContactId else { return false }
-        guard let identityTag = sasIdentityTag(for: peer) else { return false }
-        let fp = SasVerificationStore.fingerprint(forWords: words)
-        return SasVerificationStore.shared.isVerified(
-            peerUserId: peer, currentFingerprint: fp, currentIdentityTag: identityTag)
     }
 
     /// The call holds the real ML-KEM session key (`callSasKeySource == .mlKem`). This, and nothing about the PSK, is
