@@ -29,6 +29,9 @@ public enum VoiceprintLookup: Equatable {
 protocol VoiceprintBacking: AnyObject {
     /// `true` only when the template is really stored.
     @discardableResult func save(contactId: String, template: [Float]) -> Bool
+    /// Whether an item is stored for the id at all, usable or not (`lookup` reports an unusable one as absent). `nil` when it
+    /// cannot be told.
+    func itemExists(contactId: String) -> Bool?
     func lookup(contactId: String) -> VoiceprintLookup
     /// `true` when the item is gone afterwards (it may not have existed).
     @discardableResult func delete(contactId: String) -> Bool
@@ -134,6 +137,10 @@ public final class VoiceprintStore {
         if case .present(let template) = lookup(contactId: contactId) { return template }
         return nil
     }
+
+    /// Whether an item is stored for `contactId` at all, whatever its content (`lookup` reads an unusable template as
+    /// absent). `nil` when the store cannot be queried.
+    func itemExists(contactId: String) -> Bool? { backing.itemExists(contactId: contactId) }
 
     @discardableResult
     public func delete(contactId: String) -> Bool { backing.delete(contactId: contactId) }
@@ -277,6 +284,20 @@ private final class KeychainVoiceprintBacking: VoiceprintBacking {
         let read = VoiceprintKeychainRead.lookup(status: result.status, item: result.item)
         if case .present = read { Self.upgradeAccessibilityIfNeeded(account: contactId) }
         return read
+    }
+
+    func itemExists(contactId: String) -> Bool? {
+        lock.lock(); defer { lock.unlock() }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecAttrAccount as String: contactId,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        let status = SecItemCopyMatching(query as CFDictionary, nil)
+        if status == errSecSuccess { return true }
+        if status == errSecItemNotFound { return false }
+        return nil
     }
 
     @discardableResult
@@ -462,6 +483,12 @@ final class InMemoryVoiceprintBacking: VoiceprintBacking {
         if let template = templates[contactId] { return .present(template) }
         return .absent
     }
+    func itemExists(contactId: String) -> Bool? {
+        lock.lock(); defer { lock.unlock() }
+        if failReads { return nil }
+        return templates[contactId] != nil
+    }
+
     @discardableResult
     func delete(contactId: String) -> Bool {
         lock.lock(); defer { lock.unlock() }

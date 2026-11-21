@@ -151,6 +151,9 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
     private var learning = false
     private var collectForRefinement = false
     private var sessionUserId = ""
+    /// The learner's generation when the call started: windows are handed back with it, and a wipe in between makes the
+    /// learner refuse them (`OwnerVoiceLearner.generation`).
+    private var sessionGeneration: UInt64 = 0
     private var sessionId = UUID().uuidString
     private var pendingWindows: [OwnerVoiceLearning.Window] = []
     /// While the call's collection is open and a template exists: the number of windows judged below the lower bar
@@ -410,12 +413,15 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         sessionPrepared = true
         guard let learner else { return }
         let userId = userIdProvider?() ?? ""
+        // Read before `prepare`: a wipe that runs after this point makes the windows of this call unwelcome.
+        let generation = learner.generation
         switch learner.prepare(userId: userId) {
         case .unavailable:
             learning = false
         case .ready(let template, let collect):
             learning = true
             sessionUserId = userId
+            sessionGeneration = generation
             collectForRefinement = collect
             if let template {
                 verifier.importTemplate(template)
@@ -455,7 +461,7 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
             return
         }
         guard learning, let learner,
-              let stage = learner.record(windows: batch, userId: sessionUserId) else { return }
+              let stage = learner.record(windows: batch, userId: sessionUserId, generation: sessionGeneration) else { return }
         let code: String
         switch stage {
         case .learning: code = "lrn"

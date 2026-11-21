@@ -15,7 +15,7 @@ struct VoiceBundlePins: Equatable {
     let vadSha256: String
 
     static let v0 = VoiceBundlePins(
-        constantsSha256: "33ac42dad692028fc1b5657f16dbfcc8bd23e38ec44d461b696b76e74aae75d8",
+        constantsSha256: "bbb87655388d82f282722d99b1c26aa9b182cd094d8c8604fbf53a583a4f68e2",
         fbankTablesSha256: "5a0751f6fa9f9c6119f8aaa98bb1f108aa4e941febe1bd455c3763d33f948d21",
         vadSha256: "7ed98ddbad84ccac4cd0aeb3099049280713df825c610a8ed34543318f1b2c49"
     )
@@ -72,6 +72,9 @@ struct VoiceConstants: Decodable {
         let tablesSha256: String
         let nbHiBins: [Int]
         let nbLoBins: [Int]
+        /// The embedding input is the fbank of the first `embedSamples` samples of a window (`embedFrames` frames).
+        let embedSamples: Int
+        let embedFrames: Int
     }
 
     struct Gates: Decodable {
@@ -121,6 +124,7 @@ struct VoiceConstants: Decodable {
             let rxRateHz: Int
             let tapLagMs: Int
             let tapTolMs: Int
+            let overdueMs: Int
         }
 
         let enroll: Enroll
@@ -244,12 +248,20 @@ struct VoiceBundle {
         guard c.fbank.nbHiBins.count == 2, c.fbank.nbLoBins.count == 2 else {
             throw VoiceBundleError.malformed("constants.json: bandwidth bins")
         }
+        guard c.fbank.embedFrames >= 1, c.fbank.embedFrames <= VoiceFbank.frames,
+              c.fbank.embedSamples == VoiceFbankTables.frameLength + (c.fbank.embedFrames - 1) * VoiceFbank.frameShift,
+              c.fbank.embedSamples <= VoiceFbank.windowSamples else {
+            throw VoiceBundleError.malformed("constants.json: embedding input")
+        }
         guard c.window.chunks > 0, c.window.hopChunks > 0, c.gates.snr.clip.count == 2 else {
             throw VoiceBundleError.malformed("constants.json: window or snr entries")
         }
         let rate = c.gates.stats.rxRateHz
         guard rate > 0, VoiceStatsTrack.tickRate % rate == 0 else {
             throw VoiceBundleError.malformed("constants.json: rx rate")
+        }
+        guard c.gates.stats.overdueMs > 0 else {
+            throw VoiceBundleError.malformed("constants.json: overdue")
         }
         for key in ["24000", "32000", "48000"] {
             guard let filter = c.resampler.filters[key], filter.L > 0, filter.M > 0, !filter.taps.isEmpty,

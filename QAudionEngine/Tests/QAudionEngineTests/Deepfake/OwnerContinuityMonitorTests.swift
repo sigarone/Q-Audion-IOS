@@ -171,6 +171,7 @@ final class OwnerContinuityMonitorTests: XCTestCase {
 
     private struct LearningRig {
         let monitor: OwnerContinuityMonitor
+        let learner: OwnerVoiceLearner
         let recorder: StateRecorder
         let templates: VoiceprintStore
         let progress: MemoryOwnerVoiceProgress
@@ -181,14 +182,16 @@ final class OwnerContinuityMonitorTests: XCTestCase {
         let templates = VoiceprintStore(backing: InMemoryVoiceprintBacking())
         let progress = MemoryOwnerVoiceProgress()
         let speech = StubSpeechDetector(ms: 4_000)
+        let learner = OwnerVoiceLearner(templates: templates, progress: progress)
         let monitor = OwnerContinuityMonitor(
             verifier: SpeakerVerifier(embedder: DeterministicTestEmbedder()),
             speechDetector: speech,
-            learner: OwnerVoiceLearner(templates: templates, progress: progress))
+            learner: learner)
         monitor.userIdProvider = userId
         let recorder = StateRecorder()
         monitor.onStateChanged = { recorder.record($0) }
-        return LearningRig(monitor: monitor, recorder: recorder, templates: templates, progress: progress, speech: speech)
+        return LearningRig(
+            monitor: monitor, learner: learner, recorder: recorder, templates: templates, progress: progress, speech: speech)
     }
 
     /// One call: `start`, `windows` windows of tone from the local microphone, `stop` (which hands the windows over).
@@ -322,6 +325,30 @@ final class OwnerContinuityMonitorTests: XCTestCase {
         XCTAssertNil(rig.progress.data)
         XCTAssertNil(rig.templates.load(contactId: VoiceprintStore.deviceOwnerId))
         XCTAssertEqual(rig.monitor.currentState(), .inactive)
+    }
+
+    /// Logout, account deletion, remote wipe and the Settings reset while a call is running: the monitor holds the windows
+    /// of the call, the wipe removes what the learner keeps, and at the end of the call the windows must not be written
+    /// back (the account that left would own a record again). The next call learns as usual.
+    func testAWipeDuringACallKeepsTheWindowsOfThatCallOffTheDisk() {
+        for wipe in [{ (rig: LearningRig) in _ = rig.learner.wipe() }, { (rig: LearningRig) in _ = rig.learner.reset() }] {
+            let rig = makeLearningRig()
+            rig.monitor.start()
+            rig.monitor.drainForTesting()
+            for n in 0..<windowFrames { rig.monitor.feed(pcmFrame: toneFrame(phase: n * 960)) }
+            rig.monitor.drainForTesting()
+            XCTAssertNotNil(rig.progress.data, "the call prepared the learning of the account")
+            wipe(rig)
+            XCTAssertNil(rig.progress.data)
+
+            rig.monitor.stop()
+            rig.monitor.drainForTesting()
+            XCTAssertNil(rig.progress.data, "the windows of the wiped account are not written back")
+            XCTAssertNil(rig.templates.load(contactId: VoiceprintStore.deviceOwnerId))
+
+            runCall(rig, windows: 3)
+            XCTAssertEqual(rig.progress.record?.windows.count, 3, "a call that starts after the wipe learns")
+        }
     }
 
     private func scoredCount(_ recorder: StateRecorder) -> Int {

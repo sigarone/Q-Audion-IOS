@@ -89255,37 +89255,37 @@
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Il contatto ha attivato la Voce-come-chiave sul proprio dispositivo. Se durante la chiamata il suo telefono rileva che la voce sul suo microfono non corrisponde più a quella registrata in passato, questo scudo diventa rosso — segnale che il telefono è passato in un'altra mano. Non è una prova crittografica: è un'informazione che il dispositivo del contatto dichiara di sé stesso."
+            "value": "Il contatto ha attivato la Voce-come-chiave sul proprio dispositivo. Se durante la chiamata il suo telefono rileva che la voce sul suo microfono non corrisponde più a quella che il telefono ha imparato dalle sue chiamate, questo scudo diventa rosso — segnale che il telefono è passato in un'altra mano. Non è una prova crittografica: è un'informazione che il dispositivo del contatto dichiara di sé stesso."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The contact has Voice-as-Key enabled on their device. If their phone detects during the call that the voice on their microphone no longer matches their past recording, this shield turns red — a sign the phone changed hands. This is not cryptographic proof: it is information that the contact's device declares about itself."
+            "value": "The contact has Voice-as-Key enabled on their device. If their phone detects during the call that the voice on their microphone no longer matches the one the phone has learned from their calls, this shield turns red — a sign the phone changed hands. This is not cryptographic proof: it is information that the contact's device declares about itself."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El contacto ha activado Voice-as-Key en su dispositivo. Si durante la llamada su teléfono detecta que la voz de su micrófono ya no coincide con la grabada anteriormente, este escudo se pone rojo — señal de que el teléfono ha pasado a otras manos. No es una prueba criptográfica: es una información que el dispositivo del contacto declara sobre sí mismo."
+            "value": "El contacto ha activado Voice-as-Key en su dispositivo. Si durante la llamada su teléfono detecta que la voz de su micrófono ya no coincide con la que el teléfono ha aprendido de sus llamadas, este escudo se pone rojo — señal de que el teléfono ha pasado a otras manos. No es una prueba criptográfica: es una información que el dispositivo del contacto declara sobre sí mismo."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le contact a activé Voice-as-Key sur son appareil. Si, pendant l'appel, son téléphone détecte que la voix sur son microphone ne correspond plus à celle enregistrée auparavant, ce bouclier devient rouge — signe que le téléphone est passé dans d'autres mains. Ce n'est pas une preuve cryptographique : c'est une information que l'appareil du contact déclare sur lui-même."
+            "value": "Le contact a activé Voice-as-Key sur son appareil. Si, pendant l'appel, son téléphone détecte que la voix sur son microphone ne correspond plus à celle que le téléphone a apprise lors de ses appels, ce bouclier devient rouge — signe que le téléphone est passé dans d'autres mains. Ce n'est pas une preuve cryptographique : c'est une information que l'appareil du contact déclare sur lui-même."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Der Kontakt hat Voice-as-Key auf seinem Gerät aktiviert. Erkennt sein Telefon während des Anrufs, dass die Stimme an seinem Mikrofon nicht mehr mit seiner früheren Aufnahme übereinstimmt, wird dieses Schutzschild rot — ein Zeichen dafür, dass das Telefon in andere Hände geraten ist. Das ist kein kryptografischer Beweis: Es ist eine Angabe, die das Gerät des Kontakts über sich selbst macht."
+            "value": "Der Kontakt hat Voice-as-Key auf seinem Gerät aktiviert. Erkennt sein Telefon während des Anrufs, dass die Stimme an seinem Mikrofon nicht mehr mit der übereinstimmt, die das Telefon aus seinen Anrufen gelernt hat, wird dieses Schutzschild rot — ein Zeichen dafür, dass das Telefon in andere Hände geraten ist. Das ist kein kryptografischer Beweis: Es ist eine Angabe, die das Gerät des Kontakts über sich selbst macht."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O contato ativou o Voice-as-Key no próprio dispositivo. Se, durante a chamada, o telefone dele detectar que a voz no microfone não corresponde mais à gravada anteriormente, este escudo fica vermelho — sinal de que o telefone passou para outras mãos. Não é uma prova criptográfica: é uma informação que o dispositivo do contato declara sobre si mesmo."
+            "value": "O contato ativou o Voice-as-Key no próprio dispositivo. Se, durante a chamada, o telefone dele detectar que a voz no microfone não corresponde mais à que o telefone aprendeu com as chamadas dele, este escudo fica vermelho — sinal de que o telefone passou para outras mãos. Não é uma prova criptográfica: é uma informação que o dispositivo do contato declara sobre si mesmo."
           }
         }
       }

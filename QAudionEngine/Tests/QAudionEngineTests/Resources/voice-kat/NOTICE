@@ -1,7 +1,9 @@
-NOTICE for the KAT audio in kat/audio
+NOTICE for the KAT audio in kat/audio and the data derived from it
 
 The five clips clip_a_48k.wav, clip_b_48k_loss.wav, clip_c_24k.wav, clip_d_16k.wav and clip_f_32k.wav are derived works of
-excerpts of the LibriSpeech corpus, test-clean subset (clip f is clip a resampled to 32 kHz, see below):
+excerpts of the LibriSpeech corpus, test-clean subset (clip f is clip a resampled to 32 kHz, see below). Two more files, clip_g_16k.wav and
+clip_i_16k.wav (KAT stage 13), are excerpts of the same corpus, unchanged except for the concatenation of consecutive utterances of one speaker
+(speakers 5142 and 8230; the utterance ids are in kat/inputs/s13_sources.json):
 
   Vassil Panayotov, Guoguo Chen, Daniel Povey and Sanjeev Khudanpur,
   "LibriSpeech: an ASR corpus based on public domain audio books", ICASSP 2015.
@@ -15,7 +17,12 @@ conversion (to 48, 24, 32 and 16 kHz); added synthetic noise (low-level out-of-b
 48 kHz and 24 kHz clips, stationary white noise at about 12 dB signal-to-noise ratio on clip d); band limiting
 to 3.8 kHz (clip c); level changes and hard clipping of one segment (clip c); simulated packet loss with crude
 concealment (clip b); the first 6.75 s of clip a resampled to 32 kHz (4.5 s) with a handful of samples set to full-scale
-extreme values (clip f, tools/make_kat_audio_f.py). The source utterance ids and offsets are listed in audio_meta.json ("sources").
+extreme values (clip f). The source utterance ids and offsets are listed in audio_meta.json ("sources").
 The clips are test vectors only; they are not recordings of the original speakers' intended speech.
 
 The pseudo-random choices and the packet-loss and clipping metadata are recorded in audio_meta.json.
+
+Derived data: kat/inputs/template_g.f32 (a speaker embedding computed from further utterances of speaker 5142), cohort.bin (80 speaker embeddings
+computed from 4.096 s excerpts of the other 38 test-clean speakers) and the embeddings stored in the KAT stages 5, 6 and 13 are numerical
+features computed from LibriSpeech excerpts with the CAM++ model; they contain no audio. The same attribution applies to them. The files
+kat/inputs and cohort.bin were written by the generator that also writes the rest of the KAT.

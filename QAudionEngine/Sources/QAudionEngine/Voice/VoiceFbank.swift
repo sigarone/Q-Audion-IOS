@@ -89,11 +89,15 @@ struct VoiceFbankTables {
 }
 
 /// The 80-bin log-mel front-end of one 65,536-sample window (408 frames), in float32 with a radix-2 FFT driven by the
-/// shipped tables.
+/// shipped tables. The embedding input is the fbank of the first `embed_samples` samples only (`embed_frames` frames,
+/// 400 in bundle v0) with the mean normalisation taken over those frames; the bandwidth measure reads all 408 frames.
 struct VoiceFbank {
     static let frameShift = 160
     static let windowSamples = 65_536
     static let frames = 1 + (windowSamples - VoiceFbankTables.frameLength) / frameShift
+
+    /// Frames of the embedding input (`fbank.embed_frames`).
+    let embedFrames: Int
 
     private let tables: VoiceFbankTables
     private let preemphasis: Float
@@ -102,6 +106,7 @@ struct VoiceFbank {
 
     init(tables: VoiceFbankTables, constants: VoiceConstants.Fbank) {
         self.tables = tables
+        self.embedFrames = constants.embedFrames
         self.preemphasis = Float(constants.preemph)
         self.logFloor = Float(constants.logFloor)
         let bits = 9
@@ -116,21 +121,23 @@ struct VoiceFbank {
         self.bitReversed = perm
     }
 
-    /// Log-mel energies before mean normalisation, row-major `frames x 80`.
-    func logMel(_ samples: [Float]) -> [Float] {
+    /// Log-mel energies before mean normalisation, row-major `count x 80`: the first `count` frames of the window (all 408
+    /// by default, which the bandwidth measure reads).
+    func logMel(_ samples: [Float], frames count: Int = VoiceFbank.frames) -> [Float] {
         precondition(samples.count == Self.windowSamples, "a window is exactly 65,536 samples")
+        precondition(count >= 1 && count <= Self.frames, "frames of a window")
         let frameLength = VoiceFbankTables.frameLength
         let fftSize = VoiceFbankTables.fftSize
         let bins = VoiceFbankTables.twiddleCount
         let numMel = VoiceFbankTables.numMel
-        var out = [Float](repeating: 0, count: Self.frames * numMel)
+        var out = [Float](repeating: 0, count: count * numMel)
         var frame = [Float](repeating: 0, count: frameLength)
         var re = [Float](repeating: 0, count: fftSize)
         var im = [Float](repeating: 0, count: fftSize)
         var power = [Float](repeating: 0, count: bins)
         let divisor = Float(frameLength)
 
-        for f in 0..<Self.frames {
+        for f in 0..<count {
             let start = f * Self.frameShift
             var sum: Float = 0
             for i in 0..<frameLength {
@@ -193,9 +200,10 @@ struct VoiceFbank {
         return out
     }
 
-    /// 408 x 80 features after mean normalisation.
+    /// The embedding input: `embedFrames` x 80 (400 x 80 in bundle v0) after mean normalisation over those frames. The later
+    /// frames of the window are not computed.
     func fbank(_ samples: [Float]) -> [Float] {
-        Self.meanNormalised(logMel(samples))
+        Self.meanNormalised(logMel(samples, frames: embedFrames))
     }
 
     /// Mean over frames of (mean of the high-band bins) minus (mean of the mid-band bins); inclusive bin ranges.

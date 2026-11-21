@@ -10,7 +10,13 @@ final class VoiceKatStage4Tests: XCTestCase {
         let bundle = try VoiceKat.bundle()
         let fbank = VoiceFbank(tables: bundle.tables, constants: bundle.constants.fbank)
         let stage4 = try VoiceKat.json("stage4_fbank/stage4.json")
-        XCTAssertEqual(stage4["shape"].ints, [VoiceFbank.frames, VoiceFbankTables.numMel])
+        // The embedding input is the fbank of the first `embed_samples` samples of the window: 400 frames, CMN over those 400.
+        XCTAssertEqual(bundle.constants.fbank.embedSamples, 64_240)
+        XCTAssertEqual(bundle.constants.fbank.embedFrames, 400)
+        XCTAssertEqual(stage4["input_samples"].int, bundle.constants.fbank.embedSamples)
+        XCTAssertEqual(stage4["window_samples"].int, VoiceFbank.windowSamples)
+        XCTAssertEqual(fbank.embedFrames, 400)
+        XCTAssertEqual(stage4["shape"].ints, [fbank.embedFrames, VoiceFbankTables.numMel])
         XCTAssertEqual(stage4["windows"].count, 9)
 
         var streams: [String: [Float]] = [:]

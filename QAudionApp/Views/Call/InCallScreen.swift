@@ -1809,7 +1809,7 @@ struct InCallScreen: View {
             switch self {
             case .voiceKey:
                 return String(localized: "incall.trust_body.voice_key",
-                              defaultValue: "Il contatto ha attivato la Voce-come-chiave sul proprio dispositivo. Se durante la chiamata il suo telefono rileva che la voce sul suo microfono non corrisponde più a quella registrata in passato, questo scudo diventa rosso — segnale che il telefono è passato in un'altra mano. Non è una prova crittografica: è un'informazione che il dispositivo del contatto dichiara di sé stesso.",
+                              defaultValue: "Il contatto ha attivato la Voce-come-chiave sul proprio dispositivo. Se durante la chiamata il suo telefono rileva che la voce sul suo microfono non corrisponde più a quella che il telefono ha imparato dalle sue chiamate, questo scudo diventa rosso — segnale che il telefono è passato in un'altra mano. Non è una prova crittografica: è un'informazione che il dispositivo del contatto dichiara di sé stesso.",
                               comment: "Call screen, popup text of the voice-as-key shield")
             case .speakerChange:
                 return VoiceGuardCopy.infoBody

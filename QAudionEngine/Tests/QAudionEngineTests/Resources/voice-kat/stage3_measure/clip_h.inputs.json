@@ -57,5 +57,6 @@
   "events": [
     {"kind": "reset", "at_chunk": 156, "at_input": 0, "tap": 1},
     {"kind": "reset", "at_chunk": 281, "at_input": 0, "tap": 2}
-  ]
+  ],
+  "end_ns": 7890135031000000
 }

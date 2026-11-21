@@ -206,6 +206,139 @@ final class OwnerVoiceLearningTests: XCTestCase {
         XCTAssertEqual(rig.learner.prepare(userId: "u1"), .ready(template: nil, collect: true))
     }
 
+    // MARK: - Wipe (logout, account deletion, remote wipe)
+
+    /// A learner with a final template and a record that holds an account's learning.
+    private func learnedRig() throws -> Rig {
+        let rig = makeRig()
+        _ = rig.learner.prepare(userId: "u1")
+        for call in 0..<6 { rig.learner.record(windows: windows("c\(call)", count: 5, day: Int64(call / 2)), userId: "u1") }
+        XCTAssertNotNil(rig.templates.load(contactId: ownerId))
+        XCTAssertTrue(try XCTUnwrap(rig.progress.record).refined)
+        return rig
+    }
+
+    func testAWipeRemovesTheTemplateAndTheWholeRecord() throws {
+        let rig = try learnedRig()
+        XCTAssertEqual(rig.learner.wipe(), [])
+        XCTAssertEqual(rig.templates.lookup(contactId: ownerId), .absent)
+        XCTAssertNil(rig.progress.data, "the windows, the account and the final mark are gone")
+        // The next account starts from nothing.
+        XCTAssertEqual(rig.learner.prepare(userId: "u2"), .ready(template: nil, collect: true))
+    }
+
+    /// Every removal is tried whatever another one answers, and what is still there is reported.
+    func testAWipeTriesEveryRemovalAndReportsWhatIsLeft() throws {
+        let record = try learnedRig()
+        record.progress.failWrites = true
+        XCTAssertEqual(record.learner.wipe(), [.record])
+        XCTAssertEqual(record.templates.lookup(contactId: ownerId), .absent, "the template went although the record could not be removed")
+        XCTAssertFalse(record.learner.reset())
+
+        let template = try learnedRig()
+        template.templateBacking.failWrites = true
+        XCTAssertEqual(template.learner.wipe(), [.template])
+        // The record is not deleted (a template without a record is adopted by the next account): it is emptied and
+        // belongs to no account.
+        XCTAssertEqual(template.progress.record?.userId, "")
+        XCTAssertEqual(template.progress.record?.windows.count, 0)
+
+        // An item that cannot be read afterwards is not known to be gone.
+        let unreadable = try learnedRig()
+        unreadable.templateBacking.failReads = true
+        unreadable.progress.failReads = true
+        unreadable.progress.failWrites = true
+        XCTAssertEqual(unreadable.learner.wipe(), [.template, .record])
+
+        let clean = try learnedRig()
+        XCTAssertTrue(clean.learner.reset())
+    }
+
+    /// A template that cannot be removed is not adopted by the next account, and does not feed this account's learning.
+    func testATemplateThatCouldNotBeRemovedIsNotAdoptedByTheNextAccount() throws {
+        let rig = try learnedRig()
+        rig.templateBacking.failWrites = true
+        XCTAssertEqual(rig.learner.wipe(), [.template])
+        XCTAssertEqual(rig.learner.prepare(userId: "u2"), .unavailable, "the old template is not handed over")
+        rig.templateBacking.failWrites = false
+        XCTAssertEqual(rig.learner.prepare(userId: "u2"), .ready(template: nil, collect: true))
+        XCTAssertEqual(rig.templates.lookup(contactId: ownerId), .absent)
+    }
+
+    /// The read-back looks at the Keychain item, not at what `lookup` makes of it: an unusable template that is still
+    /// there is a leftover.
+    func testAnUnusableTemplateThatIsStillStoredIsALeftover() {
+        let rig = makeRig()
+        _ = rig.learner.prepare(userId: "u1")
+        XCTAssertTrue(rig.templateBacking.save(contactId: ownerId, template: [0, 0, 0]))
+        XCTAssertEqual(rig.templates.lookup(contactId: ownerId), .absent, "the store reads it as no template")
+        rig.templateBacking.failWrites = true
+        XCTAssertEqual(rig.learner.wipe(), [.template])
+        rig.templateBacking.failWrites = false
+        XCTAssertEqual(rig.learner.wipe(), [])
+        XCTAssertEqual(rig.templateBacking.itemExists(contactId: ownerId), false)
+    }
+
+    /// The race: a call is running, the monitor holds its windows, the account leaves, and at the end of the call the
+    /// windows would be written back. They are refused when the generation of the start of the call is no longer current.
+    func testWindowsCollectedBeforeAWipeAreRefusedAfterIt() throws {
+        let rig = makeRig()
+        guard case .ready = rig.learner.prepare(userId: "u1") else { return XCTFail("not ready") }
+        let started = rig.learner.generation
+        XCTAssertEqual(rig.learner.wipe(), [])
+        XCTAssertNotEqual(rig.learner.generation, started)
+
+        XCTAssertNil(rig.learner.record(windows: windows("a", count: 6), userId: "u1", generation: started))
+        XCTAssertNil(rig.progress.data, "nothing of the old account is written back")
+        XCTAssertEqual(rig.templates.lookup(contactId: ownerId), .absent)
+
+        // A call that starts after the wipe is welcome, and so is a caller that does not pass a generation.
+        XCTAssertEqual(rig.learner.record(windows: windows("b", count: 6), userId: "u2", generation: rig.learner.generation), .learning)
+        XCTAssertEqual(rig.learner.record(windows: windows("c", count: 6), userId: "u2"), .min)
+    }
+
+    /// The Settings reset counts as a wipe: a call that was running when it was pressed does not bring the windows back,
+    /// and every learner instance sees it (the monitor, the announce and Settings each make their own).
+    func testAResetBumpsTheGenerationOfEveryLearner() {
+        let first = makeRig()
+        let second = makeRig()
+        let started = first.learner.generation
+        XCTAssertEqual(second.learner.generation, started)
+        XCTAssertTrue(second.learner.reset())
+        XCTAssertNotEqual(first.learner.generation, started)
+        XCTAssertNil(first.learner.record(windows: windows("a", count: 6), userId: "u1", generation: started))
+    }
+
+    // MARK: - The stage that is reported is the one that was stored
+
+    func testARecordThatCannotBeWrittenReportsNoStage() {
+        let rig = makeRig()
+        _ = rig.learner.prepare(userId: "u1")
+        rig.progress.failWrites = true
+        XCTAssertNil(rig.learner.record(windows: windows("a", count: 6), userId: "u1"), "the windows were not kept")
+        XCTAssertEqual(rig.progress.record?.windows.count, 0)
+    }
+
+    /// REFINED is reported only when the final mark reached the record: with the template stored and the record not
+    /// written the stage is MIN, and the next call that does write it reaches REFINED.
+    func testRefinedIsNotReportedWhenTheFinalMarkWasNotWritten() throws {
+        let rig = makeRig()
+        _ = rig.learner.prepare(userId: "u1")
+        for call in 0..<5 {
+            rig.learner.record(windows: windows("c\(call)", count: 5, day: Int64(call / 2)), userId: "u1")
+        }
+        XCTAssertNotNil(rig.templates.load(contactId: ownerId))
+        XCTAssertFalse(try XCTUnwrap(rig.progress.record).refined)
+
+        rig.progress.failWrites = true
+        XCTAssertEqual(rig.learner.record(windows: windows("c5", count: 5, day: 2), userId: "u1"), .min)
+        XCTAssertFalse(try XCTUnwrap(rig.progress.record).refined, "the final mark is not on the record")
+
+        rig.progress.failWrites = false
+        XCTAssertEqual(rig.learner.record(windows: windows("c5", count: 5, day: 2), userId: "u1"), .refined)
+        XCTAssertTrue(try XCTUnwrap(rig.progress.record).refined)
+    }
+
     // MARK: - A fused template far from the current one
 
     func testAFusedTemplateFarFromTheCurrentOneDoesNotReplaceIt() throws {
