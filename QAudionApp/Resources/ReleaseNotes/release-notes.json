@@ -1,5 +1,34 @@
 [
   {
+    "version": "1.0.1300",
+    "notes": {
+      "it": [
+        "Quando esci dall'account, la voce che il telefono ha imparato viene cancellata",
+        "Spiegazione più chiara della verifica vocale durante la chiamata"
+      ],
+      "en": [
+        "When you sign out, the voice your phone has learned is deleted",
+        "A clearer explanation of voice verification during calls"
+      ],
+      "de": [
+        "Wenn Sie sich abmelden, wird die Stimme gelöscht, die Ihr Telefon gelernt hat",
+        "Verständlichere Erklärung der Stimmprüfung während des Anrufs"
+      ],
+      "es": [
+        "Al cerrar sesión, se borra la voz que tu teléfono ha aprendido",
+        "Explicación más clara de la verificación de voz durante la llamada"
+      ],
+      "fr": [
+        "Lorsque vous vous déconnectez, la voix apprise par votre téléphone est effacée",
+        "Explication plus claire de la vérification vocale pendant l'appel"
+      ],
+      "pt-BR": [
+        "Ao sair da conta, a voz que seu telefone aprendeu é apagada",
+        "Explicação mais clara da verificação de voz durante a chamada"
+      ]
+    }
+  },
+  {
     "version": "1.0.1299",
     "notes": {
       "it": [
