@@ -268,6 +268,8 @@ public final class ConversationStore {
     /// have their own resume path (`TusResumeState`); tombstoned rows are
     /// never re-sent. `.failed` rows are deliberately NOT here: they stay
     /// on manual retry exactly as before.
+    /// A row held for Bluetooth only (`Message.bluetoothHold`) is never in this list: the network outbox must not send it
+    /// unless the user's answer cleared the hold.
     public func loadPendingOutboundTextMessages() -> [Message] {
         do {
             return try db.reader.read { db in
@@ -276,6 +278,7 @@ public final class ConversationStore {
                     .filter(Column("direction") == Message.Direction.outgoing.rawValue)
                     .filter(Column("mediaMimeType") == nil)
                     .filter(Column("deletedAt") == nil)
+                    .filter(sql: "bluetoothHold IS NOT 1")
                     .order(Column("sentAt").asc)
                     .fetchAll(db)
                 // A row with a local copy of a file (`mediaLocalPath`) is an attachment of the old kind and stays out, EXCEPT a
@@ -563,6 +566,19 @@ public final class ConversationStore {
         }
     }
 
+    /// Sets or clears the Bluetooth-only hold of one row. Only the user's "send over the internet" answer clears it.
+    public func setBluetoothHold(id: UUID, hold: Bool) {
+        do {
+            try db.writer.write { db in
+                if let msg = try Message.fetchOne(db, key: id) {
+                    try msg.withBluetoothHold(hold ? true : nil).save(db)
+                }
+            }
+        } catch {
+            print("[ConversationStore] setBluetoothHold failed: \(error)")
+        }
+    }
+
     /// One row of ``updateMessageStatuses(_:)``: the same fields
     /// `updateMessageStatus(id:conversationId:newStatus:deliveredAt:readAt:viaMesh:)`
     /// takes (`conversationId` is not needed — the row is keyed by `id`).
@@ -628,7 +644,8 @@ public final class ConversationStore {
                 exportBlocked: msg.exportBlocked,
                 viaMesh: viaMesh ?? msg.viaMesh,
                 wireAttachmentId: msg.wireAttachmentId,
-                isPlaceholder: msg.isPlaceholder
+                isPlaceholder: msg.isPlaceholder,
+                bluetoothHold: msg.bluetoothHold
             )
             try msg.save(db)
         }
@@ -661,7 +678,8 @@ public final class ConversationStore {
                         exportBlocked: msg.exportBlocked,
                         viaMesh: msg.viaMesh,
                         wireAttachmentId: wireAttachmentId,
-                        isPlaceholder: msg.isPlaceholder
+                        isPlaceholder: msg.isPlaceholder,
+                bluetoothHold: msg.bluetoothHold
                     )
                     try msg.save(db)
                 }
@@ -713,7 +731,8 @@ public final class ConversationStore {
                         exportBlocked: msg.exportBlocked,
                         viaMesh: msg.viaMesh,
                         wireAttachmentId: msg.wireAttachmentId,
-                        isPlaceholder: msg.isPlaceholder
+                        isPlaceholder: msg.isPlaceholder,
+                bluetoothHold: msg.bluetoothHold
                     )
                     try msg.save(db)
                 }
@@ -750,7 +769,8 @@ public final class ConversationStore {
                         exportBlocked: msg.exportBlocked,
                         viaMesh: msg.viaMesh,
                         wireAttachmentId: msg.wireAttachmentId,
-                        isPlaceholder: msg.isPlaceholder
+                        isPlaceholder: msg.isPlaceholder,
+                bluetoothHold: msg.bluetoothHold
                     ).save(db)
                 }
             }
@@ -798,7 +818,8 @@ public final class ConversationStore {
                         exportBlocked: msg.exportBlocked,
                         viaMesh: msg.viaMesh,
                         wireAttachmentId: msg.wireAttachmentId,
-                        isPlaceholder: msg.isPlaceholder
+                        isPlaceholder: msg.isPlaceholder,
+                bluetoothHold: msg.bluetoothHold
                     )
                     try msg.save(db)
                 }
@@ -906,7 +927,8 @@ public final class ConversationStore {
                     exportBlocked: msg.exportBlocked,
                     viaMesh: msg.viaMesh,
                     wireAttachmentId: msg.wireAttachmentId,
-                    isPlaceholder: msg.isPlaceholder
+                    isPlaceholder: msg.isPlaceholder,
+                bluetoothHold: msg.bluetoothHold
                 )
                 try msg.save(db)
                 return true
@@ -973,7 +995,8 @@ public final class ConversationStore {
                         viewOnceOpened: msg.viewOnceOpened,
                         exportBlocked: msg.exportBlocked,
                         viaMesh: msg.viaMesh,
-                        isPlaceholder: nil
+                        isPlaceholder: nil,
+                bluetoothHold: msg.bluetoothHold
                     )
                     try msg.save(db)
                     return true
@@ -1032,7 +1055,8 @@ public final class ConversationStore {
                         viewOnceOpened: msg.viewOnceOpened,
                         exportBlocked: msg.exportBlocked,
                         viaMesh: msg.viaMesh,
-                        isPlaceholder: nil
+                        isPlaceholder: nil,
+                bluetoothHold: msg.bluetoothHold
                     )
                     try msg.save(db)
                     if let quotedId = quotedServerId, MessageReplyCodec.isServerMessageId(quotedId) {
@@ -1121,7 +1145,8 @@ public final class ConversationStore {
                     exportBlocked: msg.exportBlocked,
                     viaMesh: msg.viaMesh,
                     wireAttachmentId: msg.wireAttachmentId,
-                    isPlaceholder: msg.isPlaceholder
+                    isPlaceholder: msg.isPlaceholder,
+                bluetoothHold: msg.bluetoothHold
                 )
                 try msg.save(db)
                 return added
@@ -1245,7 +1270,8 @@ public final class ConversationStore {
                         exportBlocked: msg.exportBlocked,
                         viaMesh: msg.viaMesh,
                         wireAttachmentId: msg.wireAttachmentId,
-                        isPlaceholder: msg.isPlaceholder
+                        isPlaceholder: msg.isPlaceholder,
+                bluetoothHold: msg.bluetoothHold
                     )
                     try msg.save(db)
                 }

@@ -254,6 +254,6 @@ extension Message {
                 mediaMimeType: mediaMimeType, clientMsgId: clientMsgId, edited: edited, deletedAt: deletedAt,
                 reactions: reactions, expiresAt: expiresAt, isViewOnce: isViewOnce, viewOnceOpened: viewOnceOpened,
                 exportBlocked: exportBlocked, viaMesh: viaMesh, wireAttachmentId: wireAttachmentId,
-                isPlaceholder: isPlaceholder)
+                isPlaceholder: isPlaceholder, bluetoothHold: bluetoothHold)
     }
 }

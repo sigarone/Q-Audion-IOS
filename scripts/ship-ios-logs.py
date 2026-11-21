@@ -1339,6 +1339,7 @@ def _is_pair_format_body(tag, norm_body):
 #   relay ph=<8 hex> ttl=<n> p=<n> fwd=<n> okLinks=<n> [reason=<rate|dup|mode|ttl>]
 #   app.tx ph=<8 hex> kind=<msg|rcpt> state=<sent|queued|failed> attempt=<n>
 #   app.rx ph=<8 hex> kind=<msg|rcpt> result=<token>   outbox pending=<n> retried=<n> gaveUp=<n>
+#   fallback ph=<8 hex> reason=<deadline|radio_off|giveup|reconnect|user_choice>
 # ---------------------------------------------------------------------------
 _MESH_TAG_PREFIXES = ("mesh",)
 
@@ -1383,6 +1384,7 @@ _RE_MESH_FULL = re.compile(
     r"|app\.tx " + _MESH_PH + r" kind=(?:msg|rcpt) state=(?:sent|queued|failed) attempt=\d{1,6}"
     r"|app\.rx " + _MESH_PH + r" kind=(?:msg|rcpt) result=" + _MESH_APP_RESULTS +
     r"|outbox pending=\d{1,4} retried=\d{1,4} gaveUp=\d{1,4}"
+    r"|fallback " + _MESH_PH + r" reason=(?:deadline|radio_off|giveup|reconnect|user_choice)"
     r")\Z"
 )
 

@@ -1127,7 +1127,23 @@ struct ChatDetailScreen: View {
                 // the local user already reacted with removes it.
                 container.toggleReaction(msg, emoji: emoji)
             },
-            viaMesh: msg.viaMesh == true
+            viaMesh: msg.viaMesh == true,
+            btPrompt: msg.direction == .outgoing ? MeshBtPromptStore.shared.state(messageId: msg.id.uuidString) : .idle,
+            btContent: msg.mediaMimeType != nil || msg.mediaLocalPath != nil,
+            onBtInternet: {
+                if msg.mediaMimeType != nil || msg.mediaLocalPath != nil {
+                    container.sendHeldContent(messageId: msg.id)
+                } else {
+                    MeshOutboxDrain.shared.userChoseInternet(messageId: msg.id.uuidString)
+                }
+            },
+            onBtKeep: {
+                if msg.mediaMimeType != nil || msg.mediaLocalPath != nil {
+                    container.keepContentUnsent(messageId: msg.id)
+                } else {
+                    container.keepOnBluetooth(messageId: msg.id)
+                }
+            }
         ) {
             if isVO && !voOpened {
                 // View-once: hidden until tapped. Show eye-slash pill.

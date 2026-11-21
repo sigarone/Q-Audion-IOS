@@ -74,6 +74,39 @@ final class MeshOutboxStore {
         return load().due(nowMs: nowMs, reachableTargets: reachableTargets)
     }
 
+    /// Works out `bluetoothOnly` for the message entries stored by an earlier build (value missing). The value is never
+    /// guessed as "allowed": `resolve` answers true when it cannot tell.
+    func normalizeLegacy(resolve: (MeshOutboxEntry) -> Bool) {
+        mutate { queue in
+            for entry in queue.entries where entry.kind == .message && entry.bluetoothOnly == nil {
+                queue.setBluetoothOnly(id: entry.id, resolve(entry))
+            }
+        }
+    }
+
+    /// Sets whether an entry is Bluetooth only.
+    func setBluetoothOnly(id: String, _ value: Bool) {
+        mutate { $0.setBluetoothOnly(id: id, value) }
+    }
+
+    /// The message entries to hand to the network path now (`MeshFallbackPolicy`), oldest first.
+    func fallbackCandidates(
+        nowMs: Int64, networkUsable: Bool, radioOff: Bool, trigger: MeshFallbackPolicy.Trigger
+    ) -> [(entry: MeshOutboxEntry, reason: MeshFallbackReason)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return load().fallbackCandidates(nowMs: nowMs, networkUsable: networkUsable, radioOff: radioOff, trigger: trigger)
+    }
+
+    /// The Bluetooth-only message entries that need the user now: the prompt, or the parked state after the limit.
+    func bluetoothOnlyActions(
+        nowMs: Int64, networkUsable: Bool, radioOff: Bool, stateOf: (String) -> MeshBtOnlyState
+    ) -> [(entry: MeshOutboxEntry, action: MeshBtOnlyAction)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return load().bluetoothOnlyActions(nowMs: nowMs, networkUsable: networkUsable, radioOff: radioOff, stateOf: stateOf)
+    }
+
     /// Entries the outbox gives up on. The caller owns the `ConversationStore` write that goes with it.
     func expired(nowMs: Int64) -> [MeshOutboxEntry] {
         lock.lock()
