@@ -1603,6 +1603,35 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// default as the flag's own compiled default.
     public var p2pProbeKillSwitchProvider: (() -> Bool)?
 
+    /// Remote gate for the faster media switch on a network change (flag
+    /// `calls.ice_fastswitch`, default off): the signalling socket reconnects on a path edge
+    /// during the call, an interface-change ICE restart reuses the ICE servers the connection
+    /// already holds (no relay UDP re-probe) and primes gathering at once. Same indirection as
+    /// the providers above (this target cannot import `FeatureFlags`): `AppState` hands a
+    /// snapshot taken on the main actor at call wiring. `nil` resolves to `false`.
+    public var iceFastSwitchProvider: (() -> Bool)?
+
+    /// Time of the last OS interface change that started an ICE restart (monotonic-enough wall
+    /// ms), the audio packet count seen then, and whether each timing line was already logged.
+    /// Guarded by `fastSwitchLock`; reset by every new trigger and at teardown.
+    private let fastSwitchLock = NSLock()
+    private var fastSwitchTriggerMs: Int64?
+    private var fastSwitchPendingTriggerMs: Int64?
+    private var fastSwitchFast: Bool = false
+    private var fastSwitchSentLogged: Bool = false
+    private var fastSwitchRxTask: Task<Void, Never>?
+    private var fastSwitchFallbackTask: Task<Void, Never>?
+    /// Latest classification of the SELECTED pair, no dwell (see `resolveAndApplyRouteTier`).
+    private var _latestSelectedPairTier: RouteTier = .unknown
+    /// Read and written from different threads (stats callback, probe timer): always through
+    /// `restartIceDebounceLock`.
+    private func latestSelectedPairTier() -> RouteTier {
+        restartIceDebounceLock.withLock { _latestSelectedPairTier }
+    }
+    private func setLatestSelectedPairTier(_ tier: RouteTier) {
+        restartIceDebounceLock.withLock { _latestSelectedPairTier = tier }
+    }
+
     /// I2/I4 (webrtc-plan.md v2 §3.3, M150 migration, 2026-09-29) — remote
     /// gate for `QaudionRuntimeTuning.setRequireDtlsPqc(_:)`. Same indirection
     /// reason as `p2pProbeKillSwitchProvider` right above (QAudionEngine
@@ -3057,6 +3086,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // per-call resources.
         restartPathMonitor?.cancel()
         restartPathMonitor = nil
+        CallFastSwitchGate.shared.set(false)
+        cancelFastSwitchTiming()
         iceRecoveryWatchdogTask?.cancel()
         iceRecoveryWatchdogTask = nil
         // W-FALLBACKLATCH (2026-10-03) — the SRTP-fallback engage debounce is call-scoped too,
@@ -3157,6 +3188,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // bleed into the next call (mirrors Android's
         // `PeerBitrateCap.reset()` at call teardown).
         _routeTierDwell.reset()
+        setLatestSelectedPairTier(.unknown)
         if _lastReportedRemoteHost != nil {
             _lastReportedRemoteHost = nil
             onActiveCandidatePairRemoteHost?(nil)
@@ -3276,6 +3308,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// second call (e.g. a defensive re-invocation) is a no-op.
     private func armRestartPathMonitor() {
         guard restartPathMonitor == nil else { return }
+        CallFastSwitchGate.shared.set(iceFastSwitchProvider?() ?? false)
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
@@ -3369,6 +3402,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                self.hasEverConnectedIce,
                !self.isIceStateBad(self.lastIceConnectionState) {
                 self.log?("restart_ice trigger=1 from_if=\(Self.interfaceTypeCode(previous)) to_if=\(Self.interfaceTypeCode(interfaceType))")
+                self.noteFastSwitchTrigger()
                 // `[weak self]` again here even though `self` is already a
                 // strongly-unwrapped local in this scope (from the `guard
                 // let self` above) — capturing that strong local directly
@@ -3727,7 +3761,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
     }
 
-    public func restartIce(reason: String) async {
+    public func restartIce(reason: String, forceProbe: Bool = false) async {
         guard peerConnection != nil, !intentionalShutdown else { return }
         guard let rid = recipientId else { return }
         // Atomic check-then-set — see `restartIceDebounceLock`'s own kdoc
@@ -3774,6 +3808,21 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
         onRestartAttemptStarted?()
 
+        // Faster switch (flag `calls.ice_fastswitch`): the interface-change restart reuses the
+        // ICE servers the connection already holds. There is no separate priming call: the one
+        // restart offer below is created at once (no probe await any more) and applying it
+        // starts gathering while the send waits for the signalling socket, so exactly one
+        // restart offer exists per trigger. Everything else keeps the probe below.
+        let fastSwitchOn: Bool = iceFastSwitchProvider?() ?? false
+        let cachedServers = FastSwitchDecisions.usesCachedServersForRestart(
+            flagOn: fastSwitchOn, reason: reason, forceProbe: forceProbe)
+        // Only an ACCEPTED interface-change restart (past the debounce and the gate) adopts the
+        // trigger stamp and replaces a pending fallback; a refused one leaves both alone.
+        if reason == FastSwitchDecisions.interfaceChangeReason { adoptFastSwitchTrigger(fast: fastSwitchOn) }
+        if cachedServers {
+            log?("restart_ice fast=1 probe=0 cached=1")
+        }
+
         // N6 (network-resilience-max, this task) — re-evaluate relay
         // reachability + the WSS-TURN bridge on EVERY ICE restart, proactive
         // (W-PROACTIVEHANDOFF, a real interface change) or reactive (the
@@ -3808,7 +3857,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // ICE a second time and reset the checks that are already
         // converging. The single-flight gate armed above stays armed, so the
         // watchdog still backs off while that other restart converges.
-        if let liveConnection = peerConnection {
+        if !cachedServers, let liveConnection = peerConnection {
             let remoteRestartsBefore = restartIceDebounceLock.withLock { remoteRestartOffersApplied }
             await refreshIceServersForRestart(on: liveConnection)
             guard !intentionalShutdown, peerConnection === liveConnection else { return }
@@ -3893,6 +3942,29 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // server's 60s disconnect-grace ceiling); this call does not block
         // on the park itself finishing beyond that method's own 5s
         // fast-path attempt.
+        var parkDelivery: (@Sendable () async -> Void)? = nil
+        if FastSwitchDecisions.parkedResendMintsNewOffer(cachedServers: cachedServers) {
+            parkDelivery = { [weak self] in
+                await self?.restartIce(
+                    reason: reason + RestartIceDecisions.parkedResendReasonSuffix)
+            }
+        } else {
+            // Fast path: on socket recovery re-send THIS offer (no second offer is made), then do what an
+            // immediate send does: log trigger -> sent from the original trigger and arm the
+            // fallback, unless the call ended or the connection was replaced meanwhile.
+            let capabilities = advertisedCapabilitiesFilter(CallCapabilities.localCaps())
+            let offerConnectionId = ObjectIdentifier(pc)
+            parkDelivery = { [weak self] in
+                guard let self, !self.intentionalShutdown,
+                      self.peerConnection.map({ ObjectIdentifier($0) }) == offerConnectionId else { return }
+                let delivered = await self.callingApi.sendIceRestartOffer(
+                    recipientId: rid, sdp: sdp, capabilities: capabilities, onParkDelivery: nil)
+                if delivered {
+                    self.noteFastSwitchSent()
+                    self.startFastSwitchProbeFallback()
+                }
+            }
+        }
         let sent = await callingApi.sendIceRestartOffer(
             recipientId: rid,
             sdp: sdp,
@@ -3901,10 +3973,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // restartIce so the wire carries an offer minted at delivery
             // time, never the (by then stale) `sdp` above. The suffix
             // exempts the continuation from the debounce and the gate.
-            onParkDelivery: { [weak self] in
-                await self?.restartIce(
-                    reason: reason + RestartIceDecisions.parkedResendReasonSuffix)
-            }
+            // Fast path (flag on, interface change): nil, so the park re-sends THIS offer,
+            // already applied locally, and no second createOffer(iceRestart) exists.
+            onParkDelivery: parkDelivery
         )
         if !sent {
             // W-ICERESTARTGATE — the attempt parked: extend the single-
@@ -3916,6 +3987,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             restartIceDebounceLock.withLock { iceRestartGateUntil = parkUntil }
         }
         log?("restart_ice sent=\(sent ? 1 : 0) reason=\(reason)")
+        if sent, reason == FastSwitchDecisions.interfaceChangeReason {
+            noteFastSwitchSent()
+            if cachedServers { startFastSwitchProbeFallback() }
+        }
     }
 
     /// D6 (2026-09-28, TURN-stuck-on-P2P fix, owner-requested) — watches
@@ -3966,7 +4041,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // is always `false` here.
         let input = P2pProbeDecisions.Input(
             isInitiator: isInitiator,
-            pairKind: _routeTierDwell.committed,
+            pairKind: P2pProbeDecisions.effectivePairKind(committed: _routeTierDwell.committed,
+                                                          latestSelected: latestSelectedPairTier()),
             relayPairSinceMs: relayPairSinceMs,
             nowMs: nowMs,
             peerSentNonRelayCandidate: peerSentNonRelayCandidateThisCall,
@@ -5239,6 +5315,113 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
     }
 
+    // MARK: - Faster switch timing (flag `calls.ice_fastswitch`)
+
+    /// Remember when the OS reported an interface change. Nothing is cancelled or started here:
+    /// the restart may still be refused by the debounce or the gate.
+    private func noteFastSwitchTrigger() {
+        let t = Self.nowMs()
+        fastSwitchLock.withLock { fastSwitchPendingTriggerMs = t }
+    }
+
+    /// The interface-change restart was ACCEPTED: adopt the stamped trigger time, replace the
+    /// previous trigger's watchers, and (flag on only) watch for the first audio packet that
+    /// arrives afterwards. With the flag off nothing is polled. Logged with `fast=1`/`fast=0`.
+    private func adoptFastSwitchTrigger(fast: Bool) {
+        fastSwitchLock.lock()
+        fastSwitchTriggerMs = fastSwitchPendingTriggerMs ?? Self.nowMs()
+        fastSwitchPendingTriggerMs = nil
+        fastSwitchFast = fast
+        fastSwitchSentLogged = false
+        fastSwitchRxTask?.cancel()
+        fastSwitchRxTask = nil
+        fastSwitchFallbackTask?.cancel()
+        fastSwitchFallbackTask = nil
+        fastSwitchLock.unlock()
+        if fast { startFastSwitchRxWatch() }
+    }
+
+    /// The restart offer left the device: log trigger -> sent once per trigger.
+    private func noteFastSwitchSent() {
+        fastSwitchLock.lock()
+        let t = fastSwitchTriggerMs
+        let fast = fastSwitchFast
+        let already = fastSwitchSentLogged
+        if t != nil { fastSwitchSentLogged = true }
+        fastSwitchLock.unlock()
+        guard let t, !already else { return }
+        log?("restart_ice fast=\(fast ? 1 : 0) trig_sent_ms=\(max(0, Self.nowMs() - t))")
+    }
+
+    /// A fast restart was sent: if no audio arrives on the new pair within
+    /// `probeFallbackAfterSec`, repeat the restart ONCE on the normal path (UDP re-probe and
+    /// bridge decision), exactly as with the flag off. One per trigger; a new trigger replaces it.
+    private func startFastSwitchProbeFallback() {
+        let peerRestartsAtSend = restartIceDebounceLock.withLock { remoteRestartOffersApplied }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            let baseline = await self.readAudioRxPackets()
+            try? await Task.sleep(nanoseconds: UInt64(FastSwitchDecisions.probeFallbackAfterSec * 1_000_000_000))
+            if Task.isCancelled || self.intentionalShutdown { return }
+            let now = await self.readAudioRxPackets()
+            let peerApplied = self.restartIceDebounceLock.withLock { self.remoteRestartOffersApplied } != peerRestartsAtSend
+            guard FastSwitchDecisions.needsProbeFallback(fast: true, baselinePackets: baseline, packetsNow: now,
+                                                         peerRestartApplied: peerApplied) else { return }
+            self.log?("restart_ice fast=1 fallback=1 probe=1")
+            await self.restartIce(reason: FastSwitchDecisions.fallbackReason, forceProbe: true)
+        }
+        fastSwitchLock.lock()
+        fastSwitchFallbackTask?.cancel()
+        fastSwitchFallbackTask = task
+        fastSwitchLock.unlock()
+    }
+
+    private func cancelFastSwitchTiming() {
+        fastSwitchLock.lock()
+        fastSwitchRxTask?.cancel()
+        fastSwitchRxTask = nil
+        fastSwitchFallbackTask?.cancel()
+        fastSwitchFallbackTask = nil
+        fastSwitchTriggerMs = nil
+        fastSwitchLock.unlock()
+    }
+
+    /// Poll the audio inbound packet count every 250 ms for up to 20 s after the trigger; the
+    /// first increase over the count at the trigger is the first packet received on the new
+    /// pair. A call with no inbound RTP row (sealed DataChannel audio) logs nothing.
+    private func startFastSwitchRxWatch() {
+        let task = Task { [weak self] in
+            guard let self else { return }
+            guard let baseline = await self.readAudioRxPackets() else { return }
+            for _ in 0..<80 {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                if Task.isCancelled || self.intentionalShutdown { return }
+                guard let now = await self.readAudioRxPackets() else { continue }
+                if now > baseline {
+                    let (t, fast) = self.fastSwitchLock.withLock { (self.fastSwitchTriggerMs, self.fastSwitchFast) }
+                    if let t { self.log?("restart_ice fast=\(fast ? 1 : 0) trig_rx_ms=\(max(0, Self.nowMs() - t))") }
+                    return
+                }
+            }
+        }
+        fastSwitchLock.lock()
+        fastSwitchRxTask = task
+        fastSwitchLock.unlock()
+    }
+
+    private func readAudioRxPackets() async -> Int64? {
+        guard let pc = peerConnection?.peerConnection else { return nil }
+        return await withCheckedContinuation { (cont: CheckedContinuation<Int64?, Never>) in
+            pc.statistics { report in
+                var best: Int64 = -1
+                for (_, st) in report.statistics where st.type == "inbound-rtp" && (st.values["kind"] as? String) == "audio" {
+                    best = max(best, (st.values["packetsReceived"] as? NSNumber)?.int64Value ?? -1)
+                }
+                cont.resume(returning: best >= 0 ? best : nil)
+            }
+        }
+    }
+
     /// W-ROUTETIEREVENT (2026-08-26, P2 audit item 4) — react to a real
     /// libwebrtc "selected candidate pair changed" event instead of waiting
     /// for the next 3s `pollVideoStatsOnce` tick. `resolveAndApplyRouteTier`
@@ -5573,12 +5756,35 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         guard let pc = peerConnection?.peerConnection else { return }
         pc.statistics { [weak self] report in
             guard let self else { return }
-            let succeededPair = report.statistics.values.first { s in
-                s.type == "candidate-pair" &&
-                    ((s.values["state"] as? String) == "succeeded" ||
-                        (s.values["nominated"] as? NSNumber)?.boolValue == true)
+            // The tier follows the pair the transport selected (nominated as the fallback), not
+            // the first succeeded pair in dictionary order: after a network change an old relay
+            // pair can stay succeeded beside the new direct one.
+            var selectedPairId: String?
+            var pairSnapshots: [IcePairSnapshot] = []
+            for (_, st) in report.statistics where st.type == "transport" {
+                if selectedPairId == nil { selectedPairId = st.values["selectedCandidatePairId"] as? String }
             }
-            guard let pair = succeededPair else { return }
+            for (pairId, st) in report.statistics where st.type == "candidate-pair" {
+                var lt = ""
+                var rt = ""
+                if let lid = st.values["localCandidateId"] as? String,
+                   let ls = report.statistics[lid] { lt = (ls.values["candidateType"] as? String) ?? "" }
+                if let rid = st.values["remoteCandidateId"] as? String,
+                   let rs = report.statistics[rid] { rt = (rs.values["candidateType"] as? String) ?? "" }
+                pairSnapshots.append(IcePairSnapshot(
+                    id: pairId,
+                    state: (st.values["state"] as? String) ?? "",
+                    nominated: (st.values["nominated"] as? NSNumber)?.boolValue ?? false,
+                    localType: lt,
+                    remoteType: rt))
+            }
+            guard let chosen = SelectedPairResolver.select(selectedPairId: selectedPairId, pairs: pairSnapshots),
+                  let pair = report.statistics[chosen.id] else {
+                // Ambiguous or missing: never keep an older "direct" that could suppress the
+                // relay probe. Fail toward probing.
+                self.setLatestSelectedPairTier(.unknown)
+                return
+            }
             var localType = ""
             if let localId = pair.values["localCandidateId"] as? String,
                let localStat = report.statistics[localId] {
@@ -5606,6 +5812,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 }
             }
             let tier = RouteTier.classify(localType: localType, remoteType: remoteType)
+            self.setLatestSelectedPairTier(tier)
             guard tier != .unknown else { return }
             // W-ROUTETIERDWELL — only a COMMITTED change (dwell-confirmed,
             // or the call's first-ever resolution) re-applies the sender

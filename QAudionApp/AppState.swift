@@ -9534,6 +9534,9 @@ final class AppState: ObservableObject {
         // `dtlsAnswerPassiveKillSwitchProvider`'s own kdoc (QAudionEngine
         // cannot import FeatureFlags directly).
         controller.dtlsAnswerPassiveKillSwitchProvider = CallFlagProviders.snapshot { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
+        // Faster media switch on a network change (flag `calls.ice_fastswitch`, default off);
+        // see `iceFastSwitchProvider`'s own kdoc. Read once here, on the main actor.
+        controller.iceFastSwitchProvider = CallFlagProviders.snapshot { FeatureFlags.bool("calls.ice_fastswitch", false) }
         controller.useExternalVideoSource = true
         // WIRE_SPEC §8.7 — publication rides the RX render gate (parked
         // until the receiver cryptor is ready, 2s failsafe).
@@ -21706,6 +21709,9 @@ final class AppState: ObservableObject {
                 // kill switch; see `dtlsAnswerPassiveKillSwitchProvider`'s own
                 // kdoc (QAudionEngine cannot import FeatureFlags directly).
                 controller.dtlsAnswerPassiveKillSwitchProvider = CallFlagProviders.snapshot { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
+                // Faster media switch on a network change (flag `calls.ice_fastswitch`, default off);
+                // see `iceFastSwitchProvider`'s own kdoc. Read once here, on the main actor.
+                controller.iceFastSwitchProvider = CallFlagProviders.snapshot { FeatureFlags.bool("calls.ice_fastswitch", false) }
                 // For outgoing video calls VideoCallPipeline (above)
                 // already opened the camera. Tell the controller to
                 // skip RTCCameraVideoCapturer so the two AVCaptureSessions
@@ -31704,6 +31710,9 @@ extension AppState {
         // switch; see `dtlsAnswerPassiveKillSwitchProvider`'s own kdoc
         // (QAudionEngine cannot import FeatureFlags directly).
         controller.dtlsAnswerPassiveKillSwitchProvider = CallFlagProviders.snapshot { FeatureFlags.bool("calls.dtls_answer_passive_kill", false) }
+        // Faster media switch on a network change (flag `calls.ice_fastswitch`, default off);
+        // see `iceFastSwitchProvider`'s own kdoc. Read once here, on the main actor.
+        controller.iceFastSwitchProvider = CallFlagProviders.snapshot { FeatureFlags.bool("calls.ice_fastswitch", false) }
         // For incoming video calls, start the VideoCallPipeline first so it
         // owns the AVCaptureSession. Tell the WebRTC controller to skip its
         // own RTCCameraVideoCapturer — avoids the dual AVCaptureSession

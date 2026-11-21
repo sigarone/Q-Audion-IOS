@@ -1209,6 +1209,34 @@ def _is_block_format_body(tag, norm_body):
 
 
 # ---------------------------------------------------------------------------
+# FASTSWITCH -- the lines the call controller writes about the faster media switch after a network change (tag
+# "call", QAudionWebRtcCallController: restart_ice fast=<0|1> ...):
+#   restart_ice fast=1 probe=0 cached=1          (fast restart: cached servers, no UDP re-probe)
+#   restart_ice fast=1 fallback=1 probe=1        (no audio after the fast restart: one normal restart)
+#   restart_ice fast=<0|1> trig_sent_ms=<n>      (path trigger -> restart offer sent)
+#   restart_ice fast=<0|1> trig_rx_ms=<n>        (path trigger -> first audio packet)
+# Numbers and 0/1 flags only. Same scoping reason as BLOCK_FORMAT_VOCAB: "fast", "fallback" and "probe" are plain words,
+# so they are consulted only when the tag is call (or a prefix variant) AND the whole body is, in full, one of these
+# four shapes; they are NOT in APP_VOCAB. Pinned by test_ship_ios_fastswitch_vocab.py.
+# ---------------------------------------------------------------------------
+FASTSWITCH_FORMAT_VOCAB = frozenset("""
+    fast fallback probe
+""".split())
+
+_RE_FASTSWITCH_FULL = re.compile(
+    r"^restart_ice fast=[01] (?:probe=0 cached=1|fallback=1 probe=1|trig_sent_ms=[0-9]{1,7}|trig_rx_ms=[0-9]{1,7})$"
+)
+
+
+def _is_fastswitch_format_body(tag, norm_body):
+    """True if `tag` is the call RTLog scope (or a prefix variant) AND `norm_body` is, in full, one of the
+    "restart_ice fast=..." lines above."""
+    if not tag or not str(tag).lower().startswith("call"):
+        return False
+    return bool(_RE_FASTSWITCH_FULL.match(norm_body))
+
+
+# ---------------------------------------------------------------------------
 # PAIR (2026-10-20) -- the line the in-person pairing scanner writes when it turns a scanned QR down (tag "pair",
 # ProximityScanReport in QAudionApp/Views/Contacts/ProximityPairingSupportViews.swift):
 #   scan outcome=not_pair len=<n>
@@ -2530,6 +2558,9 @@ def redact_body(orig_body, tag_is_safe, attrs, tag=None):
     elif _is_block_format_body(tag, norm):
         # BLOCK (2026-10-19) -- the "block drop=1 kind=<k>" lines, same scoping, own words.
         _scoped_vocab = BLOCK_FORMAT_VOCAB
+    elif _is_fastswitch_format_body(tag, norm):
+        # FASTSWITCH -- the "restart_ice fast=..." lines of the faster media switch, same scoping, own words.
+        _scoped_vocab = FASTSWITCH_FORMAT_VOCAB
     elif _is_pair_format_body(tag, norm):
         # PAIR (2026-10-20) -- the "scan outcome=..." lines of the pairing scanner, same scoping, own words.
         _scoped_vocab = PAIR_FORMAT_VOCAB
