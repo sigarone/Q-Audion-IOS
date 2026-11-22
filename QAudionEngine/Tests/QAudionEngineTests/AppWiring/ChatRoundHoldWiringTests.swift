@@ -112,4 +112,16 @@ final class ChatRoundHoldWiringTests: XCTestCase {
         }
         XCTAssertEqual(ranges(of: "CHAT-REKEY", in: app).count, 5)
     }
+
+    func testWaitingFramesOutliveTheFinalTimerWhileARoundIsHeld() throws {
+        let app = try code("QAudionApp/AppState.swift")
+        let fin = try XCTUnwrap(app.range(of: "private func finalizeBufferedOneToOneMessages(for senderId: String) {"))
+        XCTAssertTrue(String(app[fin.upperBound...].prefix(200)).contains("if pendingChatRounds.values.contains(where: { $0.peerId == senderId }) { return }"))
+        let discard = try XCTUnwrap(app.range(of: "private func discardHeldChatRound("))
+        let body = String(app[discard.lowerBound...].prefix(900))
+        XCTAssertTrue(body.contains("bufferedOneToOneCiphertexts[i].bufferedAtMs = nowMs"))
+        XCTAssertTrue(body.contains("scheduleBufferedOneToOneFinalize(for: round.peerId)"))
+        // the cap keeps the newest frames
+        XCTAssertTrue(app.contains("bufferedOneToOneCiphertexts.removeFirst( bufferedOneToOneCiphertexts.count - Self.maxBufferedOneToOneCiphertexts)"))
+    }
 }

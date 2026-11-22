@@ -1955,8 +1955,16 @@ final class AppState: ObservableObject {
 
     @MainActor
     private func discardHeldChatRound(callId: String) {
-        if pendingChatRounds.removeValue(forKey: callId.lowercased()) != nil {
+        if let round = pendingChatRounds.removeValue(forKey: callId.lowercased()) {
             RTLog.info("call", "CHAT-REKEY discarded")
+            // The normal patience window of the waiting frames starts now.
+            let nowMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+            var waiting = false
+            for i in bufferedOneToOneCiphertexts.indices where bufferedOneToOneCiphertexts[i].senderId == round.peerId {
+                bufferedOneToOneCiphertexts[i].bufferedAtMs = nowMs
+                waiting = true
+            }
+            if waiting { scheduleBufferedOneToOneFinalize(for: round.peerId) }
         }
     }
 
@@ -13009,6 +13017,9 @@ final class AppState: ObservableObject {
     /// convergence in `ensureV4Session` has had its ~45 s). Younger frames stay
     /// buffered and the timer is re-armed for the earliest of them.
     private func finalizeBufferedOneToOneMessages(for senderId: String) {
+        // While a chat round of this peer is held for the call's confirmation, its frames wait for it: the apply retries them,
+        // a discard restarts their patience window (`discardHeldChatRound`).
+        if pendingChatRounds.values.contains(where: { $0.peerId == senderId }) { return }
         let nowMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
         let patienceMs = Int64(AppState.bufferedFinalizeDelaySec) * 1_000
         var remaining: [BufferedOneToOneFrame] = []
