@@ -1,5 +1,40 @@
 [
   {
+    "version": "1.0.1303",
+    "notes": {
+      "it": [
+        "Badge di sicurezza dei contatti più preciso: i dispositivi che il contatto non usa più non lo lasciano da verificare",
+        "Dopo la verifica di persona, il badge in chat diventa verde alla prima chiamata con quel contatto",
+        "Chat ancora più protette durante le chiamate"
+      ],
+      "en": [
+        "A more precise contact security badge: devices the contact no longer uses no longer keep it unverified",
+        "After an in-person verification, the chat badge turns green on the first call with that contact",
+        "Even stronger chat protection during calls"
+      ],
+      "de": [
+        "Genaueres Sicherheitsabzeichen für Kontakte: Geräte, die der Kontakt nicht mehr nutzt, sorgen nicht mehr dafür, dass es „zu prüfen“ bleibt",
+        "Nach der persönlichen Verifizierung wird das Abzeichen im Chat beim ersten Anruf mit diesem Kontakt grün",
+        "Noch stärkerer Schutz Ihrer Chats während Anrufen"
+      ],
+      "es": [
+        "Insignia de seguridad de contactos más precisa: los dispositivos que el contacto ya no usa no la dejan pendiente de verificar",
+        "Tras la verificación en persona, la insignia del chat se pone verde en la primera llamada con ese contacto",
+        "Chats aún más protegidos durante las llamadas"
+      ],
+      "fr": [
+        "Un badge de sécurité des contacts plus précis : les appareils que le contact n'utilise plus ne le laissent plus « à vérifier »",
+        "Après une vérification en personne, le badge de la discussion passe au vert au premier appel avec ce contact",
+        "Des discussions encore mieux protégées pendant les appels"
+      ],
+      "pt-BR": [
+        "Selo de segurança dos contatos mais preciso: aparelhos que o contato não usa mais não o deixam pendente de verificação",
+        "Depois da verificação presencial, o selo da conversa fica verde na primeira chamada com esse contato",
+        "Conversas ainda mais protegidas durante as chamadas"
+      ]
+    }
+  },
+  {
     "version": "1.0.1302",
     "notes": {
       "it": [
