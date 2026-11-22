@@ -295,4 +295,26 @@ final class MessageRatchetV4RoutedTests: XCTestCase {
         XCTAssertNotNil(frame)
         XCTAssertEqual(ratchet.decryptV4Routed(peerId: "A", frame: frame ?? Data()), pt)
     }
+
+    /// A held round applied after the confirmation (with or without a print) converges the pair and chat works both ways:
+    /// the install after a key rotation is the same replace as any other.
+    func testAppliedHeldRoundChatsBothWaysWithRealCore() throws {
+        try XCTSkipUnless(
+            RatchetNative.available && MessageRatchet.v4NativeRatchetEnabled,
+            "CHAT replace needs the real native core linked AND the flag ON")
+        let ratchet = MessageRatchet(vault: TestRatchetVault())
+        XCTAssertTrue(installAlice(ratchet, secret0))
+        XCTAssertTrue(installBob(ratchet, secret0))
+        // the rotated round is installed late, once, on both sides
+        XCTAssertTrue(installAlice(ratchet, secret2))
+        XCTAssertTrue(installBob(ratchet, secret2))
+        let there = Data("a-to-b".utf8)
+        let back = Data("b-to-a".utf8)
+        let f1 = ratchet.encryptV4Routed(peerId: "B", plaintext: there)
+        XCTAssertNotNil(f1)
+        XCTAssertEqual(ratchet.decryptV4Routed(peerId: "A", frame: f1 ?? Data()), there)
+        let f2 = ratchet.encryptV4Routed(peerId: "A", plaintext: back)
+        XCTAssertNotNil(f2)
+        XCTAssertEqual(ratchet.decryptV4Routed(peerId: "B", frame: f2 ?? Data()), back)
+    }
 }

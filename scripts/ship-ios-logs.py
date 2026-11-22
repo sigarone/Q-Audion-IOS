@@ -1457,6 +1457,18 @@ _RE_SHIELD_FULL = re.compile(
     r" pq=(?:pending|pq2|pq|reduced|cl) max=[01]\Z"
 )
 
+# SESSION BINDING LINE (call / stdout tags): the one line written when a binding or liveness record of a chat session could not be
+# written. Closed words only (the slot is one of three), no id, name or key by construction. The generic gate gives the bare line
+# name a budget of zero, so it is accepted here by the whole-line match only: one extra word, a value outside its set or any suffix
+# and it goes through the ordinary gates as before. Pinned by test_ship_ios_sessionbind_vocab.py.
+_RE_SESSIONBIND_FULL = re.compile(r"\ASESSION-BIND write_failed slot=(?:cur|prev|rec)\Z")
+
+# CHAT SESSION UPDATE LINE (call / stdout tags): what became of the chat-session install of a call round that was not confirmed by
+# its signature (kept, applied after the confirmation, applied without a key record, dropped). One closed word, no id, name or key
+# by construction. Accepted by the whole-line match only; anything else goes through the ordinary gates as before. Pinned by
+# test_ship_ios_chatrekey_vocab.py.
+_RE_CHATREKEY_FULL = re.compile(r"\ACHAT-REKEY (?:held|applied|applied_release|discarded|buffer_drop)\Z")
+
 # CALL KEY STATE LINES (call tag): the fixed-word lines of the per-call key bookkeeping (QAudionCallIntegration, written through
 # CapsBindLog.line to RTLog.info("call", ...)) and the extended capability line. Every value is a decimal number from a closed
 # range, no id, name or key by construction. The generic gate gives bare words a budget of zero, so each shape is accepted here by
@@ -1507,7 +1519,8 @@ def _is_closed_grammar_line(tag, norm_body):
         return bool(_RE_PAIR_BLE_FULL.match(norm_body) or _RE_PAIR_NFC_FULL.match(norm_body))
     if t.startswith(_HANDSHAKE_TAG_PREFIXES):
         return bool(_RE_HANDSHAKE_FULL.match(norm_body) or _RE_PQLEVEL_FULL.match(norm_body)
-                    or _RE_LIVE_FULL.match(norm_body) or _RE_SHIELD_FULL.match(norm_body))
+                    or _RE_LIVE_FULL.match(norm_body) or _RE_SHIELD_FULL.match(norm_body)
+                    or _RE_SESSIONBIND_FULL.match(norm_body) or _RE_CHATREKEY_FULL.match(norm_body))
     return False
 
 

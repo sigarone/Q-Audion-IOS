@@ -69,6 +69,22 @@ public protocol RatchetVault: AnyObject {
 
     /// Delete the v4 session blob for `(epochId, peerId)`. Default no-op.
     func deleteV4(epochId: String, peerId: String)
+
+    // Checked variants, for the session binding records (`SessionBindingStore`): they must
+    // tell "absent" from "could not be read" and must know when a delete did not happen.
+    // The defaults answer exactly what the plain methods answer, so a vault that cannot
+    // fail (memory, tests) needs nothing.
+
+    /// True when a v4 row EXISTS for `(epochId, peerId)`. Answers without reading the value
+    /// where the store allows it; throws when the store cannot say (never "false" on an error).
+    func hasV4Checked(epochId: String, peerId: String) throws -> Bool
+
+    /// The v4 row, `nil` only when none exists; throws when a row exists (or may exist) and
+    /// cannot be read now.
+    func loadV4Checked(epochId: String, peerId: String) throws -> Data?
+
+    /// `deleteV4` that throws when the store refused the delete.
+    func deleteV4Checked(epochId: String, peerId: String) throws
 }
 
 // SECURITY / back-compat: default v4 bodies so existing vaults (and test
@@ -80,6 +96,15 @@ public extension RatchetVault {
     func loadV4(epochId: String, peerId: String) -> Data? { nil }
     func saveV4(epochId: String, peerId: String, blob: Data) throws {}
     func deleteV4(epochId: String, peerId: String) {}
+    func hasV4Checked(epochId: String, peerId: String) throws -> Bool {
+        loadV4(epochId: epochId, peerId: peerId) != nil
+    }
+    func loadV4Checked(epochId: String, peerId: String) throws -> Data? {
+        loadV4(epochId: epochId, peerId: peerId)
+    }
+    func deleteV4Checked(epochId: String, peerId: String) throws {
+        deleteV4(epochId: epochId, peerId: peerId)
+    }
     // W-KCAFTERUNLOCK — a vault that cannot be locked answers exactly what
     // `load` answers.
     func loadChecked(epochId: String, peerId: String) throws -> RatchetSnapshot? {
@@ -95,4 +120,8 @@ public enum VaultError: Error, Equatable {
     /// `errSecInteractionNotAllowed` (-25308): the device is locked, the
     /// snapshot is NOT known to be absent. Transient; never bootstrap over it.
     case deviceLocked
+    /// A Keychain read failed with a status other than "not found" or "locked" (the row may exist).
+    case readFailed(OSStatus)
+    /// A Keychain delete failed with a status other than "not found".
+    case deleteFailed(OSStatus)
 }

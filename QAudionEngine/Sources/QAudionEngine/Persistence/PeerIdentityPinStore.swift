@@ -144,6 +144,45 @@ public final class PeerIdentityPinStore {
         return out
     }
 
+    /// One pinned key with the device it belongs to (`deviceId` empty for the legacy bare-`contactId` pin).
+    public struct PinnedRow: Equatable, Sendable {
+        public let deviceId: String
+        public let key: Data
+        public init(deviceId: String, key: Data) {
+            self.deviceId = deviceId
+            self.key = key
+        }
+    }
+
+    /// The pinned rows of every peer, from ONE enumeration of the Keychain service, grouped by the peer id. Read-only.
+    public func allPinnedRowsByContact() -> [String: [PinnedRow]] {
+        var out: [String: [PinnedRow]] = [:]
+        for account in allAccounts() {
+            guard let key = rawPinnedKey(account: account), key.count == 32 else { continue }
+            let parts = account.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+            let contactId: String = parts.first.map(String.init) ?? account
+            let deviceId: String = parts.count > 1 ? String(parts[1]) : ""
+            out[contactId, default: []].append(PinnedRow(deviceId: deviceId, key: key))
+        }
+        return out
+    }
+
+    /// The pinned rows of one peer. Read-only.
+    public func allPinnedRows(contactId: String) -> [PinnedRow] {
+        guard !contactId.isEmpty else { return [] }
+        var rows: [PinnedRow] = []
+        if let legacy = rawPinnedKey(account: contactId), legacy.count == 32 {
+            rows.append(PinnedRow(deviceId: "", key: legacy))
+        }
+        let prefix: String = contactId + "|"
+        for acct in allAccounts() where acct.hasPrefix(prefix) {
+            if let key = rawPinnedKey(account: acct), key.count == 32 {
+                rows.append(PinnedRow(deviceId: String(acct.dropFirst(prefix.count)), key: key))
+            }
+        }
+        return rows
+    }
+
     /// Raw single-account Keychain read (no migration fallback).
     private func rawPinnedKey(account: String) -> Data? {
         #if canImport(Security)

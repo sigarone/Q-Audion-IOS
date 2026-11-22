@@ -235,7 +235,8 @@ final class ContactsListContainer: ObservableObject {
             proximityServerConfirmed: proximityPairedAtMs != nil
                 ? proximityServerConfirmed : existing?.proximityServerConfirmed,
             identityChangePendingAtMs: existing?.identityChangePendingAtMs,
-            identityChangePendingFingerprintsHex: existing?.identityChangePendingFingerprintsHex
+            identityChangePendingFingerprintsHex: existing?.identityChangePendingFingerprintsHex,
+            lastTrafficAtMs: existing?.lastTrafficAtMs
         )
         store.upsert(contact)
         // W77: kick off the pairwise PSK handshake so future chats with

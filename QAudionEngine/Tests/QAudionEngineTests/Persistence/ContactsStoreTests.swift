@@ -605,7 +605,8 @@ final class ContactsStoreTests: XCTestCase {
             proximityPairedAtMs: 333,
             proximityServerConfirmed: true,
             identityChangePendingAtMs: 444,
-            identityChangePendingFingerprintsHex: ["fp-fixture"]
+            identityChangePendingFingerprintsHex: ["fp-fixture"],
+            lastTrafficAtMs: ["dev-fixture": 555]
         )
     }
 
@@ -626,7 +627,7 @@ final class ContactsStoreTests: XCTestCase {
     /// until the fixture (and the helpers' intent) is updated on purpose.
     func test_copyHelperFixture_populatesEveryStoredField() {
         let children = Mirror(reflecting: fullyPopulatedContact()).children
-        XCTAssertEqual(children.count, 21,
+        XCTAssertEqual(children.count, 22,
                        "StoredContact gained or lost a field: extend fullyPopulatedContact() and decide, per helper, whether the new field is preserved or cleared")
         for child in children {
             XCTAssertNotEqual("\(child.value)", "nil",

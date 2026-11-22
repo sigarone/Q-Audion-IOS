@@ -187,9 +187,112 @@ public final class MessageRatchet {
     /// unchanged (its callers serialize).
     private let v4RoutingLock = NSLock()
 
+    /// Which peer key each CHAT / CONTROL session was authenticated against (see `SessionBindingStore`).
+    private let bindings: SessionBindingStore
+
     public init(vault: RatchetVault) {
         self.vault = vault
+        self.bindings = SessionBindingStore(vault: vault)
     }
+
+    // MARK: - Session bindings
+
+    /// Posted (synchronously, on the writing thread) whenever the binding or the liveness of a peer's CHAT / CONTROL sessions changes: an
+    /// install, a replace, a drop, a first decrypt, a decrypt under the previous session, a failed binding write. `userInfo["peerId"]`
+    /// is the peer. An observer only records the peer and returns, so no change is ever lost; see `bindingVersion(peerId:)`.
+    public static let bindingDidChangeNotification = Notification.Name("qaudion.sessionBinding.didChange")
+
+    /// Grows whenever `peerId`'s bindings or their liveness change; a cached answer is valid while it (and `bindingGeneration`) is unchanged.
+    public static func bindingVersion(peerId: String) -> UInt64 {
+        SessionBindingStore.State.shared.version(of: peerId)
+    }
+
+    /// Moves when the whole vault was wiped.
+    public static func bindingGeneration() -> UInt64 {
+        SessionBindingStore.State.shared.generation()
+    }
+
+    /// The vault was wiped (logout, remote wipe, account deletion): drops what is remembered in memory about every peer's bindings and
+    /// announces each peer once.
+    public static func bindingsVaultWiped() {
+        for peer in SessionBindingStore.State.shared.resetAll() {
+            NotificationCenter.default.post(name: bindingDidChangeNotification, object: nil, userInfo: ["peerId": peer])
+        }
+    }
+
+    /// The safety-number fingerprints of the peer keys the live CHAT and CONTROL sessions of `peerId` are bound to (the current sessions
+    /// plus every live previous one), telling "cannot tell" (`.unknown`) from "could not read" (`.failed`, which must not be cached).
+    public func boundPeerPrintsChecked(peerId: String) -> BoundResult {
+        bindings.check(peerId)
+    }
+
+    /// The newest ratchet version this device holds a session for with `peerId`: 5 when a CHAT and a CONTROL session exist, 4 for a CHAT session alone,
+    /// 0 otherwise (which reads as unknown). Throws when the store cannot say. The send path picks v4 exactly when a v4 session exists (`hasV4Session`), so the
+    /// session rows are what a contact's ratchet version is on this platform.
+    public func newestChannelRatchetVersion(peerId: String) throws -> Int {
+        // A v4 or v5 contact has a CHAT session; a CONTROL session alone says nothing about the chat ratchet.
+        guard try vault.hasV4Checked(epochId: Self.v4RoutingEpoch, peerId: peerId) else { return 0 }
+        if try vault.hasV4Checked(epochId: Self.v5ControlRoutingEpoch, peerId: peerId) { return 5 }
+        return 4
+    }
+
+    // The persisting steps below hold the write order of the binding rule: the record is invalidated first, then the sessions and their
+    // source rows are written, then the record that binds them. A binding or liveness write never fails an install; only the session
+    // write itself can.
+
+    /// Persists a freshly derived session blob (create, or overwrite the current one without moving it) and binds it to `peerKeyPrint`.
+    func persistInstall(epochId: String, peerId: String, blob: Data, peerKeyPrint: String?) throws {
+        let tag = SessionBindingStore.tag(of: blob)
+        let before = bindings.begin(epochId, peerId)
+        try vault.saveV4(epochId: epochId, peerId: peerId, blob: blob)
+        bindings.putAux(SessionBindingStore.srcId(epochId), peerId, tag)
+        bindings.commitInstall(epochId, peerId, before: before, curTag: tag, print: peerKeyPrint)
+    }
+
+    /// Installs `blob` as the current session of the slot, keeping the one it replaces as the previous session (whose binding moves with
+    /// it). Returns false when the current session was already installed from exactly this material (nothing is replaced; a legacy
+    /// session is bound now).
+    func persistReplace(epochId: String, peerId: String, blob: Data, peerKeyPrint: String?) throws -> Bool {
+        let fingerprint = SessionBindingStore.tag(of: blob)
+        let previous = vault.loadV4(epochId: epochId, peerId: peerId)
+        var oldSource: Data?
+        if previous != nil {
+            oldSource = vault.loadV4(epochId: Self.sourceEpochId(epochId), peerId: peerId)
+            if let installedFrom = oldSource, installedFrom == fingerprint {
+                bindings.bindIfUnbound(epochId, peerId, curTag: fingerprint, print: peerKeyPrint)
+                return false
+            }
+        }
+        let before = bindings.begin(epochId, peerId)
+        if let previous = previous {
+            try vault.saveV4(epochId: Self.previousEpochId(epochId), peerId: peerId, blob: previous)
+            if let oldSource = oldSource {
+                bindings.putAux(SessionBindingStore.prevSrcId(epochId), peerId, oldSource)
+            } else {
+                bindings.deleteAux(SessionBindingStore.prevSrcId(epochId), peerId)
+            }
+        }
+        try vault.saveV4(epochId: epochId, peerId: peerId, blob: blob)
+        bindings.putAux(SessionBindingStore.srcId(epochId), peerId, fingerprint)
+        bindings.commitReplace(epochId, peerId, before: before, hadPrevious: previous != nil, curTag: fingerprint, print: peerKeyPrint)
+        return true
+    }
+
+    /// Forgets the current session of the slot (the previous one stays with its own binding and liveness).
+    func persistDrop(epochId: String, peerId: String) {
+        let before = bindings.begin(epochId, peerId)
+        do {
+            try vault.deleteV4Checked(epochId: epochId, peerId: peerId)
+        } catch {
+            bindings.dropFailed(epochId, peerId, before: before)
+            return
+        }
+        bindings.commitDrop(epochId, peerId, before: before)
+    }
+
+    /// The current session of the slot opened a frame / the previous one did. Never throw, never fail the decrypt.
+    func noteCurrentOpened(epochId: String, peerId: String) { bindings.noteCurrentDecrypt(epochId, peerId) }
+    func notePreviousOpened(epochId: String, peerId: String) { bindings.notePrevDecrypt(epochId, peerId) }
 
     // MARK: - Errors
 
@@ -955,7 +1058,8 @@ public final class MessageRatchet {
         peerEpochId: Data,
         selfIdentityPub: Data,
         peerIdentityPub: Data,
-        transcriptHash: Data
+        transcriptHash: Data,
+        peerKeyPrint: String? = nil
     ) -> Bool {
         v4RoutingLock.lock(); defer { v4RoutingLock.unlock() }
         // bootstrapV4 itself fail-closes (returns 0) when the v4 path is disabled.
@@ -971,7 +1075,7 @@ public final class MessageRatchet {
         defer { freeV4Session(handle) }
         guard let blob = serializeV4Session(handle) else { return false }
         do {
-            try vault.saveV4(epochId: Self.v4RoutingEpoch, peerId: peerId, blob: blob)
+            try persistInstall(epochId: Self.v4RoutingEpoch, peerId: peerId, blob: blob, peerKeyPrint: peerKeyPrint)
             return true
         } catch {
             // Persist failed — treat as a failed bootstrap so the dispatcher can
@@ -1008,7 +1112,7 @@ public final class MessageRatchet {
     /// exists for `(epochId, peerId)` — either because this call just created one, or
     /// because one already existed, in which case `bootstrap` is never invoked and
     /// the existing session is left completely untouched.
-    public func ensureBootstrapped(epochId: String, peerId: String, bootstrap: () -> UInt) -> Bool {
+    public func ensureBootstrapped(epochId: String, peerId: String, peerKeyPrint: String? = nil, bootstrap: () -> UInt) -> Bool {
         v4RoutingLock.lock(); defer { v4RoutingLock.unlock() }
         guard isV4Enabled() else { return false }
         if vault.loadV4(epochId: epochId, peerId: peerId) != nil { return true }
@@ -1017,7 +1121,7 @@ public final class MessageRatchet {
         defer { freeV4Session(handle) }
         guard let blob = serializeV4Session(handle) else { return false }
         do {
-            try vault.saveV4(epochId: epochId, peerId: peerId, blob: blob)
+            try persistInstall(epochId: epochId, peerId: peerId, blob: blob, peerKeyPrint: peerKeyPrint)
             return true
         } catch {
             return false
@@ -1050,27 +1154,22 @@ public final class MessageRatchet {
     /// replacing it again would RESET a chain that has since advanced and
     /// re-emit its (key, nonce) pairs for new plaintexts — so it is skipped.
     /// The fingerprint lives in a `sourceEpochId` row next to the session.
-    public func replaceChannelSession(epochId: String, peerId: String, bootstrap: () -> UInt) -> Bool {
+    public func replaceChannelSession(epochId: String, peerId: String, peerKeyPrint: String? = nil, bootstrap: () -> UInt) -> Bool {
         v4RoutingLock.lock(); defer { v4RoutingLock.unlock() }
         guard isV4Enabled() else { return false }
         let handle = bootstrap()
         guard handle != 0 else { return false }
         defer { freeV4Session(handle) }
         guard let blob = serializeV4Session(handle) else { return false }
-        let fingerprint = Data(SHA256.hash(data: blob))
         do {
-            let previous = vault.loadV4(epochId: epochId, peerId: peerId)
-            if let previous = previous {
-                if let installedFrom = vault.loadV4(epochId: Self.sourceEpochId(epochId), peerId: peerId),
-                   installedFrom == fingerprint {
-                    print("[MessageRatchet] BOOT-SKIP epoch=\(epochId) peer=\(peerId.suffix(6)) same-source")
-                    return true
-                }
-                try vault.saveV4(epochId: Self.previousEpochId(epochId), peerId: peerId, blob: previous)
+            let hadPrevious = vault.loadV4(epochId: epochId, peerId: peerId) != nil
+            // The binding record is invalidated, the previous session and the new one are written, then the record is written:
+            // see `persistReplace`. A repeat of the same material replaces nothing.
+            guard try persistReplace(epochId: epochId, peerId: peerId, blob: blob, peerKeyPrint: peerKeyPrint) else {
+                print("[MessageRatchet] BOOT-SKIP epoch=\(epochId) peer=\(peerId.suffix(6)) same-source")
+                return true
             }
-            try vault.saveV4(epochId: epochId, peerId: peerId, blob: blob)
-            try vault.saveV4(epochId: Self.sourceEpochId(epochId), peerId: peerId, blob: fingerprint)
-            print("[MessageRatchet] BOOT epoch=\(epochId) peer=\(peerId.suffix(6)) replaced=\(previous != nil)")
+            print("[MessageRatchet] BOOT epoch=\(epochId) peer=\(peerId.suffix(6)) replaced=\(hadPrevious)")
             return true
         } catch {
             return false
@@ -1082,7 +1181,7 @@ public final class MessageRatchet {
     /// it. Called when a frame fails against a session that IS present.
     public func dropChannelSession(epochId: String, peerId: String) {
         v4RoutingLock.lock(); defer { v4RoutingLock.unlock() }
-        vault.deleteV4(epochId: epochId, peerId: peerId)
+        persistDrop(epochId: epochId, peerId: peerId)
         print("[MessageRatchet] DROP epoch=\(epochId) peer=\(peerId.suffix(6)) reason=present-but-undecryptable")
     }
 
@@ -1148,6 +1247,7 @@ public final class MessageRatchet {
             let previous = decryptV4Under(
                 rowEpochId: Self.previousEpochId(Self.v4RoutingEpoch), peerId: peerId, frame: frame)
             if previous != nil {
+                notePreviousOpened(epochId: Self.v4RoutingEpoch, peerId: peerId)
                 print("[MessageRatchet] OPEN epoch=\(Self.v4RoutingEpoch) peer=\(peerId.suffix(6)) result=previous")
             }
             return previous
@@ -1159,6 +1259,7 @@ public final class MessageRatchet {
         if let advanced = RatchetNative.serialize(handle) {
             try? vault.saveV4(epochId: Self.v4RoutingEpoch, peerId: peerId, blob: advanced)
         }
+        noteCurrentOpened(epochId: Self.v4RoutingEpoch, peerId: peerId)
         return pt
     }
 
@@ -1247,12 +1348,14 @@ public final class MessageRatchet {
         v4RoutingLock.lock(); defer { v4RoutingLock.unlock() }
         guard isV4Enabled() else { return nil }
         if let current = decryptV5Under(rowEpochId: epochId, peerId: peerId, frame: frame) {
+            noteCurrentOpened(epochId: epochId, peerId: peerId)
             return current
         }
         // W-CTRLREPLACE — a frame the peer sealed under the session we just
         // replaced (see `replaceChannelSession`) still opens. Its own chain
         // advances on its own row, never the current one.
         let previous = decryptV5Under(rowEpochId: Self.previousEpochId(epochId), peerId: peerId, frame: frame)
+        if previous != nil { notePreviousOpened(epochId: epochId, peerId: peerId) }
         let present = vault.loadV4(epochId: epochId, peerId: peerId) != nil
         print("[MessageRatchet] OPEN epoch=\(epochId) peer=\(peerId.suffix(6)) result=\(previous != nil ? "previous" : "fail") present=\(present)")
         return previous
