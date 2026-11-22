@@ -1225,6 +1225,21 @@ final class AppState: ObservableObject {
         let install: (_ bindPrint: Bool) -> Void
     }
     private var pendingChatRounds: [String: PendingChatRound] = [:]
+    /// The call-derived message key of a round held the same way: written together with the CHAT and CONTROL install, or dropped with it.
+    private struct PendingMsgPsk {
+        let peerId: String
+        let persist: () -> Void
+    }
+    private var pendingMsgPsks: [String: PendingMsgPsk] = [:]
+    /// Calls whose confirmation already released their held round (lowercased call id -> the key it vouched for, empty for none). A
+    /// round that lands after its confirmation is applied at once under the same rule. Dropped with the call.
+    private var releasedChatCalls: [String: Data] = [:]
+
+    /// True while a round of this peer is held for a call's confirmation.
+    private func hasHeldRound(for peerId: String) -> Bool {
+        pendingChatRounds.values.contains(where: { $0.peerId == peerId })
+            || pendingMsgPsks.values.contains(where: { $0.peerId == peerId })
+    }
     /// Lowercased callIds whose handshake verdict was `.abort` — consulted by
     /// `onRelaySessionReady` / `onV4BootstrapReady` to decide whether to run
     /// their media-install work immediately or stash it above.
@@ -1928,44 +1943,83 @@ final class AppState: ObservableObject {
         awaitingIdentityConfirmation = true
     }
 
+    /// True when a live call, active or still ringing, has this id.
+    @MainActor
+    private func isLiveCallId(_ cid: String) -> Bool {
+        let activeId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased()
+        return !cid.isEmpty && (activeId == cid || RingSignalingRegistry.shared.entry(cid) != nil)
+    }
+
     /// Keep a first-round chat install under the handshake's call id, or drop it when no live call has that id.
     @MainActor
     private func holdChatRound(handshakeCallId: String, round: PendingChatRound) {
         let cid = handshakeCallId.lowercased()
-        let activeId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased()
-        let live = !cid.isEmpty && (activeId == cid || RingSignalingRegistry.shared.entry(cid) != nil)
-        guard live else {
+        guard isLiveCallId(cid) else {
             RTLog.info("call", "CHAT-REKEY discarded")
             return
         }
         pendingChatRounds[cid] = round
         RTLog.info("call", "CHAT-REKEY held")
+        applyIfAlreadyReleased(cid)
+    }
+
+    /// Persist the call-derived message key now, or keep it with the held round of the call.
+    @MainActor
+    private func persistOrHoldMessagePsk(sessionKey: Data, callId: String, peerContactId: String, held: Bool) {
+        guard held else {
+            persistMessagePsk(sessionKey: sessionKey, callId: callId, peerContactId: peerContactId)
+            return
+        }
+        let cid = callId.lowercased()
+        guard isLiveCallId(cid) else { return }
+        pendingMsgPsks[cid] = PendingMsgPsk(peerId: peerContactId) { [weak self] in
+            self?.persistMessagePsk(sessionKey: sessionKey, callId: callId, peerContactId: peerContactId)
+        }
+        applyIfAlreadyReleased(cid)
+    }
+
+    /// The confirmation came before the round landed: the round is applied now, with the key that confirmation vouched for.
+    @MainActor
+    private func applyIfAlreadyReleased(_ cid: String) {
+        guard let key = releasedChatCalls[cid] else { return }
+        applyHeldChatRound(callId: cid, bindKey: key.isEmpty ? nil : key)
     }
 
     /// The call's confirmation released a held round. `bindKey` is the key the confirmation vouches for; the sessions get its
     /// print only when it is the key of the held round, otherwise they are installed without one.
     @MainActor
     private func applyHeldChatRound(callId: String, bindKey: Data?) {
-        guard let round = pendingChatRounds.removeValue(forKey: callId.lowercased()) else { return }
-        let bind = bindKey != nil && bindKey == round.peerIdentityPub
-        round.install(bind)
-        RTLog.info("call", bind ? "CHAT-REKEY applied" : "CHAT-REKEY applied_release")
-        retryBufferedOneToOneMessages(for: round.peerId)
+        let cid = callId.lowercased()
+        releasedChatCalls[cid] = bindKey ?? Data()
+        let round = pendingChatRounds.removeValue(forKey: cid)
+        let psk = pendingMsgPsks.removeValue(forKey: cid)
+        guard round != nil || psk != nil else { return }
+        psk?.persist()
+        var bind = false
+        if let round {
+            bind = bindKey != nil && bindKey == round.peerIdentityPub
+            round.install(bind)
+            RTLog.info("call", bind ? "CHAT-REKEY applied" : "CHAT-REKEY applied_release")
+        }
+        if let peerId = round?.peerId ?? psk?.peerId { retryBufferedOneToOneMessages(for: peerId) }
     }
 
     @MainActor
     private func discardHeldChatRound(callId: String) {
-        if let round = pendingChatRounds.removeValue(forKey: callId.lowercased()) {
-            RTLog.info("call", "CHAT-REKEY discarded")
-            // The normal patience window of the waiting frames starts now.
-            let nowMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
-            var waiting = false
-            for i in bufferedOneToOneCiphertexts.indices where bufferedOneToOneCiphertexts[i].senderId == round.peerId {
-                bufferedOneToOneCiphertexts[i].bufferedAtMs = nowMs
-                waiting = true
-            }
-            if waiting { scheduleBufferedOneToOneFinalize(for: round.peerId) }
+        let cid = callId.lowercased()
+        releasedChatCalls.removeValue(forKey: cid)
+        let round = pendingChatRounds.removeValue(forKey: cid)
+        let psk = pendingMsgPsks.removeValue(forKey: cid)
+        guard let peerId = round?.peerId ?? psk?.peerId else { return }
+        RTLog.info("call", "CHAT-REKEY discarded")
+        // The normal patience window of the waiting frames starts now.
+        let nowMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        var waiting = false
+        for i in bufferedOneToOneCiphertexts.indices where bufferedOneToOneCiphertexts[i].senderId == peerId {
+            bufferedOneToOneCiphertexts[i].bufferedAtMs = nowMs
+            waiting = true
         }
+        if waiting { scheduleBufferedOneToOneFinalize(for: peerId) }
     }
 
     /// P0-3 — called from the in-call "CONFERMA COINCIDONO" SAS button
@@ -12981,9 +13035,15 @@ final class AppState: ObservableObject {
         bufferedOneToOneCiphertexts.append(
             (senderId: senderId, serverMsgId: serverMsgId, cipher: cipher, clientMsgId: clientMsgId,
              serverTs: serverTs, bufferedAtMs: Int64((Date().timeIntervalSince1970 * 1000).rounded())))
-        if bufferedOneToOneCiphertexts.count > Self.maxBufferedOneToOneCiphertexts {
-            bufferedOneToOneCiphertexts.removeFirst(
-                bufferedOneToOneCiphertexts.count - Self.maxBufferedOneToOneCiphertexts)
+        // Over the cap the oldest frame of a peer WITHOUT a held round goes first; only when every frame waits for a held round
+        // is the oldest one dropped, and that is logged.
+        while bufferedOneToOneCiphertexts.count > Self.maxBufferedOneToOneCiphertexts {
+            if let i = bufferedOneToOneCiphertexts.firstIndex(where: { !hasHeldRound(for: $0.senderId) }) {
+                bufferedOneToOneCiphertexts.remove(at: i)
+            } else {
+                bufferedOneToOneCiphertexts.removeFirst()
+                RTLog.info("call", "CHAT-REKEY buffer_drop")
+            }
         }
     }
 
@@ -13019,7 +13079,7 @@ final class AppState: ObservableObject {
     private func finalizeBufferedOneToOneMessages(for senderId: String) {
         // While a chat round of this peer is held for the call's confirmation, its frames wait for it: the apply retries them,
         // a discard restarts their patience window (`discardHeldChatRound`).
-        if pendingChatRounds.values.contains(where: { $0.peerId == senderId }) { return }
+        if hasHeldRound(for: senderId) { return }
         let nowMs = Int64((Date().timeIntervalSince1970 * 1000).rounded())
         let patienceMs = Int64(AppState.bufferedFinalizeDelaySec) * 1_000
         var remaining: [BufferedOneToOneFrame] = []
@@ -14011,6 +14071,8 @@ final class AppState: ObservableObject {
             RTLog.info("chat", "control failure stale=1 live=\(live ? 1 : 0)")
             return
         }
+        // A held round of this peer may be what makes their frames fail: nothing is counted until it is applied or dropped.
+        if hasHeldRound(for: senderId) { return }
         let diverged = AppState.controlFailureTracker.record(
             peerId: senderId, frameId: serverMsgId, nowMs: nowMs)
         if diverged {
@@ -18211,6 +18273,8 @@ final class AppState: ObservableObject {
             // W-M15SEALERONCE — read SYNCHRONOUSLY (the integration clears the flag
             // as soon as this closure returns, before the Task below runs).
             let isReKeyRound: Bool = integration?.relaySessionReadyIsReKey ?? false
+            // Read before any hop: the verdict of this round holds its media (set by the handshake before this fires).
+            let roundHeld: Bool = integration?.isMediaHeld(callId: cid) ?? false
             // W-STALESEALER (fix-3) — `generation` is NOT read here. It was captured
             // by the integration itself, at the START of processing the inbound
             // handshake message that produced this session key — BEFORE any
@@ -18278,7 +18342,7 @@ final class AppState: ObservableObject {
                 // immediately for a call with no plan (a mid-call re-key) or an
                 // already-released ACCEPT.
                 self.runOrDeferUntilAccepted(cidLower) { [weak self] in
-                    self?.persistMessagePsk(sessionKey: sessionKey, callId: cid, peerContactId: peerId)
+                    self?.persistOrHoldMessagePsk(sessionKey: sessionKey, callId: cid, peerContactId: peerId, held: roundHeld)
                 }
                 // Cold-start answer race — the relay session key is now live, so
                 // engine + integration + contactId are all ready. If the user
@@ -21353,6 +21417,8 @@ final class AppState: ObservableObject {
                     nackEpochCallService?.noteSessionKeyInstalled()
                     // W-M15SEALERONCE — read SYNCHRONOUSLY (see the responder wiring).
                     let isReKeyRound: Bool = integration?.relaySessionReadyIsReKey ?? false
+                    // Read before any hop: the verdict of this round holds its media (set by the handshake before this fires).
+                    let roundHeld: Bool = integration?.isMediaHeld(callId: cid) ?? false
                     // W-STALESEALER (fix-3) — `generation` is the integration's own
                     // entry-time capture (before any `await` in the ACCEPT path that
                     // produced this session key — e.g. the earbud GATT round-trip in
@@ -21408,7 +21474,7 @@ final class AppState: ObservableObject {
                             installAudioMedia()
                         }
                         // W-GRPDIAG-4 — see persistMessagePsk doc above.
-                        self.persistMessagePsk(sessionKey: sessionKey, callId: cid, peerContactId: peerId)
+                        self.persistOrHoldMessagePsk(sessionKey: sessionKey, callId: cid, peerContactId: peerId, held: roundHeld)
                     }
                 }
                 integration.onPqcSessionKeyEstablished = { [weak self, weak integration] sharedSecret in

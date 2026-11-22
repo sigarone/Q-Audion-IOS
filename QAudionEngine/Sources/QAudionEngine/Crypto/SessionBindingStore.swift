@@ -205,6 +205,8 @@ final class SessionBindingStore {
         guard let print, !print.isEmpty else { return }
         let old = readRecord(epoch, peerId)
         if let old, old.curTag == curTag, !old.curPrint.isEmpty { return }
+        // A record with no session tag is the mark of an unknown slot: only an install that writes a record replaces it.
+        if let old, old.curTag.isEmpty { return }
         // The previous session (if any) was installed before this record existed: its binding is unknown, which is what an empty
         // `prevPrint` means. Its liveness numbers are kept as they were.
         write(epoch, peerId,

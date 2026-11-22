@@ -4,7 +4,7 @@ r"""
 The chat session update line must survive the phone-log shipper (scripts/ship-ios-logs.py) VERBATIM, and only that exact
 grammar:
 
-    CHAT-REKEY <held|applied|applied_release|discarded>
+    CHAT-REKEY <held|applied|applied_release|discarded|buffer_drop>
 
 Run:  python scripts/test_ship_ios_chatrekey_vocab.py [path/to/ship-ios-logs.py]
 Exit 0 = every allowed line ships unchanged and every forged variant is refused; 1 otherwise.
@@ -45,7 +45,7 @@ def shipped(line, tag="call"):
 
 
 REAL = "CHAT-REKEY applied_release"
-OKAY = ["CHAT-REKEY %s" % w for w in ("held", "applied", "applied_release", "discarded")]
+OKAY = ["CHAT-REKEY %s" % w for w in ("held", "applied", "applied_release", "discarded", "buffer_drop")]
 
 failures = []
 checks = 0

@@ -1467,7 +1467,7 @@ _RE_SESSIONBIND_FULL = re.compile(r"\ASESSION-BIND write_failed slot=(?:cur|prev
 # its signature (kept, applied after the confirmation, applied without a key record, dropped). One closed word, no id, name or key
 # by construction. Accepted by the whole-line match only; anything else goes through the ordinary gates as before. Pinned by
 # test_ship_ios_chatrekey_vocab.py.
-_RE_CHATREKEY_FULL = re.compile(r"\ACHAT-REKEY (?:held|applied|applied_release|discarded)\Z")
+_RE_CHATREKEY_FULL = re.compile(r"\ACHAT-REKEY (?:held|applied|applied_release|discarded|buffer_drop)\Z")
 
 # CALL KEY STATE LINES (call tag): the fixed-word lines of the per-call key bookkeeping (QAudionCallIntegration, written through
 # CapsBindLog.line to RTLog.info("call", ...)) and the extended capability line. Every value is a decimal number from a closed

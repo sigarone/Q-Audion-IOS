@@ -375,6 +375,25 @@ final class SessionBindingStoreTests: XCTestCase {
         XCTAssertEqual(MessageRatchet(vault: vault).boundPeerPrintsChecked(peerId: peer), .unknown)
     }
 
+    func testARepeatInstallNeverOverwritesTheMarkOfAnUnknownSlot() throws {
+        let vault = FlakyVault()
+        let r = MessageRatchet(vault: vault)
+        let peer = newPeer()
+        _ = try r.persistReplace(epochId: chat, peerId: peer, blob: blob(1), peerKeyPrint: printB)
+        _ = try r.persistReplace(epochId: chat, peerId: peer, blob: blob(2), peerKeyPrint: printA)
+        r.noteCurrentOpened(epochId: chat, peerId: peer)
+        // the note of the previous session fails once: a mark goes over the record
+        vault.failSaveOnce = [SessionBindingStore.recId(chat)]
+        r.notePreviousOpened(epochId: chat, peerId: peer)
+        // the same material installs again with a print, then the app restarts
+        let replaced = try r.persistReplace(epochId: chat, peerId: peer, blob: blob(2), peerKeyPrint: printA)
+        XCTAssertFalse(replaced)
+        _ = SessionBindingStore.State.shared.resetAll()
+        let after = MessageRatchet(vault: vault)
+        after.noteCurrentOpened(epochId: chat, peerId: peer)
+        XCTAssertEqual(after.boundPeerPrintsChecked(peerId: peer), .unknown)
+    }
+
     func testASessionInstalledWithoutAVerifiedKeyIsUnknownNeverTheClaimedKey() throws {
         // A round whose signature did not verify hands no print: the slot reads as unknown, as before bindings existed.
         let r = MessageRatchet(vault: FlakyVault())

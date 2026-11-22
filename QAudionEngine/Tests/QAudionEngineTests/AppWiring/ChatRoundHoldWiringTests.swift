@@ -74,8 +74,8 @@ final class ChatRoundHoldWiringTests: XCTestCase {
         let app = try code("QAudionApp/AppState.swift")
         let start = try XCTUnwrap(app.range(of: "private func holdChatRound("))
         let body = String(app[start.lowerBound...].prefix(1000))
-        XCTAssertTrue(body.contains("activeId == cid || RingSignalingRegistry.shared.entry(cid) != nil"))
-        XCTAssertTrue(body.contains("guard live else { RTLog.info(\"call\", \"CHAT-REKEY discarded\") return }"))
+        XCTAssertTrue(app.contains("return !cid.isEmpty && (activeId == cid || RingSignalingRegistry.shared.entry(cid) != nil)"))
+        XCTAssertTrue(body.contains("guard isLiveCallId(cid) else { RTLog.info(\"call\", \"CHAT-REKEY discarded\") return }"))
         XCTAssertTrue(body.contains("pendingChatRounds[cid] = round RTLog.info(\"call\", \"CHAT-REKEY held\")"))
     }
 
@@ -83,11 +83,11 @@ final class ChatRoundHoldWiringTests: XCTestCase {
         let app = try code("QAudionApp/AppState.swift")
         let apply = try XCTUnwrap(app.range(of: "private func applyHeldChatRound("))
         let body = String(app[apply.lowerBound...].prefix(1000))
-        XCTAssertTrue(body.contains("let bind = bindKey != nil && bindKey == round.peerIdentityPub"))
+        XCTAssertTrue(body.contains("bind = bindKey != nil && bindKey == round.peerIdentityPub"))
         XCTAssertTrue(body.contains("round.install(bind)"))
         XCTAssertTrue(body.contains("bind ? \"CHAT-REKEY applied\" : \"CHAT-REKEY applied_release\""))
         // frames that failed to open while the round was held sit in the one-to-one retry buffer: they are retried now
-        XCTAssertTrue(body.contains("retryBufferedOneToOneMessages(for: round.peerId)"))
+        XCTAssertTrue(body.contains("retryBufferedOneToOneMessages(for: peerId)"))
         // the release path applies it (both modes), and the release-only mode passes no key
         XCTAssertTrue(app.contains("if applyChatRound { applyHeldChatRound(callId: cid, bindKey: bindKey) }"))
         XCTAssertTrue(app.contains("case .releaseOnly: RTLog.info(\"call\", \"sasConfirm release=1 rec=0\") confirmIdentityAndReleaseMedia(markSasConfirmed: false) return .releasedOnly"))
@@ -107,21 +107,50 @@ final class ChatRoundHoldWiringTests: XCTestCase {
 
     func testTheOnlyNewLogLinesAreTheClosedVocabulary() throws {
         let app = try code("QAudionApp/AppState.swift")
-        for word in ["held", "applied", "applied_release", "discarded"] {
+        for word in ["held", "applied", "applied_release", "discarded", "buffer_drop"] {
             XCTAssertTrue(app.contains("\"CHAT-REKEY \(word)\""), word)
         }
-        XCTAssertEqual(ranges(of: "CHAT-REKEY", in: app).count, 5)
+        XCTAssertEqual(ranges(of: "CHAT-REKEY", in: app).count, 6)
     }
 
     func testWaitingFramesOutliveTheFinalTimerWhileARoundIsHeld() throws {
         let app = try code("QAudionApp/AppState.swift")
         let fin = try XCTUnwrap(app.range(of: "private func finalizeBufferedOneToOneMessages(for senderId: String) {"))
-        XCTAssertTrue(String(app[fin.upperBound...].prefix(200)).contains("if pendingChatRounds.values.contains(where: { $0.peerId == senderId }) { return }"))
+        XCTAssertTrue(String(app[fin.upperBound...].prefix(200)).contains("if hasHeldRound(for: senderId) { return }"))
         let discard = try XCTUnwrap(app.range(of: "private func discardHeldChatRound("))
         let body = String(app[discard.lowerBound...].prefix(900))
         XCTAssertTrue(body.contains("bufferedOneToOneCiphertexts[i].bufferedAtMs = nowMs"))
-        XCTAssertTrue(body.contains("scheduleBufferedOneToOneFinalize(for: round.peerId)"))
+        XCTAssertTrue(body.contains("scheduleBufferedOneToOneFinalize(for: peerId)"))
         // the cap keeps the newest frames
-        XCTAssertTrue(app.contains("bufferedOneToOneCiphertexts.removeFirst( bufferedOneToOneCiphertexts.count - Self.maxBufferedOneToOneCiphertexts)"))
+        XCTAssertTrue(app.contains("firstIndex(where: { !hasHeldRound(for: $0.senderId) })"))
+        XCTAssertTrue(app.contains("bufferedOneToOneCiphertexts.removeFirst() RTLog.info(\"call\", \"CHAT-REKEY buffer_drop\")"))
+    }
+
+    /// Source scan (the app target cannot be driven): the call-derived message key of a held round is written only by the apply.
+    func testTheMessageKeyOfAHeldRoundIsWrittenOnlyByTheApply() throws {
+        let app = try code("QAudionApp/AppState.swift")
+        // no call site writes it directly any more: the one direct write is inside the helper's unheld branch
+        XCTAssertEqual(ranges(of: "persistMessagePsk(sessionKey:", in: app).count, 3, "the definition, the helper's unheld branch and the held closure")
+        XCTAssertEqual(ranges(of: "persistOrHoldMessagePsk(sessionKey:", in: app).count, 3, "the definition and the two legs")
+        XCTAssertEqual(ranges(of: "held: roundHeld)", in: app).count, 2)
+        XCTAssertEqual(ranges(of: "let roundHeld: Bool = integration?.isMediaHeld(callId: cid) ?? false", in: app).count, 2, "read before the hop")
+        let apply = try XCTUnwrap(app.range(of: "private func applyHeldChatRound("))
+        XCTAssertTrue(String(app[apply.lowerBound...].prefix(1000)).contains("psk?.persist()"))
+        let discard = try XCTUnwrap(app.range(of: "private func discardHeldChatRound("))
+        XCTAssertTrue(String(app[discard.lowerBound...].prefix(400)).contains("pendingMsgPsks.removeValue(forKey: cid)"))
+    }
+
+    func testAConfirmationThatComesBeforeTheHoldAppliesTheRoundWhenItLands() throws {
+        let app = try code("QAudionApp/AppState.swift")
+        XCTAssertTrue(app.contains("releasedChatCalls[cid] = bindKey ?? Data()"))
+        XCTAssertTrue(app.contains("guard let key = releasedChatCalls[cid] else { return }"))
+        XCTAssertTrue(app.contains("applyHeldChatRound(callId: cid, bindKey: key.isEmpty ? nil : key)"))
+        XCTAssertEqual(ranges(of: "applyIfAlreadyReleased(cid)", in: app).count, 2, "after a round lands and after a key lands")
+    }
+
+    func testTheControlFailureQuorumPausesWhileARoundIsHeld() throws {
+        let app = try code("QAudionApp/AppState.swift")
+        let guardRange = try XCTUnwrap(app.range(of: "if hasHeldRound(for: senderId) { return } let diverged = AppState.controlFailureTracker.record("))
+        XCTAssertNotNil(guardRange)
     }
 }
