@@ -167,9 +167,7 @@ enum ContactShieldPublished {
         }
 
         func published(peerUserId: String) async -> PublishedDevices? {
-            lock.lock()
-            let current = client
-            lock.unlock()
+            let current = lock.withLock { client }
             guard let current else { return nil }
             return await KmsPublishedDeviceSource(client: current, selfContext: ContactShieldPublished.selfContext)
                 .published(peerUserId: peerUserId)
