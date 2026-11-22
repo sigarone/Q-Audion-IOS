@@ -176,6 +176,9 @@ final class ChatFileAttachmentReceiver {
             ) else {
                 throw ReceiveError.signatureInvalid
             }
+            // The announce verified as from this key: accepted traffic with it (the contact shield keeps counting a device that has
+            // had it). Not the pin below: a pin is not traffic.
+            ContactShieldEvaluator.noteTraffic(peerUserId: envelope.senderId, deviceId: nil, key: resolution.key)
             // Only commit the first-contact TOFU pin AFTER a successful
             // verify — never pin a server-supplied candidate key that never
             // actually produced a valid signature (mirrors

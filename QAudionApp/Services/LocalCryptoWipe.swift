@@ -44,6 +44,8 @@ enum LocalCryptoWipe {
             print("[LocalCryptoWipe] SovereignKeyVault.clearAll failed: \(error)")
         }
         KeychainRatchetVault().wipeAll()
+        // What is remembered in memory about the chat sessions' bindings went with them.
+        MessageRatchet.bindingsVaultWiped()
         KeychainGroupSessionVault().wipeAll()
         PeerIdentityPinStore().wipeAll()
         // The capability pins are account data: logout, remote wipe and account deletion all come through here. The arming flag

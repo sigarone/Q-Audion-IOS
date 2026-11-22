@@ -3,8 +3,8 @@ import QAudionEngine
 
 /// Reads the stores that hold the key-bound verification record of a contact and hands them to the pure rules of
 /// `IdentityShieldRules` (QAudionEngine, where the CI job that runs on every push compiles their tests). Nothing here decides
-/// anything: it gathers the pinned keys, the stored in-call confirmation and the stored safety-number verification, and the
-/// identity of this account.
+/// anything: it gathers the pinned keys, the stored in-call confirmation and the stored safety-number verification, the keys the
+/// chat sessions are bound to, what the server publishes for the contact, and the identity of this account.
 ///
 /// Used by every surface that shows the identity shield outside a call (contact list, contact detail, chat header, chat list,
 /// the car screen) and by the live call (`keyVerification`).
@@ -47,24 +47,50 @@ enum ContactShieldEvaluator {
             peerUserId: peerUserId)
     }
 
-    /// The contact-level shield of one contact (no call), from the keys pinned for it.
-    static func shield(for contact: ContactsStore.StoredContact, pinnedKeys: [Data], context: Context) -> IdentityShield {
+    /// The contact-level shield of one contact (no call), from the keys pinned for it, the keys its chat sessions are bound to and
+    /// what the server publishes for it (`IdentityShieldRules.contactShield(rows:...)`). A binding that is unknown is the plain rule
+    /// over every row.
+    static func shield(for contact: ContactsStore.StoredContact, pins: [PeerIdentityPinStore.PinnedRow], context: Context) -> IdentityShield {
         if let me = context.selfUserId, me == contact.userId { return .pending }
-        return IdentityShieldRules.contactShield(
-            pinnedKeys: pinnedKeys,
+        let rows = IdentityShieldRules.contactShieldRows(
+            pins: pins,
             record: record(peerUserId: contact.userId, contact: contact),
             selfUserId: context.selfUserId, selfIdentityKey: context.selfIdentityKey,
             peerUserId: contact.userId,
-            pendingChange: contact.identityChangePendingAtMs != nil)
+            pendingChangeFingerprints: contact.identityChangePendingFingerprintsHex ?? [],
+            traffic: contact.lastTrafficAtMs ?? [:])
+        // Reads the Keychain on a first answer for the peer, then is cached until the peer's bindings change.
+        let bound = PeerSessionBindings.shared.boundPeerPrints(peerUserId: contact.userId)
+        let published = ContactShieldPublished.lastKnown(peerUserId: contact.userId)
+        if bound != nil, rows.contains(where: { !$0.verified && !$0.changePending }) {
+            ContactShieldPublished.refreshIfStale(peerUserId: contact.userId)
+        }
+        return IdentityShieldRules.contactShield(
+            rows: rows,
+            contactChangePending: contact.identityChangePendingAtMs != nil,
+            verifiedAtMs: contact.verifiedAtMs,
+            published: published,
+            bound: bound)
     }
 
     /// The shield of every contact, from ONE enumeration of the pin store (a list must not scan the Keychain once per row).
     static func shields(for contacts: [ContactsStore.StoredContact]) -> [String: IdentityShield] {
         let context = currentContext()
-        let pins = PeerIdentityPinStore().allPinnedKeysByContact()
+        let pins = PeerIdentityPinStore().allPinnedRowsByContact()
         var out: [String: IdentityShield] = [:]
         for contact in contacts {
-            out[contact.userId] = shield(for: contact, pinnedKeys: pins[contact.userId] ?? [], context: context)
+            out[contact.userId] = shield(for: contact, pins: pins[contact.userId] ?? [], context: context)
+        }
+        return out
+    }
+
+    /// The shield of just the given contacts (one pin read each): the refresh of a peer whose bindings or published set changed.
+    static func shields(forFew contacts: [ContactsStore.StoredContact]) -> [String: IdentityShield] {
+        let context = currentContext()
+        let store = PeerIdentityPinStore()
+        var out: [String: IdentityShield] = [:]
+        for contact in contacts {
+            out[contact.userId] = shield(for: contact, pins: store.allPinnedRows(contactId: contact.userId), context: context)
         }
         return out
     }
@@ -72,6 +98,66 @@ enum ContactShieldEvaluator {
     /// The shield of one contact by user id: `.pending` when it is not a stored contact.
     static func shield(forUserId userId: String) -> IdentityShield {
         guard let contact = ContactsStore().load().first(where: { $0.userId == userId }) else { return .pending }
-        return shield(for: contact, pinnedKeys: PeerIdentityPinStore().allPinnedKeys(contactId: userId), context: currentContext())
+        return shield(for: contact, pins: PeerIdentityPinStore().allPinnedRows(contactId: userId), context: currentContext())
+    }
+
+    /// The safety-number fingerprint of `key` as the trust rows record it (what the chat sessions are bound to) for the peer
+    /// `peerUserId`; nil when this account's identity is unavailable.
+    static func peerKeyPrint(peerUserId: String, key: Data) -> String? {
+        let context = currentContext()
+        return PeerKeyPrint.of(selfUserId: context.selfUserId, selfIdentityKey: context.selfIdentityKey, peerUserId: peerUserId, peerKey: key)
+    }
+
+    /// Records ACCEPTED traffic with a device or key of a stored contact (see `ContactsStore.noteTraffic`). The key reads run off the
+    /// caller's thread; the one short read-modify-write of the contact store is done on the main queue, where every other write of the
+    /// store is made and whose observers expect the change notification.
+    static func noteTraffic(peerUserId: String, deviceId: String?, key: Data?) {
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        DispatchQueue.global(qos: .utility).async {
+            let fingerprint: String? = key.flatMap { peerKeyPrint(peerUserId: peerUserId, key: $0) }
+            DispatchQueue.main.async {
+                ContactsStore().noteTraffic(peerUserId: peerUserId, deviceId: deviceId, fingerprintHex: fingerprint, nowMs: nowMs)
+            }
+        }
+    }
+}
+
+/// The server's published device set of the contacts, for the contact shield: one shared cache over the signed-in session's KMS client.
+/// Until a session exists (and whenever a fetch fails) the set is unknown and every row of a contact counts.
+enum ContactShieldPublished {
+    private static let lock = NSLock()
+    private static var cache: PublishedDeviceSetCache?
+
+    /// Called whenever the signed-in session's client changes; nil drops the cache.
+    static func configure(kmsClient: BCryptoKmsClient?) {
+        lock.lock(); defer { lock.unlock() }
+        guard let kmsClient else {
+            cache = nil
+            return
+        }
+        let source = KmsPublishedDeviceSource(client: kmsClient, selfContext: Self.selfContext)
+        cache = PublishedDeviceSetCache(source: source)
+    }
+
+    @Sendable private static func selfContext() -> (userId: String, identityKey: Data)? {
+        let context = ContactShieldEvaluator.currentContext()
+        guard let me = context.selfUserId, let key = context.selfIdentityKey else { return nil }
+        return (me, key)
+    }
+
+    private static func current() -> PublishedDeviceSetCache? {
+        lock.lock(); defer { lock.unlock() }
+        return cache
+    }
+
+    /// The last set known for the peer, fresh or not: an expiry never flips the shield.
+    static func lastKnown(peerUserId: String) -> PublishedDevices? {
+        current()?.lastKnown(peerUserId: peerUserId)
+    }
+
+    /// Starts a fetch when the entry is missing or expired. Fire and forget; the cache announces a change.
+    static func refreshIfStale(peerUserId: String) {
+        guard let cache = current(), !cache.isFresh(peerUserId: peerUserId) else { return }
+        Task.detached(priority: .utility) { await cache.get(peerUserId: peerUserId) }
     }
 }

@@ -107,6 +107,11 @@ struct ContactDetailScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .sasVerificationDidChange)) { _ in
             contactShield = ContactShieldEvaluator.shield(forUserId: item.userId)
         }
+        // The chat sessions of THIS contact were bound to another key, or their liveness changed: posted from the engine's own threads.
+        .onReceive(NotificationCenter.default.publisher(for: MessageRatchet.bindingDidChangeNotification)) { note in
+            guard (note.userInfo?["peerId"] as? String) == item.userId else { return }
+            DispatchQueue.main.async { contactShield = ContactShieldEvaluator.shield(forUserId: item.userId) }
+        }
         .onAppear {
             contactShield = ContactShieldEvaluator.shield(forUserId: item.userId)
             isBlocked = BlockedContactsStore.isBlocked(item.userId)

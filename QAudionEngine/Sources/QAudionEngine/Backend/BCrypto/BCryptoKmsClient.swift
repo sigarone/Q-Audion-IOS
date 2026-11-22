@@ -396,6 +396,36 @@ public final class BCryptoKmsClient {
         }
     }
 
+    /// What the server publishes for a peer's devices, from the SAME `?all=1` response as `fetchUserIdentityKeySet`: the device ids
+    /// (blank ones left out) and each published Ed25519 key (32 bytes; the bundle signature is not checked here on purpose, so more
+    /// keys can only mean fewer rows dropped by the contact shield). `nil` on any failure, offline, 404 or when no device id is listed:
+    /// the caller then counts every row.
+    public struct PublishedDeviceKeys: Equatable, Sendable {
+        public let deviceIds: Set<String>
+        public let keys: [Data]
+    }
+
+    public func fetchUserPublishedDevices(userId: String) async -> PublishedDeviceKeys? {
+        guard !userId.isEmpty, !rest.isOffline else { return nil }
+        do {
+            let data = try await rest.get("/api/v1/users/\(userId)/identity-key?all=1")
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let devices = json["devices"] as? [[String: Any]] else { return nil }
+            var ids = Set<String>()
+            var keys: [Data] = []
+            for dev in devices {
+                if let id = dev["device_id"] as? String, !id.trimmingCharacters(in: .whitespaces).isEmpty { ids.insert(id) }
+                if let b64 = (dev["ed25519_pub_b64"] as? String) ?? (dev["public_key_b64"] as? String),
+                   let raw = Data(base64Encoded: b64), raw.count == 32 {
+                    keys.append(raw)
+                }
+            }
+            return ids.isEmpty ? nil : PublishedDeviceKeys(deviceIds: ids, keys: keys)
+        } catch {
+            return nil
+        }
+    }
+
     /// ADR-014a §2.3 — full v2 identity bundle for a peer, used by the
     /// group-call KMS-prebootstrap send path (gap A2, see
     /// `AppState.attemptGroupCtrlKmsPreBootstrap`). Unlike

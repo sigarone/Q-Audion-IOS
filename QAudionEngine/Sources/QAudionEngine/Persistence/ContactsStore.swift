@@ -197,6 +197,12 @@ public final class ContactsStore {
         /// devices). A verification, a confirmation or an adoption settles ONLY the change of exactly the key it concerns: verifying
         /// device B must not clear a pending change of device A.
         public private(set) var identityChangePendingFingerprintsHex: [String]?
+        /// When this device last had ACCEPTED traffic with each device or key of the contact (an authenticated call identity, content verified
+        /// as from it, a key a pre-bootstrap installed a session for), keyed by `trafficKey(deviceId:)` / `trafficKey(fingerprintHex:)`. Read
+        /// only by the contact shield, which keeps counting an unverified device the server no longer publishes once it has traffic after the
+        /// contact's last verification. Written only by `withTraffic`, never by a pin, a lookup or a background refresh. `nil` for every row
+        /// written before this field existed (no traffic recorded).
+        public private(set) var lastTrafficAtMs: [String: Int64]?
 
         public init(userId: String, displayName: String, phoneHash: String,
                     avatarUrl: URL?, lastSeen: Date?, isVerified: Bool,
@@ -214,7 +220,8 @@ public final class ContactsStore {
                     proximityPairedAtMs: Int64? = nil,
                     proximityServerConfirmed: Bool? = nil,
                     identityChangePendingAtMs: Int64? = nil,
-                    identityChangePendingFingerprintsHex: [String]? = nil) {
+                    identityChangePendingFingerprintsHex: [String]? = nil,
+                    lastTrafficAtMs: [String: Int64]? = nil) {
             self.userId = userId
             self.displayName = displayName
             self.phoneHash = phoneHash
@@ -236,6 +243,7 @@ public final class ContactsStore {
             self.proximityServerConfirmed = proximityServerConfirmed
             self.identityChangePendingAtMs = identityChangePendingAtMs
             self.identityChangePendingFingerprintsHex = identityChangePendingFingerprintsHex
+            self.lastTrafficAtMs = lastTrafficAtMs
         }
 
         // MARK: Field-preserving copies
@@ -347,6 +355,29 @@ public final class ContactsStore {
             var copy = self
             copy.proximityPairedAtMs = atMs
             copy.proximityServerConfirmed = serverConfirmed
+            return copy
+        }
+
+        /// The key under which traffic with a device is recorded.
+        public static func trafficKey(deviceId: String) -> String { "dev:" + deviceId.lowercased() }
+        /// The key under which traffic with a pinned key is recorded.
+        public static func trafficKey(fingerprintHex: String) -> String { "fp:" + fingerprintHex.lowercased() }
+
+        /// Returns a copy that records ACCEPTED traffic with the device `deviceId` and/or the key `fingerprintHex` at `nowMs`. The value
+        /// written is never behind what is already known: `max(nowMs, the value already recorded, the contact's last verification + 1)`, so
+        /// a clock stepped back cannot sort traffic before the verification it follows, nor before traffic already recorded.
+        public func withTraffic(deviceId: String?, fingerprintHex: String?, nowMs: Int64) -> StoredContact {
+            var keys: [String] = []
+            if let d = deviceId, !d.isEmpty { keys.append(Self.trafficKey(deviceId: d)) }
+            if let f = fingerprintHex, !f.isEmpty { keys.append(Self.trafficKey(fingerprintHex: f)) }
+            guard !keys.isEmpty else { return self }
+            var copy = self
+            var map = copy.lastTrafficAtMs ?? [:]
+            for key in keys {
+                let floor = (verifiedAtMs ?? -1) &+ 1
+                map[key] = max(nowMs, map[key] ?? 0, floor)
+            }
+            copy.lastTrafficAtMs = map
             return copy
         }
 
@@ -1088,6 +1119,16 @@ public final class ContactsStore {
         return updated
     }
 
+    /// Records ACCEPTED traffic with the device `deviceId` / the key `fingerprintHex` of a stored contact (see
+    /// `StoredContact.withTraffic`). Called only for real traffic: an authenticated call identity, content verified as from the contact,
+    /// a pre-bootstrap that installed a session for the key. Never from a pin, a lookup, a background refresh or a chat open. A peer that
+    /// is not a stored contact has no row to mark. Nothing is written when nothing changed.
+    public func noteTraffic(peerUserId: String, deviceId: String?, fingerprintHex: String?, nowMs: Int64) {
+        guard let existing = load().first(where: { $0.userId == peerUserId }) else { return }
+        let updated = existing.withTraffic(deviceId: deviceId, fingerprintHex: fingerprintHex, nowMs: nowMs)
+        if updated != existing { upsert(updated) }
+    }
+
     /// Reconstruct a `StoredContact` identical to `base` except for
     /// `presenceAuth`/`presenceFloor` — every OTHER field threaded through
     /// unchanged. Centralised here (rather than repeated inline at each
@@ -1117,7 +1158,8 @@ public final class ContactsStore {
             proximityPairedAtMs: base.proximityPairedAtMs,
             proximityServerConfirmed: base.proximityServerConfirmed,
             identityChangePendingAtMs: base.identityChangePendingAtMs,
-            identityChangePendingFingerprintsHex: base.identityChangePendingFingerprintsHex
+            identityChangePendingFingerprintsHex: base.identityChangePendingFingerprintsHex,
+            lastTrafficAtMs: base.lastTrafficAtMs
         )
     }
 }

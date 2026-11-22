@@ -80,6 +80,7 @@ struct ChatDetailScreen: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType) private var type
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     /// False when the chat is the detail column next to the list: there is no list to go back to.
     @Environment(\.qaudionChatShowsBack) private var showsBack
     @Environment(\.qaudionSnackbar) private var snackbar
@@ -659,6 +660,18 @@ struct ChatDetailScreen: View {
 
     // MARK: - Top bar
 
+    /// A compact width: the secondary header buttons live in the overflow menu.
+    private var headerIsNarrow: Bool { horizontalSizeClass == .compact }
+
+    /// The Bluetooth mesh entry as a menu item (same gate as the header button).
+    private var meshMenuButton: some View {
+        Button {
+            if capabilityGate.isUnlocked(.meshBle) { showingMeshSheet = true } else { upgradeSheetCapability = .meshBle }
+        } label: {
+            Label("Mesh Bluetooth", systemImage: "dot.radiowaves.left.and.right")
+        }
+    }
+
     private var topBar: some View {
         HStack(spacing: 8) {
             if showsBack {
@@ -687,10 +700,18 @@ struct ChatDetailScreen: View {
             )
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(resolvedPeerTitle)
-                    .qaudionStyle(type.titleSmall)
-                    .foregroundStyle(scheme.onSurface)
-                    .lineLimit(1)
+                // The identity shield of the contact (1:1 chats only) sits next to the name: the same badge as the call bar, the contact
+                // list and the detail. The name keeps its room; it is the shield that stays at its small size.
+                HStack(spacing: 4) {
+                    Text(resolvedPeerTitle)
+                        .qaudionStyle(type.titleSmall)
+                        .foregroundStyle(scheme.onSurface)
+                        .lineLimit(1)
+                    if container.viewModel.conversation.kind != .group {
+                        ContactShieldBadge(userId: container.viewModel.conversation.peerUserId, size: 20)
+                            .fixedSize()
+                    }
+                }
                 Text(presenceLine)
                     .qaudionStyle(type.labelSmall)
                     .tracking(1.0)
@@ -706,11 +727,6 @@ struct ChatDetailScreen: View {
             // rather than wired to a real source, because post-quantum key
             // agreement is unconditional in this app, so even a truthful
             // indicator would restate nothing.
-
-            // The identity shield of the contact (1:1 chats only): the same badge as the call bar, the contact list and the detail.
-            if container.viewModel.conversation.kind != .group {
-                ContactShieldBadge(userId: container.viewModel.conversation.peerUserId, size: 28)
-            }
 
             // W445: ephemeral timer button. Tap opens the timer chooser.
             // Accent color signals when a timer is active so the user knows
@@ -770,7 +786,8 @@ struct ChatDetailScreen: View {
             // opening a sheet to find out whether you could. The
             // accessibility label distinguishes them rather than naming an
             // icon. Matches the Android sibling.
-            if MeshFeature.enabled {
+            // On a narrow screen the entry moves to the overflow menu, so the name stays readable.
+            if MeshFeature.enabled, !headerIsNarrow {
                 let conversationKey = container.viewModel.conversation.id.uuidString
                 let armed = meshRuntime.activeTarget(for: conversationKey) != nil
                 let peerNearby = meshChatPeerIsNearby
@@ -802,6 +819,7 @@ struct ChatDetailScreen: View {
             // contact. The local-store wipe is immediate; block / unblock
             // hits ContactsApi.blockContact via the persistent backend.
             Menu {
+                if MeshFeature.enabled, headerIsNarrow { meshMenuButton }
                 // Screenshot permission
                 let ssGranted = container.screenshotGrantedByPeer
                 if ssGranted == true {

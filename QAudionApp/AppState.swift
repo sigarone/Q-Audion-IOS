@@ -361,6 +361,8 @@ final class AppState: ObservableObject {
     /// node. A live capture showed four such clients in one process, one per rebuild.
     internal var liveProvider: BCryptoBackendProvider? {
         didSet {
+            // The contact shield reads the published devices of its contacts through this session's client.
+            ContactShieldPublished.configure(kmsClient: liveProvider?.kmsClient)
             guard let old = oldValue, old !== liveProvider else { return }
             retireProvider(old)
         }
@@ -1456,12 +1458,25 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Records accepted traffic with the device and key the handshake of this call stood on.
+    private func noteCallTraffic(_ report: IdentityVerdictReport) {
+        switch report.kind {
+        case .authenticated(let key):
+            ContactShieldEvaluator.noteTraffic(peerUserId: report.peerId, deviceId: report.deviceId, key: key)
+        case .held(_, let signerKey, _, _):
+            ContactShieldEvaluator.noteTraffic(peerUserId: report.peerId, deviceId: report.deviceId, key: signerKey)
+        }
+    }
+
     /// Fold one handshake round's report into the call's identity state. Marshalled to the main actor by the integration callback.
     /// Creates the rotation candidate ONLY here, from the verdict of this call's handshake.
     @MainActor
     func handleIdentityVerdict(_ report: IdentityVerdictReport) {
         let cid = report.callId.lowercased()
         guard !cid.isEmpty else { return }
+        // An accepted call identity is accepted traffic with that device and key (a held verdict counts too: the call proceeds, and the
+        // conservative side is to keep the row in the contact shield).
+        if report.round <= 1, !report.isProofReport { noteCallTraffic(report) }
         // A verdict or a proof of a call that is not the live one (a late answer of a call that ended) is dropped. While no call id is
         // bound yet (ring time) the report is taken; the state itself is tagged with its call and reset at every call start.
         // Recording a changed key on the CONTACT is a fact about the contact, not call state: it is done for every verdict, before the
@@ -18374,9 +18389,12 @@ final class AppState: ObservableObject {
                 // create-if-absent: its sender installs before the peer has
                 // consumed the envelope, so replacing there could break a working
                 // session on one side only.
+                // The safety-number fingerprint of the peer key this handshake authenticated: both sessions are bound to it.
+                let peerKeyPrint: String? = ContactShieldEvaluator.peerKeyPrint(peerUserId: peerId, key: peerIdentityPub)
                 let ok = AppState.sharedV4Ratchet.replaceChannelSession(
                     epochId: MessageRatchet.v4RoutingEpoch,
-                    peerId: peerId
+                    peerId: peerId,
+                    peerKeyPrint: peerKeyPrint
                 ) {
                     AppState.sharedV4Ratchet.bootstrapV4(
                         effectiveSecret: effectiveSecret,
@@ -18404,7 +18422,8 @@ final class AppState: ObservableObject {
                 // create-if-absent (W-V4CONNECTRESET). Same change on Android/Desktop.
                 let controlOk = AppState.sharedV4Ratchet.replaceChannelSession(
                     epochId: MessageRatchet.v5ControlRoutingEpoch,
-                    peerId: peerId
+                    peerId: peerId,
+                    peerKeyPrint: peerKeyPrint
                 ) {
                     AppState.sharedV4Ratchet.bootstrapV5Control(
                         peerId: peerId,
@@ -21419,9 +21438,12 @@ final class AppState: ObservableObject {
                         // W-CHATREPLACE (2026-09-19) — REPLACE, like the responder leg
                         // above: see its note for why CHAT can no longer stay
                         // create-if-absent (a diverged pair never repairs).
+                        // The safety-number fingerprint of the peer key this handshake authenticated: both sessions are bound to it.
+                        let peerKeyPrint: String? = ContactShieldEvaluator.peerKeyPrint(peerUserId: peerId, key: peerIdentityPub)
                         let ok = AppState.sharedV4Ratchet.replaceChannelSession(
                             epochId: MessageRatchet.v4RoutingEpoch,
-                            peerId: peerId
+                            peerId: peerId,
+                            peerKeyPrint: peerKeyPrint
                         ) {
                             AppState.sharedV4Ratchet.bootstrapV4(
                                 effectiveSecret: effectiveSecret,
@@ -21447,7 +21469,8 @@ final class AppState: ObservableObject {
                         // pair no matter who dialled.
                         let controlOk = AppState.sharedV4Ratchet.replaceChannelSession(
                             epochId: MessageRatchet.v5ControlRoutingEpoch,
-                            peerId: peerId
+                            peerId: peerId,
+                            peerKeyPrint: peerKeyPrint
                         ) {
                             AppState.sharedV4Ratchet.bootstrapV5Control(
                                 peerId: peerId,
@@ -31403,7 +31426,9 @@ extension AppState {
         // consumed the envelope (and the peer may fail to decode it), so replacing a working
         // CHAT session here could break it on one side only. CONTROL, whose frames are
         // re-sendable envelopes, replaces below.
-        let ok = ratchet.ensureBootstrapped(epochId: MessageRatchet.v4RoutingEpoch, peerId: peer) {
+        // The safety-number fingerprint of the peer key this envelope authenticated: both sessions are bound to it.
+        let peerKeyPrint: String? = ContactShieldEvaluator.peerKeyPrint(peerUserId: peer, key: peerIdentityEdPub)
+        let ok = ratchet.ensureBootstrapped(epochId: MessageRatchet.v4RoutingEpoch, peerId: peer, peerKeyPrint: peerKeyPrint) {
             ratchet.bootstrapV4(
                 effectiveSecret: rk0,
                 selfEpochId: zeroEpoch,
@@ -31426,7 +31451,7 @@ extension AppState {
         // whose CONTROL sessions had already diverged stayed diverged until their next
         // call. Mirrors the call-handshake fix (W-CTRLREPLACE, ~line 13489) and Android's
         // `KmsPreBootstrapReceiver.bootstrapV4FromEnvelope`, which already replaces here.
-        let controlOk = ratchet.replaceChannelSession(epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peer) {
+        let controlOk = ratchet.replaceChannelSession(epochId: MessageRatchet.v5ControlRoutingEpoch, peerId: peer, peerKeyPrint: peerKeyPrint) {
             ratchet.bootstrapV5Control(
                 peerId: peer,
                 effectiveSecret: rk0,
@@ -31439,6 +31464,8 @@ extension AppState {
         }
         RTLog.info("crypto", "v5 control prebootstrap replaceChannelSession ok=\(controlOk ? 1 : 0)")
         print("[AppState] KmsPreBootstrap: v5 control session replaced=\(controlOk) peer=\(peer.prefix(8))…")
+        // The envelope was verified as from this key: accepted traffic with it (the contact shield keeps counting a device that has had it).
+        ContactShieldEvaluator.noteTraffic(peerUserId: peer, deviceId: nil, key: peerIdentityEdPub)
         if controlOk {
             // 2026-09-19 — flush service payloads held for this peer (after a short
             // grace inside the coordinator, so this envelope's own pre-bootstrap

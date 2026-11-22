@@ -82,6 +82,50 @@ public final class KeychainRatchetVault: RatchetVault, @unchecked Sendable {
         deleteBlob(service: Self.serviceV4, account: Self.account(epochId: epochId, peerId: peerId))
     }
 
+    // MARK: - Checked variants (see `RatchetVault`)
+
+    /// Existence of a v4 row, asked without returning its value: nothing is unwrapped for this answer.
+    public func hasV4Checked(epochId: String, peerId: String) throws -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.serviceV4,
+            kSecAttrAccount as String: Self.account(epochId: epochId, peerId: peerId),
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        let status = SecItemCopyMatching(query as CFDictionary, nil)
+        if status == errSecSuccess { return true }
+        if status == errSecItemNotFound { return false }
+        if status == KeychainAccessibilityPolicy.deviceLockedStatus { throw VaultError.deviceLocked }
+        throw VaultError.readFailed(status)
+    }
+
+    /// The v4 row; `nil` only when it does not exist. A row that exists but cannot be read throws.
+    public func loadV4Checked(epochId: String, peerId: String) throws -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.serviceV4,
+            kSecAttrAccount as String: Self.account(epochId: epochId, peerId: peerId),
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        if status == KeychainAccessibilityPolicy.deviceLockedStatus { throw VaultError.deviceLocked }
+        guard status == errSecSuccess, let data = item as? Data else { throw VaultError.readFailed(status) }
+        return data
+    }
+
+    public func deleteV4Checked(epochId: String, peerId: String) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.serviceV4,
+            kSecAttrAccount as String: Self.account(epochId: epochId, peerId: peerId),
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw VaultError.deleteFailed(status) }
+    }
+
     /// P0-5 (2026-08-05, coordinated fix plan cluster 5) — bulk wipe for
     /// `remote_wipe` / account deletion. `delete(epochId:peerId:)` /
     /// `deleteV4(epochId:peerId:)` only ever remove ONE known `(epochId,
