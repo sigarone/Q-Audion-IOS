@@ -945,7 +945,9 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// the fire (passes nothing) when any real input is missing (no signed
     /// handshake), so there is no v4 bootstrap rather than a divergent placeholder
     /// session. No-op when nil.
-    public var onV4BootstrapReady: ((String, Data, Data, Data, Data) -> Void)?
+    /// The last argument is true only when the signature of THIS round verified under the peer key passed (`offerSigOk` /
+    /// `acceptSigOk`); the session binding records that key only then.
+    public var onV4BootstrapReady: ((String, Data, Data, Data, Data, Bool) -> Void)?
 
     /// W574g — fires (sessionKey, callId) at EVERY session-init site, the
     /// instant the engine session key is set. The app wires this to
@@ -3040,7 +3042,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 if v4Fire,
                    let selfId = localSignerIdentityKey,
                    let peerId = v4PeerSik {
-                    onV4BootstrapReady?(callerId, combined, verifiedOfferBinding, selfId, peerId)
+                    onV4BootstrapReady?(callerId, combined, verifiedOfferBinding, selfId, peerId, offerSigOk)
                 }
                 // W-KCMAC (ship step 5) — responder leg. Fires AFTER the session key
                 // and the ACCEPT's binding both exist. `kcKey`/`transcript` stay
@@ -3760,7 +3762,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                let peerId = v4InitPeerSik,
                let sentOfferT = sentOfferTForV4 {
                 let sentBinding = HandshakeTranscript.offerBinding(sentOfferT)
-                onV4BootstrapReady?(callerId, combined, sentBinding, selfId, peerId)
+                onV4BootstrapReady?(callerId, combined, sentBinding, selfId, peerId, acceptSigOk)
             }
             // W-KCMAC (ship step 5) — initiator leg, the CALLER-side twin of the
             // responder's fire above. `offerBindingV2ForKc` is OUR OWN sent-OFFER

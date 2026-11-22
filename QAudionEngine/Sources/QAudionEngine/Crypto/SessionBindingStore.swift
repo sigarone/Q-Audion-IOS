@@ -130,9 +130,9 @@ final class SessionBindingStore {
             try vault.deleteV4Checked(epochId: Self.recId(epoch), peerId: peerId)
         } catch {
             logWriteFailed("rec")
-            // The tags cannot be relied on to disown a stale record that is still there: the slot is unknown until a record write to
-            // the same slot succeeds.
-            State.shared.markUnknown(epoch: epoch, peer: peerId)
+            // The tags cannot be relied on to disown a stale record that is still there: the slot is unknown, in memory and on disk
+            // (a tombstone over the record, or no record), until a record write to the same slot succeeds at an install or replace.
+            markUnknownPersistently(epoch, peerId, base: old)
         }
         changed(peerId) // cached answers are void from here until the record is back
         return Before(record: old, curSrc: curSrc)
@@ -183,22 +183,21 @@ final class SessionBindingStore {
     func commitDrop(_ epoch: String, _ peerId: String, before: Before) {
         guard let old = before.record else {
             // Nothing believable to carry over: whatever row remains is not trusted.
-            State.shared.markUnknown(epoch: epoch, peer: peerId)
-            changed(peerId)
+            markUnknownPersistently(epoch, peerId, base: nil)
             return
         }
+        // A drop is not an install or a replace: it never clears an unknown mark.
         let ok = write(epoch, peerId,
                        Record(counter: old.counter, curTag: Data(), curPrint: "", prevTag: old.prevTag, prevPrint: old.prevPrint,
                               curFirstSeq: 0, prevLastSeq: old.prevLastSeq),
-                       slot: "rec", rearms: true)
-        if !ok { State.shared.markUnknown(epoch: epoch, peer: peerId) }
+                       slot: "rec", rearms: false)
+        if !ok { markUnknownPersistently(epoch, peerId, base: old) }
     }
 
     /// The delete of the current session did not happen: the session is still there, with no record. The slot is unknown.
-    func dropFailed(_ epoch: String, _ peerId: String) {
+    func dropFailed(_ epoch: String, _ peerId: String, before: Before) {
         logWriteFailed("cur")
-        State.shared.markUnknown(epoch: epoch, peer: peerId)
-        changed(peerId)
+        markUnknownPersistently(epoch, peerId, base: before.record)
     }
 
     /// A repeat install from the same material: bind the session now if its slot has no believable record for it.
@@ -242,16 +241,24 @@ final class SessionBindingStore {
 
     /// The retained previous session of `epoch` opened a frame.
     func notePrevDecrypt(_ epoch: String, _ peerId: String) {
-        guard let old = readRecord(epoch, peerId) else { return }
+        let old: Record
+        do {
+            guard let found = try readRecordChecked(epoch, peerId) else { return }
+            old = found
+        } catch {
+            // The previous session just decrypted but the record that says whether it is live could not be read: it might look dead.
+            logWriteFailed("prev")
+            markUnknownPersistently(epoch, peerId, base: nil)
+            return
+        }
         let seq = old.counter &+ 1
         var next = old
         next.counter = seq
         next.prevLastSeq = seq
         if !write(epoch, peerId, next, slot: "prev", rearms: false) {
-            // The previous session just decrypted but that could not be recorded: it might look dead. The slot is unknown for this
-            // peer, in memory, until a later successful record write to the same slot.
-            State.shared.markUnknown(epoch: epoch, peer: peerId)
-            changed(peerId)
+            // It could not be recorded either: the slot is unknown, in memory and on disk, until a record write to the same slot
+            // succeeds at an install or replace.
+            markUnknownPersistently(epoch, peerId, base: old)
         }
     }
 
@@ -307,6 +314,29 @@ final class SessionBindingStore {
             changed(peerId)
             return false
         }
+    }
+
+    /// The slot is unknown from now on, also after a restart: a tombstone (a record with no print, which reads as unknown) is written
+    /// over the record; when that fails too the record is deleted. Only a record write to the same slot at an install or replace
+    /// clears the in-memory mark, and that write replaces the tombstone.
+    private func markUnknownPersistently(_ epoch: String, _ peerId: String, base: Record?) {
+        State.shared.markUnknown(epoch: epoch, peer: peerId)
+        let tomb = Record(counter: base?.counter ?? 0, curTag: Data(), curPrint: "", prevTag: Data(), prevPrint: "",
+                          curFirstSeq: 0, prevLastSeq: 0)
+        do {
+            try vault.saveV4(epochId: Self.recId(epoch), peerId: peerId, blob: tomb.encode())
+        } catch {
+            logWriteFailed("rec")
+            do { try vault.deleteV4Checked(epochId: Self.recId(epoch), peerId: peerId) } catch { logWriteFailed("rec") }
+        }
+        changed(peerId)
+    }
+
+    /// The record, nil only when none exists; a read error or a record that cannot be decoded throws.
+    private func readRecordChecked(_ epoch: String, _ peerId: String) throws -> Record? {
+        guard let data = try vault.loadV4Checked(epochId: Self.recId(epoch), peerId: peerId) else { return nil }
+        guard let record = Record.decode(data) else { throw VaultError.readFailed(0) }
+        return record
     }
 
     /// The record as written, or nil when absent or unreadable (both are "not believable").

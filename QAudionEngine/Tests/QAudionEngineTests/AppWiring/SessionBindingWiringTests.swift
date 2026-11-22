@@ -55,6 +55,26 @@ final class SessionBindingWiringTests: XCTestCase {
         XCTAssertEqual(ranges(of: "ContactShieldEvaluator.peerKeyPrint(peerUserId: peer, key: peerIdentityEdPub)", in: app).count, 1)
     }
 
+    func testTheBindingNamesAKeyOnlyWhenThatRoundsSignatureVerifiedUnderIt() throws {
+        let engine = try code("QAudionEngine/Sources/QAudionEngine/Integration/QAudionCallIntegration.swift")
+        XCTAssertTrue(engine.contains("onV4BootstrapReady?(callerId, combined, verifiedOfferBinding, selfId, peerId, offerSigOk)"))
+        XCTAssertTrue(engine.contains("onV4BootstrapReady?(callerId, combined, sentBinding, selfId, peerId, acceptSigOk)"))
+        let app = try code("QAudionApp/AppState.swift")
+        XCTAssertEqual(ranges(of: "peerIdentityPub, peerKeyVerified in", in: app).count, 2)
+        XCTAssertEqual(ranges(of: "peerKeyVerified ? ContactShieldEvaluator.peerKeyPrint(peerUserId: peerId, key: peerIdentityPub) : nil", in: app).count, 2)
+    }
+
+    func testTheDetailScreenReadsTheSharedCacheAndTheProviderRebuildKeepsThePublishedSets() throws {
+        let detail = try code("QAudionApp/Views/Contacts/ContactDetailScreen.swift")
+        XCTAssertFalse(detail.contains("ContactShieldEvaluator."), "the detail screen does no shield work of its own")
+        XCTAssertTrue(detail.contains("ContactShieldCache.shared"))
+        let evaluator = try code("QAudionApp/Services/ContactShieldEvaluator.swift")
+        XCTAssertTrue(evaluator.contains("static func configure(kmsClient: BCryptoKmsClient?) { source.set(kmsClient) }")
+                      || evaluator.contains("static func configure(kmsClient: BCryptoKmsClient?) { source.set(kmsClient)"),
+                      "a new or missing provider only swaps who is asked")
+        XCTAssertTrue(evaluator.contains("guard source.hasClient, !cache.isFresh(peerUserId: peerUserId) else { return }"))
+    }
+
     func testTheShieldWorkRunsOffTheMainActorAndCannotLoseAPeerUpdate() throws {
         let cache = try code("QAudionApp/Services/ContactShieldCache.swift")
         let head = try XCTUnwrap(cache.range(of: "final class ContactShieldCache: ObservableObject"))
@@ -69,6 +89,9 @@ final class SessionBindingWiringTests: XCTestCase {
         // one set of dirty peers, emptied before the work and refilled by every mark, which always schedules a drain
         XCTAssertTrue(worker.contains("dirtyPeers.insert(peer)"))
         XCTAssertTrue(worker.contains("let peers = dirtyPeers allDirty = false dirtyPeers = []"))
+        // one serial place publishes the whole map with a sequence number; a map older than the one shown is dropped
+        XCTAssertTrue(worker.contains("sequence += 1 publish?(sequence, current)"))
+        XCTAssertTrue(cache.contains("guard sequence > lastSequence else { return }"))
         XCTAssertTrue(cache.contains("MessageRatchet.bindingDidChangeNotification"))
         XCTAssertTrue(cache.contains("PublishedDeviceSetCache.didChangeNotification"))
     }

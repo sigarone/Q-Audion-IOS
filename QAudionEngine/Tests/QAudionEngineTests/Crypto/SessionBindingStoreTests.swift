@@ -13,6 +13,8 @@ final class SessionBindingStoreTests: XCTestCase {
         private let lock = NSLock()
         private var rows: [String: Data] = [:]
         var failSaveRows: Set<String> = []
+        /// Rows whose NEXT save fails, once.
+        var failSaveOnce: Set<String> = []
         var failDeleteRows: Set<String> = []
         var failExistsRows: Set<String> = []
         var failLoadRows: Set<String> = []
@@ -30,6 +32,7 @@ final class SessionBindingStoreTests: XCTestCase {
         func saveV4(epochId: String, peerId: String, blob: Data) throws {
             lock.lock(); defer { lock.unlock() }
             if failSaveRows.contains(epochId) { throw VaultError.persistFailed(-1) }
+            if failSaveOnce.remove(epochId) != nil { throw VaultError.persistFailed(-1) }
             rows[key(epochId, peerId)] = blob
         }
         func deleteV4(epochId: String, peerId: String) {
@@ -329,6 +332,71 @@ final class SessionBindingStoreTests: XCTestCase {
         r.persistDrop(epochId: chat, peerId: peer) // the session could not be deleted
         vault.failDeleteRows = []
         XCTAssertEqual(r.boundPeerPrintsChecked(peerId: peer), .unknown)
+    }
+
+    func testAReadFailureDuringThePreviousNoteMarksTheSlotUnknown() throws {
+        let vault = FlakyVault()
+        let r = MessageRatchet(vault: vault)
+        let peer = newPeer()
+        _ = try r.persistReplace(epochId: chat, peerId: peer, blob: blob(1), peerKeyPrint: printB)
+        _ = try r.persistReplace(epochId: chat, peerId: peer, blob: blob(2), peerKeyPrint: printA)
+        r.noteCurrentOpened(epochId: chat, peerId: peer)
+        XCTAssertEqual(bound(r, peer), [printA])
+        vault.failLoadRows = [SessionBindingStore.recId(chat)]
+        r.notePreviousOpened(epochId: chat, peerId: peer)
+        vault.failLoadRows = []
+        XCTAssertEqual(r.boundPeerPrintsChecked(peerId: peer), .unknown, "the previous session decrypted and nothing could say so")
+    }
+
+    func testAnUnknownMarkSurvivesARestart() throws {
+        let vault = FlakyVault()
+        let r = MessageRatchet(vault: vault)
+        let peer = newPeer()
+        _ = try r.persistReplace(epochId: chat, peerId: peer, blob: blob(1), peerKeyPrint: printB)
+        _ = try r.persistReplace(epochId: chat, peerId: peer, blob: blob(2), peerKeyPrint: printA)
+        r.noteCurrentOpened(epochId: chat, peerId: peer)
+        XCTAssertEqual(bound(r, peer), [printA])
+        // The note cannot be written once: a tombstone goes over the record.
+        vault.failSaveOnce = [SessionBindingStore.recId(chat)]
+        r.notePreviousOpened(epochId: chat, peerId: peer)
+        XCTAssertEqual(r.boundPeerPrintsChecked(peerId: peer), .unknown)
+        _ = SessionBindingStore.State.shared.resetAll() // a restart: nothing is remembered in memory
+        XCTAssertEqual(MessageRatchet(vault: vault).boundPeerPrintsChecked(peerId: peer), .unknown)
+        // An install over it clears it.
+        _ = try r.persistReplace(epochId: chat, peerId: peer, blob: blob(3), peerKeyPrint: printA)
+        r.noteCurrentOpened(epochId: chat, peerId: peer)
+        XCTAssertEqual(bound(r, peer), [printA])
+        // When the tombstone cannot be written either the record is deleted, which reads as unknown after a restart too.
+        vault.failSaveRows = [SessionBindingStore.recId(chat)]
+        r.notePreviousOpened(epochId: chat, peerId: peer)
+        vault.failSaveRows = []
+        _ = SessionBindingStore.State.shared.resetAll()
+        XCTAssertNil(vault.loadV4(epochId: SessionBindingStore.recId(chat), peerId: peer))
+        XCTAssertEqual(MessageRatchet(vault: vault).boundPeerPrintsChecked(peerId: peer), .unknown)
+    }
+
+    func testASessionInstalledWithoutAVerifiedKeyIsUnknownNeverTheClaimedKey() throws {
+        // A round whose signature did not verify hands no print: the slot reads as unknown, as before bindings existed.
+        let r = MessageRatchet(vault: FlakyVault())
+        let peer = newPeer()
+        _ = try r.persistReplace(epochId: control, peerId: peer, blob: blob(1), peerKeyPrint: printA)
+        _ = try r.persistReplace(epochId: control, peerId: peer, blob: blob(2), peerKeyPrint: nil)
+        r.noteCurrentOpened(epochId: control, peerId: peer)
+        XCTAssertNotEqual(r.boundPeerPrintsChecked(peerId: peer), .known([printA]))
+        XCTAssertEqual(r.boundPeerPrintsChecked(peerId: peer), .unknown)
+    }
+
+    func testTheRatchetVersionNeedsAChatSession() throws {
+        let vault = FlakyVault()
+        let r = MessageRatchet(vault: vault)
+        let peer = newPeer()
+        XCTAssertEqual(try r.newestChannelRatchetVersion(peerId: peer), 0)
+        _ = try r.persistReplace(epochId: control, peerId: peer, blob: blob(1), peerKeyPrint: printA)
+        XCTAssertEqual(try r.newestChannelRatchetVersion(peerId: peer), 0, "a CONTROL session alone is not a v4 or v5 chat")
+        try r.persistInstall(epochId: chat, peerId: peer, blob: blob(2), peerKeyPrint: printA)
+        XCTAssertEqual(try r.newestChannelRatchetVersion(peerId: peer), 5)
+        r.persistDrop(epochId: control, peerId: peer)
+        XCTAssertEqual(try r.newestChannelRatchetVersion(peerId: peer), 4)
     }
 
     // MARK: One signal per peer, never lost

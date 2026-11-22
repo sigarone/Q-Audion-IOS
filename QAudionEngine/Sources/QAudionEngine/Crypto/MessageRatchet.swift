@@ -226,13 +226,14 @@ public final class MessageRatchet {
         bindings.check(peerId)
     }
 
-    /// The newest ratchet version this device holds a session for with `peerId`: 5 when a CONTROL session exists, 4 for a CHAT session,
-    /// 0 for none. Throws when the store cannot say. The send path picks v4 exactly when a v4 session exists (`hasV4Session`), so the
+    /// The newest ratchet version this device holds a session for with `peerId`: 5 when a CHAT and a CONTROL session exist, 4 for a CHAT session alone,
+    /// 0 otherwise (which reads as unknown). Throws when the store cannot say. The send path picks v4 exactly when a v4 session exists (`hasV4Session`), so the
     /// session rows are what a contact's ratchet version is on this platform.
     public func newestChannelRatchetVersion(peerId: String) throws -> Int {
+        // A v4 or v5 contact has a CHAT session; a CONTROL session alone says nothing about the chat ratchet.
+        guard try vault.hasV4Checked(epochId: Self.v4RoutingEpoch, peerId: peerId) else { return 0 }
         if try vault.hasV4Checked(epochId: Self.v5ControlRoutingEpoch, peerId: peerId) { return 5 }
-        if try vault.hasV4Checked(epochId: Self.v4RoutingEpoch, peerId: peerId) { return 4 }
-        return 0
+        return 4
     }
 
     // The persisting steps below hold the write order of the binding rule: the record is invalidated first, then the sessions and their
@@ -283,7 +284,7 @@ public final class MessageRatchet {
         do {
             try vault.deleteV4Checked(epochId: epochId, peerId: peerId)
         } catch {
-            bindings.dropFailed(epochId, peerId)
+            bindings.dropFailed(epochId, peerId, before: before)
             return
         }
         bindings.commitDrop(epochId, peerId, before: before)

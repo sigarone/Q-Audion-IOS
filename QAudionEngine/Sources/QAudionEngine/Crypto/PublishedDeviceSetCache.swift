@@ -34,19 +34,28 @@ public final class PublishedDeviceSetCache: @unchecked Sendable {
     private let source: PublishedDeviceSource
     private let nowMs: @Sendable () -> Int64
     private let announce: Bool
+    private let timeoutMs: Int64
     private let lock = NSLock()
     private var entries: [String: Entry] = [:]
     private var inFlight: [String: Task<PublishedDevices?, Never>] = [:]
 
-    /// `nowMs` must be a monotonic clock (the default is the process uptime): it only measures how old an entry is.
+    /// `nowMs` is wall time by default, so that the time the device sleeps counts towards the age of an entry (a monotonic uptime clock
+    /// does not run while asleep). An age below zero (the clock was stepped back) is never fresh.
     public init(
         source: PublishedDeviceSource,
-        nowMs: @escaping @Sendable () -> Int64 = { Int64(ProcessInfo.processInfo.systemUptime * 1000) },
-        announceChanges: Bool = true
+        nowMs: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
+        announceChanges: Bool = true,
+        fetchTimeoutMs: Int64 = PublishedDeviceSetCache.fetchTimeoutMs
     ) {
+        self.timeoutMs = fetchTimeoutMs
         self.source = source
         self.nowMs = nowMs
         self.announce = announceChanges
+    }
+
+    /// Forgets every entry (the account left).
+    public func removeAll() {
+        lock.lock(); entries.removeAll(); lock.unlock()
     }
 
     /// The last set fetched for the peer, fresh or not (nil after a failed fetch or before any).
@@ -79,7 +88,7 @@ public final class PublishedDeviceSetCache: @unchecked Sendable {
         if !force, let e = entries[peerUserId], isFresh(e) { return .cached(e.value) }
         if let running = inFlight[peerUserId] { return .fetching(running) }
         let source = self.source
-        let timeout = Self.fetchTimeoutMs
+        let timeout = timeoutMs
         let task = Task { [weak self] () -> PublishedDevices? in
             let fetched: PublishedDevices?? = await Self.withTimeout(milliseconds: timeout) {
                 await source.published(peerUserId: peerUserId)
@@ -105,20 +114,42 @@ public final class PublishedDeviceSetCache: @unchecked Sendable {
     }
 
     private func isFresh(_ e: Entry) -> Bool {
-        nowMs() - e.atMs < (e.value != nil ? Self.ttlMs : Self.failureTtlMs)
+        let age = nowMs() - e.atMs
+        return age >= 0 && age < (e.value != nil ? Self.ttlMs : Self.failureTtlMs)
     }
 
-    /// Runs `work`, returning nil when it does not finish within `milliseconds`.
+    /// Runs `work`, returning nil when it has not finished within `milliseconds`: the caller stops waiting at the deadline whether or
+    /// not `work` honours cancellation (it is cancelled, and its late answer is dropped).
     private static func withTimeout<T: Sendable>(milliseconds: Int64, _ work: @escaping @Sendable () async -> T) async -> T? {
-        await withTaskGroup(of: T?.self) { group in
-            group.addTask { Optional(await work()) }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(max(milliseconds, 0)) * 1_000_000)
-                return nil
+        await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
+            let gate = ResumeOnce<T?>(continuation)
+            let worker = Task {
+                let value = await work()
+                gate.resume(Optional(value))
             }
-            let first: T?? = await group.next()
-            group.cancelAll()
-            return first ?? nil
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(max(milliseconds, 0)) * 1_000_000)
+                if gate.resume(nil) { worker.cancel() }
+            }
+        }
+    }
+
+    /// Resumes a continuation at most once, from whichever of two tasks gets there first.
+    private final class ResumeOnce<V>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<V, Never>?
+
+        init(_ continuation: CheckedContinuation<V, Never>) { self.continuation = continuation }
+
+        @discardableResult
+        func resume(_ value: V) -> Bool {
+            lock.lock()
+            let c = continuation
+            continuation = nil
+            lock.unlock()
+            guard let c else { return false }
+            c.resume(returning: value)
+            return true
         }
     }
 }

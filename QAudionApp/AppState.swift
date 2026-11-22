@@ -18344,7 +18344,7 @@ final class AppState: ObservableObject {
         // selfEpochId/peerEpochId are the 16-zero cross-platform constant (Android
         // zeroEpoch). The integration only fires when every input is real, so no
         // placeholder ever reaches here.
-        integration.onV4BootstrapReady = { [weak self] peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub in
+        integration.onV4BootstrapReady = { [weak self] peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub, peerKeyVerified in
             let bootstrap: () -> Void = {
                 // W-V4CONNECTRESET — v4Fire/v4InitFire already guard against a
                 // MID-CALL re-key round (`isReKeyRound`), but the call's own
@@ -18389,8 +18389,8 @@ final class AppState: ObservableObject {
                 // create-if-absent: its sender installs before the peer has
                 // consumed the envelope, so replacing there could break a working
                 // session on one side only.
-                // The safety-number fingerprint of the peer key this handshake authenticated: both sessions are bound to it.
-                let peerKeyPrint: String? = ContactShieldEvaluator.peerKeyPrint(peerUserId: peerId, key: peerIdentityPub)
+                // Both sessions are bound to the safety-number fingerprint of the peer key, only when this round's signature verified under it; otherwise no print (unknown).
+                let peerKeyPrint: String? = peerKeyVerified ? ContactShieldEvaluator.peerKeyPrint(peerUserId: peerId, key: peerIdentityPub) : nil
                 let ok = AppState.sharedV4Ratchet.replaceChannelSession(
                     epochId: MessageRatchet.v4RoutingEpoch,
                     peerId: peerId,
@@ -21423,7 +21423,7 @@ final class AppState: ObservableObject {
                 // shared signed handshake. selfEpochId/peerEpochId are the 16-zero
                 // cross-platform constant (Android zeroEpoch). The integration only
                 // fires when every input is real, so no placeholder reaches here.
-                integration.onV4BootstrapReady = { [weak self] peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub in
+                integration.onV4BootstrapReady = { [weak self] peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub, peerKeyVerified in
                     let bootstrap: () -> Void = {
                         // W-V4CONNECTRESET — see the identical guard + full
                         // rationale on the responder leg's onV4BootstrapReady
@@ -21438,8 +21438,8 @@ final class AppState: ObservableObject {
                         // W-CHATREPLACE (2026-09-19) — REPLACE, like the responder leg
                         // above: see its note for why CHAT can no longer stay
                         // create-if-absent (a diverged pair never repairs).
-                        // The safety-number fingerprint of the peer key this handshake authenticated: both sessions are bound to it.
-                        let peerKeyPrint: String? = ContactShieldEvaluator.peerKeyPrint(peerUserId: peerId, key: peerIdentityPub)
+                        // Both sessions are bound to the safety-number fingerprint of the peer key, only when this round's signature verified under it; otherwise no print (unknown).
+                        let peerKeyPrint: String? = peerKeyVerified ? ContactShieldEvaluator.peerKeyPrint(peerUserId: peerId, key: peerIdentityPub) : nil
                         let ok = AppState.sharedV4Ratchet.replaceChannelSession(
                             epochId: MessageRatchet.v4RoutingEpoch,
                             peerId: peerId,

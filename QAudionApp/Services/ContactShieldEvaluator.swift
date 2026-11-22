@@ -122,42 +122,63 @@ enum ContactShieldEvaluator {
     }
 }
 
-/// The server's published device set of the contacts, for the contact shield: one shared cache over the signed-in session's KMS client.
-/// Until a session exists (and whenever a fetch fails) the set is unknown and every row of a contact counts.
+/// The server's published device set of the contacts, for the contact shield: one shared cache that outlives the signed-in session's
+/// provider. A provider that is rebuilt or gone (nil) only means there is nobody to ask for now: the last known sets stay, and no fetch
+/// is started, so a rebuild never turns "known" into "unknown". Until a first set is fetched, and whenever a fetch fails, the set is
+/// unknown and every row of a contact counts.
 enum ContactShieldPublished {
-    private static let lock = NSLock()
-    private static var cache: PublishedDeviceSetCache?
+    private static let source = SwappableSource()
+    private static let cache = PublishedDeviceSetCache(source: source)
 
-    /// Called whenever the signed-in session's client changes; nil drops the cache.
+    /// Called whenever the signed-in session's client changes. nil stops refreshing; nothing is forgotten.
     static func configure(kmsClient: BCryptoKmsClient?) {
-        lock.lock(); defer { lock.unlock() }
-        guard let kmsClient else {
-            cache = nil
-            return
+        source.set(kmsClient)
+    }
+
+    /// The account left (logout, wipe): what was learned about its contacts goes.
+    static func forgetAccount() {
+        source.set(nil)
+        cache.removeAll()
+    }
+
+    /// The last set known for the peer, fresh or not: an expiry never flips the shield.
+    static func lastKnown(peerUserId: String) -> PublishedDevices? {
+        cache.lastKnown(peerUserId: peerUserId)
+    }
+
+    /// Starts a fetch when the entry is missing or expired and a client exists. Fire and forget; the cache announces a change.
+    static func refreshIfStale(peerUserId: String) {
+        guard source.hasClient, !cache.isFresh(peerUserId: peerUserId) else { return }
+        Task.detached(priority: .utility) { await cache.get(peerUserId: peerUserId) }
+    }
+
+    /// Asks through whichever client is current at the time of the fetch.
+    private final class SwappableSource: PublishedDeviceSource, @unchecked Sendable {
+        private let lock = NSLock()
+        private var client: BCryptoKmsClient?
+
+        func set(_ new: BCryptoKmsClient?) {
+            lock.lock(); client = new; lock.unlock()
         }
-        let source = KmsPublishedDeviceSource(client: kmsClient, selfContext: Self.selfContext)
-        cache = PublishedDeviceSetCache(source: source)
+
+        var hasClient: Bool {
+            lock.lock(); defer { lock.unlock() }
+            return client != nil
+        }
+
+        func published(peerUserId: String) async -> PublishedDevices? {
+            lock.lock()
+            let current = client
+            lock.unlock()
+            guard let current else { return nil }
+            return await KmsPublishedDeviceSource(client: current, selfContext: ContactShieldPublished.selfContext)
+                .published(peerUserId: peerUserId)
+        }
     }
 
     @Sendable private static func selfContext() -> (userId: String, identityKey: Data)? {
         let context = ContactShieldEvaluator.currentContext()
         guard let me = context.selfUserId, let key = context.selfIdentityKey else { return nil }
         return (me, key)
-    }
-
-    private static func current() -> PublishedDeviceSetCache? {
-        lock.lock(); defer { lock.unlock() }
-        return cache
-    }
-
-    /// The last set known for the peer, fresh or not: an expiry never flips the shield.
-    static func lastKnown(peerUserId: String) -> PublishedDevices? {
-        current()?.lastKnown(peerUserId: peerUserId)
-    }
-
-    /// Starts a fetch when the entry is missing or expired. Fire and forget; the cache announces a change.
-    static func refreshIfStale(peerUserId: String) {
-        guard let cache = current(), !cache.isFresh(peerUserId: peerUserId) else { return }
-        Task.detached(priority: .utility) { await cache.get(peerUserId: peerUserId) }
     }
 }

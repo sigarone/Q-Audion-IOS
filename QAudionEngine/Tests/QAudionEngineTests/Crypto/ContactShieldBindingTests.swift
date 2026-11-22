@@ -327,6 +327,25 @@ final class ContactShieldBindingTests: XCTestCase {
         XCTAssertEqual(source.calls, 2)
     }
 
+    func testAClockStepBackExpiresAnEntryAndASlowSourceIsNotWaitedFor() async {
+        let clock = TestClock()
+        let source = FakeSource(published)
+        let cache = PublishedDeviceSetCache(source: source, nowMs: { clock.now }, announceChanges: false)
+        let peer = UUID().uuidString.lowercased()
+        _ = await cache.get(peerUserId: peer)
+        XCTAssertTrue(cache.isFresh(peerUserId: peer))
+        clock.advance(-5_000) // the wall clock was stepped back: a negative age is expired
+        XCTAssertFalse(cache.isFresh(peerUserId: peer))
+
+        let slow = FakeSource(published)
+        slow.delayMs = 5_000
+        let impatient = PublishedDeviceSetCache(source: slow, nowMs: { clock.now }, announceChanges: false, fetchTimeoutMs: 50)
+        let started = Date()
+        let none = await impatient.get(peerUserId: peer)
+        XCTAssertNil(none)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3, "the caller stops waiting at the deadline")
+    }
+
     // MARK: The traffic marker
 
     private func contact(verifiedAtMs: Int64?) -> ContactsStore.StoredContact {

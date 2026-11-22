@@ -65,7 +65,10 @@ struct ContactDetailScreen: View {
     @StateObject private var trustModel = TrustEvaluationModel()
     /// The identity shield of this contact (no call), from the key-bound verification record. Recomputed when the screen opens, after
     /// every evaluation and whenever the contacts or the pins change; never from `item.isVerified`.
-    @State private var contactShield: IdentityShield = .pending
+    /// The shield comes from the shared cache, computed off the main actor and refreshed when the contacts, the pins, the verifications,
+    /// the chat sessions' bindings or the published devices of the contact change (the chat list and header read the same one).
+    @ObservedObject private var shieldCache = ContactShieldCache.shared
+    private var contactShield: IdentityShield { shieldCache.shield(for: item.userId) }
     /// The last successful evaluation; nil while loading or after a failure.
     /// Carries the peer's raw Ed25519 identity key (`peerIkEdPub`), which
     /// `onAcceptNewFingerprint` needs to re-pin without re-fetching.
@@ -98,22 +101,8 @@ struct ContactDetailScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: .blockedContactsDidChange)) { _ in
             isBlocked = BlockedContactsStore.isBlocked(item.userId)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .contactsDidChange)) { _ in
-            contactShield = ContactShieldEvaluator.shield(forUserId: item.userId)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: PeerIdentityPinStore.didChangeNotification)) { _ in
-            contactShield = ContactShieldEvaluator.shield(forUserId: item.userId)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .sasVerificationDidChange)) { _ in
-            contactShield = ContactShieldEvaluator.shield(forUserId: item.userId)
-        }
-        // The chat sessions of THIS contact were bound to another key, or their liveness changed: posted from the engine's own threads.
-        .onReceive(NotificationCenter.default.publisher(for: MessageRatchet.bindingDidChangeNotification)) { note in
-            guard (note.userInfo?["peerId"] as? String) == item.userId else { return }
-            DispatchQueue.main.async { contactShield = ContactShieldEvaluator.shield(forUserId: item.userId) }
-        }
         .onAppear {
-            contactShield = ContactShieldEvaluator.shield(forUserId: item.userId)
+            shieldCache.reload()
             isBlocked = BlockedContactsStore.isBlocked(item.userId)
             peerExtension = DisplayName.resolvedExtension(
                 for: item.userId, serverDisplay: item.displayName,
@@ -124,8 +113,8 @@ struct ContactDetailScreen: View {
         // which cancels a superseded run and starts the next one.
         .task(id: TrustRunKey(userId: item.userId, token: trustModel.runToken)) {
             await trustModel.run(peerUserId: item.userId, evaluator: trustEvaluator)
-            // The evaluation pins the key it resolved and can record a change: the shield is read after it.
-            contactShield = ContactShieldEvaluator.shield(forUserId: item.userId)
+            // The evaluation pins the key it resolved and can record a change: the shield is recomputed after it.
+            shieldCache.reload()
         }
         .onChange(of: appState.wsConnectionState) { newState in
             trustModel.connectionStateChanged(to: newState)

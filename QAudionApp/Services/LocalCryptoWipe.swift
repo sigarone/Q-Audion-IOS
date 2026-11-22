@@ -46,6 +46,8 @@ enum LocalCryptoWipe {
         KeychainRatchetVault().wipeAll()
         // What is remembered in memory about the chat sessions' bindings went with them.
         MessageRatchet.bindingsVaultWiped()
+        // What was learned about the account's contacts from the server goes too.
+        ContactShieldPublished.forgetAccount()
         KeychainGroupSessionVault().wipeAll()
         PeerIdentityPinStore().wipeAll()
         // The capability pins are account data: logout, remote wipe and account deletion all come through here. The arming flag

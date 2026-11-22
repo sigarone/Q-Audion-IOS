@@ -19,10 +19,11 @@ final class ContactShieldCache: ObservableObject {
 
     private let worker = ContactShieldWorker()
     private var observers: [NSObjectProtocol] = []
+    private var lastSequence: UInt64 = 0
 
     private init() {
-        worker.publish = { [weak self] full, values in
-            Task { @MainActor [weak self] in self?.apply(full: full, values: values) }
+        worker.publish = { [weak self] sequence, values in
+            Task { @MainActor [weak self] in self?.apply(sequence: sequence, values: values) }
         }
         let center = NotificationCenter.default
         let names: [Notification.Name] = [.contactsDidChange, PeerIdentityPinStore.didChangeNotification, .sasVerificationDidChange]
@@ -52,16 +53,12 @@ final class ContactShieldCache: ObservableObject {
         worker.mark(peer: nil)
     }
 
-    private func apply(full: Bool, values: [String: IdentityShield]) {
-        let next: [String: IdentityShield]
-        if full {
-            next = values
-        } else {
-            var merged = shields
-            for (peer, value) in values { merged[peer] = value }
-            next = merged
-        }
-        if next != shields { shields = next }
+    /// The worker publishes the WHOLE map with a sequence number; two hops to the main actor may run in either order, so a map older
+    /// than the one already shown is dropped (the newer one contains everything the older one said).
+    private func apply(sequence: UInt64, values: [String: IdentityShield]) {
+        guard sequence > lastSequence else { return }
+        lastSequence = sequence
+        if values != shields { shields = values }
     }
 }
 
@@ -73,9 +70,11 @@ private final class ContactShieldWorker: @unchecked Sendable {
     private var dirtyPeers: Set<String> = []
     private var allDirty = false
     private var drainScheduled = false
+    private var current: [String: IdentityShield] = [:]
+    private var sequence: UInt64 = 0
 
-    /// Called on the worker's queue with the computed values; `full` replaces the whole map, else the values are merged.
-    var publish: (@Sendable (_ full: Bool, _ values: [String: IdentityShield]) -> Void)?
+    /// Called on the worker's queue with the whole map and its sequence number (growing by one per publish).
+    var publish: (@Sendable (_ sequence: UInt64, _ values: [String: IdentityShield]) -> Void)?
 
     /// Records that `peer` (every contact when nil) must be recomputed.
     func mark(peer: String?) {
@@ -95,12 +94,12 @@ private final class ContactShieldWorker: @unchecked Sendable {
         dirtyPeers = []
         guard full || !peers.isEmpty else { return }
         let contacts = ContactsStore().load()
-        let values: [String: IdentityShield]
         if full {
-            values = ContactShieldEvaluator.shields(for: contacts)
+            current = ContactShieldEvaluator.shields(for: contacts)
         } else {
-            values = ContactShieldEvaluator.shields(forFew: contacts.filter { peers.contains($0.userId) })
+            for (peer, value) in ContactShieldEvaluator.shields(forFew: contacts.filter { peers.contains($0.userId) }) { current[peer] = value }
         }
-        publish?(full, values)
+        sequence += 1
+        publish?(sequence, current)
     }
 }
