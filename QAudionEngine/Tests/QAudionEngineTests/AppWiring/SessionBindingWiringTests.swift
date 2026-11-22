@@ -57,11 +57,11 @@ final class SessionBindingWiringTests: XCTestCase {
 
     func testTheBindingNamesAKeyOnlyWhenThatRoundsSignatureVerifiedUnderIt() throws {
         let engine = try code("QAudionEngine/Sources/QAudionEngine/Integration/QAudionCallIntegration.swift")
-        XCTAssertTrue(engine.contains("onV4BootstrapReady?(callerId, combined, verifiedOfferBinding, selfId, peerId, offerSigOk)"))
-        XCTAssertTrue(engine.contains("onV4BootstrapReady?(callerId, combined, sentBinding, selfId, peerId, acceptSigOk)"))
+        XCTAssertTrue(engine.contains("onV4BootstrapReady?(callerId, combined, verifiedOfferBinding, selfId, peerId, offerSigOk, callId)"))
+        XCTAssertTrue(engine.contains("onV4BootstrapReady?(callerId, combined, sentBinding, selfId, peerId, acceptSigOk, callId)"))
         let app = try code("QAudionApp/AppState.swift")
-        XCTAssertEqual(ranges(of: "peerIdentityPub, peerKeyVerified in", in: app).count, 2)
-        XCTAssertEqual(ranges(of: "peerKeyVerified ? ContactShieldEvaluator.peerKeyPrint(peerUserId: peerId, key: peerIdentityPub) : nil", in: app).count, 2)
+        XCTAssertEqual(ranges(of: "peerIdentityPub, peerKeyVerified, handshakeCallId in", in: app).count, 2)
+        XCTAssertEqual(ranges(of: "bindPrint ? ContactShieldEvaluator.peerKeyPrint(peerUserId: peerId, key: peerIdentityPub) : nil", in: app).count, 2)
     }
 
     func testTheDetailScreenReadsTheSharedCacheAndTheProviderRebuildKeepsThePublishedSets() throws {

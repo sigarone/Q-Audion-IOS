@@ -1215,6 +1215,16 @@ final class AppState: ObservableObject {
     /// identity verdict was `.abort`. Drained and run once by
     /// `confirmIdentityAndReleaseMedia()`.
     private var pendingIdentityGatedMedia: [String: [() -> Void]] = [:]
+    /// A first call round whose peer signature did not verify, or that was aborted, keeps its chat-session install here
+    /// (lowercased handshake call id). Nothing of it is applied or used to decrypt until the call's confirmation releases it
+    /// (`applyHeldChatRound`); the call ending, a replacing round or a call that is gone drop it.
+    private struct PendingChatRound {
+        let peerId: String
+        let peerIdentityPub: Data
+        /// Runs the CHAT and CONTROL session install; the flag says whether the sessions get the key print of the peer key.
+        let install: (_ bindPrint: Bool) -> Void
+    }
+    private var pendingChatRounds: [String: PendingChatRound] = [:]
     /// Lowercased callIds whose handshake verdict was `.abort` — consulted by
     /// `onRelaySessionReady` / `onV4BootstrapReady` to decide whether to run
     /// their media-install work immediately or stash it above.
@@ -1637,19 +1647,22 @@ final class AppState: ObservableObject {
             return .releasedOnly
 
         case .adoptHeldRotation(let candidate):
-            confirmIdentityAndReleaseMedia(markSasConfirmed: false)
+            confirmIdentityAndReleaseMedia(markSasConfirmed: false, applyChatRound: false)
             let outcome = await adoptIdentityRotation(candidate)
             guard outcome == .pinned || outcome == .alreadyPinned else {
+                applyHeldChatRound(callId: cid, bindKey: nil)
                 RTLog.warn("call", "sasConfirm release=1 rec=0 rot=0")
                 return .releasedOnly
             }
             // Compare-and-set: authenticated only if the call is STILL the hold of this key.
             let next = CallIdentityReducer.adoptedRotation(callIdentityAuth, candidate: candidate)
             guard case .authenticated = next else {
+                applyHeldChatRound(callId: cid, bindKey: nil)
                 RTLog.warn("call", "sasConfirm release=1 rec=0 cas=1")
                 return .releasedOnly
             }
             callIdentityAuth = next
+            applyHeldChatRound(callId: cid, bindKey: candidate.key)
             SasVerificationStore.shared.recordVerified(
                 peerUserId: peer, fingerprint: fp,
                 identityTag: SasVerificationStore.identityTag(forPinnedKey: candidate.key))
@@ -1679,7 +1692,7 @@ final class AppState: ObservableObject {
                 identityTag: SasVerificationStore.identityTag(forPinnedKey: key))
             RTLog.info("call", "sasConfirm ok=1")
             confirmCapsPinWarning()
-            confirmIdentityAndReleaseMedia()
+            confirmIdentityAndReleaseMedia(bindKey: key)
             callIdentityAuth = CallIdentityReducer.markReleasedAdopted(callIdentityAuth, callId: cid, signerKey: key)
             recomputeCallIdentityShield()
             return .recorded
@@ -1709,7 +1722,7 @@ final class AppState: ObservableObject {
             // A pin warning of this call goes with the confirmation (the record of the contact device drops the capability).
             confirmCapsPinWarning()
             // Release whatever media AppState held back for this call's unverified handshake identity, if any was.
-            confirmIdentityAndReleaseMedia()
+            confirmIdentityAndReleaseMedia(bindKey: key)
             recomputeCallIdentityShield()
             return .recorded
         }
@@ -1915,12 +1928,44 @@ final class AppState: ObservableObject {
         awaitingIdentityConfirmation = true
     }
 
+    /// Keep a first-round chat install under the handshake's call id, or drop it when no live call has that id.
+    @MainActor
+    private func holdChatRound(handshakeCallId: String, round: PendingChatRound) {
+        let cid = handshakeCallId.lowercased()
+        let activeId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased()
+        let live = !cid.isEmpty && (activeId == cid || RingSignalingRegistry.shared.entry(cid) != nil)
+        guard live else {
+            RTLog.info("call", "CHAT-REKEY discarded")
+            return
+        }
+        pendingChatRounds[cid] = round
+        RTLog.info("call", "CHAT-REKEY held")
+    }
+
+    /// The call's confirmation released a held round. `bindKey` is the key the confirmation vouches for; the sessions get its
+    /// print only when it is the key of the held round, otherwise they are installed without one.
+    @MainActor
+    private func applyHeldChatRound(callId: String, bindKey: Data?) {
+        guard let round = pendingChatRounds.removeValue(forKey: callId.lowercased()) else { return }
+        let bind = bindKey != nil && bindKey == round.peerIdentityPub
+        round.install(bind)
+        RTLog.info("call", bind ? "CHAT-REKEY applied" : "CHAT-REKEY applied_release")
+        retryBufferedOneToOneMessages(for: round.peerId)
+    }
+
+    @MainActor
+    private func discardHeldChatRound(callId: String) {
+        if pendingChatRounds.removeValue(forKey: callId.lowercased()) != nil {
+            RTLog.info("call", "CHAT-REKEY discarded")
+        }
+    }
+
     /// P0-3 — called from the in-call "CONFERMA COINCIDONO" SAS button
     /// (`LiveInCallScreen.handleConfirmSas`). Releases whatever media was held
     /// back for the active call's identity-unverified gate. No-op (safe to
     /// call unconditionally) when the gate was never engaged for this call.
     @MainActor
-    func confirmIdentityAndReleaseMedia(markSasConfirmed: Bool = true) {
+    func confirmIdentityAndReleaseMedia(markSasConfirmed: Bool = true, bindKey: Data? = nil, applyChatRound: Bool = true) {
         guard let activeCallId = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() else {
             return
         }
@@ -1932,6 +1977,7 @@ final class AppState: ObservableObject {
         awaitingIdentityConfirmation = false
         let actions = pendingIdentityGatedMedia.removeValue(forKey: cid) ?? []
         for action in actions { action() }
+        if applyChatRound { applyHeldChatRound(callId: cid, bindKey: bindKey) }
         // R-HELD-REKEY: the hold is released, so the caller may start rekeys again; one that was
         // skipped while held runs now instead of a whole period later.
         var rekeyWasDeferred = false
@@ -17288,6 +17334,7 @@ final class AppState: ObservableObject {
         let cid = callId.lowercased()
         pendingAcceptGatedActions[cid] = nil
         pendingIdentityGatedMedia[cid] = nil
+        discardHeldChatRound(callId: cid)
         // The replaced round's verdict, rotation candidate and proof go with it: the words now come from the replacing round.
         if callIdentityAuth.callIdOrNil == nil || callIdentityAuth.callIdOrNil == cid { resetCallIdentityShield() }
         identityUnverifiedCallIds.remove(cid)
@@ -18344,8 +18391,8 @@ final class AppState: ObservableObject {
         // selfEpochId/peerEpochId are the 16-zero cross-platform constant (Android
         // zeroEpoch). The integration only fires when every input is real, so no
         // placeholder ever reaches here.
-        integration.onV4BootstrapReady = { [weak self] peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub, peerKeyVerified in
-            let bootstrap: () -> Void = {
+        integration.onV4BootstrapReady = { [weak self] peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub, peerKeyVerified, handshakeCallId in
+            let bootstrap: (_ bindPrint: Bool) -> Void = { bindPrint in
                 // W-V4CONNECTRESET — v4Fire/v4InitFire already guard against a
                 // MID-CALL re-key round (`isReKeyRound`), but the call's own
                 // FIRST handshake round reaches here unconditionally, and
@@ -18389,8 +18436,8 @@ final class AppState: ObservableObject {
                 // create-if-absent: its sender installs before the peer has
                 // consumed the envelope, so replacing there could break a working
                 // session on one side only.
-                // Both sessions are bound to the safety-number fingerprint of the peer key, only when this round's signature verified under it; otherwise no print (unknown).
-                let peerKeyPrint: String? = peerKeyVerified ? ContactShieldEvaluator.peerKeyPrint(peerUserId: peerId, key: peerIdentityPub) : nil
+                // Both sessions are bound to the safety-number fingerprint of the peer key, only when `bindPrint` is set (a verified round, or a confirmed one); otherwise no print (unknown).
+                let peerKeyPrint: String? = bindPrint ? ContactShieldEvaluator.peerKeyPrint(peerUserId: peerId, key: peerIdentityPub) : nil
                 let ok = AppState.sharedV4Ratchet.replaceChannelSession(
                     epochId: MessageRatchet.v4RoutingEpoch,
                     peerId: peerId,
@@ -18443,13 +18490,19 @@ final class AppState: ObservableObject {
                         object: nil, userInfo: ["peerId": peerId])
                 }
             }
-            // P0-3 — this closure carries no callId (unlike onRelaySessionReady),
-            // so resolve the active call's id to key the same gate. Safe: this
-            // fires well after call setup has already bound the active call.
+            // A round whose signature did not verify, or that was aborted, is held as a candidate under the
+            // handshake's own call id and installed only when the call's confirmation releases it.
+            let round = PendingChatRound(peerId: peerId, peerIdentityPub: peerIdentityPub, install: bootstrap)
             Task { @MainActor [weak self] in
-                guard let self = self else { bootstrap(); return }
+                guard let self = self else { if peerKeyVerified { bootstrap(true) }; return }
+                guard peerKeyVerified else {
+                    self.holdChatRound(handshakeCallId: handshakeCallId, round: round)
+                    return
+                }
+                self.pendingChatRounds[handshakeCallId.lowercased()] = nil
+                // P0-3 — resolve the active call's id to key the identity gate.
                 guard let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased() else {
-                    bootstrap()
+                    bootstrap(true)
                     return
                 }
                 // W-MEDIAATACCEPT (option b) — D2/I12: discharge the ACCEPT
@@ -18461,9 +18514,9 @@ final class AppState: ObservableObject {
                 // the ACCEPT actually releases.
                 let identityGated: () -> Void = {
                     if self.identityUnverifiedCallIds.contains(cid) {
-                        self.pendingIdentityGatedMedia[cid, default: []].append(bootstrap)
+                        self.pendingIdentityGatedMedia[cid, default: []].append({ bootstrap(true) })
                     } else {
-                        bootstrap()
+                        bootstrap(true)
                     }
                 }
                 self.runOrDeferUntilAccepted(cid, action: identityGated)
@@ -21423,8 +21476,8 @@ final class AppState: ObservableObject {
                 // shared signed handshake. selfEpochId/peerEpochId are the 16-zero
                 // cross-platform constant (Android zeroEpoch). The integration only
                 // fires when every input is real, so no placeholder reaches here.
-                integration.onV4BootstrapReady = { [weak self] peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub, peerKeyVerified in
-                    let bootstrap: () -> Void = {
+                integration.onV4BootstrapReady = { [weak self] peerId, effectiveSecret, transcriptHash, selfIdentityPub, peerIdentityPub, peerKeyVerified, handshakeCallId in
+                    let bootstrap: (_ bindPrint: Bool) -> Void = { bindPrint in
                         // W-V4CONNECTRESET — see the identical guard + full
                         // rationale on the responder leg's onV4BootstrapReady
                         // above (same fix, both directions of the handshake).
@@ -21438,8 +21491,8 @@ final class AppState: ObservableObject {
                         // W-CHATREPLACE (2026-09-19) — REPLACE, like the responder leg
                         // above: see its note for why CHAT can no longer stay
                         // create-if-absent (a diverged pair never repairs).
-                        // Both sessions are bound to the safety-number fingerprint of the peer key, only when this round's signature verified under it; otherwise no print (unknown).
-                        let peerKeyPrint: String? = peerKeyVerified ? ContactShieldEvaluator.peerKeyPrint(peerUserId: peerId, key: peerIdentityPub) : nil
+                        // Both sessions are bound to the safety-number fingerprint of the peer key, only when `bindPrint` is set (a verified round, or a confirmed one); otherwise no print (unknown).
+                        let peerKeyPrint: String? = bindPrint ? ContactShieldEvaluator.peerKeyPrint(peerUserId: peerId, key: peerIdentityPub) : nil
                         let ok = AppState.sharedV4Ratchet.replaceChannelSession(
                             epochId: MessageRatchet.v4RoutingEpoch,
                             peerId: peerId,
@@ -21490,18 +21543,23 @@ final class AppState: ObservableObject {
                                 object: nil, userInfo: ["peerId": peerId])
                         }
                     }
-                    // P0-3 — same active-callId resolution as the responder leg
-                    // above (this closure carries no callId parameter either).
+                    // Same hold-or-install rule as the responder leg above.
+                    let round = PendingChatRound(peerId: peerId, peerIdentityPub: peerIdentityPub, install: bootstrap)
                     Task { @MainActor [weak self] in
-                        guard let self = self else { bootstrap(); return }
+                        guard let self = self else { if peerKeyVerified { bootstrap(true) }; return }
+                        guard peerKeyVerified else {
+                            self.holdChatRound(handshakeCallId: handshakeCallId, round: round)
+                            return
+                        }
+                        self.pendingChatRounds[handshakeCallId.lowercased()] = nil
                         guard let cid = (self.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased() else {
-                            bootstrap()
+                            bootstrap(true)
                             return
                         }
                         if self.identityUnverifiedCallIds.contains(cid) {
-                            self.pendingIdentityGatedMedia[cid, default: []].append(bootstrap)
+                            self.pendingIdentityGatedMedia[cid, default: []].append({ bootstrap(true) })
                         } else {
-                            bootstrap()
+                            bootstrap(true)
                         }
                     }
                 }
@@ -24302,6 +24360,7 @@ extension AppState {
             identityUnverifiedCallIds.remove(gatedCallId)
             identityHoldCodeByCallId.removeValue(forKey: gatedCallId)
             pendingIdentityGatedMedia.removeValue(forKey: gatedCallId)
+            discardHeldChatRound(callId: gatedCallId)
         }
         // Post-v5: why the call closed, when it is one of the allow-listed handshake/identity reasons
         // (a handshake fatal, or a call closed while its media was still held for an unconfirmed
@@ -32334,6 +32393,7 @@ extension AppState {
         responderCallIntegration?.wipeSasCommitState(callId: callId)
         kcPendingOwnMac[callId] = nil
         pendingAcceptGatedActions[callId] = nil
+        discardHeldChatRound(callId: callId)
         // G1 (§4.7) — this call's queued remote ICE candidates/removals.
         PendingIceCandidateQueue.shared.wipe(callId)
         // G3 (§4.9) — a video-upgrade request deferred while this call's
