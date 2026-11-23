@@ -1,5 +1,34 @@
 [
   {
+    "version": "1.0.1304",
+    "notes": {
+      "it": [
+        "Le chiamate si riprendono più in fretta quando la persona con cui parli cambia rete",
+        "Miglioramenti di affidabilità e stabilità"
+      ],
+      "en": [
+        "Calls recover faster when the person you're talking to switches network",
+        "Reliability and stability improvements"
+      ],
+      "de": [
+        "Anrufe werden schneller wiederhergestellt, wenn Ihr Gesprächspartner das Netz wechselt",
+        "Verbesserungen bei Zuverlässigkeit und Stabilität"
+      ],
+      "es": [
+        "Las llamadas se recuperan más rápido cuando la persona con la que hablas cambia de red",
+        "Mejoras de fiabilidad y estabilidad"
+      ],
+      "fr": [
+        "Les appels reprennent plus vite quand la personne avec qui tu parles change de réseau",
+        "Améliorations de la fiabilité et de la stabilité"
+      ],
+      "pt-BR": [
+        "As chamadas se recuperam mais rápido quando a pessoa com quem você fala troca de rede",
+        "Melhorias de confiabilidade e estabilidade"
+      ]
+    }
+  },
+  {
     "version": "1.0.1303",
     "notes": {
       "it": [
