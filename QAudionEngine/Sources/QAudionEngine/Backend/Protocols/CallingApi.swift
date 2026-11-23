@@ -194,6 +194,16 @@ public protocol CallingApi {
     /// overrides.
     func sendRestartIceRequest(recipientId: String) async -> Bool
 
+    /// Writes a `restart_ice_request` only on a fresh authenticated signalling socket and returns that socket's
+    /// generation; nil when no such socket exists (nothing is written). Default: nil.
+    func writeRestartIceRequestOnLiveSocket(recipientId: String) -> Int?
+
+    /// Generation of the fresh authenticated signalling socket, nil when there is none. Default: nil.
+    func liveSignalingGeneration() -> Int?
+
+    /// Waits up to `timeoutSec` for a fresh authenticated signalling socket, reconnecting if needed. Default: false.
+    func awaitSignalingReady(timeoutSec: TimeInterval) async -> Bool
+
     /// Get TURN/STUN relay servers with time-limited credentials.
     func getRelays() async throws -> [RelayServer]
 
@@ -398,6 +408,10 @@ public extension CallingApi {
     func sendRestartIceRequest(recipientId: String) async -> Bool {
         return false
     }
+
+    func writeRestartIceRequestOnLiveSocket(recipientId: String) -> Int? { nil }
+    func liveSignalingGeneration() -> Int? { nil }
+    func awaitSignalingReady(timeoutSec: TimeInterval) async -> Bool { false }
 }
 
 /// Server `/api/v1/calling/relays` response shape.

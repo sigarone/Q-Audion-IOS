@@ -1215,16 +1215,27 @@ def _is_block_format_body(tag, norm_body):
 #   restart_ice fast=1 fallback=1 probe=1        (no audio after the fast restart: one normal restart)
 #   restart_ice fast=<0|1> trig_sent_ms=<n>      (path trigger -> restart offer sent)
 #   restart_ice fast=<0|1> trig_rx_ms=<n>        (path trigger -> first audio packet)
+#   restart_ice fast=<0|1> trig=peer_req trig_sent_ms=<n> | trig_rx_ms=<n>   (same, for a restart the peer requested)
+#   restart_ice fast=1 trig=peer_req resend=1 | bypass=1   (peer request: same offer sent again | gates skipped)
+#   restart_ice fast=1 role=responder <debounced|gated>=1 request=1          (request still sent inside the gate)
+#   restart_ice fast=1 role=responder delivered=1                            (the peer's offer arrived)
+#   restart_ice fast=1 role=responder n=<n> delivered=1 | giveup=1           (request confirmed | gave up)
+#   restart_ice fast=1 role=responder n=<n> resend=1 reason=<wsgen|reconnect> (request written again)
 # Numbers and 0/1 flags only. Same scoping reason as BLOCK_FORMAT_VOCAB: "fast", "fallback" and "probe" are plain words,
 # so they are consulted only when the tag is call (or a prefix variant) AND the whole body is, in full, one of these
 # four shapes; they are NOT in APP_VOCAB. Pinned by test_ship_ios_fastswitch_vocab.py.
 # ---------------------------------------------------------------------------
 FASTSWITCH_FORMAT_VOCAB = frozenset("""
-    fast fallback probe
+    fast fallback probe trig peer_req role responder request resend reason wsgen reconnect delivered giveup
+    bypass debounced gated
 """.split())
 
 _RE_FASTSWITCH_FULL = re.compile(
-    r"^restart_ice fast=[01] (?:probe=0 cached=1|fallback=1 probe=1|trig_sent_ms=[0-9]{1,7}|trig_rx_ms=[0-9]{1,7})$"
+    r"^restart_ice fast=[01] (?:probe=0 cached=1|fallback=1 probe=1"
+    r"|(?:trig=peer_req )?trig_(?:sent|rx)_ms=[0-9]{1,7}"
+    r"|trig=peer_req (?:resend|bypass)=1"
+    r"|role=responder (?:(?:debounced|gated)=1 request=1|delivered=1"
+    r"|n=[0-9]{1,2} (?:delivered=1|giveup=1|resend=1 reason=(?:wsgen|reconnect))))$"
 )
 
 
@@ -1982,6 +1993,8 @@ KV_FIXED_VOCAB = frozenset([
     "P2pSrtp", "P2pDtls", "WsRelay", "Session", "Tempo", "TUS",
     "WIFI", "CELLULAR", "ETHERNET", "LOOPBACK", "OTHER", "NONE",
     "ws-relay", "media-lost", "half-open",
+    # Faster media switch -- the trigger label of a restart the peer requested (`restart_ice fast=1 trig=peer_req ...`).
+    "peer_req",
     # In-person pairing -- a rejected scan's reason (RE_KV_ENUM allows one '_', this token has two).
     "not_pair_prefix",
     # W-NATIVESRTPDIAG (this task) -- RTCAudioSession.category, read back
