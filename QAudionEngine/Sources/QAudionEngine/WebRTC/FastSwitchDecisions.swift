@@ -82,6 +82,15 @@ public enum FastSwitchDecisions {
         case resendInflight
     }
 
+    /// True when the restart offer kept for a re-send is still THE pending offer: nothing was answered and no other
+    /// offer was made (video upgrade, setup) since it was created. `inflightSlotGeneration` is the answer-slot
+    /// generation when the restart offer was created; any applied answer or new offer moves the current one.
+    public static func hasUnansweredRestartOffer(inflightSlotGeneration: Int?, currentSlotGeneration: Int,
+                                                 answerApplied: Bool) -> Bool {
+        guard let g = inflightSlotGeneration else { return false }
+        return g == currentSlotGeneration && !answerApplied
+    }
+
     /// A peer request closer than this to the previous accepted one is a duplicate.
     public static let peerRequestDuplicateMs: Int64 = 1_000
     /// At most one NEW offer per this long from peer requests.

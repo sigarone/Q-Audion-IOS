@@ -11989,7 +11989,7 @@ final class AppState: ObservableObject {
                     return
                 }
                 RTLog.info("call", "restarticereq accepted=1")
-                await ctrl.restartIce(reason: "peer-requested-ice-restart")
+                await ctrl.restartIce(reason: FastSwitchDecisions.peerRequestReason)
                 #endif
             }
         }

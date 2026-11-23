@@ -1632,6 +1632,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         let sdp: String
         let capabilities: [String]
         let connection: ObjectIdentifier
+        /// `answerSlotGeneration` when the offer was created.
+        let slotGeneration: Int
     }
     private var inflightRestartOffer: InflightRestartOffer?
     /// Wall-clock ms of the last accepted peer request and of the last new offer made for one.
@@ -2050,9 +2052,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// because the controller is `@unchecked Sendable` (NOT @MainActor).
     private let answerLock = NSLock()
     private var _hasAppliedRemoteAnswer = false
+    /// Moves whenever the answer slot changes (an answer applied, or a new offer opening the slot): an offer kept for
+    /// a re-send is only still pending while this is unchanged. Guarded by `answerLock`.
+    private var _answerSlotGeneration = 0
+    private var answerSlotGeneration: Int { answerLock.lock(); defer { answerLock.unlock() }; return _answerSlotGeneration }
     private var hasAppliedRemoteAnswer: Bool {
         get { answerLock.lock(); defer { answerLock.unlock() }; return _hasAppliedRemoteAnswer }
-        set { answerLock.lock(); _hasAppliedRemoteAnswer = newValue; answerLock.unlock() }
+        set { answerLock.lock(); _hasAppliedRemoteAnswer = newValue; _answerSlotGeneration &+= 1; answerLock.unlock() }
     }
     /// Atomic test-and-set: returns `true` if the caller "won" the
     /// race and should proceed; returns `false` if another caller has
@@ -2063,6 +2069,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         defer { answerLock.unlock() }
         if _hasAppliedRemoteAnswer { return false }
         _hasAppliedRemoteAnswer = true
+        _answerSlotGeneration &+= 1
         return true
     }
 
@@ -3811,7 +3818,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             let api = callingApi
             let d = RestartRequestDelivery(environment: RestartRequestDelivery.Environment(
                 write: { [weak self] in
-                    guard let rid = self?.recipientId else { return nil }
+                    guard let self, !self.intentionalShutdown, let rid = self.recipientId else { return nil }
                     return api.writeRestartIceRequestOnLiveSocket(recipientId: rid)
                 },
                 liveGeneration: { api.liveSignalingGeneration() },
@@ -3848,20 +3855,26 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // Flag on, offering side, peer request: a request that follows our own unanswered offer, or that arrives while
         // ICE is down, is not dropped by the debounce or the gate (see `FastSwitchDecisions.peerRequestAction`).
         let nowMs = Self.nowMs()
-        let (inflightOffer, inflightLive, sinceAccepted, sinceOffer):
-            (InflightRestartOffer?, Bool, Int64?, Int64?) = restartIceDebounceLock.withLock {
-            let sa = lastPeerRequestAcceptedMs.map { nowMs - $0 }
-            let so = lastPeerRequestOfferMs.map { nowMs - $0 }
-            guard let o = inflightRestartOffer, let pc = peerConnection, o.connection == ObjectIdentifier(pc) else {
-                return (nil, false, sa, so)
+        // Decide and record in ONE lock section: two concurrent peer requests cannot both get a new offer.
+        let (peerAction, inflightOffer): (FastSwitchDecisions.PeerRequestAction, InflightRestartOffer?) =
+            restartIceDebounceLock.withLock {
+            var inflight: InflightRestartOffer?
+            if let o = inflightRestartOffer, let pc = peerConnection, o.connection == ObjectIdentifier(pc) {
+                inflight = o
             }
-            return (o, true, sa, so)
+            let unanswered = FastSwitchDecisions.hasUnansweredRestartOffer(
+                inflightSlotGeneration: inflight?.slotGeneration,
+                currentSlotGeneration: answerSlotGeneration,
+                answerApplied: hasAppliedRemoteAnswer)
+            let action = FastSwitchDecisions.peerRequestAction(
+                flagOn: fastSwitchOn, initiator: isInitiator, reason: reason,
+                hasUnansweredOffer: unanswered,
+                sinceLastAcceptedMs: lastPeerRequestAcceptedMs.map { nowMs - $0 },
+                sinceLastNewOfferMs: lastPeerRequestOfferMs.map { nowMs - $0 })
+            if action == .bypassGates || action == .resendInflight { lastPeerRequestAcceptedMs = nowMs }
+            if action == .bypassGates { lastPeerRequestOfferMs = nowMs }
+            return (action, inflight)
         }
-        var peerAction = FastSwitchDecisions.peerRequestAction(
-            flagOn: fastSwitchOn, initiator: isInitiator, reason: reason,
-            hasUnansweredOffer: inflightLive && !hasAppliedRemoteAnswer,
-            sinceLastAcceptedMs: sinceAccepted, sinceLastNewOfferMs: sinceOffer)
-        if peerAction == .resendInflight, inflightOffer == nil { peerAction = .bypassGates }
         if peerAction == .drop {
             log?("restart_ice fast=1 trig=\(FastSwitchDecisions.peerRequestTrigLabel) dup=1")
             return
@@ -3872,8 +3885,6 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 return nil
             }
             if peerAction != .normal {
-                lastPeerRequestAcceptedMs = nowMs
-                if peerAction == .bypassGates { lastPeerRequestOfferMs = nowMs }
                 lastIceRestartAt = now
                 iceRestartGateUntil = now.addingTimeInterval(
                     Double(RestartIceDecisions.iceRestartConvergenceWindowMs) / 1000.0)
@@ -3903,6 +3914,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 peerUsesRequest: peerNegotiated()?.useRestartIceRequest == true) {
                 log?("restart_ice fast=1 role=responder \(refusal)=1 request=1")
                 peerConnection?.primeIceRestart()
+                guard !intentionalShutdown, recipientId == rid else { return }
                 let accepted = await restartRequestDelivery().start()
                 log?("restart_ice req_sent=\(accepted ? 1 : 0) reason=\(reason)")
                 return
@@ -4023,6 +4035,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // `createOffer`-constraint substitute used elsewhere in this
             // method.
             peerConnection?.primeIceRestart()
+            // The awaits above may have outlived the call: never start a runner for a closed one.
+            guard !intentionalShutdown, recipientId == rid else { return }
             let reqSent: Bool
             if fastSwitchOn {
                 // Written only on an authenticated socket, confirmed or re-sent (see `RestartRequestDelivery`).
@@ -4089,7 +4103,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             let offerConnectionId = ObjectIdentifier(pc)
             restartIceDebounceLock.withLock {
                 inflightRestartOffer = InflightRestartOffer(
-                    sdp: sdp, capabilities: capabilities, connection: offerConnectionId)
+                    sdp: sdp, capabilities: capabilities, connection: offerConnectionId,
+                    slotGeneration: answerSlotGeneration)
             }
             parkDelivery = makeFastParkDelivery(
                 sdp: sdp, capabilities: capabilities, recipientId: rid, connection: offerConnectionId)

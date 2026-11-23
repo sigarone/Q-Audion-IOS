@@ -230,6 +230,14 @@ final class RestartRequestDeliveryTests: XCTestCase {
         XCTAssertEqual(peerAction(sinceAccepted: 2_000, sinceOffer: 2_000), .bypassGates)
     }
 
+    func testARestartAnsweredAndThenADifferentOfferPendingIsNotResent() {
+        // restart offer created at slot generation 5; it was answered (5 -> 6), then a video offer opened the slot.
+        XCTAssertFalse(D.hasUnansweredRestartOffer(inflightSlotGeneration: 5, currentSlotGeneration: 7, answerApplied: false))
+        XCTAssertFalse(D.hasUnansweredRestartOffer(inflightSlotGeneration: 5, currentSlotGeneration: 6, answerApplied: true))
+        XCTAssertTrue(D.hasUnansweredRestartOffer(inflightSlotGeneration: 5, currentSlotGeneration: 5, answerApplied: false))
+        XCTAssertFalse(D.hasUnansweredRestartOffer(inflightSlotGeneration: nil, currentSlotGeneration: 5, answerApplied: false))
+    }
+
     func testAtMostOneNewOfferPerTwoSecondsButAnUnansweredOneIsResent() {
         XCTAssertEqual(peerAction(sinceAccepted: 1_500, sinceOffer: 1_500), .drop, "answered, inside the storm bound")
         XCTAssertEqual(peerAction(unanswered: true, sinceAccepted: 1_500, sinceOffer: 1_500), .resendInflight)
@@ -278,13 +286,32 @@ final class RestartRequestDeliveryTests: XCTestCase {
 
     func testTheControllerResendsTheSameOfferAndBypassesTheGateOnlyThroughTheDecision() {
         let ctl = controllerSource()
-        XCTAssertTrue(ctl.contains("let peerAction = FastSwitchDecisions.peerRequestAction(") ||
-                      ctl.contains("var peerAction = FastSwitchDecisions.peerRequestAction("))
-        XCTAssertTrue(ctl.contains("if peerAction != .normal {\n                lastPeerRequestAcceptedMs = nowMs"))
+        XCTAssertEqual(ctl.components(separatedBy: "FastSwitchDecisions.peerRequestAction(").count - 1, 1)
+        XCTAssertTrue(ctl.contains("if action == .bypassGates || action == .resendInflight { lastPeerRequestAcceptedMs = nowMs }"),
+                      "decided and recorded in the same lock section")
+        XCTAssertEqual(ctl.components(separatedBy: "guard !intentionalShutdown, recipientId == rid else { return }").count - 1, 2,
+                       "both request starts re-check the call after the awaits")
+        XCTAssertTrue(ctl.contains("if peerAction != .normal {\n                lastIceRestartAt = now"))
         XCTAssertTrue(ctl.contains("if peerAction == .resendInflight, let offer = inflightOffer"))
         XCTAssertTrue(ctl.contains("sdp: offer.sdp, capabilities: offer.capabilities"))
         XCTAssertEqual(ctl.components(separatedBy: "createOffer(audioOnly: true, iceRestart: true)").count - 1, 1)
         XCTAssertTrue(ctl.contains("trig=\\(FastSwitchDecisions.peerRequestTrigLabel) resend=1"))
+    }
+
+    func testAppStateUsesTheSingleReasonConstant() {
+        var dir = URL(fileURLWithPath: "\(#filePath)")
+        var text = ""
+        for _ in 0..<10 {
+            dir = dir.deletingLastPathComponent()
+            if let t = try? String(contentsOf: dir.appendingPathComponent("QAudionApp/AppState.swift"), encoding: .utf8) {
+                text = t
+                break
+            }
+        }
+        XCTAssertFalse(text.isEmpty, "AppState.swift not found")
+        XCTAssertTrue(text.contains("ctrl.restartIce(reason: FastSwitchDecisions.peerRequestReason)"))
+        XCTAssertFalse(text.contains("\"peer-requested-ice-restart\""), "no duplicated literal")
+        XCTAssertEqual(FastSwitchDecisions.peerRequestReason, "peer-requested-ice-restart")
     }
 
     func testTheCalleeRequestUsesTheDeliveryOnlyWithTheFlagOn() {
