@@ -2,7 +2,7 @@ import Foundation
 
 /// Label rule for the peer of a call-history row.
 ///
-/// Title: the contact name, otherwise the extension or number stored on the call record, otherwise a
+/// Title: the contact name, then the display name stored on the call record, then the extension, then the number, otherwise a
 /// localized "Unknown". An internal user id (or any UUID-shaped text) is never shown.
 enum CallPeerLabel {
 
@@ -33,6 +33,11 @@ enum CallPeerLabel {
         if let name = contactName?.trimmingCharacters(in: .whitespacesAndNewlines),
            !name.isEmpty, !DisplayName.isPlaceholderName(name) {
             return Result(title: name, extensionDigits: ext, isUnknown: false)
+        }
+        if let stored = storedDisplay?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !stored.isEmpty, !DisplayName.isPlaceholderName(stored),
+           phoneNumber(stored) == nil, DisplayName.bareDigits(stored) == nil {
+            return Result(title: stored, extensionDigits: ext, isUnknown: false)
         }
         if let ext {
             return Result(title: ext, extensionDigits: ext, isUnknown: false)

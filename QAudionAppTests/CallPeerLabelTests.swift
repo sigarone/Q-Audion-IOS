@@ -18,6 +18,19 @@ final class CallPeerLabelTests: XCTestCase {
         XCTAssertFalse(r.isUnknown)
     }
 
+    func test_storedDisplayNameShowsWhenNotInContacts() {
+        let r = label(display: "Anna Bianchi", ext: 207)
+        XCTAssertEqual(r.title, "Anna Bianchi")
+        XCTAssertEqual(r.extensionDigits, "207")
+        XCTAssertFalse(r.isUnknown)
+    }
+
+    func test_storedIdLikeValueIsSkipped() {
+        XCTAssertEqual(label(display: uuid, ext: 207).title, "207")
+        XCTAssertEqual(label(display: "Utente 6cb04144…", ext: 207).title, "207")
+        XCTAssertEqual(label(display: uuid).title, unknown)
+    }
+
     func test_storedExtensionWhenNotInContacts() {
         let r = label(display: "Utente 6cb04144…", ext: 207)
         XCTAssertEqual(r.title, "207")
