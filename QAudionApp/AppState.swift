@@ -1758,9 +1758,9 @@ final class AppState: ObservableObject {
                 self?.handleCapsPinAnomaly(callId: callId, reasons: reasons)
             }
         }
-        integration.onPqLateEnd = { [weak self] callId, result in
+        integration.onPqLateEnd = { [weak self] callId, result, round in
             Task { @MainActor [weak self] in
-                self?.handlePqLateEnd(callId: callId, result: result)
+                self?.handlePqLateEnd(callId: callId, result: result, round: round)
             }
         }
         integration.pqSig = makePqSigRuntime()
@@ -1823,6 +1823,9 @@ final class AppState: ObservableObject {
                     peerUserId: peerUserId, deviceId: senderDeviceId, signerEdPub: signerEdPub, keyId: keyId,
                     fetchDevice: { user, device in
                         _ = await self?.fetchPeerDeviceBundleForCall(userId: user, deviceId: device)
+                    },
+                    refetchDevice: { user, device, signerEdPub in
+                        await self?.refetchPeerDeviceKeyForCall(userId: user, deviceId: device, signerEdPub: signerEdPub)
                     })
             })
     }
@@ -1835,6 +1838,16 @@ final class AppState: ObservableObject {
         guard let kms = liveProvider?.kmsClient,
               let bundle = await kms.fetchUserIdentityBundleV2(userId: userId, deviceId: deviceId) else { return }
         _ = Self.verifyPeerBundleSelfSig(bundle)
+    }
+
+    /// A fresh fetch of one device's second key for a key id that differs from the stored one: verified like any fetched bundle and
+    /// returned, never recorded, so it cannot erase or replace a stored or pinned key. Only for the Ed25519 key that signed the round.
+    private func refetchPeerDeviceKeyForCall(userId: String, deviceId: String, signerEdPub: Data) async
+        -> MldsaIdentityPublication.VerifiedPeer? {
+        guard let kms = liveProvider?.kmsClient,
+              let bundle = await kms.fetchUserIdentityBundleV2(userId: userId, deviceId: deviceId),
+              bundle.ed25519Pub == signerEdPub, Self.verifyPeerBundleSelfSigOnly(bundle) else { return nil }
+        return PeerMldsaStore.verify(bundle)
     }
 
     /// Warm the peer's second key ahead of a call (a callee while ringing, a caller when it starts the call). Fire and forget.
@@ -1868,12 +1881,13 @@ final class AppState: ObservableObject {
     /// The late check of the live call's second signature settled. `unavailable` (no key after the last attempt) shows the neutral
     /// grey note; any verdict removes it (a failed one raises its own warning through `handleCapsPinAnomaly`).
     @MainActor
-    private func handlePqLateEnd(callId: String, result: String) {
+    private func handlePqLateEnd(callId: String, result: String, round: Int) {
         let cid = callId.lowercased()
         guard !cid.isEmpty else { return }
         let active = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased()
         if let active, !active.isEmpty, active != cid { return }
-        callPqVerifyNote = result == "unavailable" ? cid : nil
+        // only a result that concerns round 1 sets or clears the note
+        callPqVerifyNote = PqLateNote.next(current: callPqVerifyNote, callId: cid, result: result, round: round)
         callService.notePqLateChanged()
     }
 

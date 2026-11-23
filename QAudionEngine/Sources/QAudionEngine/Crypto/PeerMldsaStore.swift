@@ -24,12 +24,18 @@ public enum PeerMldsaStore {
     /// whose own signature already verified. Never throws and never rejects the bundle.
     @discardableResult
     public static func ingest(_ bundle: BCryptoKmsClient.IdentityBundleV2) -> MldsaIdentityPublication.VerifiedPeer? {
-        let verified = MldsaIdentityPublication.verifyPeer(
+        let verified = verify(bundle)
+        record(uuidRaw: bundle.uuidRaw, deviceId: bundle.deviceId, edPub: bundle.ed25519Pub, verified: verified)
+        return verified
+    }
+
+    /// Verifies the extra fields of a fetched bundle WITHOUT recording anything: a refetch for a key id that differs from the stored
+    /// one uses it, so that it can never erase or replace a stored (or pinned) key.
+    public static func verify(_ bundle: BCryptoKmsClient.IdentityBundleV2) -> MldsaIdentityPublication.VerifiedPeer? {
+        MldsaIdentityPublication.verifyPeer(
             pubB64: bundle.mldsaPubB64, createdMs: bundle.mldsaXcCreatedMs, edSigB64: bundle.mldsaXcEdSigB64,
             pqSigB64: bundle.mldsaXcPqSigB64, gen: bundle.mldsaGen, keyIdB64: bundle.mldsaKeyIdB64,
             uuidRaw: bundle.uuidRaw, deviceId: bundle.deviceId, edPub: bundle.ed25519Pub)
-        record(uuidRaw: bundle.uuidRaw, deviceId: bundle.deviceId, edPub: bundle.ed25519Pub, verified: verified)
-        return verified
     }
 
     /// Stores `verified`, replacing every other entry of the same (user, device); nil removes them all.

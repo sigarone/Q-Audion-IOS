@@ -48,8 +48,15 @@ final class PqLateVerifier: @unchecked Sendable {
     /// A usable-network signal in the first moments of a run is left for the scheduled attempt (the round is still being judged).
     private let minNudgeMs: Int
     private let lock = NSLock()
-    private var inputs: [String: Inputs] = [:]
-    private var tasks: [String: Task<Void, Never>] = [:]
+
+    /// One run: the inputs it checks (kept for the call only) and its task, under a token that only this run holds.
+    private struct Run {
+        let token: UUID
+        let inputs: Inputs
+        var task: Task<Void, Never>?
+    }
+
+    private var runs: [String: Run] = [:]
     private var generation = 0
 
     init(schedule: [Double] = PqLateVerifier.defaultSchedule, attemptTimeout: Double = PqLateVerifier.defaultAttemptTimeoutSeconds,
@@ -66,67 +73,85 @@ final class PqLateVerifier: @unchecked Sendable {
     var retainedInputsCount: Int {
         lock.lock()
         defer { lock.unlock() }
-        return inputs.count
+        return runs.count
     }
 
     /// Runs in flight right now.
     var activeRunCount: Int {
         lock.lock()
         defer { lock.unlock() }
-        return tasks.count
+        return runs.count
     }
 
-    /// Starts the run of (call, round), replacing one that is already there. Returns at once.
+    /// Whether the run of (call, round) is still waiting for its key.
+    func isPending(callId: String, round: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return runs[Self.key(callId, round)] != nil
+    }
+
+    /// The token of the run of (call, round), or nil (a test reads it).
+    func token(callId: String, round: Int) -> UUID? {
+        lock.lock()
+        defer { lock.unlock() }
+        return runs[Self.key(callId, round)]?.token
+    }
+
+    /// Starts the run of (call, round), replacing one that is already there. Returns at once. Runs of other calls and other rounds
+    /// are never touched: a run ends with its own result, or with the end of the call (`cancelAll`).
     func start(callId: String, round: Int, inputs given: Inputs, resolve: @escaping Resolver,
                completion: @escaping @Sendable (Completion) -> Void) {
         let k = Self.key(callId, round)
+        let token = UUID()
         lock.lock()
-        tasks[k]?.cancel()
+        runs[k]?.task?.cancel()
         let gen = generation
-        inputs[k] = given
+        runs[k] = Run(token: token, inputs: given, task: nil)
         let task = Task.detached { [weak self] in
             guard let self else { return }
-            await self.run(k: k, gen: gen, callId: callId, round: round, resolve: resolve, completion: completion)
+            await self.run(k: k, gen: gen, token: token, callId: callId, round: round, resolve: resolve, completion: completion)
         }
-        tasks[k] = task
+        runs[k]?.task = task
         lock.unlock()
     }
 
-    /// The call ended (no exception), or another call started (`exceptCall`): every run is cancelled and its inputs are dropped.
-    func cancelAll(exceptCall: String? = nil) {
-        let keep = exceptCall.map { $0.lowercased() + "#" }
+    /// The call ended: every run is cancelled and its inputs are dropped.
+    func cancelAll() {
         lock.lock()
-        for (k, task) in tasks where keep == nil || !k.hasPrefix(keep!) {
-            task.cancel()
-            tasks[k] = nil
-            inputs[k] = nil
-        }
-        if keep == nil {
-            generation += 1
-            inputs.removeAll()
-        }
+        for (_, run) in runs { run.task?.cancel() }
+        runs.removeAll()
+        generation += 1
         lock.unlock()
     }
 
-    private func isCurrent(_ k: String, _ gen: Int) -> Bool {
+    private func isCurrent(_ k: String, _ gen: Int, _ token: UUID) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return generation == gen && inputs[k] != nil
+        return generation == gen && runs[k]?.token == token
     }
 
-    private func heldInputs(_ k: String) -> Inputs? {
+    private func heldInputs(_ k: String, _ token: UUID) -> Inputs? {
         lock.lock()
         defer { lock.unlock() }
-        return inputs[k]
+        guard let run = runs[k], run.token == token else { return nil }
+        return run.inputs
     }
 
-    private func finish(_ k: String, _ gen: Int) -> Bool {
+    /// Ends the run, dropping its inputs, only if the entry still belongs to THIS run (`token`).
+    func finish(_ k: String, _ gen: Int, _ token: UUID) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard generation == gen, inputs[k] != nil else { return false }
-        inputs[k] = nil
-        tasks[k] = nil
+        guard generation == gen, let run = runs[k], run.token == token else { return false }
+        runs[k] = nil
         return true
+    }
+
+    /// `finish` for a test: the key of (call, round) with a given token.
+    func finish(callId: String, round: Int, token: UUID) -> Bool {
+        lock.lock()
+        let gen = generation
+        lock.unlock()
+        return finish(Self.key(callId, round), gen, token)
     }
 
     private final class Flag: @unchecked Sendable {
@@ -136,7 +161,7 @@ final class PqLateVerifier: @unchecked Sendable {
         func take() -> Bool { lock.lock(); defer { lock.unlock() }; let r = raised; raised = false; return r }
     }
 
-    private func run(k: String, gen: Int, callId: String, round: Int, resolve: @escaping Resolver,
+    private func run(k: String, gen: Int, token: UUID, callId: String, round: Int, resolve: @escaping Resolver,
                      completion: @escaping @Sendable (Completion) -> Void) async {
         let started = DispatchTime.now().uptimeNanoseconds
         func elapsedMs() -> Int { Int((DispatchTime.now().uptimeNanoseconds - started) / 1_000_000) }
@@ -149,8 +174,8 @@ final class PqLateVerifier: @unchecked Sendable {
         // One attempt; true when the run is over (a result, or the call ended).
         func attemptOnce() async -> Bool {
             attempt += 1
-            guard isCurrent(k, gen), !Task.isCancelled else { return true }
-            let snapshot = heldInputs(k)
+            guard isCurrent(k, gen, token), !Task.isCancelled else { return true }
+            let snapshot = heldInputs(k, token)
             guard let given = snapshot else { return true }
             var resolved: Pqsig.MlDsaPublicKey?
             let outcome = await HybridBundleVerifier.verify(
@@ -163,13 +188,13 @@ final class PqLateVerifier: @unchecked Sendable {
                     resolved = waited.value
                     return waited.value
                 })
-            guard isCurrent(k, gen), !Task.isCancelled else { return true }
+            guard isCurrent(k, gen, token), !Task.isCancelled else { return true }
             let ms = elapsedMs()
             if outcome.result == .unavailable || outcome.result == .absent {
                 CapsBindLog.line("PQ-LATE result=unavailable attempt=\(attempt) ms=\(ms)")
                 return false
             }
-            guard finish(k, gen) else { return true }
+            guard finish(k, gen, token) else { return true }
             completion(Completion(callId: callId, round: round, outcome: outcome, key: resolved, attempt: attempt, ms: ms))
             return true
         }
@@ -177,7 +202,7 @@ final class PqLateVerifier: @unchecked Sendable {
         for offset in schedule {
             // wait until the scheduled time; a usable network in the meantime makes one attempt at once
             while true {
-                if Task.isCancelled || !isCurrent(k, gen) { return }
+                if Task.isCancelled || !isCurrent(k, gen, token) { return }
                 if elapsedMs() >= minNudgeMs, nudged.take() {
                     if await attemptOnce() { return }
                 }
@@ -188,9 +213,18 @@ final class PqLateVerifier: @unchecked Sendable {
             if await attemptOnce() { return }
         }
         // out of time: still unavailable
-        guard finish(k, gen) else { return }
+        guard finish(k, gen, token) else { return }
         let ms = elapsedMs()
         let outcome = HybridBundleVerifier.Outcome(result: .unavailable, keyId: nil)
         completion(Completion(callId: callId, round: round, outcome: outcome, key: nil, attempt: attempt, ms: ms))
+    }
+}
+
+/// What the call screen's grey note does with the end of a late check: only a result that concerns round 1 sets or clears it.
+public enum PqLateNote {
+    /// The call the note is up for after (callId, result, round) came in; `current` is the call it is up for now.
+    public static func next(current: String?, callId: String, result: String, round: Int) -> String? {
+        guard round <= 1 else { return current }
+        return result == "unavailable" ? callId.lowercased() : nil
     }
 }

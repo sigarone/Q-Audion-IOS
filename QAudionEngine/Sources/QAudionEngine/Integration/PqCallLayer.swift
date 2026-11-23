@@ -83,6 +83,7 @@ final class PqCallLayer: @unchecked Sendable {
     private var roundKeys = Table<Pqsig.MlDsaPublicKey>()
     private var refusals = Table<Refusal>()
     private var lates = Table<Bool>()
+    private var uncheckedRekeys = Table<Bool>()
 
     // MARK: - State
 
@@ -172,6 +173,19 @@ final class PqCallLayer: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// A rekey round was used while round 1's second signature was still unchecked: a late valid result must not raise the call to `H`.
+    func noteRekeyUsedUnchecked(callId: String) {
+        lock.lock()
+        uncheckedRekeys.set(callId.lowercased(), true)
+        lock.unlock()
+    }
+
+    func rekeyUsedUnchecked(callId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return uncheckedRekeys.items[callId.lowercased()] == true
+    }
+
     func lateResolved(callId: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -181,6 +195,7 @@ final class PqCallLayer: @unchecked Sendable {
     func reset() {
         lock.lock()
         lates = Table<Bool>()
+        uncheckedRekeys = Table<Bool>()
         own = Table<OwnMode>()
         anchors = Table<Anchor>()
         judged = Table<Bool>()

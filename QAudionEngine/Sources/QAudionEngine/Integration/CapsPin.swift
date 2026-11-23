@@ -46,10 +46,25 @@ public struct CapsPinRecord: Codable, Equatable, Sendable {
 public struct CapsPinState: Codable, Equatable, Sendable {
     public var pins: [String: CapsPinRecord]
     public var pinHoldArmed: Bool
+    /// The second public key (ML-DSA-87, 2592 bytes) of a record whose `mldsaKeyId` it is, by the same key as the record. A public
+    /// key, kept with the record so that a pinned contact's signature is checked locally after a restart (the in-memory store of
+    /// peer keys is gone then, and a failed fetch must not be able to leave the signature unchecked).
+    public var pinnedKeys: [String: Data]
 
-    public init(pins: [String: CapsPinRecord] = [:], pinHoldArmed: Bool = false) {
+    public init(pins: [String: CapsPinRecord] = [:], pinHoldArmed: Bool = false, pinnedKeys: [String: Data] = [:]) {
         self.pins = pins
         self.pinHoldArmed = pinHoldArmed
+        self.pinnedKeys = pinnedKeys
+    }
+
+    private enum CodingKeys: String, CodingKey { case pins, pinHoldArmed, pinnedKeys }
+
+    /// A state stored before the keys were kept has no `pinnedKeys`.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pins = try c.decode([String: CapsPinRecord].self, forKey: .pins)
+        pinHoldArmed = try c.decode(Bool.self, forKey: .pinHoldArmed)
+        pinnedKeys = try c.decodeIfPresent([String: Data].self, forKey: .pinnedKeys) ?? [:]
     }
 }
 
@@ -202,6 +217,7 @@ public final class CapsPinBook: @unchecked Sendable {
             record.caps.removeAll { $0 == CapsBind.tag }
             if record.caps.isEmpty && record.mldsaKeyId == nil && record.pqState == nil {
                 state.pins.removeValue(forKey: k)
+                state.pinnedKeys.removeValue(forKey: k)
             } else {
                 state.pins[k] = record
             }
@@ -218,6 +234,34 @@ public final class CapsPinBook: @unchecked Sendable {
             } else {
                 state.pins.removeValue(forKey: k)
             }
+            // the kept public key follows the record: it goes with it, and when the record names another key id
+            if let kept = state.pinnedKeys[k] {
+                let keptId = Pqsig.parsePublicKey(kept).map { HybridBundleVerifier.hex($0.keyId()) }
+                if record?.mldsaKeyId == nil || record?.mldsaKeyId != keptId { state.pinnedKeys.removeValue(forKey: k) }
+            }
+        }
+    }
+
+    /// The kept second public key of the contact device's record, or nil.
+    public func pinnedKey(peerUserId: String, signerKey: Data) -> Data? {
+        persistence.snapshot().pinnedKeys[Self.pinKey(peerUserId: peerUserId, signerKey: signerKey)]
+    }
+
+    /// Drops the kept key of a record and nothing else (a pin made before keys were kept has none; the tests use it).
+    func removePinnedKey(peerUserId: String, signerKey: Data) {
+        let k = Self.pinKey(peerUserId: peerUserId, signerKey: signerKey)
+        persistence.update { state in state.pinnedKeys.removeValue(forKey: k) }
+    }
+
+    /// Keeps `key` with the record, only when the record names exactly its key id. Nothing else ever replaces or erases a kept key
+    /// except the record itself (`putRecord`, `dropKey`, the clearing sites): a fetch never does.
+    public func setPinnedKey(peerUserId: String, signerKey: Data, key: Data) {
+        guard let parsed = Pqsig.parsePublicKey(key) else { return }
+        let id = HybridBundleVerifier.hex(parsed.keyId())
+        let k = Self.pinKey(peerUserId: peerUserId, signerKey: signerKey)
+        persistence.update { state in
+            guard state.pins[k]?.mldsaKeyId == id else { return }
+            state.pinnedKeys[k] = key
         }
     }
 
@@ -226,6 +270,7 @@ public final class CapsPinBook: @unchecked Sendable {
         let k = Self.pinKey(peerUserId: peerUserId, signerKey: signerKey)
         persistence.update { state in
             state.pins.removeValue(forKey: k)
+            state.pinnedKeys.removeValue(forKey: k)
         }
     }
 
@@ -258,7 +303,10 @@ public final class CapsPinBook: @unchecked Sendable {
 
     /// Logout, session expiry, account switch: the records go (account data), the arming flag stays.
     public func clearPins() {
-        persistence.update { state in state.pins.removeAll() }
+        persistence.update { state in
+            state.pins.removeAll()
+            state.pinnedKeys.removeAll()
+        }
     }
 
     /// A full local or remote wipe: the records and the arming flag.
