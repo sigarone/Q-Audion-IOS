@@ -1396,6 +1396,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     let pqLayer = PqCallLayer()
     /// The late check of a second signature whose key could not be resolved in time (see `PqLateVerifier`).
     var pqLate = PqLateVerifier()
+    /// Test hook: runs between the first read of the anchor of a rekey round and the unchecked-state check. Production never sets it.
+    var pqRekeyAfterAnchorRead: (() -> Void)?
     /// The late check of the live call settled: the result word (`valid`, `invalid`, `otherkey`), or `unavailable` when the key was
     /// still not found after the last attempt (round 1 only). Called from a background task; the app hops to its own actor.
     /// `round` is the handshake round the result concerns (1, or a rekey round).
@@ -4598,6 +4600,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             // While round 1's signature is unchecked (read from the anchor: `C` with the result `unavailable`, no late result yet) nothing
             // unsigned or unchecked is used (it is no anomaly when it merely could not be checked); a valid rekey that is used is
             // marked in the layer, under the lock of the anchor's late upgrade, so a late valid round 1 does not raise the call to `H`.
+            pqRekeyAfterAnchorRead?()
             if pqLayer.round1Unchecked(callId: callId) {
                 switch result {
                 case .unavailable:
@@ -4620,8 +4623,14 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     return false
                 }
             }
+            // The anchor is read again after the check above: a late result that settled it meanwhile is what the round is judged by
+            // (the anchor only ever moves from unchecked to settled), and a round read against another anchor starts over.
+            guard let current = pqLayer.anchor(callId: callId) else { return pqRekeyRefuses(callId: callId, peerId: peerId, pq: pq, round: round, isOfferer: isOfferer) }
+            if current != anchor {
+                return pqRekeyRefuses(callId: callId, peerId: peerId, pq: pq, round: round, isOfferer: isOfferer)
+            }
             let decision = HybridSigPolicy.decideRekey(HybridSigPolicy.RekeyInput(
-                auth1: anchor.auth, anchorKeyId: anchor.keyId, isOfferer: isOfferer, round: round,
+                auth1: current.auth, anchorKeyId: current.keyId, isOfferer: isOfferer, round: round,
                 sigHybrid: checked?.result ?? .unavailable, sigKeyId: checked?.keyId, armed: false))
             guard decision.action == .refuse else {
                 // an auth=C call logs a valid signature of an accepted rekey round (it does not raise the call to H)

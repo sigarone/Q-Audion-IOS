@@ -1863,7 +1863,11 @@ final class AppState: ObservableObject {
             await PqPinBackfill.run(
                 book: CapsPinBook.shared,
                 callActive: {
-                    await MainActor.run { (self?.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() != nil }
+                    // a call in progress, or one that is ringing
+                    await MainActor.run {
+                        (self?.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() != nil
+                            || RingSignalingRegistry.shared.hasEntries
+                    }
                 },
                 fetch: { user, signerKey in
                     // every device the server publishes for the contact (at most 8), or the default one when the set is not known
@@ -1873,6 +1877,12 @@ final class AppState: ObservableObject {
                     }
                     var found: [MldsaIdentityPublication.VerifiedPeer] = []
                     for device in devices {
+                        // asked again before each device fetch
+                        let busy = await MainActor.run {
+                            (self?.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() != nil
+                                || RingSignalingRegistry.shared.hasEntries
+                        }
+                        if busy { return [] }
                         guard let bundle = await kms.fetchUserIdentityBundleV2(userId: user, deviceId: device),
                               bundle.ed25519Pub == signerKey, Self.verifyPeerBundleSelfSigOnly(bundle),
                               let verified = PeerMldsaStore.verify(bundle) else { continue }

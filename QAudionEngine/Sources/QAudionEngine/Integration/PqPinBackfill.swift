@@ -45,7 +45,12 @@ public enum PqPinBackfill {
         for target in book.pinsWithoutKeptKey().prefix(maxPerRun) {
             if Task.isCancelled { return }
             if await callActive() { return }
-            if let result = await backfillOne(book: book, peerUserId: target.peerUserId, signerKey: target.signerKey, fetch: fetch) {
+            // asked again before each fetch (a device is fetched one after the other): a call that starts meanwhile stops the run
+            let guardedFetch: (String, Data) async -> [MldsaIdentityPublication.VerifiedPeer] = { user, signer in
+                if await callActive() { return [] }
+                return await fetch(user, signer)
+            }
+            if let result = await backfillOne(book: book, peerUserId: target.peerUserId, signerKey: target.signerKey, fetch: guardedFetch) {
                 CapsBindLog.line("PQ-BACKFILL result=\(result.rawValue)")
             }
             if spacing > 0 { try? await Task.sleep(nanoseconds: UInt64(spacing * 1_000_000_000)) }

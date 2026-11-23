@@ -147,6 +147,12 @@ public final class RingSignalingRegistry: @unchecked Sendable {
         }
     }
 
+    /// Whether any call is latched (ringing or being answered) right now.
+    public var hasEntries: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !entries.isEmpty
+    }
+
     public func entry(_ callId: String) -> Entry? {
         let id = Self.normalize(callId)
         lock.lock(); defer { lock.unlock() }

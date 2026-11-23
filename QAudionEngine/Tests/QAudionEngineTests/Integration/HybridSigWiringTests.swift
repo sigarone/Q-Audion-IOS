@@ -1912,4 +1912,30 @@ final class HybridSigWiringTests: XCTestCase {
             receiver.onCallEnded()
         }
     }
+
+    /// A late result that settles the anchor to H between the first read and the unchecked check: the unsigned rekey is judged by H
+    /// (refused with an anomaly), never accepted against the stale C.
+    func testARekeyIsJudgedByTheAnchorAsItIsAfterTheUncheckedCheck() async throws {
+        let (receiver, _, sender) = try await pinnedContactWithoutKey()
+        receiver.pqLate = slowLate()
+        let shown = warnings(of: receiver)
+        let call = callId(2)
+        try await receiveRound1(receiver, try signedOffer(sender, call: call, round: 1))
+        // the run has ended and settles round 1 as valid just after the check that found it unchecked
+        let token = try XCTUnwrap(receiver.pqLate.token(callId: call, round: 1))
+        XCTAssertTrue(receiver.pqLate.finish(callId: call, round: 1, token: token))
+        let layer = receiver.pqLayer
+        let keyId = hex(peerKeyId)
+        receiver.pqRekeyAfterAnchorRead = {
+            _ = layer.applyLateAnchor(callId: call, auth: "H", keyId: keyId, result: "valid")
+            receiver.pqRekeyAfterAnchorRead = nil
+        }
+        // the anchor was C (unchecked) when the round was first read; the unsigned round is refused against H
+        let unsigned = try await rekeyOffer(receiver, stripped(try signedOffer(sender, call: call, round: 3), keepCapsBind: true),
+                                            round: 3, call: call)
+        XCTAssertTrue(unsigned, "not accepted against the stale C")
+        XCTAssertEqual(layer.anchor(callId: call)?.auth, "H")
+        XCTAssertEqual(shown.all.last, [.absent])
+        receiver.onCallEnded()
+    }
 }
