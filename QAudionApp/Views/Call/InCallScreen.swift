@@ -362,6 +362,9 @@ struct InCallScreen: View {
     /// The contact device was pinned with a capability that this call's first round did not carry: the visible safety-code
     /// warning, with the sentence that names the missing protection. Advisory only; confirming the code below clears it.
     let pinWarningReasons: [PqWarnReason]
+    /// The second handshake signature of this call could not be checked within the late-check window: a neutral grey note, never a
+    /// warning, and it asks for nothing (no code to compare, no button).
+    let pqVerifyNote: Bool
     /// P0-3 (2026-08-05, coordinated fix plan cluster 3) — true when the
     /// handshake identity verdict for THIS call was `.abort` (a signature was
     /// required and did not verify). Unlike `identityUnauthenticatedChange`
@@ -519,6 +522,7 @@ struct InCallScreen: View {
          identityRotationAwaitingSas: Bool = false,
          handshakeSignatureInvalid: Bool = false,
          pinWarningReasons: [PqWarnReason] = [],
+         pqVerifyNote: Bool = false,
          awaitingIdentityConfirmation: Bool = false,
          assurancePresentation: AssuranceStateUI.Presentation? = nil,
          mutualNfcInCommon: Bool = false,
@@ -585,6 +589,7 @@ struct InCallScreen: View {
         self.identityRotationAwaitingSas = identityRotationAwaitingSas
         self.handshakeSignatureInvalid = handshakeSignatureInvalid
         self.pinWarningReasons = pinWarningReasons
+        self.pqVerifyNote = pqVerifyNote
         self.awaitingIdentityConfirmation = awaitingIdentityConfirmation
         self.assurancePresentation = assurancePresentation
         self.mutualNfcInCommon = mutualNfcInCommon
@@ -1162,6 +1167,12 @@ struct InCallScreen: View {
                     pinWarningBanner(pinWarningReasons).padding(.horizontal, 20)
                 }
 
+                // The post-quantum check did not complete: neutral grey note, shown only when no pin warning is up.
+                if pqVerifyNote, pinWarningReasons.isEmpty {
+                    Spacer().frame(height: 10)
+                    PqVerifyNoteRow().padding(.horizontal, 20)
+                }
+
                 // P0-3 — this one actually gates media (see the field's doc).
                 if awaitingIdentityConfirmation {
                     Spacer().frame(height: 10)
@@ -1424,7 +1435,9 @@ struct InCallScreen: View {
     private var sasPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
             sasHeaderAndWords
-            sasConfirmButton
+            if !PqVerifyNoteRow.hidesSasConfirm(noteShown: pqVerifyNote, identityVerified: sasVerifiedShown) {
+                sasConfirmButton
+            }
         }
         .padding(16)
         .background(

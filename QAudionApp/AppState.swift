@@ -1159,6 +1159,9 @@ final class AppState: ObservableObject {
     /// call screen with the sentence that names it; never holds media. Cleared when the user confirms the code from it and when a new call
     /// starts (a second incoming call never clears the live call's).
     @Published var callPinWarning: CapsPinWarning?
+    /// The call whose second signature could not be checked within the late-check window: the call screen shows a neutral grey note
+    /// for it (never a warning). Cleared when a result comes in and when another call starts.
+    @Published var callPqVerifyNote: String?
     /// 2026-09-19 — true while the active call holds a ROTATED identity key that the server publishes for
     /// the peer and that `commitSetProvenRepinForDevice` refused to pin, because the user had SAS-verified
     /// the previous key. Drives the banner copy (the key IS published, and one SAS confirmation resolves
@@ -1755,6 +1758,11 @@ final class AppState: ObservableObject {
                 self?.handleCapsPinAnomaly(callId: callId, reasons: reasons)
             }
         }
+        integration.onPqLateEnd = { [weak self] callId, result, round in
+            Task { @MainActor [weak self] in
+                self?.handlePqLateEnd(callId: callId, result: result, round: round)
+            }
+        }
         integration.pqSig = makePqSigRuntime()
         // A rekey that was deferred (no confirmed base yet, one round undecided, the 5 s spacing) can run now.
         integration.onRekeyRearm = { [weak self] reason in
@@ -1815,6 +1823,9 @@ final class AppState: ObservableObject {
                     peerUserId: peerUserId, deviceId: senderDeviceId, signerEdPub: signerEdPub, keyId: keyId,
                     fetchDevice: { user, device in
                         _ = await self?.fetchPeerDeviceBundleForCall(userId: user, deviceId: device)
+                    },
+                    refetchDevice: { user, device, signerEdPub in
+                        await self?.refetchPeerDeviceKeyForCall(userId: user, deviceId: device, signerEdPub: signerEdPub)
                     })
             })
     }
@@ -1827,6 +1838,59 @@ final class AppState: ObservableObject {
         guard let kms = liveProvider?.kmsClient,
               let bundle = await kms.fetchUserIdentityBundleV2(userId: userId, deviceId: deviceId) else { return }
         _ = Self.verifyPeerBundleSelfSig(bundle)
+    }
+
+    /// A fresh fetch of one device's second key for a key id that differs from the stored one: verified like any fetched bundle and
+    /// returned, never recorded, so it cannot erase or replace a stored or pinned key. Only for the Ed25519 key that signed the round.
+    private func refetchPeerDeviceKeyForCall(userId: String, deviceId: String, signerEdPub: Data) async
+        -> MldsaIdentityPublication.VerifiedPeer? {
+        guard let kms = liveProvider?.kmsClient,
+              let bundle = await kms.fetchUserIdentityBundleV2(userId: userId, deviceId: deviceId),
+              bundle.ed25519Pub == signerEdPub, Self.verifyPeerBundleSelfSigOnly(bundle) else { return nil }
+        return PeerMldsaStore.verify(bundle)
+    }
+
+    /// Pins made before the second public key was kept with the record have only its id: fill the key in from the peer's published
+    /// bundle, in the background, at most every 6 hours, never during a call, and only when the key id derived from the fetched
+    /// key is the pinned one (`PqPinBackfill`). The bundle must be the one of the pinned Ed25519 key and verify like any fetched one.
+    private func startPqPinBackfillIfDue() {
+        let stampKey = "com.qaudion.pqbackfill.last"
+        let now = Date().timeIntervalSince1970
+        guard now - UserDefaults.standard.double(forKey: stampKey) >= 6 * 3600,
+              !CapsPinBook.shared.pinsWithoutKeptKey().isEmpty, let kms = liveProvider?.kmsClient else { return }
+        UserDefaults.standard.set(now, forKey: stampKey)
+        Task(priority: .background) { [weak self] in
+            await PqPinBackfill.run(
+                book: CapsPinBook.shared,
+                callActive: {
+                    // a call in progress, or one that is ringing
+                    await MainActor.run {
+                        (self?.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() != nil
+                            || RingSignalingRegistry.shared.hasEntries
+                    }
+                },
+                fetch: { user, signerKey in
+                    // every device the server publishes for the contact (at most 8), or the default one when the set is not known
+                    var devices: [String?] = [nil]
+                    if let published = await kms.fetchUserPublishedDevices(userId: user) {
+                        devices = published.deviceIds.sorted().prefix(8).map { Optional($0) }
+                    }
+                    var found: [MldsaIdentityPublication.VerifiedPeer] = []
+                    for device in devices {
+                        // asked again before each device fetch
+                        let busy = await MainActor.run {
+                            (self?.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() != nil
+                                || RingSignalingRegistry.shared.hasEntries
+                        }
+                        if busy { return [] }
+                        guard let bundle = await kms.fetchUserIdentityBundleV2(userId: user, deviceId: device),
+                              bundle.ed25519Pub == signerKey, Self.verifyPeerBundleSelfSigOnly(bundle),
+                              let verified = PeerMldsaStore.verify(bundle) else { continue }
+                        found.append(verified)
+                    }
+                    return found
+                })
+        }
     }
 
     /// Warm the peer's second key ahead of a call (a callee while ringing, a caller when it starts the call). Fire and forget.
@@ -1857,10 +1921,24 @@ final class AppState: ObservableObject {
         RTLog.info("call", "pin warning=1")
     }
 
+    /// The late check of the live call's second signature settled. `unavailable` (no key after the last attempt) shows the neutral
+    /// grey note; any verdict removes it (a failed one raises its own warning through `handleCapsPinAnomaly`).
+    @MainActor
+    private func handlePqLateEnd(callId: String, result: String, round: Int) {
+        let cid = callId.lowercased()
+        guard !cid.isEmpty else { return }
+        let active = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased()
+        if let active, !active.isEmpty, active != cid { return }
+        // only a result that concerns round 1 sets or clears the note
+        callPqVerifyNote = PqLateNote.next(current: callPqVerifyNote, callId: cid, result: result, round: round)
+        callService.notePqLateChanged()
+    }
+
     /// A new call starts: its screen has no warning yet. The live call keeps its own, and a warning already raised for the new call
     /// itself (its first round can arrive before the ring) stays.
     @MainActor
     private func resetCapsPinWarningForNewCall(callId: String?) {
+        if let note = callPqVerifyNote, note != callId?.lowercased() { callPqVerifyNote = nil }
         guard let shown = callPinWarning else { return }
         if let callId, shown.callId == callId.lowercased() { return }
         let active = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased()
@@ -6650,6 +6728,7 @@ final class AppState: ObservableObject {
         wireDeviceRenewFallback(on: provider)
         provider.persistingRotatedTokens()
         self.liveProvider = provider
+        startPqPinBackfillIfDue()
         // BLOCK — every sign-in (and every cold start) builds the backend here: the blocked list of this
         // account is loaded now, without waiting for the socket to authenticate, and the load is retried with
         // a growing delay if it fails (`ContactBlockCoordinator.refreshFromServerWithRetry`). The same

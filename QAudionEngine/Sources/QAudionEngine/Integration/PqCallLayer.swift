@@ -82,6 +82,9 @@ final class PqCallLayer: @unchecked Sendable {
     private var judged = Table<Bool>()
     private var roundKeys = Table<Pqsig.MlDsaPublicKey>()
     private var refusals = Table<Refusal>()
+    private var lates = Table<Bool>()
+    private var uncheckedRekeys = Table<Bool>()
+    private var gaveUp = Table<Bool>()
 
     // MARK: - State
 
@@ -164,8 +167,76 @@ final class PqCallLayer: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// A late check changed the second-signature state of the call (the protection line then carries `late=1`).
+    func noteLate(callId: String) {
+        lock.lock()
+        lates.set(callId.lowercased(), true)
+        lock.unlock()
+    }
+
+    /// A rekey round was used while round 1's second signature was still unchecked: a late valid result must not raise the call to `H`.
+    func noteRekeyUsedUnchecked(callId: String) {
+        lock.lock()
+        uncheckedRekeys.set(callId.lowercased(), true)
+        lock.unlock()
+    }
+
+    /// Round 1's signature is still unchecked on this side: its anchor is `C` with the result `unavailable` and no late result has
+    /// settled it (nor has the last attempt failed). Read from the anchor, not from whether a run is still going.
+    func round1Unchecked(callId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = callId.lowercased()
+        guard let a = anchors.items[key] else { return false }
+        return a.auth == "C" && a.result == "unavailable" && gaveUp.items[key] != true
+    }
+
+    /// Marks, under the same lock as the late upgrade of the anchor, that a rekey round is used while round 1 is still unchecked.
+    /// False when the anchor is not unchecked any more (a late result settled it first): the round must be judged again.
+    func noteRekeyUsedIfUnchecked(callId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = callId.lowercased()
+        guard let a = anchors.items[key], a.auth == "C", a.result == "unavailable", gaveUp.items[key] != true else { return false }
+        uncheckedRekeys.set(key, true)
+        return true
+    }
+
+    /// The late result of round 1 sets the anchor. A valid result (`H`) stays at `C` when a rekey round was used unchecked: the mark
+    /// is read and the anchor written under one lock. Returns the auth that was set.
+    func applyLateAnchor(callId: String, auth: String, keyId: String?, result: String) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = callId.lowercased()
+        let final = (auth == "H" && uncheckedRekeys.items[key] == true) ? "C" : auth
+        anchors.set(key, Anchor(auth: final, keyId: final == "H" ? keyId : nil, result: result))
+        return final
+    }
+
+    /// The last attempt of the late check failed: nothing will settle round 1 any more.
+    func noteGaveUp(callId: String) {
+        lock.lock()
+        gaveUp.set(callId.lowercased(), true)
+        lock.unlock()
+    }
+
+    func rekeyUsedUnchecked(callId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return uncheckedRekeys.items[callId.lowercased()] == true
+    }
+
+    func lateResolved(callId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return lates.items[callId.lowercased()] == true
+    }
+
     func reset() {
         lock.lock()
+        lates = Table<Bool>()
+        uncheckedRekeys = Table<Bool>()
+        gaveUp = Table<Bool>()
         own = Table<OwnMode>()
         anchors = Table<Anchor>()
         judged = Table<Bool>()

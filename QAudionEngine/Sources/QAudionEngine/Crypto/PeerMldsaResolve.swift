@@ -6,13 +6,16 @@ import Foundation
 /// and the device id of the SAME fetched bundle, and the lookup is under (peer uuid, sending device id, the Ed25519 key that
 /// verified the round's `sigV6`): the second key belongs to the same Ed25519 key, uuid and device as the signature it endorses.
 /// A bundle with another Ed25519 key for that device is another entry, never a hit. When the store has nothing for the device the
-/// caller's `fetchDevice` runs once (it fills the store) and the store is read again. The key must also be the one the bundle
-/// names. No device id (an envelope without one) means no key: the certificate binds a device id.
+/// caller's `fetchDevice` runs once (it fills the store) and the store is read again. When the stored entry names another key id
+/// than the one the bundle claims, `refetchDevice` runs instead: it returns the verified key of a fresh fetch WITHOUT recording it,
+/// so a refetch can never erase or replace a stored or pinned key. The key must also be the one the bundle names. No device id (an envelope without one) means no key: the certificate binds a device id.
 public enum PeerMldsaResolve {
 
     public static func resolve(
         peerUserId: String, deviceId: String?, signerEdPub: Data, keyId: Data,
-        fetchDevice: (_ peerUserId: String, _ deviceId: String) async -> Void
+        fetchDevice: (_ peerUserId: String, _ deviceId: String) async -> Void,
+        refetchDevice: ((_ peerUserId: String, _ deviceId: String, _ signerEdPub: Data) async
+                        -> MldsaIdentityPublication.VerifiedPeer?)? = nil
     ) async -> Pqsig.MlDsaPublicKey? {
         guard let deviceId, !deviceId.isEmpty, let uuid = UUID(uuidString: peerUserId) else { return nil }
         let uuidRaw = withUnsafeBytes(of: uuid.uuid) { Data($0) }
@@ -20,6 +23,12 @@ public enum PeerMldsaResolve {
         if entry == nil {
             await fetchDevice(peerUserId, deviceId)
             entry = PeerMldsaStore.get(uuidRaw: uuidRaw, deviceId: deviceId, edPub: signerEdPub)
+        } else if let stale = entry, stale.keyId != keyId {
+            // the stored entry names another key: look again, keep what is stored
+            guard let refetchDevice, let fresh = await refetchDevice(peerUserId, deviceId, signerEdPub), fresh.keyId == keyId else {
+                return nil
+            }
+            return Pqsig.parsePublicKey(fresh.pub)
         }
         guard let found = entry, found.keyId == keyId else { return nil }
         return Pqsig.parsePublicKey(found.pub)

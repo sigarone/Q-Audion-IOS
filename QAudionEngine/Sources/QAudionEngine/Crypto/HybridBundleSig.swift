@@ -45,7 +45,7 @@ public enum HybridBundleVerifier {
     public struct Outcome: Equatable, Sendable {
         public let result: PqSigResult
         /// Lowercase hex of the key id the check ran under: set for `valid` and `invalid` when the claim decoded and a key was
-        /// found, else nil.
+        /// found. For `unavailable` it is the key id the bundle CLAIMED (no key was found for it); nil when nothing decoded.
         public let keyId: String?
     }
 
@@ -68,10 +68,10 @@ public enum HybridBundleVerifier {
               let claimedText = mldsaKeyIdB64,
               let claimed = SasCommit.decodeCanonicalBase64(claimedText, expectedLength: Pqsig.keyIdSize)
         else { return Outcome(result: .invalid, keyId: nil) }
-        guard let key = await resolveKey(claimed) else { return Outcome(result: .unavailable, keyId: nil) }
-        // The resolver must hand back the key the bundle names; anything else is no key at all.
-        guard key.keyId() == claimed else { return Outcome(result: .unavailable, keyId: nil) }
         let claimedHex = hex(claimed)
+        guard let key = await resolveKey(claimed) else { return Outcome(result: .unavailable, keyId: claimedHex) }
+        // The resolver must hand back the key the bundle names; anything else is no key at all.
+        guard key.keyId() == claimed else { return Outcome(result: .unavailable, keyId: claimedHex) }
         let fields = Pqsig.HtFields(
             kind: kind, bundleHash: Data(SHA256.hash(data: transcript)), edPub: signerEdPub, mldsaKeyId: claimed,
             dtlsFpSelf: dtlsFpSelf, dtlsFpPeer: kind == Pqsig.kindOffer ? Data() : (dtlsFpPeer ?? Data()),

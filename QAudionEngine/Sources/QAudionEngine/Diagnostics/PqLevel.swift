@@ -138,6 +138,8 @@ public struct PqLevelLine: Equatable, Sendable {
     public var round: String = ""
     /// One-to-one lines only: why a chained rekey was refused. A slot of its own after `round=`; empty prints nothing.
     public var rreason: String = ""
+    /// One-to-one lines only: `1` once a late check of the second signature changed the call's state. Empty prints nothing.
+    public var late: String = ""
     /// Group lines only.
     public var tl: String?
     public var kd: String?
@@ -174,6 +176,9 @@ public struct PqLevelLine: Equatable, Sendable {
         ]
         if kind != "group", !rreason.isEmpty {
             parts.append("rreason=" + rreason)
+        }
+        if kind != "group", !late.isEmpty {
+            parts.append("late=" + late)
         }
         if kind == "group" {
             parts.append("tl=" + Self.v(tl ?? ""))

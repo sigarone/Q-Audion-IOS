@@ -10477,6 +10477,48 @@
         }
       }
     },
+    "in_call.pq_verify_note": {
+      "extractionState": "manual",
+      "comment": "Call screen, neutral grey note: the check of the second (post-quantum) signature of the handshake did not complete during this call. Not a warning.",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica post-quantistica non completata in questa chiamata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post-quantum check not completed in this call."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Post-Quanten-Prüfung wurde in diesem Anruf nicht abgeschlossen."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificación poscuántica no completada en esta llamada."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification post-quantique non terminée pendant cet appel."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificação pós-quântica não concluída nesta chamada."
+          }
+        }
+      }
+    },
     "in_call.pin_warning.lead": {
       "extractionState": "manual",
       "comment": "Call screen, safety-code warning: first sentence, followed by the one that names the missing protection.",

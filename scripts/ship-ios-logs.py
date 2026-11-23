@@ -1455,9 +1455,18 @@ _RE_PQLEVEL_FULL = re.compile(
     r" pqstate=(?:pinned|withdrawn-unsigned|invalid|other-key|-)"
     r" pq_sig=(?:valid|absent|unavailable|invalid|otherkey|anomaly_confirmed|-)"
     r" outer=(?:sealed|off|-) reason=(?:peer_install|local_install|x25519_zero|relay_kem|slot_collision|send_revert|chain_base|-)"
-    r" rekey=(?:ok|refused|-) round=(?:[0-9]{1,10}|-)(?: rreason=chain_base)?"
+    r" rekey=(?:ok|refused|-) round=(?:[0-9]{1,10}|-)(?: rreason=chain_base)?(?: late=1)?"
     r"(?: tl=(?:pq|cl|-) kd=(?:pq|cl|-) unk=[0-9]{1,3})?\Z"
 )
+# LATE CHECK LINE (call / stdout tags): one line per attempt of the background check of a call's second handshake signature
+# (QAudionEngine PqLateVerifier / pqLateSettled). The result is one of four words, the attempt a small count and the time in
+# milliseconds since the first failure: no id, name or key by construction. Whole-line match only. Pinned by
+# test_ship_ios_pqlate_vocab.py.
+_RE_PQLATE_FULL = re.compile(r"\APQ-LATE result=(?:valid|invalid|otherkey|unavailable) attempt=[0-9]{1,2} ms=[0-9]{1,7}\Z")
+# KEY BACKFILL LINE (call / stdout tags): one line per pinned contact whose second public key was looked up after the fact
+# (QAudionEngine PqPinBackfill). Three result words, no id, name or key. Whole-line match only. Pinned by
+# test_ship_ios_pqlate_vocab.py.
+_RE_PQBACKFILL_FULL = re.compile(r"\APQ-BACKFILL result=(?:stored|mismatch|failed)\Z")
 # SHIELD STATE LINE (call / stdout tags): the identity and post-quantum shield state of a call, written when either changes.
 # Every field is a member of a closed set, a flag or the 8 hex characters of the call prefix: no key, name or fingerprint by
 # construction. The generic gate gives the bare line name a budget of zero, so it is accepted here by the whole-line match only:
@@ -1529,7 +1538,8 @@ def _is_closed_grammar_line(tag, norm_body):
         # The Bluetooth and NFC lines of the in-person pairing; the "scan outcome=" lines go the scoped-vocabulary way.
         return bool(_RE_PAIR_BLE_FULL.match(norm_body) or _RE_PAIR_NFC_FULL.match(norm_body))
     if t.startswith(_HANDSHAKE_TAG_PREFIXES):
-        return bool(_RE_HANDSHAKE_FULL.match(norm_body) or _RE_PQLEVEL_FULL.match(norm_body)
+        return bool(_RE_HANDSHAKE_FULL.match(norm_body) or _RE_PQLEVEL_FULL.match(norm_body) or _RE_PQLATE_FULL.match(norm_body)
+                    or _RE_PQBACKFILL_FULL.match(norm_body)
                     or _RE_LIVE_FULL.match(norm_body) or _RE_SHIELD_FULL.match(norm_body)
                     or _RE_SESSIONBIND_FULL.match(norm_body) or _RE_CHATREKEY_FULL.match(norm_body))
     return False

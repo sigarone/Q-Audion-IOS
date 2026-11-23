@@ -28,6 +28,11 @@ final class CapsBindCallState: @unchecked Sendable {
         var kcmacVerified: Bool
         /// The user confirmed the safety code from the warning.
         var sas: Bool
+        /// The signature could not be checked (`unavailable`): the round is neutral (no warning, no pin anomaly, auth `C`) and the
+        /// second-key members of the pin record stay as they were, until a late check settles it.
+        var neutral: Bool = false
+        /// A late check replaced the first result.
+        var late: Bool = false
     }
 
     /// The pin decision of one call's round 1.
@@ -195,18 +200,13 @@ final class CapsBindCallState: @unchecked Sendable {
         var honoured = false
         var pqCtx: PqRound1?
         if let pq {
-            let input = HybridSigPolicy.Round1Input(
-                record: record, capsBindV1: peer.hasTag, sigHybridV1: pq.sigHybridV1, withdrawn: peer.withdrawn, ext: false,
-                sigHybrid: pq.result, sigKeyId: pq.keyId, kcmacValid: true, armed: armedForHold, sasConfirmed: false)
-            let policy = HybridSigPolicy.decideRound1(input)
-            if policy.pin == "anomaly" { pin = .anomaly }
+            let judged = Self.judgePq(record: record, capsBindV1: peer.hasTag, withdrawn: peer.withdrawn, pq: pq, armed: armedForHold)
+            if judged.anomaly { pin = .anomaly }
             hold = false
-            // the shared table keeps `absent` for a signature that could not be checked; the user is told the difference
-            warns = policy.warn.map { PqWarnReason.shown($0, for: pq.result) }
-            if policy.withdraw == "ignored" { ignored = true }
-            if policy.withdraw == "honoured" { honoured = true }
-            pqCtx = PqRound1(input: input, auth: policy.auth == "H" ? "H" : "C", result: policy.pqSig, ext: false,
-                             kcmacVerified: false, sas: false)
+            warns = judged.warns
+            if judged.ignored { ignored = true }
+            if judged.honoured { honoured = true }
+            pqCtx = judged.ctx
         }
         let call = PinCall(callId: callId.lowercased(), peerUserId: peerUserId, signerKey: signerKey, pin: pin,
                            hold: hold, reason: decision.reason, withdrawIgnored: ignored, confirmed: false,
@@ -225,6 +225,74 @@ final class CapsBindCallState: @unchecked Sendable {
                 + "pqstate=\(record?.pqState ?? "-") withdraw=\(ignored ? "ignored" : (honoured ? "honoured" : "-"))")
         }
         return call
+    }
+
+    /// What the shared table says about a round-1 bundle with the second-signature layer's result. A result of `unavailable` is
+    /// neutral: the table's warning for it is dropped (no pin anomaly, no banner, auth `C`).
+    private static func judgePq(record: CapsPinRecord?, capsBindV1: Bool, withdrawn: [String], pq: PqVerification, armed: Bool)
+        -> (ctx: PqRound1, warns: [PqWarnReason], anomaly: Bool, ignored: Bool, honoured: Bool) {
+        // A bundle that claims another key than the pinned one is `otherkey` whether or not that key can be found: the claimed id is
+        // what the pin compares, so an unavailable result with such a claim is judged as a positive failure.
+        var checked = pq
+        if pq.result == .unavailable, let claimed = pq.keyId, let pinned = record?.mldsaKeyId, claimed != pinned {
+            checked = PqVerification(result: .invalid, keyId: claimed, sigHybridV1: pq.sigHybridV1)
+        }
+        let input = HybridSigPolicy.Round1Input(
+            record: record, capsBindV1: capsBindV1, sigHybridV1: checked.sigHybridV1, withdrawn: withdrawn, ext: false,
+            sigHybrid: checked.result, sigKeyId: checked.keyId, kcmacValid: true, armed: armed, sasConfirmed: false)
+        let policy = HybridSigPolicy.decideRound1(input)
+        let neutral = checked.result == .unavailable
+        // the shared table keeps `absent` for a signature that could not be checked: here it is neither shown nor a pin anomaly
+        let warns: [PqWarnReason] = neutral ? policy.warn.filter { $0 != .absent } : policy.warn
+        let anomaly = neutral ? !warns.isEmpty : policy.pin == "anomaly"
+        let ctx = PqRound1(input: input, auth: policy.auth == "H" ? "H" : "C", result: policy.pqSig, ext: false,
+                           kcmacVerified: false, sas: false, neutral: neutral)
+        return (ctx, warns, anomaly, policy.withdraw == "ignored", policy.withdraw == "honoured")
+    }
+
+    /// A late check settled a round 1 that was judged as `unavailable`: the SAME signature was verified against the resolved key.
+    /// The judgement is redone from the record and bundle facts of the first one with the new result (the pin record is written
+    /// by the existing rules once the round's key confirmation verified). Nil when the call has no such round any more.
+    func rejudgeRound1Late(callId: String, pq: PqVerification, book: CapsPinBook, armedForHold: Bool,
+                           holdAtC: Bool = false) -> PinCall? {
+        let key = callId.lowercased()
+        // Read, judge and write under one lock: a safety-code confirmation or a key confirmation that lands meanwhile is part of
+        // what is judged, never overwritten (the judgement is pure and short).
+        lock.lock()
+        guard let current = pinByCall[key], let old = current.pq, old.neutral, !old.late else {
+            lock.unlock()
+            return nil
+        }
+        let judged = Self.judgePq(record: old.input.record, capsBindV1: old.input.capsBindV1, withdrawn: old.input.withdrawn,
+                                  pq: pq, armed: armedForHold)
+        var ctx = judged.ctx
+        ctx.ext = old.ext
+        ctx.kcmacVerified = old.kcmacVerified
+        ctx.sas = old.sas
+        ctx.late = true
+        // a rekey was used while the signature was unchecked: a valid result does not raise the call to `H`
+        if holdAtC { ctx.auth = "C" }
+        var pin = current.pin
+        if judged.anomaly { pin = .anomaly }
+        let call = PinCall(callId: current.callId, peerUserId: current.peerUserId, signerKey: current.signerKey, pin: pin, hold: false,
+                           reason: current.reason, withdrawIgnored: current.withdrawIgnored || judged.ignored,
+                           confirmed: current.confirmed, warns: judged.warns, withdrawHonoured: judged.honoured, pq: ctx)
+        pinByCall[key] = call
+        lock.unlock()
+        let withdrawWord = call.withdrawIgnored ? "ignored" : (call.withdrawHonoured ? "honoured" : "-")
+        let pinWord = pin == .unpinned ? "-" : pin.rawValue
+        CapsBindLog.line("pq round=1 pin=\(pinWord) hold=0 auth=\(ctx.auth) pq_sig=\(ctx.result) "
+            + "pqstate=\(old.input.record?.pqState ?? "-") withdraw=\(withdrawWord) late=1")
+        // written now when the round's key confirmation already verified, else when it does
+        applyPqRecord(call, book: book)
+        return call
+    }
+
+    /// The anchor was held at `C` by a rekey used while the signature was unchecked: the entry says so too.
+    func forceAuthC(callId: String) {
+        lock.lock()
+        pinByCall[callId.lowercased()]?.pq?.auth = "C"
+        lock.unlock()
     }
 
     /// Exit 1: the user confirmed the safety code of a call whose round 1 was an anomaly. The record drops the tag (or, when the
@@ -282,7 +350,19 @@ final class CapsBindCallState: @unchecked Sendable {
         input.kcmacValid = true
         input.sasConfirmed = pq.sas
         let result = HybridSigPolicy.decideRound1(input)
-        book.putRecord(peerUserId: call.peerUserId, signerKey: call.signerKey, record: result.record)
+        var written = result.record
+        if pq.neutral {
+            // a signature that could not be checked neither changes nor downgrades the second-key members of the record
+            let before = pq.input.record
+            var caps = Set(written?.caps ?? [])
+            caps.remove(HybridSigPolicy.tag)
+            if before?.pqState == HybridSigPolicy.PqState.pinned.rawValue { caps.insert(HybridSigPolicy.tag) }
+            let keyId = before?.mldsaKeyId
+            let state = before?.pqState
+            written = (caps.isEmpty && keyId == nil && state == nil) ? nil
+                : CapsPinRecord(caps: caps.sorted(), mldsaKeyId: keyId, pqState: state)
+        }
+        book.putRecord(peerUserId: call.peerUserId, signerKey: call.signerKey, record: written)
         CapsBindLog.line("pq round=1 pin=set pqstate=\(result.record?.pqState ?? "-") pq_sig=\(result.pqSig) "
             + "withdraw=\(result.withdraw) auth=\(result.auth) hold=0")
         // a safety code confirmed from a pinned invalid or other-key anomaly writes a second line
