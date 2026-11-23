@@ -1634,6 +1634,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         let connection: ObjectIdentifier
     }
     private var inflightRestartOffer: InflightRestartOffer?
+    /// Wall-clock ms of the last accepted peer request and of the last new offer made for one.
+    /// Guarded by `restartIceDebounceLock`.
+    private var lastPeerRequestAcceptedMs: Int64?
+    private var lastPeerRequestOfferMs: Int64?
 
     /// Delivery of this side's `restart_ice_request` (flag `calls.ice_fastswitch`), built on first use.
     /// Guarded by `restartIceDebounceLock`.
@@ -3158,7 +3162,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         lastExternalNetworkChangeAt = nil
         lastIceRestartAt = nil
         iceRestartGateUntil = nil   // W-ICERESTARTGATE — fresh call, fresh gate
-        restartIceDebounceLock.withLock { inflightRestartOffer = nil }
+        restartIceDebounceLock.withLock {
+            inflightRestartOffer = nil
+            lastPeerRequestAcceptedMs = nil
+            lastPeerRequestOfferMs = nil
+        }
         restartRequestDelivery().cancel()
         lastAppliedRemoteRestartSdp = nil
         lastIceConnectionState = .new
@@ -3839,23 +3847,33 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         let fastSwitchOn: Bool = iceFastSwitchProvider?() ?? false
         // Flag on, offering side, peer request: a request that follows our own unanswered offer, or that arrives while
         // ICE is down, is not dropped by the debounce or the gate (see `FastSwitchDecisions.peerRequestAction`).
-        let (inflightOffer, inflightLive): (InflightRestartOffer?, Bool) = restartIceDebounceLock.withLock {
+        let nowMs = Self.nowMs()
+        let (inflightOffer, inflightLive, sinceAccepted, sinceOffer):
+            (InflightRestartOffer?, Bool, Int64?, Int64?) = restartIceDebounceLock.withLock {
+            let sa = lastPeerRequestAcceptedMs.map { nowMs - $0 }
+            let so = lastPeerRequestOfferMs.map { nowMs - $0 }
             guard let o = inflightRestartOffer, let pc = peerConnection, o.connection == ObjectIdentifier(pc) else {
-                return (nil, false)
+                return (nil, false, sa, so)
             }
-            return (o, true)
+            return (o, true, sa, so)
         }
         var peerAction = FastSwitchDecisions.peerRequestAction(
             flagOn: fastSwitchOn, initiator: isInitiator, reason: reason,
-            iceNotConnected: isIceStateBad(lastIceConnectionState),
-            hasUnansweredOffer: inflightLive && !hasAppliedRemoteAnswer)
-        if peerAction == .resendInflight, inflightOffer == nil { peerAction = .normal }
+            hasUnansweredOffer: inflightLive && !hasAppliedRemoteAnswer,
+            sinceLastAcceptedMs: sinceAccepted, sinceLastNewOfferMs: sinceOffer)
+        if peerAction == .resendInflight, inflightOffer == nil { peerAction = .bypassGates }
+        if peerAction == .drop {
+            log?("restart_ice fast=1 trig=\(FastSwitchDecisions.peerRequestTrigLabel) dup=1")
+            return
+        }
         let refusal: String? = restartIceDebounceLock.withLock {
             if isParkedResend {
                 lastIceRestartAt = now
                 return nil
             }
             if peerAction != .normal {
+                lastPeerRequestAcceptedMs = nowMs
+                if peerAction == .bypassGates { lastPeerRequestOfferMs = nowMs }
                 lastIceRestartAt = now
                 iceRestartGateUntil = now.addingTimeInterval(
                     Double(RestartIceDecisions.iceRestartConvergenceWindowMs) / 1000.0)

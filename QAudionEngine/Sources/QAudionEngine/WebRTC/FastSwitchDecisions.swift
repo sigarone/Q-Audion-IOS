@@ -74,23 +74,35 @@ public enum FastSwitchDecisions {
     public enum PeerRequestAction: Equatable {
         /// Behaviour as before: the debounce and the gate apply, servers are refreshed.
         case normal
-        /// Skip the debounce and the gate, use the cached servers.
+        /// Accept at once (no debounce, no gate), make a new offer with the cached servers.
         case bypassGates
+        /// A duplicate, or a second new offer inside the storm bound: nothing is done.
+        case drop
         /// A restart offer of ours is in flight and unanswered: send that same offer again.
         case resendInflight
     }
 
+    /// A peer request closer than this to the previous accepted one is a duplicate.
+    public static let peerRequestDuplicateMs: Int64 = 1_000
+    /// At most one NEW offer per this long from peer requests.
+    public static let peerRequestNewOfferMs: Int64 = 2_000
+
     /// What the offering side does with a peer restart request. Only with the flag on, as the offering side, and
-    /// for the peer-request reason; everything else is `.normal`.
+    /// for the peer-request reason; everything else is `.normal`. The request itself is the signal that the peer's
+    /// network changed, so the local ICE state does not matter.
     /// - Parameters:
-    ///   - iceNotConnected: the local ICE state is disconnected or failed.
     ///   - hasUnansweredOffer: a restart offer was sent after the last answer and no answer has come back.
+    ///   - sinceLastAcceptedMs: time since the previous accepted peer request (nil: none yet).
+    ///   - sinceLastNewOfferMs: time since the previous new offer made for a peer request (nil: none yet).
     public static func peerRequestAction(flagOn: Bool, initiator: Bool, reason: String,
-                                         iceNotConnected: Bool, hasUnansweredOffer: Bool) -> PeerRequestAction {
+                                         hasUnansweredOffer: Bool,
+                                         sinceLastAcceptedMs: Int64? = nil,
+                                         sinceLastNewOfferMs: Int64? = nil) -> PeerRequestAction {
         guard flagOn, initiator, reason == peerRequestReason else { return .normal }
+        if let s = sinceLastAcceptedMs, s < peerRequestDuplicateMs { return .drop }
         if hasUnansweredOffer { return .resendInflight }
-        if iceNotConnected { return .bypassGates }
-        return .normal
+        if let s = sinceLastNewOfferMs, s < peerRequestNewOfferMs { return .drop }
+        return .bypassGates
     }
 
     /// The answering side asks the offering side for a restart on an interface change. With the flag on, a trigger

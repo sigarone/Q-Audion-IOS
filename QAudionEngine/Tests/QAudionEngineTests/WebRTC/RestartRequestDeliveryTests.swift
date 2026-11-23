@@ -204,19 +204,35 @@ final class RestartRequestDeliveryTests: XCTestCase {
     private typealias D = FastSwitchDecisions
 
     private func peerAction(flagOn: Bool = true, initiator: Bool = true, reason: String = D.peerRequestReason,
-                            iceDown: Bool = false, unanswered: Bool = false) -> D.PeerRequestAction {
-        D.peerRequestAction(flagOn: flagOn, initiator: initiator, reason: reason,
-                            iceNotConnected: iceDown, hasUnansweredOffer: unanswered)
+                            unanswered: Bool = false, sinceAccepted: Int64? = nil,
+                            sinceOffer: Int64? = nil) -> D.PeerRequestAction {
+        D.peerRequestAction(flagOn: flagOn, initiator: initiator, reason: reason, hasUnansweredOffer: unanswered,
+                            sinceLastAcceptedMs: sinceAccepted, sinceLastNewOfferMs: sinceOffer)
     }
 
     func testAPeerRequestAfterAnUnansweredOfferResendsThatOffer() {
-        XCTAssertEqual(peerAction(unanswered: true), .resendInflight)
-        XCTAssertEqual(peerAction(iceDown: true, unanswered: true), .resendInflight)
+        XCTAssertEqual(peerAction(unanswered: true, sinceAccepted: 3_000, sinceOffer: 3_000), .resendInflight)
     }
 
-    func testAPeerRequestWhileIceIsDownIsNotDebounced() {
-        XCTAssertEqual(peerAction(iceDown: true), .bypassGates)
-        XCTAssertEqual(peerAction(), .normal, "ICE up and nothing in flight: the debounce and the gate apply")
+    func testAPeerRequestWhileIceIsConnectedAndNoOfferIsInFlightGivesAnImmediateOffer() {
+        // the local ICE state is not an input: the request is the peer-network-change signal
+        XCTAssertEqual(peerAction(), .bypassGates)
+        XCTAssertEqual(peerAction(sinceAccepted: 60_000, sinceOffer: 60_000), .bypassGates)
+    }
+
+    func testADuplicateWithinOneSecondIsDropped() {
+        XCTAssertEqual(peerAction(sinceAccepted: 999, sinceOffer: 999), .drop)
+        XCTAssertEqual(peerAction(unanswered: true, sinceAccepted: 500), .drop)
+        XCTAssertEqual(peerAction(sinceAccepted: 1_000, sinceOffer: 5_000), .bypassGates)
+    }
+
+    func testASecondRequestAfterTwoSecondsWithTheOfferAnsweredGivesANewOffer() {
+        XCTAssertEqual(peerAction(sinceAccepted: 2_000, sinceOffer: 2_000), .bypassGates)
+    }
+
+    func testAtMostOneNewOfferPerTwoSecondsButAnUnansweredOneIsResent() {
+        XCTAssertEqual(peerAction(sinceAccepted: 1_500, sinceOffer: 1_500), .drop, "answered, inside the storm bound")
+        XCTAssertEqual(peerAction(unanswered: true, sinceAccepted: 1_500, sinceOffer: 1_500), .resendInflight)
     }
 
     func testCachedServersAreUsedForABypassedPeerRequestOnly() {
@@ -228,11 +244,11 @@ final class RestartRequestDeliveryTests: XCTestCase {
     }
 
     func testFlagOffKeepsTheOldBehaviour() {
-        XCTAssertEqual(peerAction(flagOn: false, iceDown: true, unanswered: true), .normal)
+        XCTAssertEqual(peerAction(flagOn: false, unanswered: true), .normal)
         XCTAssertFalse(D.requestStillSentInsideGate(flagOn: false, initiator: false,
                                                     reason: D.interfaceChangeReason, peerUsesRequest: true))
-        XCTAssertEqual(peerAction(initiator: false, iceDown: true, unanswered: true), .normal, "answering side")
-        XCTAssertEqual(peerAction(reason: "watchdog", iceDown: true, unanswered: true), .normal, "other reasons")
+        XCTAssertEqual(peerAction(initiator: false, unanswered: true), .normal, "answering side")
+        XCTAssertEqual(peerAction(reason: "watchdog", unanswered: true), .normal, "other reasons")
     }
 
     func testAnInterfaceChangeInsideTheGateStillSendsTheRequest() {
@@ -264,7 +280,7 @@ final class RestartRequestDeliveryTests: XCTestCase {
         let ctl = controllerSource()
         XCTAssertTrue(ctl.contains("let peerAction = FastSwitchDecisions.peerRequestAction(") ||
                       ctl.contains("var peerAction = FastSwitchDecisions.peerRequestAction("))
-        XCTAssertTrue(ctl.contains("if peerAction != .normal {\n                lastIceRestartAt = now"))
+        XCTAssertTrue(ctl.contains("if peerAction != .normal {\n                lastPeerRequestAcceptedMs = nowMs"))
         XCTAssertTrue(ctl.contains("if peerAction == .resendInflight, let offer = inflightOffer"))
         XCTAssertTrue(ctl.contains("sdp: offer.sdp, capabilities: offer.capabilities"))
         XCTAssertEqual(ctl.components(separatedBy: "createOffer(audioOnly: true, iceRestart: true)").count - 1, 1)

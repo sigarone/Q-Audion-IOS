@@ -50,6 +50,7 @@ LINES = [
     "restart_ice fast=1 trig=peer_req trig_rx_ms=2100",
     "restart_ice fast=1 trig=peer_req resend=1",
     "restart_ice fast=1 trig=peer_req bypass=1",
+    "restart_ice fast=1 trig=peer_req dup=1",
     "restart_ice fast=1 role=responder gated=1 request=1",
     "restart_ice fast=1 role=responder debounced=1 request=1",
     "restart_ice fast=1 role=responder delivered=1",

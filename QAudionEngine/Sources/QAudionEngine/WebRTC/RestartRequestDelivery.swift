@@ -101,6 +101,8 @@ public final class RestartRequestDelivery: @unchecked Sendable {
     private var epoch = 0
     private var task: Task<Void, Never>?
     private var active = false
+    /// A `start()` is between its entry and the spawn of its runner: a trigger that must not be lost.
+    private var startsInFlight = 0
 
     public init(environment: Environment) { self.env = environment }
 
@@ -109,6 +111,7 @@ public final class RestartRequestDelivery: @unchecked Sendable {
     @discardableResult
     public func start() async -> Bool {
         let myEpoch: Int = lock.withLock {
+            startsInFlight += 1
             epoch += 1
             task?.cancel()
             task = nil
@@ -130,14 +133,17 @@ public final class RestartRequestDelivery: @unchecked Sendable {
             await self?.run(plan: initial, epoch: myEpoch)
         }
         lock.withLock {
+            startsInFlight -= 1
             if epoch == myEpoch { task = newTask } else { newTask.cancel() }
         }
         return firstAccepted
     }
 
     /// The peer's restart offer arrived: the request did its job.
+    /// A `start()` still in progress is a newer trigger than the offer that arrived: it keeps running.
     public func peerOfferArrived() {
         let wasActive: Bool = lock.withLock {
+            if startsInFlight > 0 { return false }
             let a = active
             epoch += 1
             task?.cancel()
@@ -172,10 +178,12 @@ public final class RestartRequestDelivery: @unchecked Sendable {
             let now = env.now()
             switch plan.step(now: now, liveGeneration: env.liveGeneration()) {
             case .delivered:
+                guard isCurrent(e) else { return }
                 env.log("restart_ice fast=1 role=responder n=\(plan.writes) delivered=1")
                 finish(epoch: e)
                 return
             case .giveUp:
+                guard isCurrent(e) else { return }
                 env.log("restart_ice fast=1 role=responder n=\(plan.writes) giveup=1")
                 finish(epoch: e)
                 return

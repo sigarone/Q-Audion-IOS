@@ -1363,18 +1363,22 @@ public final class BCryptoWebSocketClient: @unchecked Sendable {
 
     /// Generation of the socket when it is authenticated, has a task and saw inbound traffic recently; nil otherwise.
     /// A frame written on a generation that is still this value later was written on a socket that stayed up.
+    /// The generation is read BEFORE the auth state and re-read after it: a socket replaced in between is not live.
     public func liveAuthenticatedGeneration() -> Int? {
+        lock.lock(); let before = connectionGeneration; lock.unlock()
         guard isFreshlyAuthenticated() else { return nil }
         lock.lock(); defer { lock.unlock() }
-        guard _state == .authenticated, webSocketTask != nil else { return nil }
-        return connectionGeneration
+        guard _state == .authenticated, webSocketTask != nil, connectionGeneration == before else { return nil }
+        return before
     }
 
     /// Writes `type` only on a fresh authenticated socket and returns that socket's generation. Returns nil, and
     /// writes nothing, when there is no such socket (no task, not authenticated, or stale).
     public func trySendOnLiveSocket(type: String, data: [String: Any]) -> Int? {
         guard let generation = liveAuthenticatedGeneration() else { return nil }
-        return trySend(type: type, data: data) ? generation : nil
+        guard trySend(type: type, data: data) else { return nil }
+        // Re-check after the write: if the socket was replaced meanwhile the frame may have gone to a dead one.
+        return liveAuthenticatedGeneration() == generation ? generation : nil
     }
 
     /// True iff authenticated with a non-nil task, regardless of inbound recency.
