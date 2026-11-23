@@ -1,5 +1,34 @@
 [
   {
+    "version": "1.0.1305",
+    "notes": {
+      "it": [
+        "Verifica di sicurezza delle chiamate più affidabile, anche quando la rete cambia all'inizio della chiamata",
+        "In videochiamata, le informazioni di sicurezza compaiono quando apri il pannello info"
+      ],
+      "en": [
+        "More reliable call security checks, even when the network changes as the call starts",
+        "In video calls, security details appear when you open the info panel"
+      ],
+      "de": [
+        "Zuverlässigere Sicherheitsprüfung bei Anrufen, auch wenn sich das Netz zu Beginn des Anrufs ändert",
+        "In Videoanrufen erscheinen die Sicherheitsdetails, wenn Sie das Infofeld öffnen"
+      ],
+      "es": [
+        "Comprobación de seguridad de las llamadas más fiable, incluso cuando la red cambia al empezar la llamada",
+        "En las videollamadas, los detalles de seguridad aparecen cuando abres el panel de información"
+      ],
+      "fr": [
+        "Vérification de sécurité des appels plus fiable, même quand le réseau change au début de l'appel",
+        "En appel vidéo, les détails de sécurité s'affichent quand tu ouvres le panneau d'infos"
+      ],
+      "pt-BR": [
+        "Verificação de segurança das chamadas mais confiável, mesmo quando a rede muda no início da chamada",
+        "Nas videochamadas, os detalhes de segurança aparecem quando você abre o painel de informações"
+      ]
+    }
+  },
+  {
     "version": "1.0.1304",
     "notes": {
       "it": [
