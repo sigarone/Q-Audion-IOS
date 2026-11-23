@@ -99,11 +99,19 @@ final class PqLateVerifier: @unchecked Sendable {
 
     /// Starts the run of (call, round), replacing one that is already there. Returns at once. Runs of other calls and other rounds
     /// are never touched: a run ends with its own result, or with the end of the call (`cancelAll`).
+    ///
+    /// `alive` is asked under the verifier's own lock, together with the registration of the run: a call that ended before that
+    /// registers nothing and keeps no inputs (false is returned), and one that ends after it finds the run in `cancelAll`.
+    @discardableResult
     func start(callId: String, round: Int, inputs given: Inputs, resolve: @escaping Resolver,
-               completion: @escaping @Sendable (Completion) -> Void) {
+               alive: () -> Bool = { true }, completion: @escaping @Sendable (Completion) -> Void) -> Bool {
         let k = Self.key(callId, round)
         let token = UUID()
         lock.lock()
+        guard alive() else {
+            lock.unlock()
+            return false
+        }
         runs[k]?.task?.cancel()
         let gen = generation
         runs[k] = Run(token: token, inputs: given, task: nil)
@@ -113,6 +121,7 @@ final class PqLateVerifier: @unchecked Sendable {
         }
         runs[k]?.task = task
         lock.unlock()
+        return true
     }
 
     /// The call ended: every run is cancelled and its inputs are dropped.

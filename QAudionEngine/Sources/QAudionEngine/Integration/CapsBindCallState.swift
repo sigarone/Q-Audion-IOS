@@ -288,6 +288,13 @@ final class CapsBindCallState: @unchecked Sendable {
         return call
     }
 
+    /// The anchor was held at `C` by a rekey used while the signature was unchecked: the entry says so too.
+    func forceAuthC(callId: String) {
+        lock.lock()
+        pinByCall[callId.lowercased()]?.pq?.auth = "C"
+        lock.unlock()
+    }
+
     /// Exit 1: the user confirmed the safety code of a call whose round 1 was an anomaly. The record drops the tag (or, when the
     /// second-signature layer judged the round, takes the state the shared table gives). Returns true once.
     @discardableResult

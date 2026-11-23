@@ -1786,4 +1786,105 @@ final class HybridSigWiringTests: XCTestCase {
         XCTAssertNil(PqLateNote.next(current: "a", callId: "A", result: "valid", round: 1))
         XCTAssertEqual(PqLateNote.next(current: nil, callId: "A", result: "unavailable", round: 1), "a")
     }
+
+    // MARK: - Windows between the end of a run, a rekey, and the end of a call
+
+    /// Between the end of the run and the late upgrade of the anchor the call is still unchecked: an unsigned rekey is not used and a
+    /// valid one is marked, so the late valid result cannot raise the call to H. Once the last attempt failed rekeys go as before.
+    func testTheUncheckedStateComesFromTheAnchorNotFromTheRunBeingAlive() async throws {
+        let (receiver, _, sender) = try await pinnedContactWithoutKey()
+        receiver.pqLate = slowLate()
+        let shown = warnings(of: receiver)
+        let call = callId(2)
+        try await receiveRound1(receiver, try signedOffer(sender, call: call, round: 1))
+        // the run has ended (its result is being applied): no run is pending any more
+        let token = try XCTUnwrap(receiver.pqLate.token(callId: call, round: 1))
+        XCTAssertTrue(receiver.pqLate.finish(callId: call, round: 1, token: token))
+        XCTAssertFalse(receiver.pqLate.isPending(callId: call, round: 1))
+        XCTAssertTrue(receiver.pqLayer.round1Unchecked(callId: call))
+        // an unsigned rekey landing in that window is refused with an anomaly, never used
+        let unsigned = try await rekeyOffer(receiver, stripped(try signedOffer(sender, call: call, round: 3), keepCapsBind: true),
+                                            round: 3, call: call)
+        XCTAssertTrue(unsigned)
+        XCTAssertEqual(shown.all.last, [.absent])
+        // a valid one is used and marked, under the lock of the anchor
+        try installPeerKey()
+        let valid = try await rekeyOffer(receiver, try signedOffer(sender, call: call, round: 5), round: 5, call: call)
+        XCTAssertFalse(valid)
+        XCTAssertTrue(receiver.pqLayer.rekeyUsedUnchecked(callId: call))
+        // the late upgrade is decided against the mark
+        XCTAssertEqual(receiver.pqLayer.applyLateAnchor(callId: call, auth: "H", keyId: hex(peerKeyId), result: "valid"), "C")
+        XCTAssertEqual(receiver.pqLayer.anchor(callId: call)?.auth, "C")
+        XCTAssertFalse(receiver.pqLayer.round1Unchecked(callId: call), "settled")
+        // once settled, the mark cannot be set any more (the round is judged again against the anchor)
+        XCTAssertFalse(receiver.pqLayer.noteRekeyUsedIfUnchecked(callId: call))
+        receiver.onCallEnded()
+    }
+
+    /// Without a mark the upgrade to H goes through; after the last attempt failed no rekey is refused for being unchecked.
+    func testTheLateUpgradeReachesHWithoutAMarkAndAGivenUpCallRekeysAsBefore() async throws {
+        let (receiver, _, sender) = try await pinnedContactWithoutKey()
+        receiver.pqLate = slowLate()
+        let call = callId(2)
+        try await receiveRound1(receiver, try signedOffer(sender, call: call, round: 1))
+        XCTAssertEqual(receiver.pqLayer.applyLateAnchor(callId: call, auth: "H", keyId: hex(peerKeyId), result: "valid"), "H")
+        receiver.onCallEnded()
+
+        let (second, _, sender2) = try await pinnedContactWithoutKey()
+        second.pqLate = slowLate()
+        try await receiveRound1(second, try signedOffer(sender2, call: callId(3), round: 1))
+        let done = PqLateVerifier.Completion(
+            callId: callId(3), round: 1, outcome: HybridBundleVerifier.Outcome(result: .unavailable, keyId: nil), key: nil,
+            attempt: 5, ms: 30000)
+        let ends = EndBox()
+        second.onPqLateEnd = { _, result, round in ends.add("\(result)/\(round)") }
+        second.pqLateSettled(done, peerId: peerUser, epoch: second.capsBindState.epoch)
+        XCTAssertEqual(ends.all, ["unavailable/1"])
+        XCTAssertFalse(second.pqLayer.round1Unchecked(callId: callId(3)), "the last attempt failed: nothing is pending")
+        // an unsigned rekey is judged by the ordinary rule (a call at C accepts it)
+        let accepted = try await rekeyOffer(second, stripped(try signedOffer(sender2, call: callId(3), round: 3), keepCapsBind: true),
+                                            round: 3, call: callId(3))
+        XCTAssertFalse(accepted)
+        second.onCallEnded()
+    }
+
+    /// A round already judged `otherkey` starts no run, so it never ends in the grey note.
+    func testARoundJudgedOtherKeyStartsNoRunAndShowsNoNote() async throws {
+        let (receiver, _, sender) = try await pinnedContactWithoutKey()
+        receiver.pqLate = fastLate()
+        let ends = EndBox()
+        receiver.onPqLateEnd = { _, result, round in ends.add("\(result)/\(round)") }
+        let other = Data(repeating: 0x55, count: 32)
+        let c = try await receiveRound1(receiver, claiming(try signedOffer(sender, call: callId(2), round: 1), keyId: other))
+        XCTAssertEqual(c.call?.pin, .anomaly)
+        XCTAssertEqual(receiver.pqLate.activeRunCount, 0)
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertTrue(ends.all.isEmpty, "no neutral note on a red call")
+        receiver.onCallEnded()
+    }
+
+    /// `start` asks whether the call is alive under the verifier's lock: a call that ended registers nothing and keeps no inputs; one
+    /// that ends after is cleared by the teardown.
+    func testStartRechecksTheCallUnderItsLockAndTeardownClearsEverything() throws {
+        let verifier = slowLate()
+        let none: PqLateVerifier.Resolver = { _, _, _, _ in nil }
+        let started = verifier.start(callId: callId(9), round: 1, inputs: try dummyInputs(), resolve: none, alive: { false }) { _ in }
+        XCTAssertFalse(started)
+        XCTAssertEqual(verifier.activeRunCount, 0)
+        XCTAssertEqual(verifier.retainedInputsCount, 0)
+        let ok = verifier.start(callId: callId(9), round: 1, inputs: try dummyInputs(), resolve: none, alive: { true }) { _ in }
+        XCTAssertTrue(ok)
+        XCTAssertEqual(verifier.retainedInputsCount, 1)
+        verifier.cancelAll()
+        XCTAssertEqual(verifier.activeRunCount, 0)
+        XCTAssertEqual(verifier.retainedInputsCount, 0)
+        // after the teardown a start whose epoch check is stale registers nothing
+        let epoch = 1
+        let current = HeldBox()
+        let late = verifier.start(callId: callId(9), round: 1, inputs: try dummyInputs(), resolve: none,
+                                  alive: { current.fire(); return epoch == 2 }) { _ in }
+        XCTAssertFalse(late)
+        XCTAssertEqual(current.count, 1)
+        XCTAssertEqual(verifier.retainedInputsCount, 0)
+    }
 }

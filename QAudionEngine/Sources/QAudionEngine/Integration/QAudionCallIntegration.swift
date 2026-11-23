@@ -4467,8 +4467,20 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             })
         if round == 1, outcome.result == .valid, let resolvedKey { pqLayer.setRound1Key(callId: callId, resolvedKey) }
         CapsBindLog.line("pq verify kind=\(isOffer ? "offer" : "accept") pq_sig=\(outcome.result.rawValue)")
-        // Only a call that is still alive starts a run (the lookup above can outlast it). A run of another call is never touched.
-        if outcome.result == .unavailable, bundle.sigHybrid != nil, bundle.mldsaKeyId != nil, capsBindState.epoch == epoch {
+        // A claim of another key than the pinned one (round 1) or than the call's anchor (a rekey under `H`) is judged `otherkey` at
+        // once: no run, so a red call never ends in the grey note.
+        var claimsAnotherKey = false
+        if let claimed = outcome.keyId {
+            if round == 1 {
+                if let pinned = book.record(peerUserId: peerId, signerKey: signerKey)?.mldsaKeyId { claimsAnotherKey = claimed != pinned }
+            } else if let anchor = pqLayer.anchor(callId: callId), anchor.auth == "H" {
+                claimsAnotherKey = claimed != anchor.keyId
+            }
+        }
+        // Only a call that is still alive starts a run (the lookup above can outlast it); the check is repeated under the
+        // verifier's lock, together with the registration. A run of another call is never touched.
+        if outcome.result == .unavailable, !claimsAnotherKey, bundle.sigHybrid != nil, bundle.mldsaKeyId != nil,
+           capsBindState.epoch == epoch {
             // The key could not be resolved in time: neutral for now, checked again in the background for the life of the call.
             let inputs = PqLateVerifier.Inputs(
                 kind: isOffer ? Pqsig.kindOffer : Pqsig.kindAccept, transcript: transcript, signerEdPub: signerKey,
@@ -4481,7 +4493,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                 }
                 return await resolver(peer, device, edPub, keyId)
             }
-            pqLate.start(callId: callId, round: round, inputs: inputs, resolve: lateResolver) { [weak self] done in
+            let state = capsBindState
+            pqLate.start(callId: callId, round: round, inputs: inputs, resolve: lateResolver, alive: { state.epoch == epoch }) { [weak self] done in
                 guard let self else { return }
                 self.pqLateSettled(done, peerId: peerId, epoch: epoch)
             }
@@ -4497,20 +4510,23 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         let cid = done.callId
         let result = done.outcome.result
         if result == .unavailable || result == .absent {
-            if done.round <= 1 { onPqLateEnd?(cid, "unavailable", done.round) }
+            if done.round <= 1 {
+                pqLayer.noteGaveUp(callId: cid)
+                // a call that is already red (an anomaly) shows no neutral note
+                if capsBindState.pinCall(callId: cid)?.pin != .anomaly { onPqLateEnd?(cid, "unavailable", done.round) }
+            }
             return
         }
         var word = result.rawValue
         if done.round <= 1 {
             let storedTag = capsBindState.pinCall(callId: cid)?.pq?.input.sigHybridV1 ?? false
             let verification = PqVerification(result: result, keyId: done.outcome.keyId, sigHybridV1: storedTag)
-            // a rekey used while the signature was unchecked: a valid result does not raise the call to H
-            let holdAtC = result == .valid && pqLayer.rekeyUsedUnchecked(callId: cid)
             guard let call = capsBindState.rejudgeRound1Late(
-                callId: cid, pq: verification, book: capsBindBook, armedForHold: false, holdAtC: holdAtC),
-                let ctx = call.pq else { return }
-            pqLayer.setAnchor(callId: cid, PqCallLayer.Anchor(
-                auth: ctx.auth, keyId: ctx.auth == "H" ? done.outcome.keyId : nil, result: ctx.result))
+                callId: cid, pq: verification, book: capsBindBook, armedForHold: false), let ctx = call.pq else { return }
+            // a rekey used while the signature was unchecked: a valid result does not raise the call to H. The mark is read and the
+            // anchor written under one lock of the layer, so a rekey that lands meanwhile is either marked or judged again.
+            let finalAuth = pqLayer.applyLateAnchor(callId: cid, auth: ctx.auth, keyId: done.outcome.keyId, result: ctx.result)
+            if finalAuth != ctx.auth { capsBindState.forceAuthC(callId: cid) }
             if result == .valid, let key = done.key { pqLayer.setRound1Key(callId: cid, key) }
             pqLayer.noteLate(callId: cid)
             persistPinnedKey(callId: cid)
@@ -4579,27 +4595,35 @@ public final class QAudionCallIntegration: @unchecked Sendable {
                     return true
                 }
             }
-            // While round 1's late check is pending nothing unsigned or unchecked is used (it is no anomaly when it merely could not
-            // be checked); a valid rekey that is used is remembered, so a late valid round 1 does not raise the call to `H`.
-            let pending = anchor.auth != "H" && pqLate.isPending(callId: callId, round: 1)
-            if pending, result == .unavailable {
-                pqLayer.noteRefusal(callId: callId, round: round, reason: .unverifiable)
-                CapsBindLog.line("pq_sig=unavailable round=\(round) pin=- hold=0 rekey=refused")
-                return true
-            }
-            if pending, result == .absent || result == .invalid {
-                reason = result == .invalid ? .invalid : .absent
-                logLine = "pq_sig=\(result.rawValue) round=\(round) pin=anomaly hold=0 rekey=refused"
-                pqLayer.noteRefusal(callId: callId, round: round, reason: reason)
-                CapsBindLog.line(logLine)
-                onCapsPinAnomaly?(callId, peerId, [reason])
-                return true
+            // While round 1's signature is unchecked (read from the anchor: `C` with the result `unavailable`, no late result yet) nothing
+            // unsigned or unchecked is used (it is no anomaly when it merely could not be checked); a valid rekey that is used is
+            // marked in the layer, under the lock of the anchor's late upgrade, so a late valid round 1 does not raise the call to `H`.
+            if pqLayer.round1Unchecked(callId: callId) {
+                switch result {
+                case .unavailable:
+                    pqLayer.noteRefusal(callId: callId, round: round, reason: .unverifiable)
+                    CapsBindLog.line("pq_sig=unavailable round=\(round) pin=- hold=0 rekey=refused")
+                    return true
+                case .absent, .invalid:
+                    reason = result == .invalid ? .invalid : .absent
+                    logLine = "pq_sig=\(result.rawValue) round=\(round) pin=anomaly hold=0 rekey=refused"
+                    pqLayer.noteRefusal(callId: callId, round: round, reason: reason)
+                    CapsBindLog.line(logLine)
+                    onCapsPinAnomaly?(callId, peerId, [reason])
+                    return true
+                case .valid:
+                    // the anchor was settled by a late result meanwhile: the round is judged again against it
+                    if !pqLayer.noteRekeyUsedIfUnchecked(callId: callId) {
+                        return pqRekeyRefuses(callId: callId, peerId: peerId, pq: pq, round: round, isOfferer: isOfferer)
+                    }
+                    CapsBindLog.line("pq_sig=valid round=\(round) pin=- hold=0 rekey=accepted")
+                    return false
+                }
             }
             let decision = HybridSigPolicy.decideRekey(HybridSigPolicy.RekeyInput(
                 auth1: anchor.auth, anchorKeyId: anchor.keyId, isOfferer: isOfferer, round: round,
                 sigHybrid: checked?.result ?? .unavailable, sigKeyId: checked?.keyId, armed: false))
             guard decision.action == .refuse else {
-                if pending { pqLayer.noteRekeyUsedUnchecked(callId: callId) }
                 // an auth=C call logs a valid signature of an accepted rekey round (it does not raise the call to H)
                 if !decision.log.isEmpty { CapsBindLog.line(decision.log) }
                 return false
