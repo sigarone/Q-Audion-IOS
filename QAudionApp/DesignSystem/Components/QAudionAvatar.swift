@@ -52,19 +52,23 @@ struct QAudionAvatar: View {
     /// per forzare il numero interno PBX nel cerchietto. 1:1 port del
     /// parametro `shortNumber` di Android `AvatarImage.kt`.
     let shortNumber: String?
+    /// When true and there is no `shortNumber`, the placeholder shows a generic person icon instead of initials.
+    let genericPerson: Bool
 
     init(displayName: String,
          imageURL: URL? = nil,
          kind: Kind = .person,
          size: CGFloat = 44,
          presenceDot: PresenceDot? = nil,
-         shortNumber: String? = nil) {
+         shortNumber: String? = nil,
+         genericPerson: Bool = false) {
         self.displayName = displayName
         self.imageURL = imageURL
         self.kind = kind
         self.size = min(240, max(20, size))
         self.presenceDot = presenceDot
         self.shortNumber = shortNumber
+        self.genericPerson = genericPerson
     }
 
     var body: some View {
@@ -226,6 +230,10 @@ struct QAudionAvatar: View {
                 if kind == .group {
                     Image(systemName: "person.3.fill")
                         .qaudionScaledFont(size: size * 0.42, weight: .semibold, maxSize: .xLarge)
+                        .foregroundStyle(.white.opacity(0.95))
+                } else if genericPerson && (shortNumber ?? "").isEmpty {
+                    Image(systemName: "person.fill")
+                        .qaudionScaledFont(size: size * 0.46, weight: .semibold, maxSize: .xLarge)
                         .foregroundStyle(.white.opacity(0.95))
                 } else {
                     // shortNumber ha priorità assoluta (1:1 con Android AvatarImage.kt)

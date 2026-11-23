@@ -29,6 +29,8 @@ public struct CallHistoryEntry: Equatable, Identifiable {
     /// so a contact's avatar update never reached this list even though the
     /// rubrica itself showed it correctly.
     public let peerAvatarUrl: URL?
+    /// True when no name, extension or number is known for the peer (generic person avatar).
+    public let peerIsUnknown: Bool
     /// Post-v5: the allow-listed `CallCloseReason` token the call closed with (failed handshake or
     /// identity check), nil for an ordinary end. Rendered as a short label in the row.
     public let closeReason: String?
@@ -37,6 +39,7 @@ public struct CallHistoryEntry: Equatable, Identifiable {
                 direction: Direction, startedAt: Date,
                 durationSeconds: Int?, isVideo: Bool,
                 peerExtension: Int? = nil,
+                peerIsUnknown: Bool = false,
                 peerAvatarUrl: URL? = nil,
                 closeReason: String? = nil) {
         self.id = id
@@ -47,6 +50,7 @@ public struct CallHistoryEntry: Equatable, Identifiable {
         self.durationSeconds = durationSeconds
         self.isVideo = isVideo
         self.peerExtension = peerExtension
+        self.peerIsUnknown = peerIsUnknown
         self.peerAvatarUrl = peerAvatarUrl
         self.closeReason = closeReason
     }
@@ -113,30 +117,14 @@ final class CallHistoryStore: ObservableObject {
         case .outgoing: dir = .outgoing
         case .missed:   dir = .missed
         }
-        // W-EXTPREFIX consolidation (2026-07-29): this used to be an
-        // independent copy of the priority chain (live rubrica name > a
-        // stored "real" name checked only for UUID-shape, not placeholder
-        // shape > "Int. NNN" > `resolveDisplayName`) — a stale "Phone #100"
-        // in either `nameByUserId` or `record.peerDisplayName` rendered
-        // verbatim. Now a single call into the canonical `DisplayName
-        // .forUser`: `nameByUserId` (live rubrica) wins first via
-        // `contacts`, then `record.peerDisplayName` (the persisted value at
-        // call time) via `serverDisplay`, then `record.peerExtension` —
-        // every source subject to the SAME placeholder check.
-        let display: String = {
-            var contacts: [ContactsStore.StoredContact] = []
-            if let n = nameByUserId[record.peerUserId], !n.isEmpty {
-                contacts = [ContactsStore.StoredContact(
-                    userId: record.peerUserId, displayName: n, phoneHash: "",
-                    avatarUrl: nil, lastSeen: nil, isVerified: false)]
-            }
-            return DisplayName.forUser(
-                record.peerUserId,
-                serverDisplay: record.peerDisplayName,
-                knownExtension: record.peerExtension.flatMap { $0 > 0 ? String($0) : nil },
-                contacts: contacts
-            )
-        }()
+        // Title: contact name, else the extension or number stored on the record, else "Unknown".
+        // An internal user id is never shown (see `CallPeerLabel`).
+        let label = CallPeerLabel.resolve(
+            contactName: nameByUserId[record.peerUserId],
+            storedDisplay: record.peerDisplayName,
+            storedExtension: record.peerExtension,
+            unknownText: String(localized: "Sconosciuto"))
+        let display = label.title
         return CallHistoryEntry(
             id: record.id,
             peerUserId: record.peerUserId,
@@ -145,7 +133,8 @@ final class CallHistoryStore: ObservableObject {
             startedAt: record.startedAt,
             durationSeconds: record.durationSeconds,
             isVideo: record.isVideo,
-            peerExtension: record.peerExtension,
+            peerExtension: label.extensionDigits.flatMap { Int($0) },
+            peerIsUnknown: label.isUnknown,
             peerAvatarUrl: avatarByUserId[record.peerUserId],
             closeReason: record.closeReason
         )
@@ -557,7 +546,8 @@ private struct CallHistoryRow: View {
             QAudionAvatar(displayName: entry.peerDisplay,
                           imageURL: entry.peerAvatarUrl,
                           size: 48,
-                          shortNumber: entry.peerExtension.map(String.init))
+                          shortNumber: entry.peerExtension.map(String.init),
+                          genericPerson: entry.peerIsUnknown)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.peerDisplay)
