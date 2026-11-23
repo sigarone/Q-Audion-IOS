@@ -1159,6 +1159,9 @@ final class AppState: ObservableObject {
     /// call screen with the sentence that names it; never holds media. Cleared when the user confirms the code from it and when a new call
     /// starts (a second incoming call never clears the live call's).
     @Published var callPinWarning: CapsPinWarning?
+    /// The call whose second signature could not be checked within the late-check window: the call screen shows a neutral grey note
+    /// for it (never a warning). Cleared when a result comes in and when another call starts.
+    @Published var callPqVerifyNote: String?
     /// 2026-09-19 — true while the active call holds a ROTATED identity key that the server publishes for
     /// the peer and that `commitSetProvenRepinForDevice` refused to pin, because the user had SAS-verified
     /// the previous key. Drives the banner copy (the key IS published, and one SAS confirmation resolves
@@ -1755,6 +1758,11 @@ final class AppState: ObservableObject {
                 self?.handleCapsPinAnomaly(callId: callId, reasons: reasons)
             }
         }
+        integration.onPqLateEnd = { [weak self] callId, result in
+            Task { @MainActor [weak self] in
+                self?.handlePqLateEnd(callId: callId, result: result)
+            }
+        }
         integration.pqSig = makePqSigRuntime()
         // A rekey that was deferred (no confirmed base yet, one round undecided, the 5 s spacing) can run now.
         integration.onRekeyRearm = { [weak self] reason in
@@ -1857,10 +1865,23 @@ final class AppState: ObservableObject {
         RTLog.info("call", "pin warning=1")
     }
 
+    /// The late check of the live call's second signature settled. `unavailable` (no key after the last attempt) shows the neutral
+    /// grey note; any verdict removes it (a failed one raises its own warning through `handleCapsPinAnomaly`).
+    @MainActor
+    private func handlePqLateEnd(callId: String, result: String) {
+        let cid = callId.lowercased()
+        guard !cid.isEmpty else { return }
+        let active = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased()
+        if let active, !active.isEmpty, active != cid { return }
+        callPqVerifyNote = result == "unavailable" ? cid : nil
+        callService.notePqLateChanged()
+    }
+
     /// A new call starts: its screen has no warning yet. The live call keeps its own, and a warning already raised for the new call
     /// itself (its first round can arrive before the ring) stays.
     @MainActor
     private func resetCapsPinWarningForNewCall(callId: String?) {
+        if let note = callPqVerifyNote, note != callId?.lowercased() { callPqVerifyNote = nil }
         guard let shown = callPinWarning else { return }
         if let callId, shown.callId == callId.lowercased() { return }
         let active = (liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId()?.lowercased()

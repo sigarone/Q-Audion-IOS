@@ -269,6 +269,8 @@ public final class BCryptoRestClient {
         _networkGeneration &+= 1
         let generation = _networkGeneration
         netLock.unlock()
+        // a usable path: anything that waits for the network (the late check of a call's second signature) tries at once
+        if satisfied { NotificationCenter.default.post(name: PqLateVerifier.networkUsableNotification, object: nil) }
 
         // (1) Pool evict — see the class-level kdoc for why `.reset()` is
         // the mechanism here.

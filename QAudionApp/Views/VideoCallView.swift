@@ -97,6 +97,13 @@ struct VideoCallView: View {
                             .padding(.horizontal, 16)
                             .padding(.top, 6)
                             .transition(.move(edge: .top).combined(with: .opacity))
+                        // The post-quantum check of the handshake did not complete: a neutral grey note, never a warning.
+                        if appState.callPqVerifyNote != nil {
+                            PqVerifyNoteRow(onVideo: true)
+                                .padding(.horizontal, 16)
+                                .padding(.top, 6)
+                                .transition(.move(edge: .top).combined(with: .opacity))
+                        }
                         if showInfo {
                             CallStatsBand()
                                 .padding(.horizontal, 16)

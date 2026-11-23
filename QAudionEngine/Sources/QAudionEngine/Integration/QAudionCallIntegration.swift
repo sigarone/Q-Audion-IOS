@@ -1394,6 +1394,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     /// advertised and no signature is sent or judged.
     public var pqSig: PqSigRuntime?
     let pqLayer = PqCallLayer()
+    /// The late check of a second signature whose key could not be resolved in time (see `PqLateVerifier`).
+    var pqLate = PqLateVerifier()
+    /// The late check of the live call settled: the result word (`valid`, `invalid`, `otherkey`), or `unavailable` when the key was
+    /// still not found after the last attempt (round 1 only). Called from a background task; the app hops to its own actor.
+    public var onPqLateEnd: ((_ callId: String, _ result: String) -> Void)?
     /// Upper bound of the peer key lookup on the handshake path.
     static let pqResolveTimeoutSeconds = 2.0
     /// `pskFingerprints` and `pskRoles` carry at most this many entries: a sender advertises its first ones, a receiver treats more
@@ -4452,7 +4457,74 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             })
         if round == 1, outcome.result == .valid, let resolvedKey { pqLayer.setRound1Key(callId: callId, resolvedKey) }
         CapsBindLog.line("pq verify kind=\(isOffer ? "offer" : "accept") pq_sig=\(outcome.result.rawValue)")
+        if round == 1 { pqLate.cancelAll(exceptCall: callId) }
+        if outcome.result == .unavailable, bundle.sigHybrid != nil, bundle.mldsaKeyId != nil {
+            // The key could not be resolved in time: neutral for now, checked again in the background for the life of the call.
+            let inputs = PqLateVerifier.Inputs(
+                kind: isOffer ? Pqsig.kindOffer : Pqsig.kindAccept, transcript: transcript, signerEdPub: signerKey,
+                dtlsFpSelf: peerOwnFp, dtlsFpPeer: isOffer ? nil : answeredFp, peer: peerCaps,
+                mldsaKeyIdB64: bundle.mldsaKeyId, sigHybridB64: bundle.sigHybrid, peerId: peerId, deviceId: deviceId)
+            let epoch = capsBindState.epoch
+            pqLate.start(callId: callId, round: round, inputs: inputs, resolve: resolver) { [weak self] done in
+                guard let self else { return }
+                self.pqLateSettled(done, peerId: peerId, epoch: epoch)
+            }
+        }
         return outcome
+    }
+
+    /// The late check of (call, round) finished: with a verdict, or with none after the last attempt. A call that ended since changes
+    /// nothing. A verdict is judged by the same rules as the first result: round 1 by the pin table (the record is written by its
+    /// existing rules), a rekey round by the rekey rule; a positive failure is the same anomaly as at first sight.
+    func pqLateSettled(_ done: PqLateVerifier.Completion, peerId: String, epoch: Int) {
+        guard capsBindState.epoch == epoch else { return }
+        let cid = done.callId
+        let result = done.outcome.result
+        if result == .unavailable || result == .absent {
+            if done.round <= 1 { onPqLateEnd?(cid, "unavailable") }
+            return
+        }
+        var word = result.rawValue
+        if done.round <= 1 {
+            let storedTag = capsBindState.pinCall(callId: cid)?.pq?.input.sigHybridV1 ?? false
+            let verification = PqVerification(result: result, keyId: done.outcome.keyId, sigHybridV1: storedTag)
+            guard let call = capsBindState.rejudgeRound1Late(
+                callId: cid, pq: verification, book: capsBindBook, armedForHold: false), let ctx = call.pq else { return }
+            pqLayer.setAnchor(callId: cid, PqCallLayer.Anchor(
+                auth: ctx.auth, keyId: ctx.auth == "H" ? done.outcome.keyId : nil, result: ctx.result))
+            if result == .valid, let key = done.key { pqLayer.setRound1Key(callId: cid, key) }
+            pqLayer.noteLate(callId: cid)
+            if ["valid", "invalid", "otherkey"].contains(ctx.result) { word = ctx.result }
+            CapsBindLog.line("PQ-LATE result=\(word) attempt=\(done.attempt) ms=\(done.ms)")
+            if call.pin == .anomaly {
+                let reasons = call.warns.isEmpty ? [PqWarnReason.capsBindV1Missing] : call.warns
+                if !capsBindState.deferWarning(callId: cid, peerUserId: peerId, reasons: reasons) {
+                    onCapsPinAnomaly?(cid, peerId, reasons)
+                }
+            }
+        } else {
+            guard let anchor = pqLayer.anchor(callId: cid) else { return }
+            let decision = HybridSigPolicy.decideRekey(HybridSigPolicy.RekeyInput(
+                auth1: anchor.auth, anchorKeyId: anchor.keyId, isOfferer: false, round: done.round,
+                sigHybrid: result, sigKeyId: done.outcome.keyId, armed: false))
+            if decision.action == .refuse {
+                word = decision.reason == .otherkey ? "otherkey" : "invalid"
+            }
+            CapsBindLog.line("PQ-LATE result=\(word) attempt=\(done.attempt) ms=\(done.ms)")
+            if decision.action == .refuse {
+                let reason = decision.reason ?? .invalid
+                pqLayer.noteRefusal(callId: cid, round: done.round, reason: reason)
+                CapsBindLog.line(decision.log)
+                onCapsPinAnomaly?(cid, peerId, [reason])
+            }
+            pqLayer.noteLate(callId: cid)
+        }
+        onPqLateEnd?(cid, word)
+    }
+
+    /// The protection line carries `late=1` once a late check changed the call's second-signature state.
+    public func pqLateResolved(callId: String) -> Bool {
+        pqLayer.lateResolved(callId: callId)
     }
 
     /// A rekey bundle of a call that is `auth=H` on this side and does not carry a valid second signature under the call's anchor key is
@@ -4474,6 +4546,13 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             }
             reason = PqWarnReason.shown(decision.reason ?? .absent, for: pq?.result ?? .unavailable)
             logLine = decision.log
+            if (pq?.result ?? .unavailable) == .unavailable {
+                // a signature that could not be checked: the round is still not used, but it is no anomaly (no warning); the late
+                // check settles it
+                pqLayer.noteRefusal(callId: callId, round: round, reason: reason)
+                CapsBindLog.line("pq_sig=unavailable round=\(round) pin=- hold=0 rekey=refused")
+                return true
+            }
         } else {
             // No anchor. When round 1 of this call was judged by the second-signature layer (the layer's own mark of the call), or an
             // anchor had to be dropped for lack of room, the round cannot be checked: it is refused (fail closed), never used unsigned.
@@ -4481,6 +4560,11 @@ public final class QAudionCallIntegration: @unchecked Sendable {
             let result = pq?.result ?? .unavailable
             reason = PqWarnReason.shown(result == .invalid ? .invalid : .absent, for: result)
             logLine = "pq_sig=\(result.rawValue) round=\(round) pin=anomaly hold=0 rekey=refused"
+            if result == .unavailable {
+                pqLayer.noteRefusal(callId: callId, round: round, reason: reason)
+                CapsBindLog.line("pq_sig=unavailable round=\(round) pin=- hold=0 rekey=refused")
+                return true
+            }
         }
         pqLayer.noteRefusal(callId: callId, round: round, reason: reason)
         CapsBindLog.line(logLine)
@@ -5309,6 +5393,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // capsBindV1: the per-call facts go with the call; the pin records stay.
         capsBindState.reset()
         pqLayer.reset()
+        // the late check of a second signature: nothing runs after the call, and its kept inputs go
+        pqLate.cancelAll()
         // The round/nonce ratchets and the pinned peer DTLS fingerprint: a reused integration
         // instance must not carry a prior call's nonce, accepted-round watermark or fingerprint
         // pin into the next call — clearing unconditionally is the same "never trust stale

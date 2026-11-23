@@ -2080,6 +2080,12 @@ final class CallService: @unchecked Sendable {
     /// The user confirmed the safety code of this call. Set by AppState, cleared at teardown.
     public var sasConfirmedThisCall: Bool = false
 
+    /// A late check of the second handshake signature settled: the protection line is written again at once if it changed
+    /// (otherwise the periodic emission picks it up). Main thread.
+    func notePqLateChanged() {
+        emitPqLevelIfChanged()
+    }
+
     /// Fed with the native `Q-AUDION dtls ... group=...` line. Any thread.
     public func noteDtlsHandshakeLine(_ line: String) {
         guard let token = PqDtlsGroup.token(fromHandshakeLine: line) else { return }
@@ -2139,6 +2145,8 @@ final class CallService: @unchecked Sendable {
         out.pqSig = pqWords.pqSig
         out.rekey = pqWords.rekey
         out.round = pqWords.round
+        // a late check of the second signature changed this call's state
+        if integration.pqLateResolved(callId: cid) { out.late = "1" }
         // A rekey refused here (sticky): the round of the last refusal; the reason word only when a chained rekey was refused.
         if let refusedEpoch = liveWords.lastRefusal, pqWords.rekey != "refused" {
             out.rekey = "refused"

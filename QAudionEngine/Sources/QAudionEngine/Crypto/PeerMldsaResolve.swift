@@ -6,7 +6,8 @@ import Foundation
 /// and the device id of the SAME fetched bundle, and the lookup is under (peer uuid, sending device id, the Ed25519 key that
 /// verified the round's `sigV6`): the second key belongs to the same Ed25519 key, uuid and device as the signature it endorses.
 /// A bundle with another Ed25519 key for that device is another entry, never a hit. When the store has nothing for the device the
-/// caller's `fetchDevice` runs once (it fills the store) and the store is read again. The key must also be the one the bundle
+/// caller's `fetchDevice` runs once (it fills the store) and the store is read again; so it does when the stored entry names
+/// another key id than the one the bundle claims (the entry is stale, never a reason to give up without a refetch). The key must also be the one the bundle
 /// names. No device id (an envelope without one) means no key: the certificate binds a device id.
 public enum PeerMldsaResolve {
 
@@ -17,7 +18,7 @@ public enum PeerMldsaResolve {
         guard let deviceId, !deviceId.isEmpty, let uuid = UUID(uuidString: peerUserId) else { return nil }
         let uuidRaw = withUnsafeBytes(of: uuid.uuid) { Data($0) }
         var entry = PeerMldsaStore.get(uuidRaw: uuidRaw, deviceId: deviceId, edPub: signerEdPub)
-        if entry == nil {
+        if entry == nil || entry?.keyId != keyId {
             await fetchDevice(peerUserId, deviceId)
             entry = PeerMldsaStore.get(uuidRaw: uuidRaw, deviceId: deviceId, edPub: signerEdPub)
         }

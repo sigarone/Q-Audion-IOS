@@ -465,7 +465,7 @@ final class HybridSigWiringTests: XCTestCase {
         XCTAssertEqual(shown.all, [[.absent, .capsBindV1Missing]])
     }
 
-    /// A signature that could not be checked (no key to check it under) is told apart from one the device did not offer.
+    /// A signature that could not be checked (no key to check it under) is no anomaly and is not shown as not offered.
     func testASignatureThatCouldNotBeCheckedIsNotShownAsNotOffered() async throws {
         try installPeerKey()
         let sender = Sender(seed: edSeed)
@@ -475,7 +475,8 @@ final class HybridSigWiringTests: XCTestCase {
         PeerMldsaStore.clear()
         let c2 = try await receiveRound1(receiver, try signedOffer(sender, call: callId(2), round: 1))
         XCTAssertEqual(c2.pq?.result, .unavailable)
-        XCTAssertEqual(c2.call?.warns, [.unverifiable])
+        XCTAssertEqual(c2.call?.warns, [])
+        XCTAssertNotEqual(c2.call?.pin, .anomaly)
     }
 
     // MARK: - Invalid signer
@@ -1298,5 +1299,243 @@ final class HybridSigWiringTests: XCTestCase {
         XCTAssertTrue(src.contains("static let maxPskAdvertEntries = 64"))
         // the three places that build an advertisement cap it (round-1 OFFER, rekey OFFER, ACCEPT), each fingerprints and roles
         XCTAssertGreaterThanOrEqual(src.components(separatedBy: ".prefix(Self.maxPskAdvertEntries)").count - 1, 6)
+    }
+
+    // MARK: - A signature that could not be checked yet is neutral, then checked again
+
+    private func fastLate() -> PqLateVerifier {
+        PqLateVerifier(schedule: [0.05, 0.1, 0.2], attemptTimeout: 1, pollSeconds: 0.01, minNudgeMs: 0)
+    }
+
+    /// A run that does not act within the test.
+    private func slowLate() -> PqLateVerifier {
+        PqLateVerifier(schedule: [3600], attemptTimeout: 1, pollSeconds: 0.05, minNudgeMs: 3_600_000)
+    }
+
+    private final class EndBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: [String] = []
+        func add(_ value: String) { lock.lock(); storage.append(value); lock.unlock() }
+        var all: [String] { lock.lock(); defer { lock.unlock() }; return storage }
+    }
+
+    private func eventually(_ condition: () -> Bool) async -> Bool {
+        for _ in 0..<500 {
+            if condition() { return true }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return condition()
+    }
+
+    /// A contact pinned by an honest first call; the store of peer keys is then emptied (the key cannot be found).
+    private func pinnedContactWithoutKey() async throws -> (receiver: QAudionCallIntegration, book: CapsPinBook, sender: Sender) {
+        try installPeerKey()
+        let sender = Sender(seed: edSeed)
+        let (receiver, book) = makeReceiver()
+        try await receiveRound1(receiver, try signedOffer(sender, call: callId(1), round: 1))
+        XCTAssertEqual(record(book), pinnedRecord())
+        receiver.onCallEnded()
+        PeerMldsaStore.clear()
+        return (receiver, book, sender)
+    }
+
+    /// Unavailable: no pin anomaly, no banner, auth C, the pin record is not changed.
+    func testAnUnavailableSignatureIsNeutral() async throws {
+        let (receiver, book, sender) = try await pinnedContactWithoutKey()
+        receiver.pqLate = slowLate()
+        let shown = warnings(of: receiver)
+        let c = try await receiveRound1(receiver, try signedOffer(sender, call: callId(2), round: 1))
+        XCTAssertEqual(c.pq?.result, .unavailable)
+        XCTAssertNotEqual(c.call?.pin, .anomaly)
+        XCTAssertEqual(c.call?.warns, [])
+        XCTAssertEqual(c.call?.pq?.auth, "C")
+        XCTAssertTrue(shown.all.isEmpty, "no banner")
+        XCTAssertEqual(record(book), pinnedRecord(), "the pin record is neither changed nor downgraded")
+        XCTAssertEqual(receiver.pqLineWords(callId: callId(2)).auth, "C")
+        XCTAssertNotEqual(receiver.capsBindLineWords(callId: callId(2)).pin, "anomaly")
+        XCTAssertFalse(receiver.isMediaHeld(callId: callId(2)))
+        receiver.onCallEnded()
+    }
+
+    /// A later resolution of the key with a valid signature: auth H, no banner, the pin record by the existing rules.
+    func testALaterValidResolutionGivesAuthHAndNoBanner() async throws {
+        let (receiver, book, sender) = try await pinnedContactWithoutKey()
+        receiver.pqLate = fastLate()
+        let ends = EndBox()
+        receiver.onPqLateEnd = { _, result in ends.add(result) }
+        let shown = warnings(of: receiver)
+        let c = try await receiveRound1(receiver, try signedOffer(sender, call: callId(2), round: 1))
+        XCTAssertEqual(c.pq?.result, .unavailable)
+        XCTAssertEqual(receiver.pqLineWords(callId: callId(2)).auth, "C")
+        try installPeerKey()
+        let done = await eventually { ends.all == ["valid"] }
+        XCTAssertTrue(done, "ends: \(ends.all) log: \(log.lines.joined(separator: "\n"))")
+        XCTAssertEqual(receiver.pqLayer.anchor(callId: callId(2))?.auth, "H")
+        XCTAssertEqual(receiver.pqLayer.anchor(callId: callId(2))?.keyId, hex(peerKeyId))
+        XCTAssertEqual(receiver.pqLineWords(callId: callId(2)).auth, "H")
+        XCTAssertTrue(receiver.pqLateResolved(callId: callId(2)))
+        XCTAssertNotEqual(receiver.capsBindState.pinCall(callId: callId(2))?.pin, .anomaly)
+        XCTAssertTrue(shown.all.isEmpty, "no banner at any point")
+        XCTAssertEqual(record(book), pinnedRecord())
+        XCTAssertTrue(log.lines.contains { $0.hasPrefix("PQ-LATE result=valid attempt=") }, log.lines.joined(separator: "\n"))
+        XCTAssertEqual(receiver.pqLate.retainedInputsCount, 0, "the inputs are dropped when the run ends")
+        receiver.onCallEnded()
+    }
+
+    /// A later invalid result is today's anomaly (a warning, nothing held).
+    func testALaterInvalidResultIsAnAnomaly() async throws {
+        let (receiver, book, sender) = try await pinnedContactWithoutKey()
+        receiver.pqLate = fastLate()
+        let ends = EndBox()
+        receiver.onPqLateEnd = { _, result in ends.add(result) }
+        let shown = warnings(of: receiver)
+        let bad = try corrupted(try signedOffer(sender, call: callId(2), round: 1))
+        let c = try await receiveRound1(receiver, bad)
+        XCTAssertEqual(c.pq?.result, .unavailable)
+        XCTAssertTrue(shown.all.isEmpty)
+        try installPeerKey()
+        let done = await eventually { ends.all == ["invalid"] }
+        XCTAssertTrue(done, "ends: \(ends.all)")
+        XCTAssertEqual(shown.all.last, [.invalid])
+        XCTAssertEqual(receiver.capsBindState.pinCall(callId: callId(2))?.pin, .anomaly)
+        XCTAssertEqual(receiver.pqLayer.anchor(callId: callId(2))?.auth, "C")
+        XCTAssertFalse(receiver.isMediaHeld(callId: callId(2)), "a pin anomaly never holds media")
+        XCTAssertEqual(record(book), pinnedRecord(), "nothing changes until the safety code is confirmed")
+        XCTAssertTrue(log.lines.contains { $0.hasPrefix("PQ-LATE result=invalid attempt=") })
+        receiver.onCallEnded()
+    }
+
+    /// A stored entry that names another key id than the one claimed is fetched again (the fetch used to run only without an entry).
+    func testAStaleKeyIdIsFetchedAgain() async throws {
+        try installPeerKey()
+        let counter = HeldBox()
+        let stale = Data(repeating: 0x55, count: 32)
+        let user = peerUser
+        let device = deviceId
+        let pub = edPub
+        let none = await PeerMldsaResolve.resolve(
+            peerUserId: user, deviceId: device, signerEdPub: pub, keyId: stale, fetchDevice: { _, _ in counter.fire() })
+        XCTAssertNil(none)
+        XCTAssertEqual(counter.count, 1, "the entry exists but names another key: refetched")
+        let same = await PeerMldsaResolve.resolve(
+            peerUserId: user, deviceId: device, signerEdPub: pub, keyId: peerKeyId, fetchDevice: { _, _ in counter.fire() })
+        XCTAssertNotNil(same)
+        XCTAssertEqual(counter.count, 1, "the entry matches: no fetch")
+    }
+
+    /// 30 s without a key: the run ends unavailable (the app shows the grey note); the schedule is 1, 3, 7, 15 and 30 s.
+    func testWithoutAKeyTheRunEndsUnavailableAndNothingIsWarned() async throws {
+        XCTAssertEqual(PqLateVerifier.defaultSchedule, [1, 3, 7, 15, 30])
+        let (receiver, book, sender) = try await pinnedContactWithoutKey()
+        receiver.pqLate = fastLate()
+        let ends = EndBox()
+        receiver.onPqLateEnd = { _, result in ends.add(result) }
+        let shown = warnings(of: receiver)
+        try await receiveRound1(receiver, try signedOffer(sender, call: callId(2), round: 1))
+        let done = await eventually { ends.all == ["unavailable"] }
+        XCTAssertTrue(done, "ends: \(ends.all)")
+        XCTAssertTrue(shown.all.isEmpty, "never red")
+        XCTAssertEqual(receiver.pqLineWords(callId: callId(2)).auth, "C")
+        XCTAssertEqual(record(book), pinnedRecord())
+        let attempts = log.lines.filter { $0.hasPrefix("PQ-LATE result=unavailable attempt=") }
+        XCTAssertEqual(attempts.count, 3, "one line per attempt of the (short) test schedule")
+        XCTAssertEqual(receiver.pqLate.retainedInputsCount, 0)
+        receiver.onCallEnded()
+    }
+
+    /// A signature omitted by a device that offered the capability is an anomaly (the pinned contact).
+    func testAnOmittedSignatureWithTheCapabilityOfferedIsAnAnomaly() async throws {
+        try installPeerKey()
+        let sender = Sender(seed: edSeed)
+        let (receiver, _) = makeReceiver()
+        let shown = warnings(of: receiver)
+        try await receiveRound1(receiver, try signedOffer(sender, call: callId(1), round: 1))
+        receiver.onCallEnded()
+        let honest = try signedOffer(sender, call: callId(2), round: 1)
+        XCTAssertEqual(honest.capabilities?.sigHybridV1, true)
+        let omitted = honest.withSecondSignature(capabilities: honest.capabilities, mldsaKeyId: honest.mldsaKeyId, sigHybrid: nil,
+                                                 capsWithdrawn: nil)
+        let c = try await receiveRound1(receiver, omitted)
+        XCTAssertEqual(c.pq?.result, .absent)
+        XCTAssertEqual(c.call?.pin, .anomaly)
+        XCTAssertEqual(shown.all.last, [.absent])
+        receiver.onCallEnded()
+    }
+
+    /// The inputs kept for the check are discarded at call end, and nothing runs, resolves or is reported after it.
+    func testTheRetainedInputsAreDiscardedAtCallEndAndNothingRunsAfterIt() async throws {
+        let (receiver, _, sender) = try await pinnedContactWithoutKey()
+        receiver.pqLate = PqLateVerifier(schedule: [0.3], attemptTimeout: 1, pollSeconds: 0.01, minNudgeMs: 0)
+        let ends = EndBox()
+        receiver.onPqLateEnd = { _, result in ends.add(result) }
+        let shown = warnings(of: receiver)
+        try await receiveRound1(receiver, try signedOffer(sender, call: callId(2), round: 1))
+        XCTAssertEqual(receiver.pqLate.retainedInputsCount, 1)
+        XCTAssertEqual(receiver.pqLate.activeRunCount, 1)
+        receiver.onCallEnded()
+        XCTAssertEqual(receiver.pqLate.retainedInputsCount, 0)
+        XCTAssertEqual(receiver.pqLate.activeRunCount, 0)
+        let before = log.lines.count
+        try installPeerKey()
+        NotificationCenter.default.post(name: PqLateVerifier.networkUsableNotification, object: nil)
+        try await Task.sleep(nanoseconds: 700_000_000)
+        XCTAssertTrue(ends.all.isEmpty, "nothing is reported after the call")
+        XCTAssertTrue(shown.all.isEmpty)
+        XCTAssertEqual(log.lines.count, before, "no attempt runs after the call")
+    }
+
+    /// A new call ends the runs of the earlier one; a run is keyed by call and round.
+    func testANewCallCancelsTheEarlierRunAndRunsAreKeyedByCallAndRound() async throws {
+        let (receiver, _, sender) = try await pinnedContactWithoutKey()
+        receiver.pqLate = slowLate()
+        try await receiveRound1(receiver, try signedOffer(sender, call: callId(2), round: 1))
+        XCTAssertEqual(receiver.pqLate.activeRunCount, 1)
+        try await receiveRound1(receiver, try signedOffer(sender, call: callId(3), round: 1))
+        XCTAssertEqual(receiver.pqLate.activeRunCount, 1, "the earlier call's run was cancelled")
+        XCTAssertEqual(receiver.pqLate.retainedInputsCount, 1)
+        receiver.onCallEnded()
+
+        let verifier = slowLate()
+        let inputs = PqLateVerifier.Inputs(
+            kind: Pqsig.kindOffer, transcript: Data([1]), signerEdPub: edPub, dtlsFpSelf: fpOffer, dtlsFpPeer: nil,
+            peer: try onTheWire(baseOffer(call: callId(9), round: 1)).capsBind,
+            mldsaKeyIdB64: Data(repeating: 1, count: Pqsig.keyIdSize).base64EncodedString(),
+            sigHybridB64: Data(repeating: 2, count: Pqsig.hybridSigSize).base64EncodedString(), peerId: peerUser, deviceId: deviceId)
+        let none: PqLateVerifier.Resolver = { _, _, _, _ in nil }
+        verifier.start(callId: callId(9), round: 1, inputs: inputs, resolve: none) { _ in }
+        verifier.start(callId: callId(9), round: 2, inputs: inputs, resolve: none) { _ in }
+        verifier.start(callId: callId(9), round: 2, inputs: inputs, resolve: none) { _ in }
+        XCTAssertEqual(verifier.activeRunCount, 2, "one run per call and round")
+        verifier.cancelAll()
+        XCTAssertEqual(verifier.activeRunCount, 0)
+        XCTAssertEqual(verifier.retainedInputsCount, 0)
+    }
+
+    /// A usable network makes one attempt at once, outside the schedule.
+    func testAUsableNetworkMakesOneAttemptAtOnce() async throws {
+        let verifier = PqLateVerifier(schedule: [3600], attemptTimeout: 1, pollSeconds: 0.01, minNudgeMs: 0)
+        let inputs = PqLateVerifier.Inputs(
+            kind: Pqsig.kindOffer, transcript: Data([1]), signerEdPub: edPub, dtlsFpSelf: fpOffer, dtlsFpPeer: nil,
+            peer: try onTheWire(baseOffer(call: callId(9), round: 1)).capsBind,
+            mldsaKeyIdB64: Data(repeating: 1, count: Pqsig.keyIdSize).base64EncodedString(),
+            sigHybridB64: Data(repeating: 2, count: Pqsig.hybridSigSize).base64EncodedString(), peerId: peerUser, deviceId: deviceId)
+        let none: PqLateVerifier.Resolver = { _, _, _, _ in nil }
+        verifier.start(callId: callId(9), round: 1, inputs: inputs, resolve: none) { _ in }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertTrue(log.lines.isEmpty)
+        NotificationCenter.default.post(name: PqLateVerifier.networkUsableNotification, object: nil)
+        let done = await eventually { self.log.lines.contains { $0.hasPrefix("PQ-LATE result=unavailable attempt=1 ms=") } }
+        XCTAssertTrue(done, log.lines.joined(separator: "\n"))
+        verifier.cancelAll()
+    }
+
+    /// The protection line carries `late=1` only for a one-to-one call that a late check changed.
+    func testTheProtectionLineCarriesLateOnlyWhenSet() {
+        var line = PqLevelLine()
+        XCTAssertFalse(line.format().contains("late="))
+        line.late = "1"
+        XCTAssertTrue(line.format().hasSuffix(" late=1"), line.format())
+        line.kind = "group"
+        XCTAssertFalse(line.format().contains("late="))
     }
 }

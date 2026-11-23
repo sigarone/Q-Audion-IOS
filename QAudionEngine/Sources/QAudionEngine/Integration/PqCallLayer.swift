@@ -82,6 +82,7 @@ final class PqCallLayer: @unchecked Sendable {
     private var judged = Table<Bool>()
     private var roundKeys = Table<Pqsig.MlDsaPublicKey>()
     private var refusals = Table<Refusal>()
+    private var lates = Table<Bool>()
 
     // MARK: - State
 
@@ -164,8 +165,22 @@ final class PqCallLayer: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// A late check changed the second-signature state of the call (the protection line then carries `late=1`).
+    func noteLate(callId: String) {
+        lock.lock()
+        lates.set(callId.lowercased(), true)
+        lock.unlock()
+    }
+
+    func lateResolved(callId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return lates.items[callId.lowercased()] == true
+    }
+
     func reset() {
         lock.lock()
+        lates = Table<Bool>()
         own = Table<OwnMode>()
         anchors = Table<Anchor>()
         judged = Table<Bool>()
