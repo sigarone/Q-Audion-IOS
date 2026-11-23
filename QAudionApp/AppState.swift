@@ -1866,9 +1866,19 @@ final class AppState: ObservableObject {
                     await MainActor.run { (self?.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() != nil }
                 },
                 fetch: { user, signerKey in
-                    guard let bundle = await kms.fetchUserIdentityBundleV2(userId: user), bundle.ed25519Pub == signerKey,
-                          Self.verifyPeerBundleSelfSigOnly(bundle) else { return nil }
-                    return PeerMldsaStore.verify(bundle)
+                    // every device the server publishes for the contact (at most 8), or the default one when the set is not known
+                    var devices: [String?] = [nil]
+                    if let published = await kms.fetchUserPublishedDevices(userId: user) {
+                        devices = published.deviceIds.sorted().prefix(8).map { Optional($0) }
+                    }
+                    var found: [MldsaIdentityPublication.VerifiedPeer] = []
+                    for device in devices {
+                        guard let bundle = await kms.fetchUserIdentityBundleV2(userId: user, deviceId: device),
+                              bundle.ed25519Pub == signerKey, Self.verifyPeerBundleSelfSigOnly(bundle),
+                              let verified = PeerMldsaStore.verify(bundle) else { continue }
+                        found.append(verified)
+                    }
+                    return found
                 })
         }
     }

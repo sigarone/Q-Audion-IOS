@@ -1887,4 +1887,29 @@ final class HybridSigWiringTests: XCTestCase {
         XCTAssertEqual(current.count, 1)
         XCTAssertEqual(verifier.retainedInputsCount, 0)
     }
+
+    /// The claimed key id is compared with the recorded one in EVERY state that carries a key id, warning-only states included.
+    func testAnotherClaimedKeyIsRedInEveryRecordStateThatCarriesAKeyId() async throws {
+        try installPeerKey()
+        let sender = Sender(seed: edSeed)
+        let (receiver, book) = makeReceiver()
+        receiver.pqLate = slowLate()
+        let shown = warnings(of: receiver)
+        PeerMldsaStore.clear()
+        let other = Data(repeating: 0x55, count: 32)
+        var n = 10
+        for state in ["pinned", "withdrawn-unsigned", "invalid", "other-key"] {
+            n += 1
+            let caps = state == "pinned" ? ["capsBindV1", "sigHybridV1"] : ["capsBindV1"]
+            book.putRecord(peerUserId: peerUser, signerKey: edPub,
+                           record: CapsPinRecord(caps: caps, mldsaKeyId: hex(peerKeyId), pqState: state))
+            let c = try await receiveRound1(receiver, claiming(try signedOffer(sender, call: callId(n), round: 1), keyId: other))
+            XCTAssertEqual(c.pq?.result, .unavailable, state)
+            XCTAssertEqual(c.call?.pin, .anomaly, state)
+            XCTAssertEqual(c.call?.warns, [.otherkey], state)
+            XCTAssertEqual(shown.all.last, [.otherkey], state)
+            XCTAssertEqual(receiver.pqLate.activeRunCount, 0, state)
+            receiver.onCallEnded()
+        }
+    }
 }

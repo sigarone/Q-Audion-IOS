@@ -14,19 +14,25 @@ public enum PqPinBackfill {
     /// The most records one run looks at.
     public static let maxPerRun = 20
 
-    /// One record: fetch, check the derived id against the record, store. `nil`: nothing to do (the record has a key or is gone).
+    /// One record: look at every candidate key the contact's devices publish for the pinned signer key, and store the one whose derived
+    /// id is the record's (exact match only). `nil`: nothing to do (the record has a key or is gone).
     static func backfillOne(
         book: CapsPinBook, peerUserId: String, signerKey: Data,
-        fetch: (_ peerUserId: String, _ signerKey: Data) async -> MldsaIdentityPublication.VerifiedPeer?
+        fetch: (_ peerUserId: String, _ signerKey: Data) async -> [MldsaIdentityPublication.VerifiedPeer]
     ) async -> Result? {
         guard book.pinnedKey(peerUserId: peerUserId, signerKey: signerKey) == nil,
               book.record(peerUserId: peerUserId, signerKey: signerKey)?.mldsaKeyId != nil else { return nil }
-        guard let verified = await fetch(peerUserId, signerKey), Pqsig.parsePublicKey(verified.pub) != nil else { return .failed }
-        switch book.backfillPinnedKey(peerUserId: peerUserId, signerKey: signerKey, key: verified.pub) {
-        case .stored: return .stored
-        case .mismatch: return .mismatch
-        case .alreadyKept, .noRecord: return nil
+        let candidates = await fetch(peerUserId, signerKey).filter { Pqsig.parsePublicKey($0.pub) != nil }
+        guard !candidates.isEmpty else { return .failed }
+        var sawMismatch = false
+        for candidate in candidates {
+            switch book.backfillPinnedKey(peerUserId: peerUserId, signerKey: signerKey, key: candidate.pub) {
+            case .stored: return .stored
+            case .mismatch: sawMismatch = true
+            case .alreadyKept, .noRecord: return nil
+            }
         }
+        return sawMismatch ? .mismatch : .failed
     }
 
     /// Looks at every pinned record without a kept key (at most `maxPerRun`), one after the other with `spacing` seconds between,
@@ -34,7 +40,7 @@ public enum PqPinBackfill {
     public static func run(
         book: CapsPinBook, maxPerRun: Int = PqPinBackfill.maxPerRun, spacing: Double = 0.5,
         callActive: () async -> Bool,
-        fetch: (_ peerUserId: String, _ signerKey: Data) async -> MldsaIdentityPublication.VerifiedPeer?
+        fetch: (_ peerUserId: String, _ signerKey: Data) async -> [MldsaIdentityPublication.VerifiedPeer]
     ) async {
         for target in book.pinsWithoutKeptKey().prefix(maxPerRun) {
             if Task.isCancelled { return }

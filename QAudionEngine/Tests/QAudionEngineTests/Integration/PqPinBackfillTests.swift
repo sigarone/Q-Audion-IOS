@@ -59,7 +59,7 @@ final class PqPinBackfillTests: XCTestCase {
         XCTAssertEqual(book.pinsWithoutKeptKey().count, 1)
         XCTAssertEqual(book.pinsWithoutKeptKey().first?.peerUserId, user)
         XCTAssertEqual(book.pinsWithoutKeptKey().first?.signerKey, signer)
-        await PqPinBackfill.run(book: book, spacing: 0, callActive: { false }, fetch: { _, _ in self.verified(a) })
+        await PqPinBackfill.run(book: book, spacing: 0, callActive: { false }, fetch: { _, _ in [self.verified(a)] })
         XCTAssertEqual(book.pinnedKey(peerUserId: user, signerKey: signer), a.bytes())
         XCTAssertEqual(log.lines, ["PQ-BACKFILL result=stored"])
         XCTAssertTrue(book.pinsWithoutKeptKey().isEmpty)
@@ -70,7 +70,7 @@ final class PqPinBackfillTests: XCTestCase {
         let b = try key(0x42)
         let book = bookNaming(a)
         // the fetched record CLAIMS A's id but carries B's bytes: the id is derived from the bytes
-        await PqPinBackfill.run(book: book, spacing: 0, callActive: { false }, fetch: { _, _ in self.verified(b, claiming: a.keyId()) })
+        await PqPinBackfill.run(book: book, spacing: 0, callActive: { false }, fetch: { _, _ in [self.verified(b, claiming: a.keyId())] })
         XCTAssertNil(book.pinnedKey(peerUserId: user, signerKey: signer))
         XCTAssertEqual(log.lines, ["PQ-BACKFILL result=mismatch"])
         // the record itself is untouched
@@ -80,7 +80,7 @@ final class PqPinBackfillTests: XCTestCase {
     func testAFailedFetchIsLoggedAndStoresNothing() async throws {
         let a = try key(0x41)
         let book = bookNaming(a)
-        await PqPinBackfill.run(book: book, spacing: 0, callActive: { false }, fetch: { _, _ in nil })
+        await PqPinBackfill.run(book: book, spacing: 0, callActive: { false }, fetch: { _, _ in [] })
         XCTAssertNil(book.pinnedKey(peerUserId: user, signerKey: signer))
         XCTAssertEqual(log.lines, ["PQ-BACKFILL result=failed"])
     }
@@ -93,7 +93,7 @@ final class PqPinBackfillTests: XCTestCase {
         XCTAssertTrue(book.pinsWithoutKeptKey().isEmpty)
         // no record is looked at, nothing is fetched
         let fetches = Counter()
-        await PqPinBackfill.run(book: book, spacing: 0, callActive: { false }, fetch: { _, _ in fetches.fire(); return self.verified(b) })
+        await PqPinBackfill.run(book: book, spacing: 0, callActive: { false }, fetch: { _, _ in fetches.fire(); return [self.verified(b)] })
         XCTAssertEqual(fetches.count, 0)
         // the direct call refuses too, for the same key and for another one
         XCTAssertEqual(book.backfillPinnedKey(peerUserId: user, signerKey: signer, key: b.bytes()), .alreadyKept)
@@ -109,8 +109,26 @@ final class PqPinBackfillTests: XCTestCase {
         let a = try key(0x41)
         let book = bookNaming(a)
         let fetches = Counter()
-        await PqPinBackfill.run(book: book, spacing: 0, callActive: { true }, fetch: { _, _ in fetches.fire(); return self.verified(a) })
+        await PqPinBackfill.run(book: book, spacing: 0, callActive: { true }, fetch: { _, _ in fetches.fire(); return [self.verified(a)] })
         XCTAssertEqual(fetches.count, 0)
         XCTAssertNil(book.pinnedKey(peerUserId: user, signerKey: signer))
+    }
+
+    /// A contact with several devices: the candidate whose derived id is the record's is stored, the others are ignored; with none
+    /// matching nothing is stored.
+    func testOnlyTheDeviceKeyWhoseDerivedIdMatchesIsStored() async throws {
+        let a = try key(0x41)
+        let b = try key(0x42)
+        let c = try key(0x43)
+        let book = bookNaming(b)
+        await PqPinBackfill.run(book: book, spacing: 0, callActive: { false },
+                                fetch: { _, _ in [self.verified(a), self.verified(b), self.verified(c)] })
+        XCTAssertEqual(book.pinnedKey(peerUserId: user, signerKey: signer), b.bytes())
+        XCTAssertEqual(log.lines, ["PQ-BACKFILL result=stored"])
+
+        let other = bookNaming(try key(0x44))
+        await PqPinBackfill.run(book: other, spacing: 0, callActive: { false }, fetch: { _, _ in [self.verified(a), self.verified(c)] })
+        XCTAssertNil(other.pinnedKey(peerUserId: user, signerKey: signer))
+        XCTAssertEqual(log.lines.last, "PQ-BACKFILL result=mismatch")
     }
 }
