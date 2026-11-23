@@ -56,6 +56,9 @@ OKAY = [
     "PQ-LATE result=otherkey attempt=6 ms=30011",
     "PQ-LATE result=unavailable attempt=5 ms=30002",
     "PQ-LATE result=unavailable attempt=1 ms=0",
+    "PQ-BACKFILL result=stored",
+    "PQ-BACKFILL result=mismatch",
+    "PQ-BACKFILL result=failed",
     LEVEL,
     LEVEL.replace("rekey=- round=- late=1", "rekey=refused round=3 rreason=chain_base late=1"),
 ]
@@ -85,6 +88,13 @@ FORGED = [
     LEVEL.replace("late=1", "late=2"),
     LEVEL.replace("late=1", "late=x"),
     LEVEL.replace(" late=1", " tl=pq kd=pq unk=0 late=1"),
+    "PQ-BACKFILL result=stored ",
+    "PQ-BACKFILL result=ok",
+    "PQ-BACKFILL result=stored id=0a1b2c3d",
+    "PQ-BACKFILL result=stored result=stored",
+    "pq-backfill result=stored",
+    "x PQ-BACKFILL result=stored",
+    "PQ-BACKFILL",
     REAL + "​",
 ]
 

@@ -1463,6 +1463,10 @@ _RE_PQLEVEL_FULL = re.compile(
 # milliseconds since the first failure: no id, name or key by construction. Whole-line match only. Pinned by
 # test_ship_ios_pqlate_vocab.py.
 _RE_PQLATE_FULL = re.compile(r"\APQ-LATE result=(?:valid|invalid|otherkey|unavailable) attempt=[0-9]{1,2} ms=[0-9]{1,7}\Z")
+# KEY BACKFILL LINE (call / stdout tags): one line per pinned contact whose second public key was looked up after the fact
+# (QAudionEngine PqPinBackfill). Three result words, no id, name or key. Whole-line match only. Pinned by
+# test_ship_ios_pqlate_vocab.py.
+_RE_PQBACKFILL_FULL = re.compile(r"\APQ-BACKFILL result=(?:stored|mismatch|failed)\Z")
 # SHIELD STATE LINE (call / stdout tags): the identity and post-quantum shield state of a call, written when either changes.
 # Every field is a member of a closed set, a flag or the 8 hex characters of the call prefix: no key, name or fingerprint by
 # construction. The generic gate gives the bare line name a budget of zero, so it is accepted here by the whole-line match only:
@@ -1535,6 +1539,7 @@ def _is_closed_grammar_line(tag, norm_body):
         return bool(_RE_PAIR_BLE_FULL.match(norm_body) or _RE_PAIR_NFC_FULL.match(norm_body))
     if t.startswith(_HANDSHAKE_TAG_PREFIXES):
         return bool(_RE_HANDSHAKE_FULL.match(norm_body) or _RE_PQLEVEL_FULL.match(norm_body) or _RE_PQLATE_FULL.match(norm_body)
+                    or _RE_PQBACKFILL_FULL.match(norm_body)
                     or _RE_LIVE_FULL.match(norm_body) or _RE_SHIELD_FULL.match(norm_body)
                     or _RE_SESSIONBIND_FULL.match(norm_body) or _RE_CHATREKEY_FULL.match(norm_body))
     return False

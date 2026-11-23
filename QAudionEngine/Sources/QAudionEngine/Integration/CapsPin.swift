@@ -247,6 +247,56 @@ public final class CapsPinBook: @unchecked Sendable {
         persistence.snapshot().pinnedKeys[Self.pinKey(peerUserId: peerUserId, signerKey: signerKey)]
     }
 
+    public enum BackfillOutcome: Sendable, Equatable {
+        case stored
+        /// The key id derived from the public key is not the one the record names.
+        case mismatch
+        case alreadyKept
+        case noRecord
+    }
+
+    /// Stores `key` for a record that has none, only when the key id derived from `key` (SHA-256 of its bytes) equals the id the
+    /// record names. An existing kept key is never replaced or erased.
+    public func backfillPinnedKey(peerUserId: String, signerKey: Data, key: Data) -> BackfillOutcome {
+        guard let parsed = Pqsig.parsePublicKey(key) else { return .mismatch }
+        let id = HybridBundleVerifier.hex(parsed.keyId())
+        let k = Self.pinKey(peerUserId: peerUserId, signerKey: signerKey)
+        var outcome = BackfillOutcome.noRecord
+        persistence.update { state in
+            guard let named = state.pins[k]?.mldsaKeyId else { return }
+            if state.pinnedKeys[k] != nil { outcome = .alreadyKept; return }
+            if named != id { outcome = .mismatch; return }
+            state.pinnedKeys[k] = key
+            outcome = .stored
+        }
+        return outcome
+    }
+
+    /// The records that name a second key id and have no kept key (pins made before keys were kept).
+    public func pinsWithoutKeptKey() -> [(peerUserId: String, signerKey: Data)] {
+        let state = persistence.snapshot()
+        var out: [(peerUserId: String, signerKey: Data)] = []
+        for (k, record) in state.pins where record.mldsaKeyId != nil && state.pinnedKeys[k] == nil {
+            let parts = k.split(separator: "|", maxSplits: 1).map(String.init)
+            guard parts.count == 2, let signer = Self.data(hex: parts[1]) else { continue }
+            out.append((parts[0], signer))
+        }
+        return out
+    }
+
+    private static func data(hex: String) -> Data? {
+        guard hex.count % 2 == 0 else { return nil }
+        var bytes = Data()
+        var index = hex.startIndex
+        while index < hex.endIndex {
+            let next = hex.index(index, offsetBy: 2)
+            guard let byte = UInt8(hex[index..<next], radix: 16) else { return nil }
+            bytes.append(byte)
+            index = next
+        }
+        return bytes
+    }
+
     /// Drops the kept key of a record and nothing else (a pin made before keys were kept has none; the tests use it).
     func removePinnedKey(peerUserId: String, signerKey: Data) {
         let k = Self.pinKey(peerUserId: peerUserId, signerKey: signerKey)

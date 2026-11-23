@@ -1850,6 +1850,29 @@ final class AppState: ObservableObject {
         return PeerMldsaStore.verify(bundle)
     }
 
+    /// Pins made before the second public key was kept with the record have only its id: fill the key in from the peer's published
+    /// bundle, in the background, at most every 6 hours, never during a call, and only when the key id derived from the fetched
+    /// key is the pinned one (`PqPinBackfill`). The bundle must be the one of the pinned Ed25519 key and verify like any fetched one.
+    private func startPqPinBackfillIfDue() {
+        let stampKey = "com.qaudion.pqbackfill.last"
+        let now = Date().timeIntervalSince1970
+        guard now - UserDefaults.standard.double(forKey: stampKey) >= 6 * 3600,
+              !CapsPinBook.shared.pinsWithoutKeptKey().isEmpty, let kms = liveProvider?.kmsClient else { return }
+        UserDefaults.standard.set(now, forKey: stampKey)
+        Task(priority: .background) { [weak self] in
+            await PqPinBackfill.run(
+                book: CapsPinBook.shared,
+                callActive: {
+                    await MainActor.run { (self?.liveProvider?.callingApi as? BCryptoCallingApiImpl)?.getActiveCallId() != nil }
+                },
+                fetch: { user, signerKey in
+                    guard let bundle = await kms.fetchUserIdentityBundleV2(userId: user), bundle.ed25519Pub == signerKey,
+                          Self.verifyPeerBundleSelfSigOnly(bundle) else { return nil }
+                    return PeerMldsaStore.verify(bundle)
+                })
+        }
+    }
+
     /// Warm the peer's second key ahead of a call (a callee while ringing, a caller when it starts the call). Fire and forget.
     private func prefetchPeerSecondKey(_ userId: String) {
         guard !userId.isEmpty, let provider = liveProvider else { return }
@@ -6685,6 +6708,7 @@ final class AppState: ObservableObject {
         wireDeviceRenewFallback(on: provider)
         provider.persistingRotatedTokens()
         self.liveProvider = provider
+        startPqPinBackfillIfDue()
         // BLOCK — every sign-in (and every cold start) builds the backend here: the blocked list of this
         // account is loaded now, without waiting for the socket to authenticate, and the load is retried with
         // a growing delay if it fails (`ContactBlockCoordinator.refreshFromServerWithRetry`). The same
