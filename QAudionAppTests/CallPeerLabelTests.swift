@@ -31,6 +31,14 @@ final class CallPeerLabelTests: XCTestCase {
         XCTAssertEqual(label(display: uuid).title, unknown)
     }
 
+    func test_bareHexIdPrefixIsSkippedButShortNamesStay() {
+        XCTAssertEqual(label(display: "6cb04144").title, unknown)
+        XCTAssertEqual(label(name: "6cb04144", display: "6CB04144", ext: 207).title, "207")
+        XCTAssertEqual(label(display: "Fabio").title, "Fabio")
+        XCTAssertEqual(label(display: "Dead Beef").title, "Dead Beef")
+        XCTAssertEqual(label(display: "Facade").title, "Facade")
+    }
+
     func test_storedExtensionWhenNotInContacts() {
         let r = label(display: "Utente 6cb04144…", ext: 207)
         XCTAssertEqual(r.title, "207")

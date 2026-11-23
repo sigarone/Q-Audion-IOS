@@ -31,11 +31,11 @@ enum CallPeerLabel {
                                                  knownExtension: nil, contacts: [])
         }()
         if let name = contactName?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !name.isEmpty, !DisplayName.isPlaceholderName(name) {
+           !name.isEmpty, !DisplayName.isPlaceholderName(name), !looksLikeHexId(name) {
             return Result(title: name, extensionDigits: ext, isUnknown: false)
         }
         if let stored = storedDisplay?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !stored.isEmpty, !DisplayName.isPlaceholderName(stored),
+           !stored.isEmpty, !DisplayName.isPlaceholderName(stored), !looksLikeHexId(stored),
            phoneNumber(stored) == nil, DisplayName.bareDigits(stored) == nil {
             return Result(title: stored, extensionDigits: ext, isUnknown: false)
         }
@@ -46,6 +46,13 @@ enum CallPeerLabel {
             return Result(title: number, extensionDigits: nil, isUnknown: false)
         }
         return Result(title: unknownText, extensionDigits: nil, isUnknown: true)
+    }
+
+    /// A bare hex run of 8 or more characters with at least one letter a-f and no spaces: an id prefix.
+    static func looksLikeHexId(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count >= 8, t.allSatisfy({ $0.isHexDigit }) else { return false }
+        return t.contains(where: { "abcdefABCDEF".contains($0) })
     }
 
     /// A stored value that is a phone number: digits with an optional leading "+", spaces and dashes,
