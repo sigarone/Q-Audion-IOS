@@ -50,6 +50,7 @@ targets:
           - PeerDiagResponderTests.swift
           - ChatVoiceNoteSenderMaxUsesTests.swift
           - CallCloseReasonRedactionTests.swift
+          - CallPeerLabelTests.swift
           - CrashDiagnosticsRedactionTests.swift
           - CallMetricsRedactionTests.swift
           - CallMinimizePolicyTests.swift
