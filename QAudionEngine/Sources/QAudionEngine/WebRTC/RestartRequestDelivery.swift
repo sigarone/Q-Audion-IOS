@@ -129,8 +129,9 @@ public final class RestartRequestDelivery: @unchecked Sendable {
             firstAccepted = gen != nil
         }
         let initial = plan
-        let newTask = Task { [weak self] in
-            await self?.run(plan: initial, epoch: myEpoch)
+        let newTask = Task<Void, Never> { [weak self] in
+            guard let self else { return }
+            await self.run(plan: initial, epoch: myEpoch)
         }
         lock.withLock {
             startsInFlight -= 1
