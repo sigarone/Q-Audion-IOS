@@ -484,13 +484,18 @@ struct VideoCallView: View {
     private var trustBar: some View {
         HStack(spacing: 6) {
             infoControls
-            if sasVerified {
-                trustChip(icon: "checkmark", label: "SAS ✓", color: .green, filled: true)
+            // As on Android, the chips appear only while the info toggle is open: the top bar already shows the verified seal, the
+            // post-quantum tag and the transport.
+            if showInfo {
+                if sasVerified {
+                    trustChip(icon: "checkmark", label: "SAS ✓", color: .green, filled: true)
+                }
+                if realSessionKey != nil {
+                    // the green of the post-quantum tag of `CallSecurityBadge` (purple means "to verify")
+                    trustChip(icon: "lock.shield.fill", label: appState.callPqBadge?.tag ?? "PQC", color: .green, filled: false)
+                }
+                trustChip(icon: nil, label: transportChipLabel, color: .white.opacity(0.75), filled: false)
             }
-            if realSessionKey != nil {
-                trustChip(icon: "lock.shield.fill", label: appState.callPqBadge?.tag ?? "PQC", color: .purple, filled: false)
-            }
-            trustChip(icon: nil, label: transportChipLabel, color: .white.opacity(0.75), filled: false)
             Spacer()
         }
     }
