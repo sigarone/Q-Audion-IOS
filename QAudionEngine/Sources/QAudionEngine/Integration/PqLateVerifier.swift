@@ -217,7 +217,12 @@ final class PqLateVerifier: @unchecked Sendable {
                 }
                 let remaining = offset - Double(elapsedMs()) / 1000
                 if remaining <= 0 { break }
-                try? await Task.sleep(nanoseconds: UInt64(min(remaining, pollSeconds) * 1_000_000_000))
+                // a cancelled sleep throws: that is the end of the run
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(min(remaining, pollSeconds) * 1_000_000_000))
+                } catch {
+                    return
+                }
             }
             if await attemptOnce() { return }
         }

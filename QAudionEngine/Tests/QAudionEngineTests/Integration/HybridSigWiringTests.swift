@@ -54,7 +54,13 @@ final class HybridSigWiringTests: XCTestCase {
         CapsBindLog.setSink { box.add($0) }
     }
 
+    /// Every receiver a test made: the late check of each is cancelled at the end of the test, so a run of one test never attempts
+    /// (or answers a usable-network signal) during another.
+    private var madeReceivers: [QAudionCallIntegration] = []
+
     override func tearDown() {
+        for receiver in madeReceivers { receiver.pqLate.cancelAll() }
+        madeReceivers.removeAll()
         CapsBindLog.setSink(nil)
         PeerMldsaStore.clear()
         super.tearDown()
@@ -93,6 +99,7 @@ final class HybridSigWiringTests: XCTestCase {
         let book = CapsPinBook(persistence: MemoryCapsPinPersistence())
         integration.capsBindBook = book
         integration.pqSig = receiverRuntime()
+        madeReceivers.append(integration)
         return (integration, book)
     }
 
@@ -1524,6 +1531,11 @@ final class HybridSigWiringTests: XCTestCase {
     func testTheRetainedInputsAreDiscardedAtCallEndAndNothingRunsAfterIt() async throws {
         let (receiver, _, sender) = try await pinnedContactWithoutKey()
         receiver.pqLate = PqLateVerifier(schedule: [0.3], attemptTimeout: 1, pollSeconds: 0.01, minNudgeMs: 0)
+        // this receiver's own lookup, counted: the number of attempts of THIS run, whatever else the process logs
+        let lookups = HeldBox()
+        receiver.pqSig = PqSigRuntime(
+            isAvailable: { false }, makeSigner: { nil },
+            resolvePeerKey: { _, _, _, _ in lookups.fire(); return nil })
         let ends = EndBox()
         receiver.onPqLateEnd = { _, result, _ in ends.add(result) }
         let shown = warnings(of: receiver)
@@ -1533,13 +1545,13 @@ final class HybridSigWiringTests: XCTestCase {
         receiver.onCallEnded()
         XCTAssertEqual(receiver.pqLate.retainedInputsCount, 0)
         XCTAssertEqual(receiver.pqLate.activeRunCount, 0)
-        let before = log.lines.count
+        let before = lookups.count
         try installPeerKey()
         NotificationCenter.default.post(name: PqLateVerifier.networkUsableNotification, object: nil)
         try await Task.sleep(nanoseconds: 700_000_000)
         XCTAssertTrue(ends.all.isEmpty, "nothing is reported after the call")
         XCTAssertTrue(shown.all.isEmpty)
-        XCTAssertEqual(log.lines.count, before, "no attempt runs after the call")
+        XCTAssertEqual(lookups.count, before, "no attempt of this run after the call, scheduled or on a network signal")
     }
 
     /// A call-waiting OFFER never ends the live call's run; a run is keyed by call and round.
