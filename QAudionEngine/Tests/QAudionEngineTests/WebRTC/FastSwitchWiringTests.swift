@@ -44,7 +44,7 @@ final class FastSwitchWiringTests: XCTestCase {
 
     func testTheRestartSkipsTheReprobeOnlyThroughTheDecision() {
         let ctl = read("QAudionEngine/Sources/QAudionEngine/WebRTC/QAudionWebRtcCallController.swift")
-        XCTAssertTrue(ctl.contains("FastSwitchDecisions.usesCachedServersForRestart(\n            flagOn: fastSwitchOn, reason: reason, forceProbe: forceProbe)"))
+        XCTAssertTrue(ctl.contains("FastSwitchDecisions.usesCachedServersForRestart(\n            flagOn: fastSwitchOn, reason: reason, forceProbe: forceProbe,\n            peerRequestBypass: peerAction == .bypassGates)"))
         XCTAssertTrue(ctl.contains("if !cachedServers, let liveConnection = peerConnection {"))
         XCTAssertEqual(count("await refreshIceServersForRestart(on:", in: ctl), 1, "a single probe call site remains")
     }
@@ -61,9 +61,10 @@ final class FastSwitchWiringTests: XCTestCase {
         }
         let body = String(ctl[a.lowerBound..<b.lowerBound])
         XCTAssertEqual(count("createOffer(audioOnly: true, iceRestart: true)", in: body), 1)
-        XCTAssertEqual(count("sendIceRestartOffer(", in: body), 2, "the park closure re-sends the same offer; the main path sends it once")
-        XCTAssertEqual(count("primeIceRestart()", in: body), 1,
-                       "only the pre-existing responder request-first prime remains, which sends no offer")
+        XCTAssertEqual(count("sendIceRestartOffer(", in: body), 2,
+                       "the same-offer resend for a peer request, and the main path; the park closure lives in makeFastParkDelivery")
+        XCTAssertEqual(count("primeIceRestart()", in: body), 2,
+                       "the responder request-first prime and the one before a request inside the gate, neither sends an offer")
         XCTAssertFalse(ctl.contains("primesRestartAtTrigger"))
         XCTAssertEqual(count("createOffer(audioOnly: true, iceRestart: true)", in: ctl), 1,
                        "no other site mints a restart offer")
@@ -85,8 +86,10 @@ final class FastSwitchWiringTests: XCTestCase {
     /// once) and arms the fallback at that moment, and still mints no new offer.
     func testAParkedFastRestartArmsTheFallbackWhenDelivered() {
         let ctl = read("QAudionEngine/Sources/QAudionEngine/WebRTC/QAudionWebRtcCallController.swift")
-        guard let a = ctl.range(of: "// Fast path: on socket recovery re-send THIS offer"),
-              let b = ctl.range(of: "let sent = await callingApi.sendIceRestartOffer(") else {
+        guard let a = ctl.range(of: "private func makeFastParkDelivery("),
+              let b = ctl.range(of: "public func restartIce(reason: String, forceProbe: Bool = false) async {"),
+              let c = ctl.range(of: "// Fast path: on socket recovery re-send THIS offer"),
+              let d = ctl.range(of: "let sent = await callingApi.sendIceRestartOffer(") else {
             XCTFail("anchors not found")
             return
         }
@@ -95,7 +98,10 @@ final class FastSwitchWiringTests: XCTestCase {
         XCTAssertFalse(body.contains("createOffer"), "no second offer")
         XCTAssertTrue(body.contains("self.noteFastSwitchSent()"))
         XCTAssertTrue(body.contains("self.startFastSwitchProbeFallback()"))
-        XCTAssertTrue(body.contains("== offerConnectionId"))
+        XCTAssertTrue(body.contains("== connection"))
+        let site = String(ctl[c.lowerBound..<d.lowerBound])
+        XCTAssertTrue(site.contains("parkDelivery = makeFastParkDelivery("))
+        XCTAssertFalse(site.contains("createOffer"), "no second offer")
         // noteFastSwitchSent reads the trigger stamp kept from the original trigger and logs once.
         XCTAssertTrue(ctl.contains("fastSwitchSentLogged = true"))
     }
@@ -105,7 +111,7 @@ final class FastSwitchWiringTests: XCTestCase {
     func testOnlyAnAcceptedRestartReplacesThePendingFallback() {
         let ctl = read("QAudionEngine/Sources/QAudionEngine/WebRTC/QAudionWebRtcCallController.swift")
         guard let stamp = ctl.range(of: "private func noteFastSwitchTrigger() {"),
-              let adopt = ctl.range(of: "private func adoptFastSwitchTrigger(fast: Bool) {"),
+              let adopt = ctl.range(of: "private func adoptFastSwitchTrigger(fast: Bool, trigLabel: String? = nil) {"),
               let sent = ctl.range(of: "private func noteFastSwitchSent() {") else {
             XCTFail("anchors not found")
             return

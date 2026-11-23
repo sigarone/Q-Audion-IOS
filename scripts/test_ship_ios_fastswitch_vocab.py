@@ -46,6 +46,18 @@ LINES = [
     "restart_ice fast=0 trig_sent_ms=4800",
     "restart_ice fast=1 trig_rx_ms=2345",
     "restart_ice fast=0 trig_rx_ms=3600",
+    "restart_ice fast=1 trig=peer_req trig_sent_ms=850",
+    "restart_ice fast=1 trig=peer_req trig_rx_ms=2100",
+    "restart_ice fast=1 trig=peer_req resend=1",
+    "restart_ice fast=1 trig=peer_req bypass=1",
+    "restart_ice fast=1 trig=peer_req dup=1",
+    "restart_ice fast=1 role=responder gated=1 request=1",
+    "restart_ice fast=1 role=responder debounced=1 request=1",
+    "restart_ice fast=1 role=responder delivered=1",
+    "restart_ice fast=1 role=responder n=2 delivered=1",
+    "restart_ice fast=1 role=responder n=12 giveup=1",
+    "restart_ice fast=1 role=responder n=3 resend=1 reason=wsgen",
+    "restart_ice fast=1 role=responder n=2 resend=1 reason=reconnect",
     "route tier=0",
     "route tier=1",
 ]
@@ -64,7 +76,7 @@ for leak_line in ("restart_ice fast=1 zorkblatfoo=1 quuxwibblez=2",
 
 # The words live in the scoped FASTSWITCH_FORMAT_VOCAB only: not in the global vocabularies, and still unknown in
 # any line that is not one of the exact call shapes (other tag, other shape, extra token).
-for word in ("fast", "fallback", "probe", "prime"):
+for word in ("fast", "fallback", "probe", "prime", "resend", "wsgen", "reconnect", "bypass"):
     if word in m.APP_VOCAB or word in m.TELEMETRY_VOCAB:
         failures.append("%r leaked into the global vocabulary" % word)
 unrelated = [
@@ -74,6 +86,9 @@ unrelated = [
     ("restart_ice fast=1 fallback=1 probe=1", "chat"),
     ("fast=1 fallback=1 probe=1", "call"),
     ("restart_ice fast=1 trig_sent_ms=12 fallback fast probe", "call"),
+    ("restart_ice fast=1 role=responder n=2 resend=1 reason=wsgen", "chat"),
+    ("restart_ice fast=1 role=responder n=2 resend=1 reason=wsgen zorkblatfoo", "call"),
+    ("responder resend wsgen reconnect giveup bypass retry handshake started", "call"),
 ]
 for line, tag in unrelated:
     got = red(line, tag)

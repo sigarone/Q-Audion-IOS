@@ -56,10 +56,70 @@ public enum FastSwitchDecisions {
     /// The parked resend of that restart (`interface-change.parked-resend`) is the same attempt, so
     /// it counts too. `forceProbe` is the explicit marker of the one fallback restart (never the
     /// reason text): it always takes the normal path.
-    public static func usesCachedServersForRestart(flagOn: Bool, reason: String, forceProbe: Bool = false) -> Bool {
+    /// `peerRequestBypass`: the restart answers a peer request that `peerRequestAction` let past the debounce and the
+    /// gate; it takes the cached servers as well.
+    public static func usesCachedServersForRestart(flagOn: Bool, reason: String, forceProbe: Bool = false,
+                                                   peerRequestBypass: Bool = false) -> Bool {
         guard flagOn, !forceProbe else { return false }
+        if peerRequestBypass && reason == peerRequestReason { return true }
         return reason == interfaceChangeReason
             || reason == interfaceChangeReason + RestartIceDecisions.parkedResendReasonSuffix
+    }
+
+    /// The restart reason of a `restart_ice_request` received from the peer.
+    public static let peerRequestReason: String = "peer-requested-ice-restart"
+    /// Trigger label written on the timing lines of such a restart.
+    public static let peerRequestTrigLabel: String = "peer_req"
+
+    public enum PeerRequestAction: Equatable {
+        /// Behaviour as before: the debounce and the gate apply, servers are refreshed.
+        case normal
+        /// Accept at once (no debounce, no gate), make a new offer with the cached servers.
+        case bypassGates
+        /// A duplicate, or a second new offer inside the storm bound: nothing is done.
+        case drop
+        /// A restart offer of ours is in flight and unanswered: send that same offer again.
+        case resendInflight
+    }
+
+    /// True when the restart offer kept for a re-send is still THE pending offer: nothing was answered and no other
+    /// offer was made (video upgrade, setup) since it was created. `inflightSlotGeneration` is the answer-slot
+    /// generation when the restart offer was created; any applied answer or new offer moves the current one.
+    public static func hasUnansweredRestartOffer(inflightSlotGeneration: Int?, currentSlotGeneration: Int,
+                                                 answerApplied: Bool) -> Bool {
+        guard let g = inflightSlotGeneration else { return false }
+        return g == currentSlotGeneration && !answerApplied
+    }
+
+    /// A peer request closer than this to the previous accepted one is a duplicate.
+    public static let peerRequestDuplicateMs: Int64 = 1_000
+    /// At most one NEW offer per this long from peer requests.
+    public static let peerRequestNewOfferMs: Int64 = 2_000
+
+    /// What the offering side does with a peer restart request. Only with the flag on, as the offering side, and
+    /// for the peer-request reason; everything else is `.normal`. The request itself is the signal that the peer's
+    /// network changed, so the local ICE state does not matter.
+    /// - Parameters:
+    ///   - hasUnansweredOffer: a restart offer was sent after the last answer and no answer has come back.
+    ///   - sinceLastAcceptedMs: time since the previous accepted peer request (nil: none yet).
+    ///   - sinceLastNewOfferMs: time since the previous new offer made for a peer request (nil: none yet).
+    public static func peerRequestAction(flagOn: Bool, initiator: Bool, reason: String,
+                                         hasUnansweredOffer: Bool,
+                                         sinceLastAcceptedMs: Int64? = nil,
+                                         sinceLastNewOfferMs: Int64? = nil) -> PeerRequestAction {
+        guard flagOn, initiator, reason == peerRequestReason else { return .normal }
+        if let s = sinceLastAcceptedMs, s < peerRequestDuplicateMs { return .drop }
+        if hasUnansweredOffer { return .resendInflight }
+        if let s = sinceLastNewOfferMs, s < peerRequestNewOfferMs { return .drop }
+        return .bypassGates
+    }
+
+    /// The answering side asks the offering side for a restart on an interface change. With the flag on, a trigger
+    /// the debounce or the gate would refuse still sends (or re-arms) the request: the gate protects against
+    /// overlapping offers, and this side makes none.
+    public static func requestStillSentInsideGate(flagOn: Bool, initiator: Bool, reason: String,
+                                                  peerUsesRequest: Bool) -> Bool {
+        flagOn && !initiator && peerUsesRequest && reason == interfaceChangeReason
     }
 
     /// When the restart offer parks (signalling socket down), the park delivers a fresh offer

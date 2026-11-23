@@ -1621,6 +1621,29 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     private var fastSwitchSentLogged: Bool = false
     private var fastSwitchRxTask: Task<Void, Never>?
     private var fastSwitchFallbackTask: Task<Void, Never>?
+    /// Which trigger the current timing lines belong to ("peer_req" for a peer request, nil for an interface change).
+    /// Guarded by `fastSwitchLock`.
+    private var fastSwitchTrigLabel: String?
+
+    /// The last restart offer sent on the fast path (cached servers) and the connection it belongs to. While no
+    /// answer has come back, a peer request for another restart re-sends exactly this offer. Guarded by
+    /// `restartIceDebounceLock`; cleared when a new offer is built the normal way and at teardown.
+    private struct InflightRestartOffer {
+        let sdp: String
+        let capabilities: [String]
+        let connection: ObjectIdentifier
+        /// `answerSlotGeneration` when the offer was created.
+        let slotGeneration: Int
+    }
+    private var inflightRestartOffer: InflightRestartOffer?
+    /// Wall-clock ms of the last accepted peer request and of the last new offer made for one.
+    /// Guarded by `restartIceDebounceLock`.
+    private var lastPeerRequestAcceptedMs: Int64?
+    private var lastPeerRequestOfferMs: Int64?
+
+    /// Delivery of this side's `restart_ice_request` (flag `calls.ice_fastswitch`), built on first use.
+    /// Guarded by `restartIceDebounceLock`.
+    private var restartRequestDeliveryStorage: RestartRequestDelivery?
     /// Latest classification of the SELECTED pair, no dwell (see `resolveAndApplyRouteTier`).
     private var _latestSelectedPairTier: RouteTier = .unknown
     /// Read and written from different threads (stats callback, probe timer): always through
@@ -2029,9 +2052,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// because the controller is `@unchecked Sendable` (NOT @MainActor).
     private let answerLock = NSLock()
     private var _hasAppliedRemoteAnswer = false
+    /// Moves whenever the answer slot changes (an answer applied, or a new offer opening the slot): an offer kept for
+    /// a re-send is only still pending while this is unchanged. Guarded by `answerLock`.
+    private var _answerSlotGeneration = 0
+    private var answerSlotGeneration: Int { answerLock.lock(); defer { answerLock.unlock() }; return _answerSlotGeneration }
     private var hasAppliedRemoteAnswer: Bool {
         get { answerLock.lock(); defer { answerLock.unlock() }; return _hasAppliedRemoteAnswer }
-        set { answerLock.lock(); _hasAppliedRemoteAnswer = newValue; answerLock.unlock() }
+        set { answerLock.lock(); _hasAppliedRemoteAnswer = newValue; _answerSlotGeneration &+= 1; answerLock.unlock() }
     }
     /// Atomic test-and-set: returns `true` if the caller "won" the
     /// race and should proceed; returns `false` if another caller has
@@ -2042,6 +2069,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         defer { answerLock.unlock() }
         if _hasAppliedRemoteAnswer { return false }
         _hasAppliedRemoteAnswer = true
+        _answerSlotGeneration &+= 1
         return true
     }
 
@@ -3141,6 +3169,12 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         lastExternalNetworkChangeAt = nil
         lastIceRestartAt = nil
         iceRestartGateUntil = nil   // W-ICERESTARTGATE — fresh call, fresh gate
+        restartIceDebounceLock.withLock {
+            inflightRestartOffer = nil
+            lastPeerRequestAcceptedMs = nil
+            lastPeerRequestOfferMs = nil
+        }
+        restartRequestDelivery().cancel()
         lastAppliedRemoteRestartSdp = nil
         lastIceConnectionState = .new
         hasEverConnectedIce = false
@@ -3761,6 +3795,42 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         }
     }
 
+    /// The park delivery of a fast restart: re-sends THIS offer on socket recovery (no second offer is made),
+    /// then does what an immediate send does, unless the call ended or the connection was replaced meanwhile.
+    private func makeFastParkDelivery(sdp: String, capabilities: [String], recipientId rid: String,
+                                      connection: ObjectIdentifier) -> (@Sendable () async -> Void) {
+        return { [weak self] in
+            guard let self, !self.intentionalShutdown,
+                  self.peerConnection.map({ ObjectIdentifier($0) }) == connection else { return }
+            let delivered = await self.callingApi.sendIceRestartOffer(
+                recipientId: rid, sdp: sdp, capabilities: capabilities, onParkDelivery: nil)
+            if delivered {
+                self.noteFastSwitchSent()
+                self.startFastSwitchProbeFallback()
+            }
+        }
+    }
+
+    /// Delivery of this side's restart request, wired to the signalling socket of `callingApi`.
+    private func restartRequestDelivery() -> RestartRequestDelivery {
+        restartIceDebounceLock.withLock {
+            if let d = restartRequestDeliveryStorage { return d }
+            let api = callingApi
+            let d = RestartRequestDelivery(environment: RestartRequestDelivery.Environment(
+                write: { [weak self] in
+                    guard let self, !self.intentionalShutdown, let rid = self.recipientId else { return nil }
+                    return api.writeRestartIceRequestOnLiveSocket(recipientId: rid)
+                },
+                liveGeneration: { api.liveSignalingGeneration() },
+                ensureReady: { timeout in await api.awaitSignalingReady(timeoutSec: timeout) },
+                now: { Date().timeIntervalSinceReferenceDate },
+                sleep: { sec in try? await Task.sleep(nanoseconds: UInt64(sec * 1_000_000_000)) },
+                log: { [weak self] line in self?.log?(line) }))
+            restartRequestDeliveryStorage = d
+            return d
+        }
+    }
+
     public func restartIce(reason: String, forceProbe: Bool = false) async {
         guard peerConnection != nil, !intentionalShutdown else { return }
         guard let rid = recipientId else { return }
@@ -3781,9 +3851,43 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // attempt that armed the gate, never a new attempt: it bypasses
         // both layers or the park would deadlock against itself.
         let isParkedResend = reason.hasSuffix(RestartIceDecisions.parkedResendReasonSuffix)
+        let fastSwitchOn: Bool = iceFastSwitchProvider?() ?? false
+        // Flag on, offering side, peer request: a request that follows our own unanswered offer, or that arrives while
+        // ICE is down, is not dropped by the debounce or the gate (see `FastSwitchDecisions.peerRequestAction`).
+        let nowMs = Self.nowMs()
+        // Decide and record in ONE lock section: two concurrent peer requests cannot both get a new offer.
+        let (peerAction, inflightOffer): (FastSwitchDecisions.PeerRequestAction, InflightRestartOffer?) =
+            restartIceDebounceLock.withLock {
+            var inflight: InflightRestartOffer?
+            if let o = inflightRestartOffer, let pc = peerConnection, o.connection == ObjectIdentifier(pc) {
+                inflight = o
+            }
+            let unanswered = FastSwitchDecisions.hasUnansweredRestartOffer(
+                inflightSlotGeneration: inflight?.slotGeneration,
+                currentSlotGeneration: answerSlotGeneration,
+                answerApplied: hasAppliedRemoteAnswer)
+            let action = FastSwitchDecisions.peerRequestAction(
+                flagOn: fastSwitchOn, initiator: isInitiator, reason: reason,
+                hasUnansweredOffer: unanswered,
+                sinceLastAcceptedMs: lastPeerRequestAcceptedMs.map { nowMs - $0 },
+                sinceLastNewOfferMs: lastPeerRequestOfferMs.map { nowMs - $0 })
+            if action == .bypassGates || action == .resendInflight { lastPeerRequestAcceptedMs = nowMs }
+            if action == .bypassGates { lastPeerRequestOfferMs = nowMs }
+            return (action, inflight)
+        }
+        if peerAction == .drop {
+            log?("restart_ice fast=1 trig=\(FastSwitchDecisions.peerRequestTrigLabel) dup=1")
+            return
+        }
         let refusal: String? = restartIceDebounceLock.withLock {
             if isParkedResend {
                 lastIceRestartAt = now
+                return nil
+            }
+            if peerAction != .normal {
+                lastIceRestartAt = now
+                iceRestartGateUntil = now.addingTimeInterval(
+                    Double(RestartIceDecisions.iceRestartConvergenceWindowMs) / 1000.0)
                 return nil
             }
             if let last = lastIceRestartAt,
@@ -3803,22 +3907,57 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             return nil
         }
         if let refusal {
+            // Answering side, flag on: an interface change inside the debounce or the gate still sends the request
+            // (the gate guards against overlapping offers; this side makes none).
+            if FastSwitchDecisions.requestStillSentInsideGate(
+                flagOn: fastSwitchOn, initiator: isInitiator, reason: reason,
+                peerUsesRequest: peerNegotiated()?.useRestartIceRequest == true) {
+                log?("restart_ice fast=1 role=responder \(refusal)=1 request=1")
+                peerConnection?.primeIceRestart()
+                guard !intentionalShutdown, recipientId == rid else { return }
+                let accepted = await restartRequestDelivery().start()
+                log?("restart_ice req_sent=\(accepted ? 1 : 0) reason=\(reason)")
+                return
+            }
             log?("restart_ice \(refusal)=1 reason=\(reason)")
             return
         }
         onRestartAttemptStarted?()
+
+        // The peer asked again while our restart offer is still unanswered: that offer, not a new one.
+        if peerAction == .resendInflight, let offer = inflightOffer, let rid = recipientId {
+            adoptFastSwitchTrigger(fast: true, trigLabel: FastSwitchDecisions.peerRequestTrigLabel)
+            log?("restart_ice fast=1 trig=\(FastSwitchDecisions.peerRequestTrigLabel) resend=1")
+            let delivered = await callingApi.sendIceRestartOffer(
+                recipientId: rid, sdp: offer.sdp, capabilities: offer.capabilities,
+                onParkDelivery: makeFastParkDelivery(
+                    sdp: offer.sdp, capabilities: offer.capabilities, recipientId: rid,
+                    connection: offer.connection))
+            if delivered {
+                noteFastSwitchSent()
+                startFastSwitchProbeFallback()
+            } else {
+                let parkUntil = Date().addingTimeInterval(RestartIceDecisions.restartOfferParkTimeoutSec)
+                restartIceDebounceLock.withLock { iceRestartGateUntil = parkUntil }
+            }
+            return
+        }
 
         // Faster switch (flag `calls.ice_fastswitch`): the interface-change restart reuses the
         // ICE servers the connection already holds. There is no separate priming call: the one
         // restart offer below is created at once (no probe await any more) and applying it
         // starts gathering while the send waits for the signalling socket, so exactly one
         // restart offer exists per trigger. Everything else keeps the probe below.
-        let fastSwitchOn: Bool = iceFastSwitchProvider?() ?? false
         let cachedServers = FastSwitchDecisions.usesCachedServersForRestart(
-            flagOn: fastSwitchOn, reason: reason, forceProbe: forceProbe)
+            flagOn: fastSwitchOn, reason: reason, forceProbe: forceProbe,
+            peerRequestBypass: peerAction == .bypassGates)
         // Only an ACCEPTED interface-change restart (past the debounce and the gate) adopts the
         // trigger stamp and replaces a pending fallback; a refused one leaves both alone.
         if reason == FastSwitchDecisions.interfaceChangeReason { adoptFastSwitchTrigger(fast: fastSwitchOn) }
+        if peerAction == .bypassGates {
+            adoptFastSwitchTrigger(fast: true, trigLabel: FastSwitchDecisions.peerRequestTrigLabel)
+            log?("restart_ice fast=1 trig=\(FastSwitchDecisions.peerRequestTrigLabel) bypass=1")
+        }
         if cachedServers {
             log?("restart_ice fast=1 probe=0 cached=1")
         }
@@ -3896,7 +4035,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // `createOffer`-constraint substitute used elsewhere in this
             // method.
             peerConnection?.primeIceRestart()
-            let reqSent = await callingApi.sendRestartIceRequest(recipientId: rid)
+            // The awaits above may have outlived the call: never start a runner for a closed one.
+            guard !intentionalShutdown, recipientId == rid else { return }
+            let reqSent: Bool
+            if fastSwitchOn {
+                // Written only on an authenticated socket, confirmed or re-sent (see `RestartRequestDelivery`).
+                reqSent = await restartRequestDelivery().start()
+            } else {
+                reqSent = await callingApi.sendRestartIceRequest(recipientId: rid)
+            }
             log?("restart_ice req_sent=\(reqSent ? 1 : 0) reason=\(reason)")
             return
         }
@@ -3954,17 +4101,15 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             // fallback, unless the call ended or the connection was replaced meanwhile.
             let capabilities = advertisedCapabilitiesFilter(CallCapabilities.localCaps())
             let offerConnectionId = ObjectIdentifier(pc)
-            parkDelivery = { [weak self] in
-                guard let self, !self.intentionalShutdown,
-                      self.peerConnection.map({ ObjectIdentifier($0) }) == offerConnectionId else { return }
-                let delivered = await self.callingApi.sendIceRestartOffer(
-                    recipientId: rid, sdp: sdp, capabilities: capabilities, onParkDelivery: nil)
-                if delivered {
-                    self.noteFastSwitchSent()
-                    self.startFastSwitchProbeFallback()
-                }
+            restartIceDebounceLock.withLock {
+                inflightRestartOffer = InflightRestartOffer(
+                    sdp: sdp, capabilities: capabilities, connection: offerConnectionId,
+                    slotGeneration: answerSlotGeneration)
             }
+            parkDelivery = makeFastParkDelivery(
+                sdp: sdp, capabilities: capabilities, recipientId: rid, connection: offerConnectionId)
         }
+        if !cachedServers { restartIceDebounceLock.withLock { inflightRestartOffer = nil } }
         let sent = await callingApi.sendIceRestartOffer(
             recipientId: rid,
             sdp: sdp,
@@ -3987,7 +4132,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             restartIceDebounceLock.withLock { iceRestartGateUntil = parkUntil }
         }
         log?("restart_ice sent=\(sent ? 1 : 0) reason=\(reason)")
-        if sent, reason == FastSwitchDecisions.interfaceChangeReason {
+        if sent, reason == FastSwitchDecisions.interfaceChangeReason || peerAction == .bypassGates {
             noteFastSwitchSent()
             if cachedServers { startFastSwitchProbeFallback() }
         }
@@ -4194,6 +4339,8 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         lastAppliedRemoteRestartSdp = sdp
         // N6 review fix — see `remoteRestartOffersApplied`.
         restartIceDebounceLock.withLock { remoteRestartOffersApplied += 1 }
+        // The peer's offer is what this side's restart request asked for.
+        restartRequestDelivery().peerOfferArrived()
         let answerSdp: String? = await withCheckedContinuation { cont in
             pc.createAnswer(hasVideo: true) { result in
                 switch result {
@@ -5327,8 +5474,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// The interface-change restart was ACCEPTED: adopt the stamped trigger time, replace the
     /// previous trigger's watchers, and (flag on only) watch for the first audio packet that
     /// arrives afterwards. With the flag off nothing is polled. Logged with `fast=1`/`fast=0`.
-    private func adoptFastSwitchTrigger(fast: Bool) {
+    private func adoptFastSwitchTrigger(fast: Bool, trigLabel: String? = nil) {
         fastSwitchLock.lock()
+        fastSwitchTrigLabel = trigLabel
         fastSwitchTriggerMs = fastSwitchPendingTriggerMs ?? Self.nowMs()
         fastSwitchPendingTriggerMs = nil
         fastSwitchFast = fast
@@ -5346,11 +5494,13 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         fastSwitchLock.lock()
         let t = fastSwitchTriggerMs
         let fast = fastSwitchFast
+        let label = fastSwitchTrigLabel
         let already = fastSwitchSentLogged
         if t != nil { fastSwitchSentLogged = true }
         fastSwitchLock.unlock()
         guard let t, !already else { return }
-        log?("restart_ice fast=\(fast ? 1 : 0) trig_sent_ms=\(max(0, Self.nowMs() - t))")
+        let trig = label.map { " trig=\($0)" } ?? ""
+        log?("restart_ice fast=\(fast ? 1 : 0)\(trig) trig_sent_ms=\(max(0, Self.nowMs() - t))")
     }
 
     /// A fast restart was sent: if no audio arrives on the new pair within
@@ -5398,8 +5548,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                 if Task.isCancelled || self.intentionalShutdown { return }
                 guard let now = await self.readAudioRxPackets() else { continue }
                 if now > baseline {
-                    let (t, fast) = self.fastSwitchLock.withLock { (self.fastSwitchTriggerMs, self.fastSwitchFast) }
-                    if let t { self.log?("restart_ice fast=\(fast ? 1 : 0) trig_rx_ms=\(max(0, Self.nowMs() - t))") }
+                    let (t, fast, label) = self.fastSwitchLock.withLock {
+                        (self.fastSwitchTriggerMs, self.fastSwitchFast, self.fastSwitchTrigLabel)
+                    }
+                    let trig = label.map { " trig=\($0)" } ?? ""
+                    if let t { self.log?("restart_ice fast=\(fast ? 1 : 0)\(trig) trig_rx_ms=\(max(0, Self.nowMs() - t))") }
                     return
                 }
             }

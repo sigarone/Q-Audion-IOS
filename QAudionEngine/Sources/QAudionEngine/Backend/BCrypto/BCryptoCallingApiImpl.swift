@@ -690,6 +690,20 @@ public final class BCryptoCallingApiImpl: CallingApi {
         return false
     }
 
+    public func writeRestartIceRequestOnLiveSocket(recipientId: String) -> Int? {
+        guard let cid = activeCallIdOrNil() else { return nil }
+        return ws.trySendOnLiveSocket(type: "restart_ice_request", data: [
+            "recipient_id": recipientId,
+            "call_id": cid,
+        ])
+    }
+
+    public func liveSignalingGeneration() -> Int? { ws.liveAuthenticatedGeneration() }
+
+    public func awaitSignalingReady(timeoutSec: TimeInterval) async -> Bool {
+        await ws.ensureAuthenticated(timeoutSec: timeoutSec)
+    }
+
     // MARK: - Pre-negotiation (Android/Desktop interop)
 
     /// Acknowledge to the caller that this device received the call_offer and is
