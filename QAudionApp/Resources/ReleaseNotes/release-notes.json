@@ -1,5 +1,28 @@
 [
   {
+    "version": "1.0.1306",
+    "notes": {
+      "it": [
+        "Cronologia chiamate più chiara: per chi non è nei contatti compare l'interno o «Sconosciuto»"
+      ],
+      "en": [
+        "Clearer call history: people not in your contacts show their extension or \"Unknown\""
+      ],
+      "de": [
+        "Übersichtlichere Anrufliste: Personen, die nicht in Ihren Kontakten sind, erscheinen mit Durchwahl oder als „Unbekannt“"
+      ],
+      "es": [
+        "Historial de llamadas más claro: quien no está en tus contactos aparece con su extensión o como «Desconocido»"
+      ],
+      "fr": [
+        "Historique des appels plus clair : les personnes absentes de tes contacts apparaissent avec leur poste ou « Inconnu »"
+      ],
+      "pt-BR": [
+        "Histórico de chamadas mais claro: quem não está nos seus contatos aparece com o ramal ou como \"Desconhecido\""
+      ]
+    }
+  },
+  {
     "version": "1.0.1305",
     "notes": {
       "it": [
