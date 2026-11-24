@@ -600,6 +600,28 @@ final class IdentityShieldTests: XCTestCase {
         }
     }
 
+    /// "Massima sicurezza" is a function of the identity shield and the protection line of the call and of nothing else: the whole
+    /// domain of both inputs gives the cryptographic condition, whatever the state of the contact's voice is, so a voice state
+    /// can neither add nor remove the badge.
+    func testMassimaSicurezza_dependsOnTheCryptographicInputsOnly() {
+        let levels = ["PQ2", "PQ2S", "PQ1", "CL", ""]
+        let auths = ["H", "C", ""]
+        let pins = ["", "anomaly", "ok"]
+        var protections: [CallPqProtection?] = [nil]
+        for l in levels { for a in auths { for p in pins { protections.append(pq(l, a, p)) } } }
+        var shown = 0
+        for shield in [IdentityShield.pending, .verified, .toVerify, .changed] {
+            for protection in protections {
+                let crypto = shield == .verified && protection?.levelToken == "PQ2" && protection?.auth == "H" && protection?.pin != "anomaly"
+                let got = IdentityShieldRules.massimaSicurezza(shield: shield, protection: protection)
+                XCTAssertEqual(crypto, got, "\(shield) \(String(describing: protection))")
+                XCTAssertEqual(IdentityShieldRules.logLine(callId: callId, shield: shield, protection: protection).hasSuffix("max=\(got ? 1 : 0)"), true)
+                if got { shown += 1 }
+            }
+        }
+        XCTAssertEqual(shown, 2) // verified, PQ2, H, and a pin that is empty or "ok"
+    }
+
     /// Badge colour mapping: the shield tones of the whole call bar, in one table.
     func testBadgeColourMapping() {
         XCTAssertEqual(.pending, shield(known: false))
