@@ -1,0 +1,1435 @@
+{
+  "layout": {"magic": "QAVT", "format_version": 3, "header_bytes": 192, "fixed_bytes": 4608, "vector_bytes": 1024, "slot_bytes": 1056, "session_bytes": 32, "max_sessions": 8, "slots": 2, "file_overhead_bytes": 28},
+  "vectors_file": "stage8_codec/vectors.f32",
+  "vector_rows": 43,
+  "fp16": {
+    "count": 10000,
+    "input_file": "stage8_codec/fp16_in.f32",
+    "binary16_file": "stage8_codec/fp16_out.u16",
+    "back_file": "stage8_codec/fp16_back.f32",
+    "decode_all": {"patterns": 63490, "sha256": "680bbc22915f61aa1bbfc7265bc3882a6aa42d299bfd2c571807196e5544de2e", "note": "the little-endian u32 float32 patterns of binary16 patterns 0 to 65535 in order, without the 2,046 NaN patterns"},
+    "categories": {"subnormal_results": 4107, "ties": 1721, "overflow_to_inf": 103, "zero_results": 10, "nan_inputs": 4, "max_finite": 4, "negative": 5029}
+  },
+  "sizes": [
+    {"state": 1, "n_sessions": 0, "size": 4608},
+    {"state": 1, "n_sessions": 1, "size": 5632},
+    {"state": 1, "n_sessions": 2, "size": 6656},
+    {"state": 1, "n_sessions": 3, "size": 7680},
+    {"state": 1, "n_sessions": 4, "size": 8704},
+    {"state": 1, "n_sessions": 5, "size": 9728},
+    {"state": 1, "n_sessions": 6, "size": 10752},
+    {"state": 1, "n_sessions": 7, "size": 11776},
+    {"state": 1, "n_sessions": 8, "size": 12800},
+    {"state": 2, "n_sessions": 0, "size": 4608},
+    {"state": 2, "n_sessions": 1, "size": 5632},
+    {"state": 2, "n_sessions": 2, "size": 6656},
+    {"state": 2, "n_sessions": 3, "size": 7680},
+    {"state": 2, "n_sessions": 4, "size": 8704},
+    {"state": 2, "n_sessions": 5, "size": 9728},
+    {"state": 2, "n_sessions": 6, "size": 10752},
+    {"state": 2, "n_sessions": 7, "size": 11776},
+    {"state": 2, "n_sessions": 8, "size": 12800},
+    {"state": 3, "n_sessions": 0, "size": 4608},
+    {"state": 3, "n_sessions": 1, "size": 4608},
+    {"state": 3, "n_sessions": 2, "size": 4608},
+    {"state": 3, "n_sessions": 3, "size": 4608},
+    {"state": 3, "n_sessions": 4, "size": 4608},
+    {"state": 3, "n_sessions": 5, "size": 4608},
+    {"state": 3, "n_sessions": 6, "size": 4608},
+    {"state": 3, "n_sessions": 7, "size": 4608},
+    {"state": 3, "n_sessions": 8, "size": 4608},
+    {"state": 4, "n_sessions": 0, "size": 4608},
+    {"state": 4, "n_sessions": 1, "size": 4608},
+    {"state": 4, "n_sessions": 2, "size": 4608},
+    {"state": 4, "n_sessions": 3, "size": 4608},
+    {"state": 4, "n_sessions": 4, "size": 4608},
+    {"state": 4, "n_sessions": 5, "size": 4608},
+    {"state": 4, "n_sessions": 6, "size": 4608},
+    {"state": 4, "n_sessions": 7, "size": 4608},
+    {"state": 4, "n_sessions": 8, "size": 4608}
+  ],
+  "records": [
+    {
+      "name": "learning_8_sessions",
+      "description": "Learning with 8 sessions, every flag combination, all route classes 0 to 5: the largest record, 12,800 bytes",
+      "fields": {
+        "state": 1,
+        "flags": [],
+        "model_id": "357a834f702b80161e5b981182c038e1",
+        "constants_version": 0,
+        "frontend_version": 1,
+        "created_s": 1790000000,
+        "updated_s": 1790900000,
+        "enrolled_s": 0,
+        "last_match_s": 0,
+        "last_verified_call_s": 1790900000,
+        "peer_consent_s": 1790900000,
+        "last_update_s": [0, 0, 0],
+        "refresh_entered_s": 0,
+        "consensus_speech_ms": 160000,
+        "sessions_seen_total": 5,
+        "update_count": 0,
+        "n_days_consensus": 6,
+        "refresh_neg_streak": 0,
+        "anchor": {"vec": 0},
+        "adaptive": {"vec": 0},
+        "slots": [
+          {"state": 0},
+          {"state": 0}
+        ],
+        "sessions": [
+          {
+            "speech_ms": 30000,
+            "day_index": 20700,
+            "start_s": 1790000000,
+            "end_s": 1790001800,
+            "device_tag": 16777216,
+            "route_class": 0,
+            "flags": ["in_consensus"],
+            "n_windows": 15,
+            "centroid": {"vec": 10}
+          },
+          {
+            "speech_ms": 31000,
+            "day_index": 20701,
+            "start_s": 1790090000,
+            "end_s": 1790091800,
+            "device_tag": 16777217,
+            "route_class": 1,
+            "flags": [],
+            "n_windows": 16,
+            "centroid": {"vec": 11}
+          },
+          {
+            "speech_ms": 32000,
+            "day_index": 20702,
+            "start_s": 1790180000,
+            "end_s": 1790181800,
+            "device_tag": 16777218,
+            "route_class": 2,
+            "flags": ["in_consensus", "conflict"],
+            "n_windows": 17,
+            "centroid": {"vec": 12}
+          },
+          {
+            "speech_ms": 33000,
+            "day_index": 20703,
+            "start_s": 1790270000,
+            "end_s": 1790271800,
+            "device_tag": 16777219,
+            "route_class": 3,
+            "flags": ["merged"],
+            "n_windows": 18,
+            "centroid": {"vec": 13}
+          },
+          {
+            "speech_ms": 34000,
+            "day_index": 20704,
+            "start_s": 1790360000,
+            "end_s": 1790361800,
+            "device_tag": 16777220,
+            "route_class": 4,
+            "flags": ["in_consensus", "merged"],
+            "n_windows": 19,
+            "centroid": {"vec": 14}
+          },
+          {
+            "speech_ms": 35000,
+            "day_index": 20705,
+            "start_s": 1790450000,
+            "end_s": 1790451800,
+            "device_tag": 16777221,
+            "route_class": 5,
+            "flags": ["conflict", "merged"],
+            "n_windows": 20,
+            "centroid": {"vec": 15}
+          },
+          {
+            "speech_ms": 36000,
+            "day_index": 20706,
+            "start_s": 1790540000,
+            "end_s": 1790541800,
+            "device_tag": 16777222,
+            "route_class": 0,
+            "flags": ["in_consensus", "conflict", "merged"],
+            "n_windows": 21,
+            "centroid": {"vec": 16}
+          },
+          {
+            "speech_ms": 37000,
+            "day_index": 20707,
+            "start_s": 1790630000,
+            "end_s": 1790631800,
+            "device_tag": 16777223,
+            "route_class": 1,
+            "flags": ["in_consensus"],
+            "n_windows": 22,
+            "centroid": {"vec": 17}
+          }
+        ],
+        "n_sessions": 8,
+        "n_centroids": 8
+      },
+      "bytes_file": "stage8_codec/rec_learning_8_sessions.bin",
+      "size": 12800,
+      "sha256": "0f49a60a890f64ce7286d09c431a7d681c02e2281c61e36a88f1ab40a8a18502"
+    },
+    {
+      "name": "learning_1_session",
+      "description": "Learning with one session: header, empty slots, one session entry and one centroid",
+      "fields": {
+        "state": 1,
+        "flags": [],
+        "model_id": "357a834f702b80161e5b981182c038e1",
+        "constants_version": 0,
+        "frontend_version": 1,
+        "created_s": 1790000000,
+        "updated_s": 1790900000,
+        "enrolled_s": 0,
+        "last_match_s": 0,
+        "last_verified_call_s": 1790900000,
+        "peer_consent_s": 1790900000,
+        "last_update_s": [0, 0, 0],
+        "refresh_entered_s": 0,
+        "consensus_speech_ms": 45024,
+        "sessions_seen_total": 1,
+        "update_count": 0,
+        "n_days_consensus": 1,
+        "refresh_neg_streak": 0,
+        "anchor": {"vec": 1},
+        "adaptive": {"vec": 1},
+        "slots": [
+          {"state": 0},
+          {"state": 0}
+        ],
+        "sessions": [
+          {
+            "speech_ms": 45024,
+            "day_index": 20700,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 305419896,
+            "route_class": 1,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": {"vec": 2}
+          }
+        ],
+        "n_sessions": 1,
+        "n_centroids": 1
+      },
+      "bytes_file": "stage8_codec/rec_learning_1_session.bin",
+      "size": 5632,
+      "sha256": "16d17695fce9355895ac1175448a35763e0f9c03da0f23d7a35200092d1786e4"
+    },
+    {
+      "name": "learning_conflict_2_sessions",
+      "description": "Learning in conflict: two sessions outside the consensus, no anchor and no adaptive vector (all-zero words)",
+      "fields": {
+        "state": 1,
+        "flags": ["conflict"],
+        "model_id": "357a834f702b80161e5b981182c038e1",
+        "constants_version": 0,
+        "frontend_version": 1,
+        "created_s": 1790000000,
+        "updated_s": 1790900000,
+        "enrolled_s": 0,
+        "last_match_s": 0,
+        "last_verified_call_s": 1790900000,
+        "peer_consent_s": 1790900000,
+        "last_update_s": [0, 0, 0],
+        "refresh_entered_s": 0,
+        "consensus_speech_ms": 0,
+        "sessions_seen_total": 2,
+        "update_count": 0,
+        "n_days_consensus": 0,
+        "refresh_neg_streak": 0,
+        "anchor": null,
+        "adaptive": null,
+        "slots": [
+          {"state": 0},
+          {"state": 0}
+        ],
+        "sessions": [
+          {
+            "speech_ms": 40000,
+            "day_index": 20700,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 305419896,
+            "route_class": 1,
+            "flags": [],
+            "n_windows": 20,
+            "centroid": {"vec": 3}
+          },
+          {
+            "speech_ms": 40000,
+            "day_index": 20701,
+            "start_s": 1790100000,
+            "end_s": 1790101000,
+            "device_tag": 305419896,
+            "route_class": 1,
+            "flags": ["conflict"],
+            "n_windows": 20,
+            "centroid": {"vec": 4}
+          }
+        ],
+        "n_sessions": 2,
+        "n_centroids": 2
+      },
+      "bytes_file": "stage8_codec/rec_learning_conflict_2_sessions.bin",
+      "size": 6656,
+      "sha256": "1a9c1766983c977ebb7df16debf9d531bf4c7b6fcb8c37e78ed9b832ef5ca9ce"
+    },
+    {
+      "name": "learning_0_sessions",
+      "description": "Learning with no session (the sessions were purged): the fixed part alone, 4,608 bytes",
+      "fields": {
+        "state": 1,
+        "flags": [],
+        "model_id": "357a834f702b80161e5b981182c038e1",
+        "constants_version": 0,
+        "frontend_version": 1,
+        "created_s": 1790000000,
+        "updated_s": 1790900000,
+        "enrolled_s": 0,
+        "last_match_s": 0,
+        "last_verified_call_s": 1790900000,
+        "peer_consent_s": 1790900000,
+        "last_update_s": [0, 0, 0],
+        "refresh_entered_s": 0,
+        "consensus_speech_ms": 0,
+        "sessions_seen_total": 5,
+        "update_count": 0,
+        "n_days_consensus": 0,
+        "refresh_neg_streak": 0,
+        "anchor": null,
+        "adaptive": null,
+        "slots": [
+          {"state": 0},
+          {"state": 0}
+        ],
+        "sessions": [],
+        "n_sessions": 0,
+        "n_centroids": 0
+      },
+      "bytes_file": "stage8_codec/rec_learning_0_sessions.bin",
+      "size": 4608,
+      "sha256": "06559504689a47d5efdbac77433de14890190ac7d5bd464d9f7958864fea63b5"
+    },
+    {
+      "name": "provisional_3_sessions",
+      "description": "Provisional with three sessions, one of them outside the consensus and one merged",
+      "fields": {
+        "state": 2,
+        "flags": [],
+        "model_id": "357a834f702b80161e5b981182c038e1",
+        "constants_version": 0,
+        "frontend_version": 1,
+        "created_s": 1790000000,
+        "updated_s": 1790900000,
+        "enrolled_s": 0,
+        "last_match_s": 0,
+        "last_verified_call_s": 1790900000,
+        "peer_consent_s": 1790900000,
+        "last_update_s": [0, 0, 0],
+        "refresh_entered_s": 0,
+        "consensus_speech_ms": 90000,
+        "sessions_seen_total": 3,
+        "update_count": 0,
+        "n_days_consensus": 2,
+        "refresh_neg_streak": 0,
+        "anchor": {"vec": 5},
+        "adaptive": {"vec": 5},
+        "slots": [
+          {"state": 0},
+          {"state": 0}
+        ],
+        "sessions": [
+          {
+            "speech_ms": 50000,
+            "day_index": 20700,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 305419896,
+            "route_class": 1,
+            "flags": ["in_consensus", "merged"],
+            "n_windows": 20,
+            "centroid": {"vec": 6}
+          },
+          {
+            "speech_ms": 20000,
+            "day_index": 20701,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 305419896,
+            "route_class": 1,
+            "flags": [],
+            "n_windows": 20,
+            "centroid": {"vec": 7}
+          },
+          {
+            "speech_ms": 40000,
+            "day_index": 20702,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 305419896,
+            "route_class": 1,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": {"vec": 8}
+          }
+        ],
+        "n_sessions": 3,
+        "n_centroids": 3
+      },
+      "bytes_file": "stage8_codec/rec_provisional_3_sessions.bin",
+      "size": 7680,
+      "sha256": "38109ac80b2ea1357ffc2ee6ea2f061d118dbfaaf9b0a91ac5e551c9870c80c8"
+    },
+    {
+      "name": "enrolled_no_slots",
+      "description": "Enrolled: anchor and adaptive differ, three session entries without centroids, both slots empty: 4,608 bytes",
+      "fields": {
+        "state": 3,
+        "flags": ["anchor_frozen"],
+        "model_id": "357a834f702b80161e5b981182c038e1",
+        "constants_version": 0,
+        "frontend_version": 1,
+        "created_s": 1790000000,
+        "updated_s": 1790900000,
+        "enrolled_s": 1790500000,
+        "last_match_s": 1790800000,
+        "last_verified_call_s": 1790900000,
+        "peer_consent_s": 1790900000,
+        "last_update_s": [1790800000, 1790300000, 0],
+        "refresh_entered_s": 0,
+        "consensus_speech_ms": 160000,
+        "sessions_seen_total": 5,
+        "update_count": 2,
+        "n_days_consensus": 4,
+        "refresh_neg_streak": 0,
+        "anchor": {"vec": 11},
+        "adaptive": {"vec": 12},
+        "slots": [
+          {"state": 0},
+          {"state": 0}
+        ],
+        "sessions": [
+          {
+            "speech_ms": 40000,
+            "day_index": 20700,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 305419896,
+            "route_class": 1,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          },
+          {
+            "speech_ms": 40000,
+            "day_index": 20701,
+            "start_s": 1790100000,
+            "end_s": 1790101000,
+            "device_tag": 305419896,
+            "route_class": 1,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          },
+          {
+            "speech_ms": 40000,
+            "day_index": 20702,
+            "start_s": 1790200000,
+            "end_s": 1790201000,
+            "device_tag": 305419896,
+            "route_class": 1,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          }
+        ],
+        "n_sessions": 3,
+        "n_centroids": 0
+      },
+      "bytes_file": "stage8_codec/rec_enrolled_no_slots.bin",
+      "size": 4608,
+      "sha256": "f2e278e3da7411ddfdeeb4a7fd885199abde40f4f1d0deee85748dc6238574aa"
+    },
+    {
+      "name": "enrolled_one_quarantine_slot",
+      "description": "Enrolled with one quarantine slot (state 1) in slot 1 and slot 0 empty",
+      "fields": {
+        "state": 3,
+        "flags": ["anchor_frozen"],
+        "model_id": "357a834f702b80161e5b981182c038e1",
+        "constants_version": 0,
+        "frontend_version": 1,
+        "created_s": 1790000000,
+        "updated_s": 1790900000,
+        "enrolled_s": 1790500000,
+        "last_match_s": 1790800000,
+        "last_verified_call_s": 1790900000,
+        "peer_consent_s": 1790900000,
+        "last_update_s": [1790800000, 1790300000, 0],
+        "refresh_entered_s": 0,
+        "consensus_speech_ms": 160000,
+        "sessions_seen_total": 5,
+        "update_count": 2,
+        "n_days_consensus": 4,
+        "refresh_neg_streak": 0,
+        "anchor": {"vec": 13},
+        "adaptive": {"vec": 13},
+        "slots": [
+          {"state": 0},
+          {
+            "state": 1,
+            "route_group": 3,
+            "nb": 0,
+            "n_sessions": 1,
+            "device_tag": 2712847316,
+            "first_day": 20705,
+            "last_day": 20705,
+            "speech_ms": 64000,
+            "last_used_s": 1790700000,
+            "centroid": {"vec": 14}
+          }
+        ],
+        "sessions": [
+          {
+            "speech_ms": 40000,
+            "day_index": 20700,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 305419896,
+            "route_class": 1,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          },
+          {
+            "speech_ms": 40000,
+            "day_index": 20701,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 305419896,
+            "route_class": 1,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          }
+        ],
+        "n_sessions": 2,
+        "n_centroids": 0
+      },
+      "bytes_file": "stage8_codec/rec_enrolled_one_quarantine_slot.bin",
+      "size": 4608,
+      "sha256": "e3fbc9a67c560f27e17e979524a59a0f4d478903515316b2e4d15e72e63658a6"
+    },
+    {
+      "name": "enrolled_two_slots_8_sessions",
+      "description": "Enrolled with an active slot and a quarantine slot and 8 session entries (the metadata stays when the centroids go)",
+      "fields": {
+        "state": 3,
+        "flags": ["anchor_frozen"],
+        "model_id": "357a834f702b80161e5b981182c038e1",
+        "constants_version": 0,
+        "frontend_version": 1,
+        "created_s": 1790000000,
+        "updated_s": 1790900000,
+        "enrolled_s": 1790500000,
+        "last_match_s": 1790800000,
+        "last_verified_call_s": 1790900000,
+        "peer_consent_s": 1790900000,
+        "last_update_s": [1790800000, 1790300000, 0],
+        "refresh_entered_s": 0,
+        "consensus_speech_ms": 160000,
+        "sessions_seen_total": 65535,
+        "update_count": 65535,
+        "n_days_consensus": 8,
+        "refresh_neg_streak": 0,
+        "anchor": {"vec": 15},
+        "adaptive": {"vec": 16},
+        "slots": [
+          {
+            "state": 2,
+            "route_group": 3,
+            "nb": 0,
+            "n_sessions": 2,
+            "device_tag": 2712847316,
+            "first_day": 20701,
+            "last_day": 20703,
+            "speech_ms": 64000,
+            "last_used_s": 1790700000,
+            "centroid": {"vec": 17}
+          },
+          {
+            "state": 1,
+            "route_group": 1,
+            "nb": 0,
+            "n_sessions": 1,
+            "device_tag": 7,
+            "first_day": 20701,
+            "last_day": 20703,
+            "speech_ms": 64000,
+            "last_used_s": 1790700000,
+            "centroid": {"vec": 18}
+          }
+        ],
+        "sessions": [
+          {
+            "speech_ms": 40000,
+            "day_index": 20700,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 0,
+            "route_class": 1,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          },
+          {
+            "speech_ms": 40000,
+            "day_index": 20701,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 1,
+            "route_class": 2,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          },
+          {
+            "speech_ms": 40000,
+            "day_index": 20702,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 2,
+            "route_class": 3,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          },
+          {
+            "speech_ms": 40000,
+            "day_index": 20703,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 3,
+            "route_class": 4,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          },
+          {
+            "speech_ms": 40000,
+            "day_index": 20704,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 4,
+            "route_class": 5,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          },
+          {
+            "speech_ms": 40000,
+            "day_index": 20705,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 5,
+            "route_class": 1,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          },
+          {
+            "speech_ms": 40000,
+            "day_index": 20706,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 6,
+            "route_class": 2,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          },
+          {
+            "speech_ms": 40000,
+            "day_index": 20707,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 7,
+            "route_class": 3,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          }
+        ],
+        "n_sessions": 8,
+        "n_centroids": 0
+      },
+      "bytes_file": "stage8_codec/rec_enrolled_two_slots_8_sessions.bin",
+      "size": 4608,
+      "sha256": "8376a209ee3fe332a1cf18e0d651ff7fe5b87b7436797dc10dbf38bbff1c0ce4"
+    },
+    {
+      "name": "needs_refresh",
+      "description": "Needs refresh: refresh_entered_s, the reprompted flag, a negative streak",
+      "fields": {
+        "state": 4,
+        "flags": ["anchor_frozen", "refresh_reprompted"],
+        "model_id": "357a834f702b80161e5b981182c038e1",
+        "constants_version": 0,
+        "frontend_version": 1,
+        "created_s": 1790000000,
+        "updated_s": 1790900000,
+        "enrolled_s": 1790500000,
+        "last_match_s": 1790800000,
+        "last_verified_call_s": 1790900000,
+        "peer_consent_s": 1790900000,
+        "last_update_s": [1790800000, 1790300000, 0],
+        "refresh_entered_s": 1790850000,
+        "consensus_speech_ms": 160000,
+        "sessions_seen_total": 5,
+        "update_count": 2,
+        "n_days_consensus": 4,
+        "refresh_neg_streak": 3,
+        "anchor": {"vec": 19},
+        "adaptive": {"vec": 20},
+        "slots": [
+          {
+            "state": 2,
+            "route_group": 3,
+            "nb": 0,
+            "n_sessions": 2,
+            "device_tag": 2712847316,
+            "first_day": 20701,
+            "last_day": 20703,
+            "speech_ms": 64000,
+            "last_used_s": 1790700000,
+            "centroid": {"vec": 21}
+          },
+          {"state": 0}
+        ],
+        "sessions": [
+          {
+            "speech_ms": 40000,
+            "day_index": 20700,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 305419896,
+            "route_class": 1,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          },
+          {
+            "speech_ms": 40000,
+            "day_index": 20702,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 305419896,
+            "route_class": 1,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          }
+        ],
+        "n_sessions": 2,
+        "n_centroids": 0
+      },
+      "bytes_file": "stage8_codec/rec_needs_refresh.bin",
+      "size": 4608,
+      "sha256": "ac1dffdbf7269a52873c5d71f62d12d6b2dbf5ea195c4a764e188d16f2014934"
+    },
+    {
+      "name": "integer_extremes",
+      "description": "Every integer field at its minimum or maximum, every flag set, route class 5, all slot fields at their extremes",
+      "fields": {
+        "state": 3,
+        "flags": ["conflict", "anchor_frozen", "refresh_reprompted"],
+        "model_id": "357a834f702b80161e5b981182c038e1",
+        "constants_version": 4294967295,
+        "frontend_version": 65535,
+        "created_s": -9223372036854775808,
+        "updated_s": 9223372036854775807,
+        "enrolled_s": -1,
+        "last_match_s": 72623859790382856,
+        "last_verified_call_s": -72623859790382856,
+        "peer_consent_s": 9223372036854775807,
+        "last_update_s": [9223372036854775807, -9223372036854775808, -1],
+        "refresh_entered_s": 4611686018427387904,
+        "consensus_speech_ms": 4294967295,
+        "sessions_seen_total": 65535,
+        "update_count": 65535,
+        "n_days_consensus": 255,
+        "refresh_neg_streak": 255,
+        "anchor": {"vec": 22},
+        "adaptive": {"vec": 23},
+        "slots": [
+          {
+            "state": 2,
+            "route_group": 255,
+            "nb": 255,
+            "n_sessions": 255,
+            "device_tag": 4294967295,
+            "first_day": -2147483648,
+            "last_day": 2147483647,
+            "speech_ms": 4294967295,
+            "last_used_s": -9223372036854775808,
+            "centroid": {"vec": 24}
+          },
+          {
+            "state": 1,
+            "route_group": 3,
+            "nb": 0,
+            "n_sessions": 2,
+            "device_tag": 2712847316,
+            "first_day": 20701,
+            "last_day": 20703,
+            "speech_ms": 64000,
+            "last_used_s": 9223372036854775807,
+            "centroid": {"vec": 25}
+          }
+        ],
+        "sessions": [
+          {
+            "speech_ms": 4294967295,
+            "day_index": -2147483648,
+            "start_s": -9223372036854775808,
+            "end_s": 9223372036854775807,
+            "device_tag": 4294967295,
+            "route_class": 5,
+            "flags": ["in_consensus", "conflict", "merged"],
+            "n_windows": 65535,
+            "centroid": null
+          },
+          {
+            "speech_ms": 0,
+            "day_index": 2147483647,
+            "start_s": -1,
+            "end_s": 0,
+            "device_tag": 0,
+            "route_class": 0,
+            "flags": [],
+            "n_windows": 0,
+            "centroid": null
+          }
+        ],
+        "n_sessions": 2,
+        "n_centroids": 0
+      },
+      "bytes_file": "stage8_codec/rec_integer_extremes.bin",
+      "size": 4608,
+      "sha256": "459c15a07bb19f5a05a0c95b5ec656b83278b9de3ebd8987507b005111ef400a"
+    },
+    {
+      "name": "byte_order",
+      "description": "Distinct bytes in every multi-byte field (a swapped byte order in any field shows)",
+      "fields": {
+        "state": 3,
+        "flags": ["anchor_frozen"],
+        "model_id": "357a834f702b80161e5b981182c038e1",
+        "constants_version": 16909060,
+        "frontend_version": 1286,
+        "created_s": 72623859790382856,
+        "updated_s": 1230066625199609624,
+        "enrolled_s": 2387509390608836392,
+        "last_match_s": 3544952156018063160,
+        "last_verified_call_s": 4702394921427289928,
+        "peer_consent_s": 5859837686836516696,
+        "last_update_s": [7017280452245743464, 8174723217654970232, 723685415333072913],
+        "refresh_entered_s": 1881128180742299681,
+        "consensus_speech_ms": 572728357,
+        "sessions_seen_total": 9767,
+        "update_count": 10281,
+        "n_days_consensus": 4,
+        "refresh_neg_streak": 0,
+        "anchor": {"vec": 26},
+        "adaptive": {"vec": 27},
+        "slots": [
+          {
+            "state": 2,
+            "route_group": 3,
+            "nb": 0,
+            "n_sessions": 2,
+            "device_tag": 825373492,
+            "first_day": 892745528,
+            "last_day": 960117564,
+            "speech_ms": 1027489600,
+            "last_used_s": 4702394921427289928,
+            "centroid": {"vec": 28}
+          },
+          {"state": 0}
+        ],
+        "sessions": [
+          {
+            "speech_ms": 16909060,
+            "day_index": 84281096,
+            "start_s": 651345242494996240,
+            "end_s": 1230066625199609624,
+            "device_tag": 421141276,
+            "route_class": 3,
+            "flags": ["merged"],
+            "n_windows": 7454,
+            "centroid": null
+          }
+        ],
+        "n_sessions": 1,
+        "n_centroids": 0
+      },
+      "bytes_file": "stage8_codec/rec_byte_order.bin",
+      "size": 4608,
+      "sha256": "7c8788f73757177b47e24e8b0e4f6ee2918867e71d11b085d01a53b631913469"
+    },
+    {
+      "name": "fp16_range_vectors",
+      "description": "Vectors with binary16 subnormals, the largest finite value, zeros of both signs and ties (not unit vectors: the codec does not care)",
+      "fields": {
+        "state": 3,
+        "flags": ["anchor_frozen"],
+        "model_id": "357a834f702b80161e5b981182c038e1",
+        "constants_version": 0,
+        "frontend_version": 1,
+        "created_s": 1790000000,
+        "updated_s": 1790900000,
+        "enrolled_s": 1790500000,
+        "last_match_s": 1790800000,
+        "last_verified_call_s": 1790900000,
+        "peer_consent_s": 1790900000,
+        "last_update_s": [1790800000, 1790300000, 0],
+        "refresh_entered_s": 0,
+        "consensus_speech_ms": 160000,
+        "sessions_seen_total": 5,
+        "update_count": 2,
+        "n_days_consensus": 4,
+        "refresh_neg_streak": 0,
+        "anchor": {"vec": 40},
+        "adaptive": {"vec": 41},
+        "slots": [
+          {
+            "state": 2,
+            "route_group": 3,
+            "nb": 0,
+            "n_sessions": 2,
+            "device_tag": 2712847316,
+            "first_day": 20701,
+            "last_day": 20703,
+            "speech_ms": 64000,
+            "last_used_s": 1790700000,
+            "centroid": {"vec": 42}
+          },
+          {"state": 0}
+        ],
+        "sessions": [
+          {
+            "speech_ms": 40000,
+            "day_index": 20700,
+            "start_s": 1790000000,
+            "end_s": 1790001000,
+            "device_tag": 305419896,
+            "route_class": 1,
+            "flags": ["in_consensus"],
+            "n_windows": 20,
+            "centroid": null
+          }
+        ],
+        "n_sessions": 1,
+        "n_centroids": 0
+      },
+      "bytes_file": "stage8_codec/rec_fp16_range_vectors.bin",
+      "size": 4608,
+      "sha256": "70656d0f6ecc70d0b60deb672f8b3b0b4143b9e1f2e91b154c7be6b3a1d34d47"
+    }
+  ],
+  "malformed": [
+    {
+      "name": "empty",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "truncate", "length": 0}
+      ],
+      "rule": "R1",
+      "reason": "truncated"
+    },
+    {
+      "name": "one_byte",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "truncate", "length": 1}
+      ],
+      "rule": "R1",
+      "reason": "truncated"
+    },
+    {
+      "name": "header_minus_one",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "truncate", "length": 191}
+      ],
+      "rule": "R1",
+      "reason": "truncated"
+    },
+    {
+      "name": "header_only",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "truncate", "length": 192}
+      ],
+      "rule": "R8",
+      "reason": "length"
+    },
+    {
+      "name": "enrolled_one_short",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "truncate", "length": 4607}
+      ],
+      "rule": "R8",
+      "reason": "length"
+    },
+    {
+      "name": "enrolled_one_extra",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "append", "hex": "00"}
+      ],
+      "rule": "R8",
+      "reason": "length"
+    },
+    {
+      "name": "enrolled_1024_extra",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "append", "hex": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"}
+      ],
+      "rule": "R8",
+      "reason": "length"
+    },
+    {
+      "name": "learning_one_short",
+      "base": "learning_8_sessions",
+      "ops": [
+        {"op": "truncate", "length": 12799}
+      ],
+      "rule": "R8",
+      "reason": "length"
+    },
+    {
+      "name": "learning_one_extra",
+      "base": "learning_8_sessions",
+      "ops": [
+        {"op": "append", "hex": "ff"}
+      ],
+      "rule": "R8",
+      "reason": "length"
+    },
+    {
+      "name": "learning_centroids_missing",
+      "base": "learning_8_sessions",
+      "ops": [
+        {"op": "truncate", "length": 4608}
+      ],
+      "rule": "R8",
+      "reason": "length"
+    },
+    {
+      "name": "learning_last_centroid_half",
+      "base": "learning_8_sessions",
+      "ops": [
+        {"op": "truncate", "length": 12288}
+      ],
+      "rule": "R8",
+      "reason": "length"
+    },
+    {
+      "name": "magic_last_byte",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 3, "hex": "55"}
+      ],
+      "rule": "R2",
+      "reason": "magic"
+    },
+    {
+      "name": "magic_zero",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 0, "hex": "00000000"}
+      ],
+      "rule": "R2",
+      "reason": "magic"
+    },
+    {
+      "name": "magic_lowercase",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 0, "hex": "71617674"}
+      ],
+      "rule": "R2",
+      "reason": "magic"
+    },
+    {
+      "name": "version_2",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 4, "hex": "0200"}
+      ],
+      "rule": "R3",
+      "reason": "version"
+    },
+    {
+      "name": "version_4",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 4, "hex": "0400"}
+      ],
+      "rule": "R3",
+      "reason": "version"
+    },
+    {
+      "name": "version_0",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 4, "hex": "0000"}
+      ],
+      "rule": "R3",
+      "reason": "version"
+    },
+    {
+      "name": "version_big_endian_3",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 4, "hex": "0003"}
+      ],
+      "rule": "R3",
+      "reason": "version"
+    },
+    {
+      "name": "version_65536_minus_1",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 4, "hex": "ffff"}
+      ],
+      "rule": "R3",
+      "reason": "version"
+    },
+    {
+      "name": "state_0",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 6, "hex": "00"}
+      ],
+      "rule": "R4",
+      "reason": "state"
+    },
+    {
+      "name": "state_5",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 6, "hex": "05"}
+      ],
+      "rule": "R4",
+      "reason": "state"
+    },
+    {
+      "name": "state_255",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 6, "hex": "ff"}
+      ],
+      "rule": "R4",
+      "reason": "state"
+    },
+    {
+      "name": "flags_bit3",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 7, "hex": "0b"}
+      ],
+      "rule": "R5",
+      "reason": "flags"
+    },
+    {
+      "name": "flags_bit7",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 7, "hex": "83"}
+      ],
+      "rule": "R5",
+      "reason": "flags"
+    },
+    {
+      "name": "flags_all",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 7, "hex": "ff"}
+      ],
+      "rule": "R5",
+      "reason": "flags"
+    },
+    {
+      "name": "n_sessions_9",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 30, "hex": "09"}
+      ],
+      "rule": "R6",
+      "reason": "n_sessions"
+    },
+    {
+      "name": "n_sessions_255",
+      "base": "learning_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 30, "hex": "ff"}
+      ],
+      "rule": "R6",
+      "reason": "n_sessions"
+    },
+    {
+      "name": "enrolled_with_centroid_count",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 31, "hex": "01"}
+      ],
+      "rule": "R7",
+      "reason": "n_centroids"
+    },
+    {
+      "name": "enrolled_8_centroids",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 31, "hex": "08"}
+      ],
+      "rule": "R7",
+      "reason": "n_centroids"
+    },
+    {
+      "name": "learning_one_centroid_fewer",
+      "base": "learning_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 31, "hex": "07"}
+      ],
+      "rule": "R7",
+      "reason": "n_centroids"
+    },
+    {
+      "name": "learning_zero_centroids",
+      "base": "learning_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 31, "hex": "00"}
+      ],
+      "rule": "R7",
+      "reason": "n_centroids"
+    },
+    {
+      "name": "provisional_more_centroids",
+      "base": "provisional_3_sessions",
+      "ops": [
+        {"op": "set", "offset": 31, "hex": "04"}
+      ],
+      "rule": "R7",
+      "reason": "n_centroids"
+    },
+    {
+      "name": "header_reserved_first",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 122, "hex": "01"}
+      ],
+      "rule": "R9",
+      "reason": "reserved"
+    },
+    {
+      "name": "header_reserved_last",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 191, "hex": "80"}
+      ],
+      "rule": "R9",
+      "reason": "reserved"
+    },
+    {
+      "name": "slot_reserved",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 3292, "hex": "00000001"}
+      ],
+      "rule": "R9",
+      "reason": "reserved"
+    },
+    {
+      "name": "slot_state_3",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 3264, "hex": "03"}
+      ],
+      "rule": "R10",
+      "reason": "slot_state"
+    },
+    {
+      "name": "slot_state_255",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 4320, "hex": "ff"}
+      ],
+      "rule": "R10",
+      "reason": "slot_state"
+    },
+    {
+      "name": "empty_slot_with_route_group",
+      "base": "enrolled_no_slots",
+      "ops": [
+        {"op": "set", "offset": 3265, "hex": "01"}
+      ],
+      "rule": "R10",
+      "reason": "slot_unused"
+    },
+    {
+      "name": "empty_slot_with_centroid_word",
+      "base": "enrolled_no_slots",
+      "ops": [
+        {"op": "set", "offset": 3396, "hex": "013c"}
+      ],
+      "rule": "R10",
+      "reason": "slot_unused"
+    },
+    {
+      "name": "empty_slot_with_reserved",
+      "base": "enrolled_no_slots",
+      "ops": [
+        {"op": "set", "offset": 3293, "hex": "01"}
+      ],
+      "rule": "R10",
+      "reason": "slot_unused"
+    },
+    {
+      "name": "unused_session_entry_speech",
+      "base": "enrolled_no_slots",
+      "ops": [
+        {"op": "set", "offset": 4448, "hex": "01"}
+      ],
+      "rule": "R11",
+      "reason": "session_unused"
+    },
+    {
+      "name": "unused_session_entry_last_byte",
+      "base": "enrolled_no_slots",
+      "ops": [
+        {"op": "set", "offset": 4607, "hex": "01"}
+      ],
+      "rule": "R11",
+      "reason": "session_unused"
+    },
+    {
+      "name": "session_flags_bit3",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 4381, "hex": "08"}
+      ],
+      "rule": "R11",
+      "reason": "session_flags"
+    },
+    {
+      "name": "session_flags_bit7",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 4381, "hex": "80"}
+      ],
+      "rule": "R11",
+      "reason": "session_flags"
+    },
+    {
+      "name": "session_route_class_6",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 4380, "hex": "06"}
+      ],
+      "rule": "R11",
+      "reason": "route_class"
+    },
+    {
+      "name": "session_route_class_255",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 4380, "hex": "ff"}
+      ],
+      "rule": "R11",
+      "reason": "route_class"
+    },
+    {
+      "name": "anchor_inf",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 392, "hex": "007c"}
+      ],
+      "rule": "R12",
+      "reason": "non_finite"
+    },
+    {
+      "name": "anchor_nan",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 392, "hex": "007e"}
+      ],
+      "rule": "R12",
+      "reason": "non_finite"
+    },
+    {
+      "name": "anchor_neg_inf",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 392, "hex": "00fc"}
+      ],
+      "rule": "R12",
+      "reason": "non_finite"
+    },
+    {
+      "name": "anchor_signalling_nan",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 392, "hex": "017d"}
+      ],
+      "rule": "R12",
+      "reason": "non_finite"
+    },
+    {
+      "name": "adaptive_inf_last_word",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 2238, "hex": "007c"}
+      ],
+      "rule": "R12",
+      "reason": "non_finite"
+    },
+    {
+      "name": "slot_centroid_nan",
+      "base": "enrolled_two_slots_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 2244, "hex": "007e"}
+      ],
+      "rule": "R12",
+      "reason": "non_finite"
+    },
+    {
+      "name": "session_centroid_inf",
+      "base": "learning_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 7686, "hex": "007c"}
+      ],
+      "rule": "R12",
+      "reason": "non_finite"
+    },
+    {
+      "name": "session_centroid_last_word_nan",
+      "base": "learning_8_sessions",
+      "ops": [
+        {"op": "set", "offset": 12798, "hex": "007e"}
+      ],
+      "rule": "R12",
+      "reason": "non_finite"
+    }
+  ]
+}

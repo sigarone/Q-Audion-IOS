@@ -163,6 +163,9 @@ struct VoiceBundle {
     static let vadFile = "silero_vad_16k_op15.onnx"
 
     let constants: VoiceConstants
+    /// The state part of the same file (enroll, update, refresh, conditions, retention, model id and versions): the template
+    /// record and its state machine.
+    let state: VoiceStateConstants
     let tables: VoiceFbankTables
     let vadModelURL: URL
 
@@ -191,9 +194,11 @@ struct VoiceBundle {
             throw VoiceBundleError.malformed("constants.json: fbank tables hash does not match \(tablesFile)")
         }
         try validate(constants)
+        let state = try VoiceStateConstants.parse(constantsData)
         let tables = try VoiceFbankTables(data: tablesData)
         return VoiceBundle(
             constants: constants,
+            state: state,
             tables: tables,
             vadModelURL: directory.appendingPathComponent(vadFile)
         )
