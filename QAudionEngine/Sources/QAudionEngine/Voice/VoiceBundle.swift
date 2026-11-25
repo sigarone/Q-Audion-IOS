@@ -116,6 +116,8 @@ struct VoiceConstants: Decodable {
         }
 
         struct Stats: Decodable {
+            /// The poll of the stats and the tick of the engine, in ms.
+            let pollMs: Int
             let widenMs: Int
             let lateMs: Int
             let cacheMs: Int
@@ -166,8 +168,15 @@ struct VoiceBundle {
     /// The state part of the same file (enroll, update, refresh, conditions, retention, model id and versions): the template
     /// record and its state machine.
     let state: VoiceStateConstants
+    /// The back-end part of the same file: the speaker model pin, the cohort, the QMF, the evidence rules, the call-local reference
+    /// and the display flags.
+    let scoring: VoiceScoringConstants
+    /// The part that only the engine orchestration reads: the CPU budget and the pending list, the speech cap of an update.
+    let engine: VoiceEngineConstants
     let tables: VoiceFbankTables
     let vadModelURL: URL
+    /// The AS-norm cohort file (pinned by `scoring.cohort.sha256`; `VoiceCohort.parse` checks it).
+    let cohortURL: URL
 
     /// Loads and verifies the bundle files in `directory`. A file that is missing, or whose hash differs from its pin,
     /// stops the load.
@@ -195,12 +204,17 @@ struct VoiceBundle {
         }
         try validate(constants)
         let state = try VoiceStateConstants.parse(constantsData)
+        let scoring = try VoiceScoringConstants.decode(constantsData)
+        let engine = try VoiceEngineConstants.parse(constantsData)
         let tables = try VoiceFbankTables(data: tablesData)
         return VoiceBundle(
             constants: constants,
             state: state,
+            scoring: scoring,
+            engine: engine,
             tables: tables,
-            vadModelURL: directory.appendingPathComponent(vadFile)
+            vadModelURL: directory.appendingPathComponent(vadFile),
+            cohortURL: directory.appendingPathComponent(scoring.cohort.file)
         )
     }
 
@@ -264,6 +278,9 @@ struct VoiceBundle {
         let rate = c.gates.stats.rxRateHz
         guard rate > 0, VoiceStatsTrack.tickRate % rate == 0 else {
             throw VoiceBundleError.malformed("constants.json: rx rate")
+        }
+        guard c.gates.stats.pollMs > 0 else {
+            throw VoiceBundleError.malformed("constants.json: poll")
         }
         guard c.gates.stats.overdueMs > 0 else {
             throw VoiceBundleError.malformed("constants.json: overdue")

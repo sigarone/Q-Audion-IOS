@@ -1525,6 +1525,43 @@ _RE_LIVE_FULL = re.compile(
 )
 
 
+# CONTACT-VOICE CHECK LINES (call / stdout tags): the ten shapes of the QA-VOICE family (QAudionEngine VoiceEngine,
+# VoiceDailyCounters). Every value is a fixed word or a number from a closed range; the call is the first eight characters of the
+# call id (or "-"), and no line has a contact, a name, a number of the user, a score, a LLR or a threshold. The generic gate gives
+# bare words a budget of zero, so each shape is accepted by the whole-line match only: one extra word, a value outside its set or
+# any suffix and the line is not one of them and goes through the ordinary gates as before. Pinned by
+# test_ship_ios_voice_vocab.py.
+_VOICE_CALL = r"call=[0-9a-f]{8}"
+_VOICE_STATE = r"(?:chk|match|diff|nover|lrn|chg|off)"
+_VOICE_CSTATE = r"(?:none|lrn|prov|enr|ref)"
+_VOICE_N4 = r"[0-9]{1,4}"
+_RE_VOICE_FULL = re.compile(
+    r"\AQA-VOICE v=1 ev=(?:"
+    r"day calls=" + _VOICE_N4 + r" off=" + _VOICE_N4 + r" match=" + _VOICE_N4 + r" chk=" + _VOICE_N4 + r" nover=" + _VOICE_N4
+    + r" diff=" + _VOICE_N4 + r" sdiff=" + _VOICE_N4 + r" chg=" + _VOICE_N4 + r" schg=" + _VOICE_N4 + r" hs=" + _VOICE_N4
+    + r" spk=" + _VOICE_N4 + r" hf=" + _VOICE_N4 + r" unk=" + _VOICE_N4 + r" newdev=" + _VOICE_N4 + r" enr=[0-9]{1,3}"
+    r" enrtot=" + _VOICE_N4 + r" lrn=[0-9]{1,3} mk=[0-9]{1,3}"
+    r"|dstr st=[1-4] calls=" + _VOICE_N4 + r" sdiff=" + _VOICE_N4 + r" m1=" + _VOICE_N4 + r" m2=" + _VOICE_N4 + r" m3=" + _VOICE_N4
+    + r" m4=" + _VOICE_N4
+    + r"|start " + _VOICE_CALL + r" own=[01] peer=[01-] tier=[012] path=(?:srtp|dc) model=(?:ok|fail|na)"
+    r"|tap " + _VOICE_CALL + r" src=rx hz=(?:16000|24000|32000|48000|other) cbmin=[0-9]{1,5} cbmax=[0-9]{1,5} n=" + _VOICE_N4
+    + r"|store call=(?:[0-9a-f]{8}|-) op=(?:write|read|delete|wipe|migrate) res=(?:ok|fail|absent|stale)"
+    r" why=(?:contact|feature|account|reinstall|model|legacy|user|retention|purge|-)"
+    r"|cstate " + _VOICE_CALL + r" st=(?:off|lrn|prov|enr|ref)"
+    r"|state " + _VOICE_CALL + r" from=" + _VOICE_STATE + r" to=" + _VOICE_STATE + r" t=[0-9]{1,5} nw=" + _VOICE_N4
+    + r" blk=[0-9]{1,3} shown=[01]"
+    r"|learn " + _VOICE_CALL + r" from=" + _VOICE_CSTATE + r" to=" + _VOICE_CSTATE + r" ns=[0-8] sp=" + _VOICE_N4
+    + r" days=[0-9] why=(?:added|merged|mixed|short|conflict|loo|enrolled|relearn|reset|evict|purge|slotq|slota)"
+    r"|upd " + _VOICE_CALL + r" res=(?:applied|bound|rate|skip_state|skip_tier|skip_short|skip_off|skip_cond)"
+    r"|end " + _VOICE_CALL + r" res=(?:match|chk|diff|nover|chg|off|na) shadow=(?:match|chk|diff|na) dur=[0-9]{1,5} vsp=[0-9]{1,5}"
+    r" acc=" + _VOICE_N4 + r" unc=" + _VOICE_N4 + r" blk=[0-9]{1,3} rsnr=" + _VOICE_N4 + r" rclip=" + _VOICE_N4 + r" rplc=" + _VOICE_N4
+    + r" rdt=" + _VOICE_N4 + r" rnb=" + _VOICE_N4 + r" rmix=" + _VOICE_N4 + r" rskip=" + _VOICE_N4 + r" rown=" + _VOICE_N4
+    + r" margin=[0-4] sc=(?:[0-9]|-) cov=[01] newdev=[01] emb50=" + _VOICE_N4 + r" emb95=" + _VOICE_N4 + r" vad95=[0-9]{1,3}"
+    r" route=(?:ear|spk|bt|wired|car|unk)"
+    r")\Z"
+)
+
+
 def _is_closed_grammar_line(tag, norm_body):
     """True if `tag` is the mesh scope and `norm_body` is, in full, one of the mesh diagnostic events, or `tag` is a
     call / stdout scope and `norm_body` is, in full, the native handshake summary. Full-line validation: a body that
@@ -1541,7 +1578,8 @@ def _is_closed_grammar_line(tag, norm_body):
         return bool(_RE_HANDSHAKE_FULL.match(norm_body) or _RE_PQLEVEL_FULL.match(norm_body) or _RE_PQLATE_FULL.match(norm_body)
                     or _RE_PQBACKFILL_FULL.match(norm_body)
                     or _RE_LIVE_FULL.match(norm_body) or _RE_SHIELD_FULL.match(norm_body)
-                    or _RE_SESSIONBIND_FULL.match(norm_body) or _RE_CHATREKEY_FULL.match(norm_body))
+                    or _RE_SESSIONBIND_FULL.match(norm_body) or _RE_CHATREKEY_FULL.match(norm_body)
+                    or _RE_VOICE_FULL.match(norm_body))
     return False
 
 
@@ -2524,6 +2562,14 @@ def _attribute_summary(attrs):
     return "[summary] " + " ".join(parts) if parts else ""
 
 
+# A number that measures a voice (a cosine, a score, a LLR, a logit, a similarity): biometric about a third party, never shipped under
+# any tag. The key is `score`, `cos`, `cosine`, `llr`, `logit` or `similarity` itself or ends in one of them (`asnorm_score`,
+# `vpscore`), and the value is an integer, a negative number, a decimal or a number in scientific notation (`3`, `-3`, `0.71`,
+# `.5`, `1e-3`). The QA-VOICE family has no such number at all (test_ship_ios_voice_vocab.py).
+_RE_VOICE_MEASURE = re.compile(
+    r"\b[a-z0-9_]*(?:cos|cosine|score|llr|logit|similarity)\s*[=:]\s*[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[-+]?[0-9]+)?")
+
+
 def redact_body(orig_body, tag_is_safe, attrs, tag=None):
     """FAIL-CLOSED body redaction. Returns (kept: bool, body: str).
 
@@ -2580,6 +2626,10 @@ def redact_body(orig_body, tag_is_safe, attrs, tag=None):
 
     # 3 -- SDP / ICE / DTLS whole-record drop (same cleaned text as above).
     if _is_sdp_line(_strip_format_chars(norm)):
+        return False, ""
+
+    # 3b -- a decimal that measures a voice (cosine, score, LLR, similarity): DROP, any tag.
+    if _RE_VOICE_MEASURE.search(low):
         return False, ""
 
     # 4 -- untrusted tag: never ship the body.

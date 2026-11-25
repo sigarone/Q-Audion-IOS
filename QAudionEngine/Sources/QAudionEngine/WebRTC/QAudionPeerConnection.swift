@@ -113,6 +113,8 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
     /// Underlying RTCPeerConnection. Avoid touching directly — use the
     /// high-level methods on this class instead.
     public private(set) var peerConnection: RTCPeerConnection?
+    /// The one registry of every `statistics` call on this connection (see `PeerConnectionStatsGate`).
+    let statsGate = PeerConnectionStatsGate()
 
     /// W-TURNSUSPECT (IOS-E4) — relay-type local candidates gathered during
     /// THIS ICE gathering cycle. Reset when a fresh cycle starts
@@ -349,6 +351,10 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
     /// OwnerContinuity consumers the sealed-DataChannel decode path already
     /// feeds. See ``NativeAudioPcmTap``'s own doc for why this exists.
     private var audioRxTap: NativeAudioPcmTap?
+    /// The producer of the contact-voice check, set while a check runs (nil otherwise). Applied to the RX tap that exists now
+    /// and to any tap created later.
+    private let voiceTapLock = NSLock()
+    private var voiceRxTap: VoiceRxTap?
     /// W-AUDIORXTAPCARRYOVER (2026-08-29) — the track ``audioRxTap`` is
     /// currently attached to. Needed because a renderer is registered ON A
     /// TRACK, so moving the tap after a post-negotiation receiver rebind
@@ -1612,8 +1618,20 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
             track.add(tap)
             audioRxTap = tap
             audioRxTapTrack = track
+            voiceTapLock.lock()
+            let voice = voiceRxTap
+            voiceTapLock.unlock()
+            tap.setVoiceTap(voice)
         }
         return attached
+    }
+
+    /// Installs (or, with nil, removes) the producer of the contact-voice check on the RX tap of this connection.
+    func setVoiceRxTap(_ voice: VoiceRxTap?) {
+        voiceTapLock.lock()
+        voiceRxTap = voice
+        voiceTapLock.unlock()
+        audioRxTap?.setVoiceTap(voice)
     }
 
     /// Mute/unmute the native-RTP audio track for this call. No-op (beyond
@@ -2354,6 +2372,7 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
                 ifCurrent: armedToken,
                 reason: NativeAudioUnitGateDecisions.ChangeReason.peerConnectionClose.rawValue)
         }
+        statsGate.close()
         peerConnection?.close()
         peerConnection = nil
         if armedToken != 0 {
@@ -2440,7 +2459,7 @@ public final class QAudionPeerConnection: NSObject, @unchecked Sendable {
             retryOrFailDtlsStats(generation: generation, startedAt: startedAt, deadlineReached: deadlineReached)
             return
         }
-        pc.statistics { [weak self] report in
+        statsGate.statistics(of: pc) { [weak self] report in
             guard let self = self else { return }
             // A newer transition to `connected` superseded this attempt while its stats call was in
             // flight: that snapshot may pre-date the transition (a different DTLS session), so it must
@@ -2836,6 +2855,32 @@ extension QAudionPeerConnection: RTCDataChannelDelegate {
         cb?(buffer.data)
     }
 }
+/// The 1 s stats poll of the contact-voice check: two selector calls, one for the live audio receiver and one for its sender, both
+/// through the gate of this connection. The receiver and the sender are looked up again at every poll, from the transceivers that
+/// were negotiated (a transceiver that the remote offer did not reuse has no mid and is never used), and the objects are not kept.
+extension QAudionPeerConnection: VoiceStatsSource {
+    func pollOnce(_ deliver: @escaping (VoicePollResult) -> Void) {
+        guard let pc = peerConnection else {
+            deliver(.unavailable)
+            return
+        }
+        let audio = pc.transceivers.filter { $0.mediaType == .audio }
+        guard let live = audio.first(where: { !$0.mid.isEmpty }) else {
+            deliver(.unavailable)
+            return
+        }
+        let join = VoicePollJoin(deliver: deliver)
+        let receiver = live.receiver
+        let sender = live.sender
+        statsGate.statistics(of: pc, for: receiver, stamped: { report, stamp in
+            join.receiverArrived((VoiceStatsReader.rows(of: report), stamp, VoiceStatsReader.reportNs(of: report)))
+        })
+        statsGate.statistics(of: pc, for: sender, stamped: { report, stamp in
+            join.senderArrived((VoiceStatsReader.rows(of: report), stamp, VoiceStatsReader.reportNs(of: report)))
+        })
+    }
+}
+
 #endif
 
 /// CALLEE-UPGRADE-PURPLE FIX (2026-07-01) — pure decision for whether a

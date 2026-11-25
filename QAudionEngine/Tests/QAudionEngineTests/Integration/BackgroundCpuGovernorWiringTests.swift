@@ -64,7 +64,7 @@ final class BackgroundCpuGovernorWiringTests: XCTestCase {
         let delivered = GovCount()
         verifier.onScoreUpdated = { _ in delivered.bump() }
         let breakdowns = GovCount()
-        verifier.onScoreBreakdown = { _, _, _, _ in breakdowns.bump() }
+        verifier.onScoreBreakdown = { _, _, _ in breakdowns.bump() }
 
         // One tick in the foreground: the governor is out of the picture and the tick runs.
         runTick(verifier, delivered: delivered)

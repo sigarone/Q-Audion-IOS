@@ -119,7 +119,7 @@ final class CallService: @unchecked Sendable {
     var onContactVoiceScoreUpdated: ((Float) -> Void)?
     /// W-GUARDIAN3SIG (2026-09-11) — pass-through of
     /// `QAudionCallIntegration.onContactVoiceScoreBreakdown`. Diagnostics only.
-    var onContactVoiceScoreBreakdown: ((Float, Float, Float, Float) -> Void)?
+    var onContactVoiceScoreBreakdown: ((Float, Float, Float) -> Void)?
 
     /// W65+W66: Full audio capture + processing pipeline.
     ///
@@ -1472,6 +1472,8 @@ final class CallService: @unchecked Sendable {
     /// Fired on the main queue when this side becomes HELD (first cause, any cause) and when it stops being HELD (last cause
     /// removed, after CALL_HOLD RESUMED was written). AppState pauses and restores the outbound video on it.
     public var onLocalHoldActiveChanged: ((Bool) -> Void)?
+    /// Fired on the main queue when the PEER's hold changed (a hold frame that was applied). The contact-voice check follows it.
+    public var onPeerHoldChanged: (() -> Void)?
     private var holdAudioCauseCap: HoldCancel?
     /// Causes recorded before the call is connected (a CallKit hold that arrives while it still rings or connects). The
     /// privacy effects apply at once (video paused, sender muted); CALL_HOLD goes out when the call becomes active.
@@ -2779,8 +2781,8 @@ final class CallService: @unchecked Sendable {
         integration.onContactVoiceScoreUpdated = { [weak self] score in
             self?.onContactVoiceScoreUpdated?(score)
         }
-        integration.onContactVoiceScoreBreakdown = { [weak self] df, lv, vp, combined in
-            self?.onContactVoiceScoreBreakdown?(df, lv, vp, combined)
+        integration.onContactVoiceScoreBreakdown = { [weak self] df, lv, combined in
+            self?.onContactVoiceScoreBreakdown?(df, lv, combined)
         }
         // W-FECDECODE (2026-08-25) — a single-frame wire gap just got a real
         // reconstruction instead of concealment; play it BEFORE the frame
@@ -3111,8 +3113,8 @@ final class CallService: @unchecked Sendable {
         integration.onContactVoiceScoreUpdated = { [weak self] score in
             self?.onContactVoiceScoreUpdated?(score)
         }
-        integration.onContactVoiceScoreBreakdown = { [weak self] df, lv, vp, combined in
-            self?.onContactVoiceScoreBreakdown?(df, lv, vp, combined)
+        integration.onContactVoiceScoreBreakdown = { [weak self] df, lv, combined in
+            self?.onContactVoiceScoreBreakdown?(df, lv, combined)
         }
         // W-FECDECODE — mirror the outgoing-side wiring 1:1, same reasoning
         // as `onOwnerContinuityStateChanged` above.
@@ -3851,6 +3853,7 @@ final class CallService: @unchecked Sendable {
         guard outcome.changed else { return }
         holdLastBeepAtMs = HoldToneSynth.never
         syncOuterHold()
+        DispatchQueue.main.async { [weak self] in self?.onPeerHoldChanged?() }
         if hold.held {
             holdTick()  // the tone plays at t=0 of HELD
         } else {

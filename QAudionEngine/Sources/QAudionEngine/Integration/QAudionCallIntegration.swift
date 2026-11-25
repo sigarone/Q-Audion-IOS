@@ -863,7 +863,7 @@ public final class QAudionCallIntegration: @unchecked Sendable {
     public var onContactVoiceScoreUpdated: ((Float) -> Void)?
     /// W-GUARDIAN3SIG (2026-09-11) — pass-through of
     /// `ContactVoiceVerifier.onScoreBreakdown`. Diagnostics only.
-    public var onContactVoiceScoreBreakdown: ((Float, Float, Float, Float) -> Void)?
+    public var onContactVoiceScoreBreakdown: ((Float, Float, Float) -> Void)?
 
     /// W389 — fired the moment the ML-KEM-1024 PQC handshake completes
     /// successfully on EITHER side (caller `case .accept` after
@@ -1453,8 +1453,8 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         // MASVS-CRYPTO remediation (2026-08-20/21) — relay the raw score.
         // See ContactVoiceVerifier's `onScoreUpdated` kdoc.
         contactVoiceVerifier.onScoreUpdated = { [weak self] score in self?.onContactVoiceScoreUpdated?(score) }
-        contactVoiceVerifier.onScoreBreakdown = { [weak self] df, lv, vp, combined in
-            self?.onContactVoiceScoreBreakdown?(df, lv, vp, combined)
+        contactVoiceVerifier.onScoreBreakdown = { [weak self] df, lv, combined in
+            self?.onContactVoiceScoreBreakdown?(df, lv, combined)
         }
         // Task #11 — head-start the ephemeral ML-KEM keypair off the
         // call-start critical path (the reused responder integration and

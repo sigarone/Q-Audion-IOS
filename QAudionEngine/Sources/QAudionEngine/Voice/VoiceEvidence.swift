@@ -76,13 +76,15 @@ enum VoiceShown: String {
     case cannotVerify = "cannot_verify"
 }
 
-/// Why the engine cannot verify (without the audio rule, which the machine derives from the ticks).
+/// Why the engine cannot verify. `audio` is the engine's own reason (its front-end went inactive); the machine adds the audio
+/// rule that it derives from the ticks.
 enum VoiceFault: String {
     case path
     case model
     case constants
     case locked
     case cpu
+    case audio
 }
 
 /// The detail of a shown state: a fault or `.audio` for Cannot verify, `.deviceNew` for Differs, `.differentSetup` for Checking.
@@ -103,6 +105,7 @@ enum VoiceDetail: String {
         case .constants: self = .constants
         case .locked: self = .locked
         case .cpu: self = .cpu
+        case .audio: self = .audio
         }
     }
 }
@@ -184,6 +187,11 @@ final class VoiceEvidence {
     }
 
     var blocked: Bool { everDiffers || everWeak }
+
+    /// A block of this call was a Differs candidate, and a block of this call was weak: the two parts of `blocked`, which the
+    /// outcome of a call names apart.
+    var everDiffersCandidate: Bool { everDiffers }
+    var everWeakBlock: Bool { everWeak }
     var blockCount: Int { block.count }
     var recentCount: Int { recent.count }
     var maxBlock: Int { cfg.maxBlock }
@@ -294,6 +302,9 @@ final class VoiceCallMachine {
         self.display = display
         self.ev = VoiceEvidence(evidence)
     }
+
+    /// The evidence of the call, for the engine to read (the outcome of a call names `everDiffersCandidate` and `everWeakBlock` apart).
+    var evidence: VoiceEvidence { ev }
 
     convenience init(constants: VoiceScoringConstants, mode: VoiceCheckMode) {
         self.init(mode: mode, evidence: EvidenceConfig.of(constants, mode: mode), display: DisplayConfig.of(constants))

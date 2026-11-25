@@ -106,6 +106,8 @@ targets:
           - ShareQueueTests.swift
           - SiriIntentPolicyTests.swift
           - TrustEvaluationModelTests.swift
+          - PeerIdentityPinKeychainTimeTests.swift
+          - VoiceCheckCardTests.swift
           - VoiceDisplayFormatTests.swift
           - VoiceGuardModelTests.swift
           - VoiceToneRowTests.swift

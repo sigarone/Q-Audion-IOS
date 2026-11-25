@@ -30,21 +30,17 @@ final class VoiceBundleTests: XCTestCase {
     }
 
     /// What the manifest lists and this repository does not carry: the measurement report and the reading texts of the
-    /// vectors (this repository is public) and the vectors of the stages that nothing here runs (10 to 13, their inputs, and
-    /// the two clips that only stage 13 reads). The cohort file and the vectors of stages 6 to 9 are here, as test
-    /// resources next to the other vectors. A name ending in "/" is a folder.
+    /// vectors (this repository is public) and the vectors of the stages that nothing here runs (10 and 13, and their
+    /// inputs). The cohort file and the vectors of stages 6 to 9, 11 and 12 are here, as test resources next to the other
+    /// vectors, with the two clips that stage 11 reads. A name ending in "/" is a folder.
     private static let notShipped: [String] = [
         "report.md",
         "kat/README.md",
         "kat/README_stages5-7-13.md",
         "kat/README_stages8-10-12.md",
         "kat/README_stages11.md",
-        "kat/audio/clip_g_16k.wav",
-        "kat/audio/clip_i_16k.wav",
         "kat/inputs/",
         "kat/stage10_vcons/",
-        "kat/stage11_engine/",
-        "kat/stage12_tier/",
         "kat/stage13_e2e/"
     ]
 
@@ -72,9 +68,6 @@ final class VoiceBundleTests: XCTestCase {
             let url: URL
             if path.hasPrefix("kat/") {
                 url = kat.appendingPathComponent(String(path.dropFirst(4)))
-            } else if path == "cohort.bin" {
-                // Test resource only: next to the vectors, never in the app bundle.
-                url = kat.appendingPathComponent(path)
             } else {
                 url = runtime.appendingPathComponent(path)
             }
@@ -87,8 +80,8 @@ final class VoiceBundleTests: XCTestCase {
             XCTAssertEqual(VoiceHash.sha256Hex(data), parts[0], path)
             checked += 1
         }
-        XCTAssertEqual(checked, 102)
-        XCTAssertEqual(skipped, 99)
+        XCTAssertEqual(checked, 176)
+        XCTAssertEqual(skipped, 25)
         // No reading text of the vectors and no report in the shipped folders, whatever the manifest lists.
         for directory in [runtime, kat] {
             let names = FileManager.default.enumerator(atPath: directory.path)?.compactMap { $0 as? String } ?? []
@@ -101,14 +94,15 @@ final class VoiceBundleTests: XCTestCase {
         }
     }
 
-    /// The cohort is a test resource: it is pinned by the constants and absent from the runtime bundle.
-    func testCohortIsPinnedAndNotInTheAppBundle() throws {
+    /// The cohort is part of the runtime bundle: it is pinned by the constants, and the bundle loader names its file.
+    func testCohortIsPinnedAndInTheAppBundle() throws {
         let runtime = try runtimeDirectory()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: runtime.appendingPathComponent("cohort.bin").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: runtime.appendingPathComponent("cohort.bin").path))
+        XCTAssertEqual(try VoiceBundle.loadFromModule().cohortURL.lastPathComponent, "cohort.bin")
         let scoring = try VoiceScoringConstants.decode(try Data(contentsOf: runtime.appendingPathComponent(VoiceBundle.constantsFile)))
         XCTAssertEqual(scoring.cohort.file, "cohort.bin")
         XCTAssertEqual(scoring.cohort.sha256, "e5ff93a8fcd08560427c5f7de998bf02c87e189e06660000fddd0e258d18c221")
-        XCTAssertEqual(VoiceHash.sha256Hex(try VoiceKat.data("cohort.bin")), scoring.cohort.sha256)
+        XCTAssertEqual(VoiceHash.sha256Hex(try VoiceScoringKat.cohortData()), scoring.cohort.sha256)
     }
 
     func testAFileWithAWrongHashIsRejected() throws {

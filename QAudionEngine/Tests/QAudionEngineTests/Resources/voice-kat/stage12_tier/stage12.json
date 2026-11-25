@@ -1,0 +1,356 @@
+{
+  "tolerance": "exact",
+  "min_key_age_s": 86400,
+  "fields": {
+    "pin_state": ["pinned", "unpinned", "identity_changed", "unresolved"],
+    "key_age_s": "integer seconds, -1 = unknown",
+    "via_legacy_row": "bool",
+    "oob_verified": "bool",
+    "pin_anomaly": "bool",
+    "kcmac_ok": "bool",
+    "held_unresolved": "bool",
+    "auth_word": ["H", "C", "none"]
+  },
+  "cases": [
+    {
+      "name": "tier1_auth_H",
+      "description": "pinned for two days, auth_word H, not verified out of band: tier 1",
+      "input": {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 1, "learning_allowed": true, "matches_allowed": true}
+    },
+    {
+      "name": "tier1_auth_C",
+      "description": "auth_word C (classical handshake only) learns too: PQ signature continuity is not a tier input",
+      "input": {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "C"},
+      "expected": {"tier": 1, "learning_allowed": true, "matches_allowed": true}
+    },
+    {
+      "name": "tier2_oob_H",
+      "description": "key verified in person, by QR or by NFC: tier 2",
+      "input": {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 2, "learning_allowed": true, "matches_allowed": true}
+    },
+    {
+      "name": "tier2_oob_C",
+      "description": "tier 2 with auth_word C",
+      "input": {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "C"},
+      "expected": {"tier": 2, "learning_allowed": true, "matches_allowed": true}
+    },
+    {
+      "name": "zero_unpinned",
+      "description": "pin_state unpinned alone",
+      "input": {"pin_state": "unpinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "zero_identity_changed",
+      "description": "pin_state identity_changed alone",
+      "input": {"pin_state": "identity_changed", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "zero_unresolved",
+      "description": "pin_state unresolved alone",
+      "input": {"pin_state": "unresolved", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "zero_legacy_row",
+      "description": "via_legacy_row alone (no peer device id, or the pin came from the legacy per-contact entry)",
+      "input": {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": true, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "zero_key_age_86399",
+      "description": "key_age_s 86,399: one second short of 24 h",
+      "input": {"pin_state": "pinned", "key_age_s": 86399, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "zero_key_age_0",
+      "description": "key_age_s 0: pinned at call start",
+      "input": {"pin_state": "pinned", "key_age_s": 0, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "zero_key_age_unknown",
+      "description": "key_age_s -1: unknown",
+      "input": {"pin_state": "pinned", "key_age_s": -1, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "zero_key_age_negative",
+      "description": "key_age_s -86400: the pinned-at time is in the future (a clock step): still tier 0",
+      "input": {"pin_state": "pinned", "key_age_s": -86400, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "zero_pin_anomaly",
+      "description": "the call's pin word is anomaly, alone",
+      "input": {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": true, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "zero_kcmac_bad",
+      "description": "round-1 key-confirmation MAC not valid, alone",
+      "input": {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": false, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "zero_held_unresolved",
+      "description": "call held on an unresolved identity, alone",
+      "input": {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": true, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "zero_auth_none",
+      "description": "auth_word none, alone",
+      "input": {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "none"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "age_86400",
+      "description": "key_age_s exactly 86,400: the limit is strict (< 86,400 is tier 0), so tier 1",
+      "input": {"pin_state": "pinned", "key_age_s": 86400, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 1, "learning_allowed": true, "matches_allowed": true}
+    },
+    {
+      "name": "age_86401",
+      "description": "key_age_s 86,401",
+      "input": {"pin_state": "pinned", "key_age_s": 86401, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 1, "learning_allowed": true, "matches_allowed": true}
+    },
+    {
+      "name": "age_huge",
+      "description": "key_age_s 2^40 seconds",
+      "input": {"pin_state": "pinned", "key_age_s": 1099511627776, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 1, "learning_allowed": true, "matches_allowed": true}
+    },
+    {
+      "name": "age_86399_oob",
+      "description": "key_age_s 86,399 with an out-of-band verification: the verification does not lift tier 0",
+      "input": {"pin_state": "pinned", "key_age_s": 86399, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "age_86400_oob",
+      "description": "key_age_s 86,400 with an out-of-band verification: tier 2",
+      "input": {"pin_state": "pinned", "key_age_s": 86400, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 2, "learning_allowed": true, "matches_allowed": true}
+    },
+    {
+      "name": "oob_with_unpinned",
+      "description": "verified out of band, but unpinned: tier 0",
+      "input": {"pin_state": "unpinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "oob_with_identity_changed",
+      "description": "verified out of band, but identity changed: tier 0",
+      "input": {"pin_state": "identity_changed", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "oob_with_unresolved",
+      "description": "verified out of band, but unresolved: tier 0",
+      "input": {"pin_state": "unresolved", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "oob_with_legacy_row",
+      "description": "verified out of band, but legacy row: tier 0",
+      "input": {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": true, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "oob_with_pin_anomaly",
+      "description": "verified out of band, but pin anomaly: tier 0",
+      "input": {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": true, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "oob_with_kcmac_bad",
+      "description": "verified out of band, but kcmac bad: tier 0",
+      "input": {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": false, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "oob_with_held_unresolved",
+      "description": "verified out of band, but held unresolved: tier 0",
+      "input": {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": true, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "oob_with_auth_none",
+      "description": "verified out of band, but auth none: tier 0",
+      "input": {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "none"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "all_zero_conditions",
+      "description": "every tier-0 condition at once",
+      "input": {"pin_state": "unresolved", "key_age_s": -1, "via_legacy_row": true, "oob_verified": false, "pin_anomaly": true, "kcmac_ok": false, "held_unresolved": true, "auth_word": "none"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "review_second_call_new_mldsa_device",
+      "description": "second call of a brand-new ML-DSA device: the key was pinned at the first call 10 minutes ago, the call reads pin=ok and auth=H, and it is still tier 0",
+      "input": {"pin_state": "pinned", "key_age_s": 600, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "review_same_device_next_day",
+      "description": "the same device on the next day, 25 hours after the pin: tier 1",
+      "input": {"pin_state": "pinned", "key_age_s": 90000, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 1, "learning_allowed": true, "matches_allowed": true}
+    },
+    {
+      "name": "review_sas_confirmed_within_24h",
+      "description": "a device whose key was confirmed by the in-call SAS 1 hour ago: the SAS is not a tier input and its method (voice) is not out of band, so the key age decides: tier 0",
+      "input": {"pin_state": "pinned", "key_age_s": 3600, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "review_sas_confirmed_after_24h",
+      "description": "the same SAS-confirmed device after 28 hours: tier 1, not 2 (a SAS confirmation is not an out-of-band one)",
+      "input": {"pin_state": "pinned", "key_age_s": 100800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 1, "learning_allowed": true, "matches_allowed": true}
+    },
+    {
+      "name": "review_legacy_row_old_key",
+      "description": "a call without a peer device id reads the legacy row: tier 0 whatever the age and the verification",
+      "input": {"pin_state": "pinned", "key_age_s": 8589934592, "via_legacy_row": true, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "review_repinned_key_fresh",
+      "description": "a re-pinned key (an accepted identity change, the pinned-at time restarts): 2 hours old, tier 0 although the first key was months old",
+      "input": {"pin_state": "pinned", "key_age_s": 7200, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "review_repinned_key_aged",
+      "description": "the re-pinned key 25 hours later: tier 1",
+      "input": {"pin_state": "pinned", "key_age_s": 93600, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 1, "learning_allowed": true, "matches_allowed": true}
+    },
+    {
+      "name": "review_identity_change_held",
+      "description": "an unresolved identity change that the call was held on",
+      "input": {"pin_state": "identity_changed", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": true, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    },
+    {
+      "name": "review_pin_anomaly_auth_H",
+      "description": "pin=anomaly with auth_word H and an old key: tier 0",
+      "input": {"pin_state": "pinned", "key_age_s": 1073741824, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": true, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+      "expected": {"tier": 0, "learning_allowed": false, "matches_allowed": false}
+    }
+  ],
+  "sequences": [
+    {
+      "name": "all_tier_1",
+      "description": "tier 1 at every moment",
+      "inputs": [
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"}
+      ],
+      "expected": {
+        "tiers": [1, 1, 1],
+        "tier": 1,
+        "learning_allowed": true,
+        "matches_allowed": true
+      }
+    },
+    {
+      "name": "tier_2_then_1",
+      "description": "the lowest moment is tier 1",
+      "inputs": [
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"}
+      ],
+      "expected": {
+        "tiers": [2, 1, 2],
+        "tier": 1,
+        "learning_allowed": true,
+        "matches_allowed": true
+      }
+    },
+    {
+      "name": "all_tier_2",
+      "description": "tier 2 at every moment",
+      "inputs": [
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"}
+      ],
+      "expected": {
+        "tiers": [2, 2],
+        "tier": 2,
+        "learning_allowed": true,
+        "matches_allowed": true
+      }
+    },
+    {
+      "name": "single_moment",
+      "description": "one moment",
+      "inputs": [
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"}
+      ],
+      "expected": {
+        "tiers": [1],
+        "tier": 1,
+        "learning_allowed": true,
+        "matches_allowed": true
+      }
+    },
+    {
+      "name": "dip_to_0_in_the_middle",
+      "description": "tier 0 for a moment, then 1 again: the call stays tier 0, no exception",
+      "inputs": [
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "none"},
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"}
+      ],
+      "expected": {
+        "tiers": [1, 1, 0, 1, 1],
+        "tier": 0,
+        "learning_allowed": false,
+        "matches_allowed": false
+      }
+    },
+    {
+      "name": "starts_at_0",
+      "description": "tier 0 first",
+      "inputs": [
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "none"},
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"}
+      ],
+      "expected": {
+        "tiers": [0, 2, 2],
+        "tier": 0,
+        "learning_allowed": false,
+        "matches_allowed": false
+      }
+    },
+    {
+      "name": "ends_at_0",
+      "description": "tier 0 last",
+      "inputs": [
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": true, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "H"},
+        {"pin_state": "pinned", "key_age_s": 172800, "via_legacy_row": false, "oob_verified": false, "pin_anomaly": false, "kcmac_ok": true, "held_unresolved": false, "auth_word": "none"}
+      ],
+      "expected": {
+        "tiers": [2, 2, 0],
+        "tier": 0,
+        "learning_allowed": false,
+        "matches_allowed": false
+      }
+    }
+  ]
+}

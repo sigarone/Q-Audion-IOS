@@ -1132,6 +1132,9 @@ struct InCallScreen: View {
                         .padding(.horizontal, 20)
                 }
 
+                // The contact-voice check: its own card, drawn only while the check runs (nothing while it is off).
+                VoiceCheckCard(contactName: peerDisplayName)
+
                 // Live crypto-engine meter (the ENGINE cipher tube), right
                 // below the voice check card: real AES-256-GCM frame ops/s
                 // pulsing. Shown only while the engine is doing work

@@ -64,6 +64,17 @@ public final class NativeAudioPcmTap: NSObject, RTCAudioRenderer, @unchecked Sen
     /// or after a route change, without flooding the log every ~10 ms.
     private var consecutiveEmptyConversions = 0
     private let lock = NSLock()
+    /// The producer of the contact-voice check (see `VoiceRxTap`), nil while the check is off. It has its own lock, held for
+    /// the length of a pointer assignment, so a buffer never waits for the conversion lock above.
+    private let voiceLock = NSLock()
+    private var voiceTap: VoiceRxTap?
+
+    /// Installs (or, with nil, removes) the producer of the contact-voice check.
+    func setVoiceTap(_ tap: VoiceRxTap?) {
+        voiceLock.lock()
+        voiceTap = tap
+        voiceLock.unlock()
+    }
 
     /// - Parameters:
     ///   - targetSampleRate: output sample rate, matching
@@ -81,6 +92,11 @@ public final class NativeAudioPcmTap: NSObject, RTCAudioRenderer, @unchecked Sen
     }
 
     public func render(pcmBuffer: AVAudioPCMBuffer) {
+        // The voice tap takes the buffer as it is, at its own rate, before the conversion below. It never waits.
+        voiceLock.lock()
+        let voice = voiceTap
+        voiceLock.unlock()
+        voice?.render(buffer: pcmBuffer)
         guard let data = Self.int16LEData(from: pcmBuffer,
                                           targetSampleRate: targetSampleRate,
                                           converter: &converter,
