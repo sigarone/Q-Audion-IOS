@@ -393,28 +393,10 @@ enum VoiceGuardLevel: Equatable {
     case highRisk
 }
 
-/// What the voice card is told about the learning of this contact's voice:
-/// the progress while it runs, and how it ended.
-enum VoiceLearningState: Equatable {
-    case idle
-    case inProgress(progress: Float)
-    case completed(contactId: String)
-    case failed
-}
-
-/// The short confirmation shown when the voice-learning session ends.
-enum VoiceGuardBanner: Equatable {
-    case learned
-    case failed
-}
-
-/// What the card shows, in priority order: the banner, the learning progress,
-/// the waiting state (no verdict level and no Guardian sample yet: the view
-/// draws just the waiting line, without the wave), and finally the verdict
-/// with its wave.
+/// What the card shows, in priority order: the waiting state (no verdict level
+/// and no Guardian sample yet: the view draws just the waiting line, without
+/// the wave), and finally the verdict with its wave.
 enum VoiceGuardContent: Equatable {
-    case banner(VoiceGuardBanner)
-    case learning(progress: Float)
     case waiting
     case verdict(level: VoiceGuardLevel?)
 }
@@ -432,10 +414,7 @@ enum VoiceGuardIcon: Equatable {
 ///  - `steady`      the detector sees no change of voice since the start of this
 ///                  call (it says nothing about past calls);
 ///  - `suspect`     the LOCAL detector sees a possible change of voice;
-///  - `changed`     the local detector confirmed that the voice changed;
-///  - `learning`    this contact's voice is being learned;
-///  - `learned`     banner: the voice was saved;
-///  - `learnFailed` banner: learning did not work.
+///  - `changed`     the local detector confirmed that the voice changed.
 /// What the far end reports about its own detector is not a state of this
 /// card (see `RemoteSpeakerChangeMonitor`). None of the lines says anything
 /// about emotion, stress, health, sincerity or coercion.
@@ -444,15 +423,9 @@ enum VoiceGuardLine: Equatable, CaseIterable {
     case steady
     case suspect
     case changed
-    case learning
-    case learned
-    case learnFailed
 }
 
 enum VoiceGuard {
-    /// How long a banner stays on the card.
-    static let bannerSeconds: Double = 3.5
-
     /// The verdict of "is this still the voice the call started with". An
     /// unknown verdict has no level: the card then shows the neutral wording.
     static func level(of change: RemoteSpeakerChangeMonitor.Level) -> VoiceGuardLevel? {
@@ -499,12 +472,6 @@ enum VoiceGuard {
     /// The line of text a card content reads as.
     static func line(for content: VoiceGuardContent) -> VoiceGuardLine {
         switch content {
-        case .banner(.learned):
-            return .learned
-        case .banner(.failed):
-            return .learnFailed
-        case .learning:
-            return .learning
         case .waiting:
             return .waiting
         case .verdict(let level):
@@ -524,41 +491,18 @@ enum VoiceGuard {
     }
 
     /// Colour role of a line: grey while there is nothing to say, green for
-    /// steady (and for the saved-voice banner), amber for a possible change,
-    /// red for a confirmed one (and for a failed learning).
+    /// steady, amber for a possible change, red for a confirmed one.
     static func tone(ofLine line: VoiceGuardLine) -> VoiceTone {
         switch line {
-        case .waiting, .learning: return .neutral
-        case .steady, .learned:   return .success
-        case .suspect:            return .warning
-        case .changed, .learnFailed: return .riskHigh
+        case .waiting: return .neutral
+        case .steady: return .success
+        case .suspect: return .warning
+        case .changed: return .riskHigh
         }
     }
 
-    /// The banner a learning-session state asks for, if any. Only the two final
-    /// states do; the card shows it once, when the state changes to it.
-    static func banner(for state: VoiceLearningState?) -> VoiceGuardBanner? {
-        guard let state = state else { return nil }
-        switch state {
-        case .completed:
-            return .learned
-        case .failed:
-            return .failed
-        case .idle, .inProgress:
-            return nil
-        }
-    }
-
-    static func content(banner: VoiceGuardBanner?,
-                        learning: VoiceLearningState?,
-                        hasHistory: Bool,
+    static func content(hasHistory: Bool,
                         level: VoiceGuardLevel?) -> VoiceGuardContent {
-        if let banner {
-            return .banner(banner)
-        }
-        if let state = learning, case .inProgress(let progress) = state {
-            return .learning(progress: clampedProgress(progress))
-        }
         // The level, when known, always wins: it is shown even while the
         // history that draws the trend is still empty. The bare waiting line
         // is for the case with no level and no sample at all.
@@ -566,17 +510,6 @@ enum VoiceGuard {
             return .waiting
         }
         return .verdict(level: level)
-    }
-
-    static func clampedProgress(_ progress: Float) -> Float {
-        guard progress.isFinite else { return 0 }
-        return min(1, max(0, progress))
-    }
-
-    /// Learning progress as a whole percentage, for the spoken value of the bar.
-    static func percentText(_ progress: Float) -> String {
-        let percent = Int((clampedProgress(progress) * 100).rounded())
-        return percent.description + "%"
     }
 
     static func tone(of level: VoiceGuardLevel?) -> VoiceTone {
@@ -588,17 +521,8 @@ enum VoiceGuard {
         }
     }
 
-    /// Colour role of the banner, or nil when there is no banner.
-    static func bannerTone(of banner: VoiceGuardBanner?) -> VoiceTone? {
-        switch banner {
-        case .learned?: return .success
-        case .failed?:  return .riskHigh
-        case nil:       return nil
-        }
-    }
-
-    static func icon(banner: VoiceGuardBanner?, level: VoiceGuardLevel?) -> VoiceGuardIcon {
-        if banner == .learned || level == .verified {
+    static func icon(level: VoiceGuardLevel?) -> VoiceGuardIcon {
+        if level == .verified {
             return .check
         }
         if level == .highRisk {
@@ -648,56 +572,12 @@ enum VoiceGuardCopy {
             return String(localized: "in_call.voice_guard.line_changed",
                           defaultValue: "Voce cambiata durante la chiamata",
                           comment: "Call screen voice check card — line when this phone confirmed that the voice changed during the call")
-        case .learning:
-            return String(localized: "in_call.voice_guard.line_learning",
-                          defaultValue: "Apprendimento della voce",
-                          comment: "Call screen voice check card — line while the voice of the other person is being learned")
-        case .learned:
-            return String(localized: "in_call.voice_guard.line_learned",
-                          defaultValue: "Voce memorizzata",
-                          comment: "Call screen voice check card — shown briefly when the voice of the other person has been saved on this phone; it does not claim the voice was verified")
-        case .learnFailed:
-            return String(localized: "in_call.voice_guard.line_learn_failed",
-                          defaultValue: "Apprendimento non riuscito",
-                          comment: "Call screen voice check card — shown briefly when learning the voice of the other person did not succeed")
         }
     }
 
     /// What a screen reader says for the card: the title, then the line.
     static func spoken(for line: VoiceGuardLine) -> String {
         title + ", " + text(for: line)
-    }
-}
-
-// MARK: - Contact screen: the saved voice
-
-/// How the contact screen words a saved voice. Saving a voice is not
-/// verifying the person, so the row says when the voice was saved and never
-/// "verified". The contact screen does not draw the row until the
-/// record-based row lands.
-enum VoiceSavedRow {
-    /// "Voce memorizzata il 12 ott 2026" once a voice is saved, otherwise the
-    /// plain statement that none is. The date is formatted for the app's
-    /// language, not as a fixed pattern.
-    static func label(savedAt: Date?, locale: Locale = Locale(identifier: AppLanguageManager.effectiveLanguageCode)) -> String {
-        guard let savedAt else {
-            return String(localized: "contact_detail.voice_not_saved",
-                          defaultValue: "Voce non ancora memorizzata",
-                          comment: "Contact screen, trust card — voice row while no voice of this contact has been saved on this phone")
-        }
-        let date: String = dateText(savedAt, locale: locale)
-        return String(localized: "contact_detail.voice_saved_on",
-                      defaultValue: "Voce memorizzata il \(date)",
-                      comment: "Contact screen, trust card — voice row once the voice of this contact has been saved on this phone; %@ is the date, already formatted for the language of the app. It does not claim the voice was verified.")
-    }
-
-    /// The date in the medium style of `locale`.
-    static func dateText(_ date: Date, locale: Locale) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = locale
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-        return formatter.string(from: date)
     }
 }
 

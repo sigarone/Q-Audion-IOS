@@ -484,10 +484,6 @@ struct LiveInCallScreen: View {
                 onReportProblem: handleReportProblem,
                 // Reduces the call to the "call in progress" bar (audio call, once connected); drawn top left.
                 onMinimize: minimizeAction,
-                // The learning state the voice check card can show, from
-                // AppState.voiceLearningState. nil between calls and while
-                // nothing reports one.
-                voiceLearningState: appState.voiceLearningState,
                 // Item 5 — live raw per-frame Guardian confidence wave,
                 // replaces the old manual-CTA slot for the rest of the call.
                 voiceConfidenceHistory: appState.voiceConfidenceHistory,

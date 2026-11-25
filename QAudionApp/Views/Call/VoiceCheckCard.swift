@@ -64,6 +64,23 @@ enum VoiceCheckCopy {
         }
     }
 
+    /// The two actions of the detail of a Differs state: "It was <name>" (it marks the call, no trust state and no tier changes) and
+    /// "Compare security code" (the existing security code view).
+    static func offersActions(for display: VoiceCheckDisplay) -> Bool {
+        display == .differs || display == .differsNewDevice
+    }
+
+    static func wasHimTitle(name: String) -> String {
+        let format = String(localized: "in_call.voice_check.was_him", defaultValue: "Era %@",
+                            comment: "Call screen voice check card, detail popup of the Differs state: marks this call as made by the contact; %@ is the contact name")
+        return String(format: format, name)
+    }
+
+    static var compareCodeTitle: String {
+        String(localized: "in_call.voice_check.compare_code", defaultValue: "Confronta il codice di sicurezza",
+               comment: "Call screen voice check card, detail popup of the Differs state: opens the security code of the call")
+    }
+
     static func tone(for display: VoiceCheckDisplay) -> VoiceTone {
         switch display {
         case .matches: return .success
@@ -89,6 +106,8 @@ struct VoiceCheckCard: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @ObservedObject private var model = VoiceCheckModel.shared
     let contactName: String
+    /// Opens the security code of the call (the existing view); it changes no trust state and no tier.
+    var onCompareCode: () -> Void = {}
     @State private var showingDetail = false
 
     var body: some View {
@@ -131,6 +150,16 @@ struct VoiceCheckCard: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel(Text(line))
             .alert(Text(VoiceGuardCopy.title), isPresented: $showingDetail) {
+                if VoiceCheckCopy.offersActions(for: display) {
+                    Button(VoiceCheckCopy.wasHimTitle(name: contactName)) {
+                        showingDetail = false
+                        AppState.shared.voiceCheckWasHim()
+                    }
+                    Button(VoiceCheckCopy.compareCodeTitle) {
+                        showingDetail = false
+                        onCompareCode()
+                    }
+                }
                 Button("Ho capito") { showingDetail = false }
             } message: {
                 Text(detail ?? "")

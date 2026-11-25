@@ -1,0 +1,709 @@
+{
+  "tolerance": "exact",
+  "construction": {"hash": "SHA-256", "salt": "32 zero bytes (an empty salt is the same HMAC key)", "info_prefix": "voice-consent-announce-v1|", "info": "UTF-8(info_prefix + lowercase(call id))", "key_length": 32, "cipher": "AES-256-GCM", "tag_bits": 128, "associated_data": "none", "sealed": "nonce(12) || ciphertext(16) || tag(16)", "string": "standard Base64 with padding, 60 characters; the unpadded 59-character form is accepted"},
+  "plaintext_layout": ["u8 version = 1", "u32 seq, big-endian", "u8 flags (bit0 allow, bit1 withdraw, bit2 learning, bit3 verifying, bits 4 to 7 zero)", "u8 route class (0 unknown, 1 ear, 2 speaker, 3 bt, 4 wired, 5 car)", "u8 platform (1 or 2)", "i64 unix ms, big-endian"],
+  "seal_cases": [
+    {
+      "name": "flags_none",
+      "description": "allow = 0, withdraw = 0: nothing is learned or checked for the sender in this call",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 0, "allow": false, "withdraw": false, "learning": false, "verifying": false, "route_class": 0, "platform": 1, "unix_ms": 0},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01000000000000010000000000000000", "sealed": "000102030405060708090a0bfbfafdd97e056d82e03fe2664b22c411b9c7e53cf3a4416d103bda21c7e6a628", "string": "AAECAwQFBgcICQoL+/r92X4FbYLgP+JmSyLEEbnH5TzzpEFtEDvaIcfmpig=", "string_unpadded": "AAECAwQFBgcICQoL+/r92X4FbYLgP+JmSyLEEbnH5TzzpEFtEDvaIcfmpig"}
+    },
+    {
+      "name": "allow",
+      "description": "allow only",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01000000010101010000018bcfe56be7", "sealed": "000102030405060708090a0bfbfafdd97f046c82e03fe3ed84c7aff6c24c690a02d51976739f0ad81e636ff5", "string": "AAECAwQFBgcICQoL+/r92X8EbILgP+PthMev9sJMaQoC1Rl2c58K2B5jb/U=", "string_unpadded": "AAECAwQFBgcICQoL+/r92X8EbILgP+PthMev9sJMaQoC1Rl2c58K2B5jb/U"}
+    },
+    {
+      "name": "allow_learning",
+      "description": "allow and learning",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 2, "allow": true, "withdraw": false, "learning": true, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01000000020501010000018bcfe56be7", "sealed": "000102030405060708090a0bfbfafdd97c006c82e03fe3ed84c7aff61e864741336ff894a22232b849516c41", "string": "AAECAwQFBgcICQoL+/r92XwAbILgP+PthMev9h6GR0Ezb/iUoiIyuElRbEE=", "string_unpadded": "AAECAwQFBgcICQoL+/r92XwAbILgP+PthMev9h6GR0Ezb/iUoiIyuElRbEE"}
+    },
+    {
+      "name": "allow_verifying",
+      "description": "allow and verifying",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 3, "allow": true, "withdraw": false, "learning": false, "verifying": true, "route_class": 1, "platform": 1, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01000000030901010000018bcfe56be7", "sealed": "000102030405060708090a0bfbfafdd97d0c6c82e03fe3ed84c7aff6c6ec12f34864a88d44865ee939a2e0cd", "string": "AAECAwQFBgcICQoL+/r92X0MbILgP+PthMev9sbsEvNIZKiNRIZe6Tmi4M0=", "string_unpadded": "AAECAwQFBgcICQoL+/r92X0MbILgP+PthMev9sbsEvNIZKiNRIZe6Tmi4M0"}
+    },
+    {
+      "name": "allow_learning_verifying",
+      "description": "allow, learning and verifying",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 4, "allow": true, "withdraw": false, "learning": true, "verifying": true, "route_class": 1, "platform": 1, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01000000040d01010000018bcfe56be7", "sealed": "000102030405060708090a0bfbfafdd97a086c82e03fe3ed84c7aff665121bd7501a3b5101584278e7356b28", "string": "AAECAwQFBgcICQoL+/r92XoIbILgP+PthMev9mUSG9dQGjtRAVhCeOc1ayg=", "string_unpadded": "AAECAwQFBgcICQoL+/r92XoIbILgP+PthMev9mUSG9dQGjtRAVhCeOc1ayg"}
+    },
+    {
+      "name": "withdraw",
+      "description": "withdraw = 1 with allow = 0: read as allow = 0, and the record of the sender is deleted",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 5, "allow": false, "withdraw": true, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01000000050201010000018bcfe56be7", "sealed": "000102030405060708090a0bfbfafdd97b076c82e03fe3ed84c7aff690b1997f474ff86d77130772d3605c02", "string": "AAECAwQFBgcICQoL+/r92XsHbILgP+PthMev9pCxmX9HT/htdxMHctNgXAI=", "string_unpadded": "AAECAwQFBgcICQoL+/r92XsHbILgP+PthMev9pCxmX9HT/htdxMHctNgXAI"}
+    },
+    {
+      "name": "all_four_flags",
+      "description": "all four flag bits (0x0F)",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 6, "allow": true, "withdraw": true, "learning": true, "verifying": true, "route_class": 1, "platform": 1, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01000000060f01010000018bcfe56be7", "sealed": "000102030405060708090a0bfbfafdd9780a6c82e03fe3ed84c7aff68d069273736ce0775423e1925b237dc4", "string": "AAECAwQFBgcICQoL+/r92XgKbILgP+PthMev9o0GknNzbOB3VCPhklsjfcQ=", "string_unpadded": "AAECAwQFBgcICQoL+/r92XgKbILgP+PthMev9o0GknNzbOB3VCPhklsjfcQ"}
+    },
+    {
+      "name": "route_0_unknown",
+      "description": "route class 0 (unknown), platform 2",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 10, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 0, "platform": 2, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "010000000a0100020000018bcfe56be7", "sealed": "000102030405060708090a0bfbfafdd974046d81e03fe3ed84c7aff60f479b3cd10f7eb43bda2d884bf4ffa4", "string": "AAECAwQFBgcICQoL+/r92XQEbYHgP+PthMev9g9HmzzRD360O9otiEv0/6Q=", "string_unpadded": "AAECAwQFBgcICQoL+/r92XQEbYHgP+PthMev9g9HmzzRD360O9otiEv0/6Q"}
+    },
+    {
+      "name": "route_1_ear",
+      "description": "route class 1 (ear), platform 2",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 11, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 2, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "010000000b0101020000018bcfe56be7", "sealed": "000102030405060708090a0bfbfafdd975046c81e03fe3ed84c7aff62b55d5aa12a5a84a824d41ace0a1ffd9", "string": "AAECAwQFBgcICQoL+/r92XUEbIHgP+PthMev9itV1aoSpahKgk1BrOCh/9k=", "string_unpadded": "AAECAwQFBgcICQoL+/r92XUEbIHgP+PthMev9itV1aoSpahKgk1BrOCh/9k"}
+    },
+    {
+      "name": "route_2_speaker",
+      "description": "route class 2 (speaker), platform 2",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 12, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 2, "platform": 2, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "010000000c0102020000018bcfe56be7", "sealed": "000102030405060708090a0bfbfafdd972046f81e03fe3ed84c7aff63857217e7f9ea177dc97d13094fb770f", "string": "AAECAwQFBgcICQoL+/r92XIEb4HgP+PthMev9jhXIX5/nqF33JfRMJT7dw8=", "string_unpadded": "AAECAwQFBgcICQoL+/r92XIEb4HgP+PthMev9jhXIX5/nqF33JfRMJT7dw8"}
+    },
+    {
+      "name": "route_3_bt",
+      "description": "route class 3 (bt), platform 2",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 13, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 3, "platform": 2, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "010000000d0103020000018bcfe56be7", "sealed": "000102030405060708090a0bfbfafdd973046e81e03fe3ed84c7aff61c456fe8bc3477896500bd143fae7772", "string": "AAECAwQFBgcICQoL+/r92XMEboHgP+PthMev9hxFb+i8NHeJZQC9FD+ud3I=", "string_unpadded": "AAECAwQFBgcICQoL+/r92XMEboHgP+PthMev9hxFb+i8NHeJZQC9FD+ud3I"}
+    },
+    {
+      "name": "route_4_wired",
+      "description": "route class 4 (wired), platform 2",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 14, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 4, "platform": 2, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "010000000e0104020000018bcfe56be7", "sealed": "000102030405060708090a0bfbfafdd970046981e03fe3ed84c7aff69f0ea167dfa4254edd879d1ae6a0fe50", "string": "AAECAwQFBgcICQoL+/r92XAEaYHgP+PthMev9p8OoWffpCVO3YedGuag/lA=", "string_unpadded": "AAECAwQFBgcICQoL+/r92XAEaYHgP+PthMev9p8OoWffpCVO3YedGuag/lA"}
+    },
+    {
+      "name": "route_5_car",
+      "description": "route class 5 (car), platform 2",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 15, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 5, "platform": 2, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "010000000f0105020000018bcfe56be7", "sealed": "000102030405060708090a0bfbfafdd971046881e03fe3ed84c7aff6bb1ceff11c0ef3b06410f13e4df5fe2d", "string": "AAECAwQFBgcICQoL+/r92XEEaIHgP+PthMev9rsc7/EcDvOwZBDxPk31/i0=", "string_unpadded": "AAECAwQFBgcICQoL+/r92XEEaIHgP+PthMev9rsc7/EcDvOwZBDxPk31/i0"}
+    },
+    {
+      "name": "platform_1",
+      "description": "platform 1",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 20, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01000000140101010000018bcfe56be7", "sealed": "000102030405060708090a0bfbfafdd96a046c82e03fe3ed84c7aff6ece5da024671bf3d136874d3d339a4f5", "string": "AAECAwQFBgcICQoL+/r92WoEbILgP+PthMev9uzl2gJGcb89E2h009M5pPU=", "string_unpadded": "AAECAwQFBgcICQoL+/r92WoEbILgP+PthMev9uzl2gJGcb89E2h009M5pPU"}
+    },
+    {
+      "name": "platform_2",
+      "description": "platform 2",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 21, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 2, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01000000150101020000018bcfe56be7", "sealed": "000102030405060708090a0bfbfafdd96b046c81e03fe3ed84c7aff64a4332105b1acfec25552d00980b8247", "string": "AAECAwQFBgcICQoL+/r92WsEbIHgP+PthMev9kpDMhBbGs/sJVUtAJgLgkc=", "string_unpadded": "AAECAwQFBgcICQoL+/r92WsEbIHgP+PthMev9kpDMhBbGs/sJVUtAJgLgkc"}
+    },
+    {
+      "name": "seq_big_endian",
+      "description": "seq 0x01020304: the byte order of the sequence number",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 16909060, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01010203040101010000018bcfe56be7", "sealed": "000102030405060708090a0bfbfbffda7a046c82e03fe3ed84c7aff67552ce1ec4ffb5d0c5a50e039e734a6c", "string": "AAECAwQFBgcICQoL+/v/2noEbILgP+PthMev9nVSzh7E/7XQxaUOA55zSmw=", "string_unpadded": "AAECAwQFBgcICQoL+/v/2noEbILgP+PthMev9nVSzh7E/7XQxaUOA55zSmw"}
+    },
+    {
+      "name": "seq_max",
+      "description": "seq 0xFFFFFFFF (u32, above the largest i32)",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 4294967295, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01ffffffff0101010000018bcfe56be7", "sealed": "000102030405060708090a0bfb05022681046c82e03fe3ed84c7aff6a2156c1ded83496894575afc6c1faf1b", "string": "AAECAwQFBgcICQoL+wUCJoEEbILgP+PthMev9qIVbB3tg0lolFda/Gwfrxs=", "string_unpadded": "AAECAwQFBgcICQoL+wUCJoEEbILgP+PthMev9qIVbB3tg0lolFda/Gwfrxs"}
+    },
+    {
+      "name": "seq_high_bit",
+      "description": "seq 0x80000000",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 2147483648, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01800000000101010000018bcfe56be7", "sealed": "000102030405060708090a0bfb7afdd97e046c82e03fe3ed84c7aff69239ee961a286167e7b372ee5521cf6c", "string": "AAECAwQFBgcICQoL+3r92X4EbILgP+PthMev9pI57pYaKGFn57Ny7lUhz2w=", "string_unpadded": "AAECAwQFBgcICQoL+3r92X4EbILgP+PthMev9pI57pYaKGFn57Ny7lUhz2w"}
+    },
+    {
+      "name": "ms_big_endian",
+      "description": "unix ms 0x0102030405060708: the byte order of the timestamp",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 72623859790382856},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01000000010101010102030405060708", "sealed": "000102030405060708090a0bfbfafdd97f046c82e13de1624e24c31927b34426872996e8781bcf99652407da", "string": "AAECAwQFBgcICQoL+/r92X8EbILhPeFiTiTDGSezRCaHKZboeBvPmWUkB9o=", "string_unpadded": "AAECAwQFBgcICQoL+/r92X8EbILhPeFiTiTDGSezRCaHKZboeBvPmWUkB9o"}
+    },
+    {
+      "name": "ms_max",
+      "description": "unix ms 2^63 - 1",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 9223372036854775807},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01000000010101017fffffffffffffff", "sealed": "000102030405060708090a0bfbfafdd97f046c829fc01d99b4dd3bee151bcdbdfe22973d30bb5940eff50c61", "string": "AAECAwQFBgcICQoL+/r92X8EbIKfwB2ZtN077hUbzb3+Ipc9MLtZQO/1DGE=", "string_unpadded": "AAECAwQFBgcICQoL+/r92X8EbIKfwB2ZtN077hUbzb3+Ipc9MLtZQO/1DGE"}
+    },
+    {
+      "name": "ms_minus_one",
+      "description": "unix ms -1 (i64: eight 0xFF bytes)",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": -1},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "0100000001010101ffffffffffffffff", "sealed": "000102030405060708090a0bfbfafdd97f046c821fc01d99b4dd3bee36b7621e58a67ad808351e9263919250", "string": "AAECAwQFBgcICQoL+/r92X8EbIIfwB2ZtN077ja3Yh5YpnrYCDUekmORklA=", "string_unpadded": "AAECAwQFBgcICQoL+/r92X8EbIIfwB2ZtN077ja3Yh5YpnrYCDUekmORklA"}
+    },
+    {
+      "name": "call_id_uppercase",
+      "description": "the call id in capitals: the info string uses the lowercase id, so the sealed bytes equal those of case `allow`",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3F2C9D1E-7A44-4C1B-9A0E-5D6F7A8B9C0D",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01000000010101010000018bcfe56be7", "sealed": "000102030405060708090a0bfbfafdd97f046c82e03fe3ed84c7aff6c24c690a02d51976739f0ad81e636ff5", "string": "AAECAwQFBgcICQoL+/r92X8EbILgP+PthMev9sJMaQoC1Rl2c58K2B5jb/U=", "string_unpadded": "AAECAwQFBgcICQoL+/r92X8EbILgP+PthMev9sJMaQoC1Rl2c58K2B5jb/U"}
+    },
+    {
+      "name": "call_id_other",
+      "description": "another call id",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c39613862376336642d356534662d346133622d386332642d316530663961386237633664", "key": "fa6572935287885685679367f0ae61e66a899540bca8ba54a62d0ad0655e5774", "plaintext": "01000000010101010000018bcfe56be7", "sealed": "000102030405060708090a0ba02cc65f817f13d0ce6604a44e65ecf04e1380cd6419f8d29979075b440b2be4", "string": "AAECAwQFBgcICQoLoCzGX4F/E9DOZgSkTmXs8E4TgM1kGfjSmXkHW0QLK+Q=", "string_unpadded": "AAECAwQFBgcICQoLoCzGX4F/E9DOZgSkTmXs8E4TgM1kGfjSmXkHW0QLK+Q"}
+    },
+    {
+      "name": "key_other",
+      "description": "another session key",
+      "session_key": "def2f013df910469b42dd85499a917fee7ca9403f7b9acccab2d8ff02d88329a",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000102030405060708090a0b",
+      "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "7922427bebd7305eec407b0b4ec41cbd679f9ca5dbb33046eaff01d6a9b2cfec", "plaintext": "01000000010101010000018bcfe56be7", "sealed": "000102030405060708090a0b348d441ebec96128ede0ea55cdcd160897d91ceccd2c705eeb3028d63f215c18", "string": "AAECAwQFBgcICQoLNI1EHr7JYSjt4OpVzc0WCJfZHOzNLHBe6zAo1j8hXBg=", "string_unpadded": "AAECAwQFBgcICQoLNI1EHr7JYSjt4OpVzc0WCJfZHOzNLHBe6zAo1j8hXBg"}
+    },
+    {
+      "name": "nonce_zero",
+      "description": "an all-zero nonce",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "000000000000000000000000",
+      "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01000000010101010000018bcfe56be7", "sealed": "0000000000000000000000001122d9bf1790fb8cbca193a695032ffbc7e06d67a1dc3f40a4fe57a2dbc23fee", "string": "AAAAAAAAAAAAAAAAESLZvxeQ+4y8oZOmlQMv+8fgbWeh3D9ApP5XotvCP+4=", "string_unpadded": "AAAAAAAAAAAAAAAAESLZvxeQ+4y8oZOmlQMv+8fgbWeh3D9ApP5XotvCP+4"}
+    },
+    {
+      "name": "nonce_ff",
+      "description": "an all-0xFF nonce",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "nonce": "ffffffffffffffffffffffff",
+      "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999},
+      "expected": {"info": "766f6963652d636f6e73656e742d616e6e6f756e63652d76317c33663263396431652d376134342d346331622d396130652d356436663761386239633064", "key": "d7b14ce9012dc947b30c94002f72bf74f12954ef5beefd150928257b31f9c443", "plaintext": "01000000010101010000018bcfe56be7", "sealed": "ffffffffffffffffffffffff252e76021d86c1ecd187e0bd9bb5f267b7a98dd430f8ff549cdbba153371a08a", "string": "////////////////JS52Ah2GwezRh+C9m7XyZ7epjdQw+P9UnNu6FTNxoIo=", "string_unpadded": "////////////////JS52Ah2GwezRh+C9m7XyZ7epjdQw+P9UnNu6FTNxoIo"}
+    }
+  ],
+  "open_cases": [
+    {
+      "name": "padded",
+      "description": "the 60-character padded string",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0=",
+      "expected": {
+        "accepted": true,
+        "fields": {"version": 1, "seq": 7, "allow": true, "withdraw": false, "learning": true, "verifying": false, "route_class": 3, "platform": 2, "unix_ms": 1700000000999, "effect": "allow"}
+      }
+    },
+    {
+      "name": "unpadded",
+      "description": "the same string without its padding (59 characters)",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0",
+      "expected": {
+        "accepted": true,
+        "fields": {"version": 1, "seq": 7, "allow": true, "withdraw": false, "learning": true, "verifying": false, "route_class": 3, "platform": 2, "unix_ms": 1700000000999, "effect": "allow"}
+      }
+    },
+    {
+      "name": "uppercase_call_id",
+      "description": "opened with the call id in capitals: the key uses the lowercase id",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3F2C9D1E-7A44-4C1B-9A0E-5D6F7A8B9C0D",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0=",
+      "expected": {
+        "accepted": true,
+        "fields": {"version": 1, "seq": 7, "allow": true, "withdraw": false, "learning": true, "verifying": false, "route_class": 3, "platform": 2, "unix_ms": 1700000000999, "effect": "allow"}
+      }
+    },
+    {
+      "name": "tamper_nonce_first_byte",
+      "description": "one bit of the nonce changed",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BwYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0=",
+      "expected": {"accepted": false, "reason": "tag"}
+    },
+    {
+      "name": "tamper_nonce_last_byte",
+      "description": "one bit of the nonce changed",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYHhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0=",
+      "expected": {"accepted": false, "reason": "tag"}
+    },
+    {
+      "name": "tamper_ciphertext_first_byte",
+      "description": "one bit of the ciphertext changed",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhJwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0=",
+      "expected": {"accepted": false, "reason": "tag"}
+    },
+    {
+      "name": "tamper_ciphertext_last_byte",
+      "description": "one bit of the ciphertext changed",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQNFsc+W+S8ywU1Zlm/w18A0=",
+      "expected": {"accepted": false, "reason": "tag"}
+    },
+    {
+      "name": "tamper_tag_first_byte",
+      "description": "one bit of the tag changed",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdBsc+W+S8ywU1Zlm/w18A0=",
+      "expected": {"accepted": false, "reason": "tag"}
+    },
+    {
+      "name": "tamper_tag_last_byte",
+      "description": "one bit of the tag changed",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18Aw=",
+      "expected": {"accepted": false, "reason": "tag"}
+    },
+    {
+      "name": "tamper_high_bit",
+      "description": "the top bit of a ciphertext byte changed",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6ovI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0=",
+      "expected": {"accepted": false, "reason": "tag"}
+    },
+    {
+      "name": "wrong_key",
+      "description": "opened with another session key",
+      "session_key": "def2f013df910469b42dd85499a917fee7ca9403f7b9acccab2d8ff02d88329a",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0=",
+      "expected": {"accepted": false, "reason": "tag"}
+    },
+    {
+      "name": "wrong_call_id",
+      "description": "opened with another call id",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0=",
+      "expected": {"accepted": false, "reason": "tag"}
+    },
+    {
+      "name": "length_43",
+      "description": "43 bytes (the last tag byte dropped), padded",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A==",
+      "expected": {"accepted": false, "reason": "length"}
+    },
+    {
+      "name": "length_45",
+      "description": "45 bytes (a byte appended), padded",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0A",
+      "expected": {"accepted": false, "reason": "length"}
+    },
+    {
+      "name": "length_12_nonce_only",
+      "description": "the nonce alone",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYG",
+      "expected": {"accepted": false, "reason": "length"}
+    },
+    {
+      "name": "length_28_no_plaintext",
+      "description": "a sealed empty plaintext (12 + 0 + 16 bytes), authentic",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoLuA5Mjf9AdgAGhQCgL+Sc/g==",
+      "expected": {"accepted": false, "reason": "length"}
+    },
+    {
+      "name": "empty_string",
+      "description": "the empty string",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "",
+      "expected": {"accepted": false, "reason": "length"}
+    },
+    {
+      "name": "b64_urlsafe",
+      "description": "the URL-safe alphabet (- and _ for + and /)",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc-W-S8ywU1Zlm_w18A0=",
+      "expected": {"accepted": false, "reason": "base64"}
+    },
+    {
+      "name": "b64_trailing_newline",
+      "description": "a newline after the string",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0=\n",
+      "expected": {"accepted": false, "reason": "base64"}
+    },
+    {
+      "name": "b64_space_inside",
+      "description": "a space inside the string",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZww L4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0=",
+      "expected": {"accepted": false, "reason": "base64"}
+    },
+    {
+      "name": "b64_leading_space",
+      "description": "a space before the string",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": " BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0=",
+      "expected": {"accepted": false, "reason": "base64"}
+    },
+    {
+      "name": "b64_star",
+      "description": "a character outside the alphabet",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "*gYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0=",
+      "expected": {"accepted": false, "reason": "base64"}
+    },
+    {
+      "name": "b64_non_ascii",
+      "description": "a non-ASCII character",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgéGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0=",
+      "expected": {"accepted": false, "reason": "base64"}
+    },
+    {
+      "name": "b64_double_padding",
+      "description": "two padding characters after the 59 characters",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0==",
+      "expected": {"accepted": false, "reason": "base64"}
+    },
+    {
+      "name": "b64_triple_padding",
+      "description": "three padding characters",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0===",
+      "expected": {"accepted": false, "reason": "base64"}
+    },
+    {
+      "name": "b64_padding_inside",
+      "description": "a padding character in the middle",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8=x9Z6PQdFsc+W+S8ywU1Zlm/w18A0=",
+      "expected": {"accepted": false, "reason": "base64"}
+    },
+    {
+      "name": "b64_one_char_short",
+      "description": "58 characters (the last character dropped): 43 bytes if the spare bits happen to be zero, so rejected for its length, otherwise for its spare bits",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A",
+      "expected": {"accepted": false, "reason": "length"}
+    },
+    {
+      "name": "b64_61_chars",
+      "description": "one character too many (61)",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A0=A",
+      "expected": {"accepted": false, "reason": "base64"}
+    },
+    {
+      "name": "b64_length_1_mod_4",
+      "description": "an unpadded length of 1 modulo 4 (57 characters)",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18",
+      "expected": {"accepted": false, "reason": "base64"}
+    },
+    {
+      "name": "b64_trailing_bits_padded",
+      "description": "the spare bits of the last character are 01: the same 44 bytes, a different string; a lenient decoder accepts it, the reference does not",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A1=",
+      "expected": {"accepted": false, "reason": "base64"}
+    },
+    {
+      "name": "b64_trailing_bits_unpadded",
+      "description": "the same without padding",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "BgYGBgYGBgYGBgYGhZwwL4Fvc6qvI8lx9Z6PQdFsc+W+S8ywU1Zlm/w18A1",
+      "expected": {"accepted": false, "reason": "base64"}
+    },
+    {
+      "name": "version_0",
+      "description": "an authentic message of version 0: rejected",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+vr92X8EbILgP+PthMev9rw9dYWnzdBKEfZozEw06u8=",
+      "expected": {"accepted": false, "reason": "version"}
+    },
+    {
+      "name": "version_2",
+      "description": "an authentic message of version 2: rejected",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+Pr92X8EbILgP+PthMev9kDfTJrt/EIy1SSs5Oib4Ns=",
+      "expected": {"accepted": false, "reason": "version"}
+    },
+    {
+      "name": "version_255",
+      "description": "an authentic message of version 255: rejected",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoLBfr92X8EbILgP+PthMev9skZ+2PMgoN/6PC68bCFYCE=",
+      "expected": {"accepted": false, "reason": "version"}
+    },
+    {
+      "name": "reserved_flag_bit4",
+      "description": "an authentic message with a reserved flag bit set (bit4): rejected",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X8UbILgP+PthMev9rQ4uZe+cgi+ic6GS9hF+dQ=",
+      "expected": {"accepted": false, "reason": "flags"}
+    },
+    {
+      "name": "reserved_flag_bit5",
+      "description": "an authentic message with a reserved flag bit set (bit5): rejected",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X8kbILgP+PthMev9i6lyDF7mzrnhzwT/5IuQ7c=",
+      "expected": {"accepted": false, "reason": "flags"}
+    },
+    {
+      "name": "reserved_flag_bit6",
+      "description": "an authentic message with a reserved flag bit set (bit6): rejected",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X9EbILgP+PthMev9tmfK3zwSV5Vmtk4lwb5N3A=",
+      "expected": {"accepted": false, "reason": "flags"}
+    },
+    {
+      "name": "reserved_flag_bit7",
+      "description": "an authentic message with a reserved flag bit set (bit7): rejected",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X+EbILgP+PthMev9vXq7efn7ZcxoRNuRi9X3v8=",
+      "expected": {"accepted": false, "reason": "flags"}
+    },
+    {
+      "name": "reserved_flag_bits4to7",
+      "description": "an authentic message with a reserved flag bit set (bits4to7): rejected",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X/0bILgP+PthMev9nSk3jfQmOJLRqfJvX2mPBk=",
+      "expected": {"accepted": false, "reason": "flags"}
+    },
+    {
+      "name": "reserved_flag_and_withdraw",
+      "description": "reserved bit 7 together with withdraw: still rejected, the message is dropped as a whole and nothing is deleted",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X+HbILgP+PthMev9tgjOv2LswQUMfxHHWvxZVk=",
+      "expected": {"accepted": false, "reason": "flags"}
+    },
+    {
+      "name": "route_class_6",
+      "description": "unknown route class 6: accepted, read as 0 (unknown)",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X8Ea4LgP+PthMev9vDQvek/1m4hJDFxkmHWQOs=",
+      "expected": {
+        "accepted": true,
+        "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 0, "platform": 1, "unix_ms": 1700000000999, "effect": "allow"}
+      }
+    },
+    {
+      "name": "route_class_7",
+      "description": "unknown route class 7: accepted, read as 0 (unknown)",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X8EaoLgP+PthMev9ruP+qQ2DaRQOL7UiqjqIoI=",
+      "expected": {
+        "accepted": true,
+        "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 0, "platform": 1, "unix_ms": 1700000000999, "effect": "allow"}
+      }
+    },
+    {
+      "name": "route_class_128",
+      "description": "unknown route class 128: accepted, read as 0 (unknown)",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X8E7YLgP+PthMev9oSwiMPm6+uJKMIjpEluOS0=",
+      "expected": {
+        "accepted": true,
+        "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 0, "platform": 1, "unix_ms": 1700000000999, "effect": "allow"}
+      }
+    },
+    {
+      "name": "route_class_255",
+      "description": "unknown route class 255: accepted, read as 0 (unknown)",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X8EkoLgP+PthMev9gcbKHtFAboj4fbEj4Rq9Jo=",
+      "expected": {
+        "accepted": true,
+        "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 0, "platform": 1, "unix_ms": 1700000000999, "effect": "allow"}
+      }
+    },
+    {
+      "name": "platform_0",
+      "description": "unknown platform 0: accepted, read as 0",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X8EbIPgP+PthMev9oUVNk1P3MK8AoOFfQaqU5c=",
+      "expected": {
+        "accepted": true,
+        "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 0, "unix_ms": 1700000000999, "effect": "allow"}
+      }
+    },
+    {
+      "name": "platform_3",
+      "description": "unknown platform 3: accepted, read as 0",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X8EbIDgP+PthMev9kz+14SYxq7ikaYVki/xFzE=",
+      "expected": {
+        "accepted": true,
+        "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 0, "unix_ms": 1700000000999, "effect": "allow"}
+      }
+    },
+    {
+      "name": "platform_255",
+      "description": "unknown platform 255: accepted, read as 0",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X8EbHzgP+PthMev9oEXPktzks3VJg1jFkn5Zm4=",
+      "expected": {
+        "accepted": true,
+        "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 0, "unix_ms": 1700000000999, "effect": "allow"}
+      }
+    },
+    {
+      "name": "effect_allow0_withdraw0",
+      "description": "allow = 0, withdraw = 0",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X8FbILgP+PthMev9tkLJAPZH2hq/DoSESIBBpc=",
+      "expected": {
+        "accepted": true,
+        "fields": {"version": 1, "seq": 1, "allow": false, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999, "effect": "off"}
+      }
+    },
+    {
+      "name": "effect_allow1_withdraw0",
+      "description": "allow = 1, withdraw = 0",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X8EbILgP+PthMev9sJMaQoC1Rl2c58K2B5jb/U=",
+      "expected": {
+        "accepted": true,
+        "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": false, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999, "effect": "allow"}
+      }
+    },
+    {
+      "name": "effect_allow0_withdraw1",
+      "description": "allow = 0, withdraw = 1",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X8HbILgP+PthMev9u+FvhBui4pT43Ajg1rF1FM=",
+      "expected": {
+        "accepted": true,
+        "fields": {"version": 1, "seq": 1, "allow": false, "withdraw": true, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999, "effect": "withdraw"}
+      }
+    },
+    {
+      "name": "effect_allow1_withdraw1",
+      "description": "allow = 1, withdraw = 1",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X8GbILgP+PthMev9vTC8xm1QftPbNU7SmanvTE=",
+      "expected": {
+        "accepted": true,
+        "fields": {"version": 1, "seq": 1, "allow": true, "withdraw": true, "learning": false, "verifying": false, "route_class": 1, "platform": 1, "unix_ms": 1700000000999, "effect": "withdraw"}
+      }
+    },
+    {
+      "name": "plaintext_15_bytes",
+      "description": "an authentic message of 15 bytes (43 sealed): rejected",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X8EbILgP+PthMevF/zTU/OG94+7GQlgvSkRWA==",
+      "expected": {"accepted": false, "reason": "length"}
+    },
+    {
+      "name": "plaintext_17_bytes",
+      "description": "an authentic message of 17 bytes (45 sealed): rejected",
+      "session_key": "3742d739eba6ce0e53824bf70ccfd39e02a2fd6e42a9f8a8fedd1fb59a9cfbee",
+      "call_id": "3f2c9d1e-7a44-4c1b-9a0e-5d6f7a8b9c0d",
+      "string": "AAECAwQFBgcICQoL+/r92X8EbILgP+PthMev9vGLkS5gEFQ0B05/MUV8Q/Iu",
+      "expected": {"accepted": false, "reason": "length"}
+    }
+  ]
+}

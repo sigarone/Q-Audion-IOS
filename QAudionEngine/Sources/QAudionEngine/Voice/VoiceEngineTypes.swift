@@ -92,6 +92,9 @@ struct VoiceCallInfo {
     var display: VoiceScoringConstants.Display?
     /// A unit vector: the leak counter `rown` (diagnostic only).
     var ownerTemplate: [Float]?
+    /// False when the peer device is really unknown (an outgoing call whose answer named no device): the device is then not counted
+    /// as new (no `newdev`, no "device not used" wording). The tier of such a call is 0 anyway.
+    var deviceKnown = true
 }
 
 /// What a window embedding gives: the raw vector of the model and the busy time it cost (virtual in the replay, measured in the app).

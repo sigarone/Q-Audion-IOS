@@ -40,6 +40,51 @@ public enum VoiceCallWiring {
         VoiceProcess.shared.accountIdProvider = provider
     }
 
+    /// True while the flag of the contact-voice check is on.
+    public static var isEnabled: Bool { VoiceFeature.isEnabled }
+
+    /// What a call reads once, at its start: whether the check may run (the owner setting AND the entitlement) and the enrolled voice
+    /// template of the owner, used only for a diagnostic counter and never in a decision. Until installed the check is off.
+    public static func setOwnerPolicy(ownerOn: @escaping () -> Bool, ownerTemplate: @escaping () -> [Float]?) {
+        VoiceProcess.shared.setOwnerPolicy(ownerOn: ownerOn, ownerTemplate: ownerTemplate)
+    }
+
+    /// The owner turned the setting off: every running engine is stopped, then every record, `meta.bin` and the key are deleted.
+    /// False when something is left.
+    @discardableResult
+    public static func ownerTurnedOff() -> Bool {
+        VoiceProcess.shared.wipeAll(why: "feature")
+    }
+
+    /// "Delete all" of the list of learned voices: every record, `meta.bin` and the key are deleted (the owner setting is not touched).
+    /// False when something is left.
+    @discardableResult
+    public static func deleteAllLearnedVoices() -> Bool {
+        VoiceProcess.shared.wipeAll(why: "user")
+    }
+
+    /// What the owner sees of the learned voices of these contacts; only contacts with a usable record are in the map. Reads only,
+    /// never creates anything. Blocking: call it from a background queue.
+    public static func summaries(contactIds: [String]) -> [String: ContactVoiceSummary] {
+        VoiceProcess.shared.summaries(contactIds: contactIds)
+    }
+
+    /// True when at least one learned voice record exists on this device. Reads the directory only; blocking.
+    public static func hasLearnedVoices() -> Bool {
+        VoiceProcess.shared.services.hasRecords()
+    }
+
+    /// "Forget this voice" (and "Relearn"): the record of the contact is deleted. `done` tells whether it worked.
+    public static func forgetVoice(userId: String, done: ((Bool) -> Void)? = nil) {
+        VoiceProcess.shared.forgetContact(userId, done: done)
+    }
+
+    /// The contact list was synced: the records of contacts that are no longer in it are deleted. Does nothing for an empty or not yet
+    /// synced list and never creates anything.
+    public static func contactsSynced(knownContactIds: [String], directorySynced: Bool) {
+        VoiceProcess.shared.sweepOrphans(knownContactIds: knownContactIds, directorySynced: directorySynced)
+    }
+
     /// The source of the background-task assertion that the post-call work runs under (the app provides it once).
     public static func setBackgroundTasks(
         begin: @escaping (_ name: String, _ onExpiration: @escaping () -> Void) -> Int?,

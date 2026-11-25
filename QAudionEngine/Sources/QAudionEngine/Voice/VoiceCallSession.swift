@@ -120,6 +120,16 @@ final class VoiceCallLatch: @unchecked Sendable {
     private let lock = NSLock()
     private var fallback = false
     private var session: VoiceCallSession?
+    private var vconsBeforeSession: [(VoiceVcons, Int)] = []
+
+    /// The peer's announcement: passed on to the session, or kept until the session exists (a few at most).
+    func noteVcons(_ v: VoiceVcons, wallS: Int) {
+        lock.lock()
+        let s = session
+        if s == nil, vconsBeforeSession.count < 8 { vconsBeforeSession.append((v, wallS)) }
+        lock.unlock()
+        s?.peerVcons(v, wallS: wallS)
+    }
 
     /// The media left SRTP for the rest of the call.
     func noteFallback() {
@@ -135,8 +145,11 @@ final class VoiceCallLatch: @unchecked Sendable {
         lock.lock()
         session = newSession
         let replay = fallback
+        let held = vconsBeforeSession
+        vconsBeforeSession = []
         lock.unlock()
         if replay { newSession.pathFallback() }
+        for (v, wallS) in held { newSession.peerVcons(v, wallS: wallS) }
     }
 
     func detach() -> VoiceCallSession? {
@@ -239,6 +252,10 @@ final class VoiceCallSession: @unchecked Sendable {
     private var lastTierInput: VoiceTierInput?
     private var engineRan = false
     private var releaseModels: (() -> Void)?
+    /// The peer's announcements that arrived before the engine exists; replayed to it once it is built.
+    private var pendingVcons: [(VoiceVcons, Int)] = []
+    /// The owner setting was off at the start of the call: nothing is processed, nothing is read or written.
+    private var offForCall = false
 
     /// Polls that the lock or the CPU governor held back, and RX blocks that went on to the engine (diagnostics and tests).
     private(set) var heldBackPolls = 0
@@ -323,6 +340,39 @@ final class VoiceCallSession: @unchecked Sendable {
             lastTierInput = input
             feed(.tier(atNs: stamped(now), input: input))
         }
+    }
+
+    /// The peer's announcement, opened and decoded. A withdrawal deletes the contact's record at once, also before the engine exists.
+    func peerVcons(_ v: VoiceVcons, wallS: Int) {
+        let now = clock()
+        queue.async { [self] in
+            if let e = engine, !isEnded {
+                e.feed(.vcons(atNs: stamped(now), vcons: v, wallS: wallS))
+                return
+            }
+            if offForCall || gaveUp || isEnded { return }
+            if v.withdraw && process.ownerOn {
+                try? process.services.deleteRecord(contactId: binding.contactId, generation: process.services.generation)
+            }
+            if pendingVcons.count < 16 { pendingVcons.append((v, wallS)) }
+        }
+    }
+
+    /// The owner chose "It was <name>" on the Differs sheet.
+    func wasHimTapped() {
+        let now = clock()
+        queue.async { [self] in
+            guard engine != nil else { return }
+            feed(.wasHim(atNs: stamped(now)))
+        }
+    }
+
+    /// The learning and verifying bits of this device's own announcement (0 while there is no engine).
+    var announcedFlags: Int {
+        lock.lock()
+        let e = engineForCancel
+        lock.unlock()
+        return e?.announcedFlags ?? 0
     }
 
     /// The peer's announced route class (a consent message, later). Until then the class is unknown: the local audio route is
@@ -429,6 +479,13 @@ final class VoiceCallSession: @unchecked Sendable {
     private func startEngine(_ now: Int64) {
         let startedGeneration = process.services.generation
         guard engine == nil, !gaveUp, !isEnded, VoiceFeature.isEnabled else { return }
+        // The owner setting (and the entitlement) is read once, here. Off: no model, no store, no key, nothing is created.
+        guard process.ownerOn else {
+            gaveUp = true
+            offForCall = true
+            process.showDisplay(.off)
+            return
+        }
         guard let ready = process.services.prepare() else {
             gaveUp = true
             return
@@ -444,7 +501,10 @@ final class VoiceCallSession: @unchecked Sendable {
         do {
             let cfg = ready.config
             let record = try services.loadRecord(contactId: binding.contactId, cfg: cfg.state, generation: startedGeneration)
-            let tag = try services.deviceTag(deviceId: binding.peerDeviceId ?? "", generation: startedGeneration)
+            let deviceKnown = !(binding.peerDeviceId?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
+            // A device that is really unknown has no tag of its own and is never counted as a new one.
+            var tag = 0
+            if deviceKnown { tag = try services.deviceTag(deviceId: binding.peerDeviceId ?? "", generation: startedGeneration) }
             guard let budget = services.budget else {
                 gaveUp = true
                 return
@@ -467,7 +527,8 @@ final class VoiceCallSession: @unchecked Sendable {
             }
             let info = VoiceCallInfo(
                 callId: binding.callId, ownerOn: true, model: ready.model, record: record, tStartS: binding.tStartS,
-                utcOffsetS: binding.utcOffsetS, deviceTag: tag, display: nil, ownerTemplate: nil)
+                utcOffsetS: binding.utcOffsetS, deviceTag: tag, display: nil, ownerTemplate: Self.usableOwnerTemplate(process.ownerTemplate()),
+                deviceKnown: deviceKnown)
             let listener = VoiceSessionEffectListener(
                 contactId: contactId, services: services, process: process, generation: startedGeneration)
             let built = try VoiceEngine(
@@ -494,12 +555,23 @@ final class VoiceCallSession: @unchecked Sendable {
                 built.feed(.hold(atNs: stamped(now), held: true))
             }
             if cancel { built.requestPostCancel() }
+            let early = pendingVcons
+            pendingVcons = []
+            for (v, wallS) in early { built.feed(.vcons(atNs: stamped(now), vcons: v, wallS: wallS)) }
             let t = makeTicker()
             ticker = t
             t.start(everyMs: 1000, queue: queue) { [weak self] in self?.pollTick() }
         } catch {
             gaveUp = true
         }
+    }
+
+    /// The owner template is read only for a diagnostic counter: a vector that is not a finite unit vector of the embedding size is
+    /// not used at all.
+    static func usableOwnerTemplate(_ t: [Float]?) -> [Float]? {
+        guard let t, t.count == 512, t.allSatisfy({ $0.isFinite }) else { return nil }
+        let norm = t.reduce(Float(0)) { $0 + $1 * $1 }.squareRoot()
+        return abs(norm - 1) <= 0.01 ? t : nil
     }
 
     private func drainRx() {

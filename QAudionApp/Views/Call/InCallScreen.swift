@@ -427,11 +427,6 @@ struct InCallScreen: View {
     let onReportProblem: (() -> Void)?
     /// Reduces the call to the bar on top of the app. Drawn top left, before the report button. nil hides it.
     let onMinimize: (() -> Void)?
-    /// The voice-learning state the card can show (`VoiceGuardCard`: the
-    /// learning progress while `.inProgress`, a brief confirmation when it
-    /// ends), published as `AppState.voiceLearningState`. nil ⇒ nothing to
-    /// show, which is every call while the contact voice engine is off.
-    let voiceLearningState: VoiceLearningState?
     /// Item 5 (2026-07-31 InCallScreen Android→iOS port) — rolling window
     /// of RAW per-frame Guardian confidence samples. It draws the wave of
     /// `VoiceGuardCard` as a trend, but only while the wave has no reference
@@ -538,7 +533,6 @@ struct InCallScreen: View {
          onToggleDiagnostics: @escaping () -> Void = {},
          onReportProblem: (() -> Void)? = nil,
          onMinimize: (() -> Void)? = nil,
-         voiceLearningState: VoiceLearningState? = nil,
          voiceConfidenceHistory: [Float] = [],
          peerOwnerContinuityLevel: VoiceContinuityLevel = .unknown,
          speakerChange: RemoteSpeakerChangeMonitor.Verdict = .init(level: .unknown),
@@ -605,7 +599,6 @@ struct InCallScreen: View {
         self.onToggleDiagnostics = onToggleDiagnostics
         self.onReportProblem = onReportProblem
         self.onMinimize = onMinimize
-        self.voiceLearningState = voiceLearningState
         self.voiceConfidenceHistory = voiceConfidenceHistory
         self.peerOwnerContinuityLevel = peerOwnerContinuityLevel
         self.speakerChange = speakerChange
@@ -1124,8 +1117,7 @@ struct InCallScreen: View {
                 if VoiceGuard.showsCard() {
                     Spacer().frame(height: 6)
 
-                    VoiceGuardCard(learningState: voiceLearningState,
-                                   confidenceHistory: voiceConfidenceHistory,
+                    VoiceGuardCard(confidenceHistory: voiceConfidenceHistory,
                                    speakerChange: speakerChange,
                                    voiceSpectrum: voiceSpectrum,
                                    voiceReference: voiceReference)
@@ -1133,7 +1125,7 @@ struct InCallScreen: View {
                 }
 
                 // The contact-voice check: its own card, drawn only while the check runs (nothing while it is off).
-                VoiceCheckCard(contactName: peerDisplayName)
+                VoiceCheckCard(contactName: peerDisplayName, onCompareCode: { showSecuritySheet = true })
 
                 // Live crypto-engine meter (the ENGINE cipher tube), right
                 // below the voice check card: real AES-256-GCM frame ops/s

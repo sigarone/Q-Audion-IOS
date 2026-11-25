@@ -7,10 +7,6 @@ import QAudionEngine
 /// tapping the card opens a small popup that says what is compared and that
 /// it is a hint (`VoiceGuardCopy.infoBody`). The line is `VoiceGuardLine`, in
 /// priority order:
-///  - the brief confirmation (3.5 s) when a voice-learning state ends,
-///    either "voice saved" or "learning failed";
-///  - the learning progress while it runs (`learningState`, which nothing
-///    sets while the contact voice engine is off);
 ///  - the bare waiting line, while there is neither a verdict level nor a
 ///    single Guardian confidence sample;
 ///  - otherwise the verdict line, with the wave under it at the full width of
@@ -24,8 +20,8 @@ import QAudionEngine
 /// calls, and it is informational: nothing is muted, blocked or ended by it.
 /// The lines are "Ascolto della voce in corso", "Nessun cambio di voce in
 /// chiamata", "Possibile cambio di voce" and "Voce cambiata durante la
-/// chiamata", plus the learning ones. None of them speaks of emotion, stress,
-/// health, sincerity or coercion.
+/// chiamata". None of them speaks of emotion, stress, health, sincerity or
+/// coercion.
 ///
 /// "Ascolto della voce in corso" means the monitor has no level yet. It needs
 /// a warm-up of voice scores (`SpeakerChangeDetector.defaultWarmupSamples`,
@@ -42,7 +38,6 @@ struct VoiceGuardCard: View {
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
-    let learningState: VoiceLearningState?
     let confidenceHistory: [Float]
     let speakerChange: RemoteSpeakerChangeMonitor.Verdict
     /// The live spectrum of the far end (40 bands, 0...1), or nil before the
@@ -51,8 +46,6 @@ struct VoiceGuardCard: View {
     /// The frozen opening spectrum of this call, or nil until it exists.
     var voiceReference: [Float]? = nil
 
-    @State private var banner: VoiceGuardBanner?
-    @State private var bannerTask: Task<Void, Never>?
     @State private var showingInfo = false
 
     private var level: VoiceGuardLevel? {
@@ -60,10 +53,7 @@ struct VoiceGuardCard: View {
     }
 
     private var cardContent: VoiceGuardContent {
-        VoiceGuard.content(banner: banner,
-                           learning: learningState,
-                           hasHistory: !confidenceHistory.isEmpty,
-                           level: level)
+        VoiceGuard.content(hasHistory: !confidenceHistory.isEmpty, level: level)
     }
 
     /// The line the card reads right now.
@@ -71,9 +61,9 @@ struct VoiceGuardCard: View {
         VoiceGuard.line(for: cardContent)
     }
 
-    /// Colour role of the icon, and of the whole card while a banner shows.
+    /// Colour role of the icon.
     private var iconTone: VoiceTone {
-        VoiceGuard.bannerTone(of: banner) ?? VoiceGuard.tone(of: level)
+        VoiceGuard.tone(of: level)
     }
 
     /// The picture the wave draws right now. The words read aloud for the wave
@@ -119,20 +109,12 @@ struct VoiceGuardCard: View {
         } message: {
             Text(VoiceGuardCopy.infoBody)
         }
-        .onChange(of: learningState) { newState in
-            showBanner(for: newState)
-        }
-        .onDisappear {
-            bannerTask?.cancel()
-            bannerTask = nil
-            banner = nil
-        }
     }
 
     // MARK: Chrome
 
     private var iconName: String {
-        switch VoiceGuard.icon(banner: banner, level: level) {
+        switch VoiceGuard.icon(level: level) {
         case .check:      return "checkmark"
         case .warning:    return "exclamationmark.triangle"
         case .microphone: return "mic"
@@ -140,16 +122,10 @@ struct VoiceGuardCard: View {
     }
 
     private var backgroundColor: Color {
-        if let tone = VoiceGuard.bannerTone(of: banner) {
-            return color(tone).opacity(0.14)
-        }
         return scheme.surface.opacity(reduceTransparency ? 1.0 : 0.55)
     }
 
     private var borderColor: Color {
-        if let tone = VoiceGuard.bannerTone(of: banner) {
-            return color(tone).opacity(0.4)
-        }
         return scheme.outline.opacity(0.5)
     }
 
@@ -158,12 +134,9 @@ struct VoiceGuardCard: View {
     @ViewBuilder
     private var contentView: some View {
         switch cardContent {
-        case .banner, .waiting:
-            // A banner, or neither a verdict level nor a Guardian sample yet:
-            // just the line, no wave.
+        case .waiting:
+            // Neither a verdict level nor a Guardian sample yet: just the line, no wave.
             lineText(color: color(VoiceGuard.tone(ofLine: line)))
-        case .learning(let progress):
-            learningView(progress)
         case .verdict(let verdictLevel):
             // The line only; the wave is under the row (`waveRow`).
             lineText(color: color(VoiceGuard.tone(of: verdictLevel)))
@@ -183,33 +156,6 @@ struct VoiceGuardCard: View {
             .accessibilityLabel(Text(VoiceGuardCopy.spoken(for: line)))
     }
 
-    private func learningView(_ progress: Float) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(VoiceGuardCopy.text(for: .learning))
-                .foregroundStyle(scheme.onSurface)
-                .scaledMono(11, weight: .semibold)
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
-                .accessibilityLabel(Text(VoiceGuardCopy.spoken(for: .learning)))
-            progressBar(progress)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityValue(Text(VoiceGuard.percentText(progress)))
-    }
-
-    private func progressBar(_ progress: Float) -> some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(scheme.surfaceVariant)
-                Capsule()
-                    .fill(extras.pqcAccent)
-                    .frame(width: geo.size.width * CGFloat(progress))
-            }
-        }
-        .frame(height: 4)
-    }
-
     /// The wave under the icon-and-line row, at the full width of the card and
     /// 30 pt high, only while the card shows a verdict (the wave itself is
     /// unchanged).
@@ -226,30 +172,6 @@ struct VoiceGuardCard: View {
         }
     }
 
-    // MARK: Banner lifetime
-
-    // The confirmation belongs to the card that saw the session end. It is
-    // shown only on the CHANGE of the learning state into a final one
-    // (`onChange` does not fire for the state a card is created with), it is
-    // dropped when the card goes away, and `AppState.voiceLearningState` is
-    // nil at the end of every call: a state that finished in an earlier
-    // call can not show its banner again in a later one. A save that does
-    // not happen is reported as a failed learning, not as a saved voice.
-
-    private func showBanner(for state: VoiceLearningState?) {
-        guard let kind = VoiceGuard.banner(for: state) else { return }
-        banner = kind
-        bannerTask?.cancel()
-        bannerTask = Task { await dismissBannerAfterDelay() }
-    }
-
-    @MainActor
-    private func dismissBannerAfterDelay() async {
-        let nanoseconds = UInt64(VoiceGuard.bannerSeconds * 1_000_000_000)
-        try? await Task.sleep(nanoseconds: nanoseconds)
-        if Task.isCancelled { return }
-        banner = nil
-    }
 }
 
 /// The per-band heights the overlay is drawn from. A plain class kept in

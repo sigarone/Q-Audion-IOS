@@ -212,6 +212,11 @@ final class VoiceTemplateStore: @unchecked Sendable {
         return names.contains { $0 == metaFile || $0.hasSuffix(ext) }
     }
 
+    /// True when at least one record file is in `dir` (`meta.bin` alone is not a record).
+    static func recordsExist(in dir: URL) throws -> Bool {
+        try listing(of: dir).contains { $0.hasSuffix(ext) }
+    }
+
     private static func listing(of dir: URL) throws -> [String] {
         guard FileManager.default.fileExists(atPath: dir.path) else { return [] }
         do {
@@ -387,7 +392,23 @@ final class VoiceTemplateStore: @unchecked Sendable {
         }
     }
 
+    /// True when `meta.bin` is loaded or on disk: only then can a record be named. Never creates anything.
+    private func hasMeta() -> Bool {
+        meta != nil || fm.fileExists(atPath: metaURL.path)
+    }
+
+    /// Removes every record file when there is no `meta.bin` to name them by (they cannot be read any more); never creates
+    /// `meta.bin` or the key. True when a file was removed.
+    private func deleteStrayRecords() -> Bool {
+        var any = false
+        for name in names() where name.hasSuffix(Self.ext) {
+            if (try? fm.removeItem(at: dir.appendingPathComponent(name))) != nil { any = true }
+        }
+        return any
+    }
+
     private func deleteLocked(_ contactId: String) throws -> Bool {
+        if !hasMeta() { return deleteStrayRecords() } // a deletion never creates `meta.bin` or the key
         let url = try fileURL(contactId)
         guard fm.fileExists(atPath: url.path) else { return false }
         do {
@@ -451,8 +472,10 @@ final class VoiceTemplateStore: @unchecked Sendable {
     }
 
     /// Runs the sweep on one contact: the record is deleted (retention) or rewritten when something was purged.
-    func sweep(_ contactId: String, nowS: Int, _ cfg: VoiceStateConstants) throws -> SweepResult? {
+    func sweep(_ contactId: String, nowS: Int, _ cfg: VoiceStateConstants, generation: Int? = nil) throws -> SweepResult? {
         try lock.withLock {
+            try admit(generation)
+            if !hasMeta() { return nil } // nothing can be named, and a sweep never creates `meta.bin` or the key
             guard let rec = try loadCompatibleLocked(contactId, cfg) else { return nil }
             let r = VoiceTemplateState.sweep(rec, nowS: nowS, cfg)
             if let kept = r.record {
@@ -467,9 +490,11 @@ final class VoiceTemplateStore: @unchecked Sendable {
     /// Deletes the record files of contacts that are not in `knownContactIds` (a contact removed while the app did not run)
     /// and returns how many. It does nothing and returns 0 when the contact list is empty or `directorySynced` is false:
     /// an empty or not yet synced list would delete every record.
-    func deleteOrphans(knownContactIds: [String], directorySynced: Bool) throws -> Int {
+    func deleteOrphans(knownContactIds: [String], directorySynced: Bool, generation: Int? = nil) throws -> Int {
         guard directorySynced, !knownContactIds.isEmpty else { return 0 }
         return try lock.withLock {
+            try admit(generation)
+            if !hasMeta() { return 0 } // no salt: nothing can be known, and nothing is created
             let salt = try ensureMeta().nameSalt
             let keep = Set(knownContactIds.map { fileName(salt: salt, contactId: $0) })
             var n = 0
@@ -485,6 +510,20 @@ final class VoiceTemplateStore: @unchecked Sendable {
         try lock.withLock {
             try admit(generation)
             return try ensureMeta().nameSalt
+        }
+    }
+
+    /// What the owner sees of the learned voices of `contactIds`: only the contacts that have a usable record are in the map. Reads
+    /// only: with no `meta.bin` there is nothing to read, and nothing (file, key) is created.
+    func summaries(contactIds: [String], cfg: VoiceStateConstants, generation: Int? = nil) throws -> [String: ContactVoiceSummary] {
+        try lock.withLock {
+            try admit(generation)
+            if !hasMeta() { return [:] }
+            var out: [String: ContactVoiceSummary] = [:]
+            for id in contactIds {
+                if let rec = try? loadCompatibleLocked(id, cfg) { out[id] = ContactVoiceSummary.of(rec, cfg) }
+            }
+            return out
         }
     }
 

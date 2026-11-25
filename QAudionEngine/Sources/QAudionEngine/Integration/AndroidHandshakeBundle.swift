@@ -811,6 +811,10 @@ public enum CallPiggyBack: Equatable {
     /// session key) decrypts and validates it.
     case voiceConfidence(callId: String, sealedPayload: String)
 
+    /// `<callId>|VCONS:<padded Base64>` — the sealed announcement of the contact-voice check (`VoiceVconsCodec`): both sides send it
+    /// in every call. Only carried through here; the app opens it with the session key of the call.
+    case voiceConsent(callId: String, sealed: String)
+
     /// `<callId>|EARBUDPDU:<base64>` — opaque earbud-firmware handshake
     /// PDU (earbud-relay-v1). The earbud-side phone relays HSRESP
     /// fragments from the firmware; iOS (always the SW counterparty)
@@ -927,6 +931,9 @@ public enum CallPiggyBack: Equatable {
         // happens in AppState, which holds the session key this enum
         // never sees. An empty body is the only thing worth dropping at
         // this layer.
+        if let v = stripPrefix(payload, "VCONS:"), !v.isEmpty {
+            return .voiceConsent(callId: callId, sealed: v)
+        }
         if let v = stripPrefix(payload, "VCONF:"), !v.isEmpty {
             return .voiceConfidence(callId: callId, sealedPayload: v)
         }
@@ -1061,6 +1068,11 @@ public enum CallPiggyBack: Equatable {
     /// separation (the signaller frames, `CallController` seals).
     public static func serializeVoiceConfidence(callId: String, sealedPayload: String) -> String {
         "\(callId)|VCONF:\(sealedPayload)"
+    }
+
+    /// Build a wire string for a VCONS announce: `payload` is `VCONS:<padded Base64>` as `VoiceVconsExchange` makes it.
+    public static func serializeVoiceConsent(callId: String, payload: String) -> String {
+        "\(callId)|\(payload)"
     }
 
     /// Build a wire string for an OWNER_CONT announce — the inverse of the

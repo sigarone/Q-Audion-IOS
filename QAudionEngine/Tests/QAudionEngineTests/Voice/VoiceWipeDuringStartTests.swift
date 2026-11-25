@@ -122,6 +122,7 @@ final class VoiceWipeDuringStartTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let services = StoreServices(config: VoiceEngineConfig(bundle: try VoiceKat.bundle(), cohort: try VoiceScoringKat.cohort()), dir: dir)
         let process = VoiceProcess(services: services, daily: VoiceDailyCounters(storage: MemoryDaily(), random: { 0 }))
+        process.setOwnerPolicy(ownerOn: { true }, ownerTemplate: { nil })
         let session = try XCTUnwrap(process.beginCall(VoiceCallBinding(
             callId: "5a000000-0000-4000-8000-000000000000", contactId: "contact-1", peerDeviceId: "dev-1",
             tStartS: 1_800_000_000, utcOffsetS: 0)))

@@ -350,6 +350,10 @@ struct PrivacySettingsScreen: View {
                     // kill switch `location_share.enabled` is off.
                     LocationSharesSettingsSection()
 
+                    // Contact voice recognition: the switch, the learned voices and "Delete all". Nothing is drawn while the check
+                    // is not available and no learned voice exists.
+                    ContactVoiceSettingsSection()
+
                     // 2026-08-10: the "MESSAGGI A SCADENZA" picker and the
                     // "ANONIMIZZAZIONE RETE" Tor toggle were removed here —
                     // both wrote a preference no production path ever read.

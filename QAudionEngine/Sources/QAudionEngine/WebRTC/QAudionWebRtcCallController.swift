@@ -1827,6 +1827,23 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         session.reportTier(input)
     }
 
+    /// The peer's announcement, opened and decoded: the engine reads the route class, an allow = 0 or withdraw = 1 blocks the check
+    /// for the call (a withdrawal also deletes the contact's record, before the engine exists too). Does nothing while the check is off.
+    public func voicePeerVcons(seq: UInt32, allow: Bool, withdraw: Bool, routeClass: Int) {
+        guard VoiceFeature.isEnabled else { return }
+        voiceLatch.noteVcons(
+            VoiceVcons(seq: Int(seq), allow: allow, withdraw: withdraw, routeClass: routeClass),
+            wallS: Int(Date().timeIntervalSince1970))
+    }
+
+    /// The learning and verifying bits of this device's own announcement (0 when there is no check in this call).
+    public var voiceAnnouncedFlags: Int { voiceLatch.currentSession?.announcedFlags ?? 0 }
+
+    /// The owner chose "It was <name>" on the Differs sheet of this call.
+    public func voiceWasHim() {
+        voiceLatch.currentSession?.wasHimTapped()
+    }
+
     /// The call is on hold (this side or the peer) or resumed: the voice check starts a new stretch.
     public func voiceHoldChanged(_ held: Bool) {
         voiceLatch.currentSession?.holdChanged(held)

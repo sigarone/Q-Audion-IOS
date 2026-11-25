@@ -447,8 +447,8 @@ final class VoiceGuardModelTests: XCTestCase {
 
     // MARK: - Voice check card: one line per state
 
-    /// The whole table, state by state: what the card is showing (banner,
-    /// learning, waiting, verdict) and the line it reads as.
+    /// The whole table, state by state: what the card is showing (waiting,
+    /// verdict) and the line it reads as.
     func testEveryStateOfTheCardReadsAsExactlyOneLine() {
         let table: [(VoiceGuardContent, VoiceGuardLine)] = [
             (.waiting, .waiting),
@@ -456,9 +456,6 @@ final class VoiceGuardModelTests: XCTestCase {
             (.verdict(level: .verified), .steady),
             (.verdict(level: .caution), .suspect),
             (.verdict(level: .highRisk), .changed),
-            (.learning(progress: 0.4), .learning),
-            (.banner(.learned), .learned),
-            (.banner(.failed), .learnFailed),
         ]
         for (content, expected) in table {
             XCTAssertEqual(VoiceGuard.line(for: content), expected, "\(content)")
@@ -467,24 +464,18 @@ final class VoiceGuardModelTests: XCTestCase {
         XCTAssertEqual(Set(table.map { $0.1 }), Set(VoiceGuardLine.allCases))
     }
 
-    /// Colours stay as they were: grey while there is nothing to say (and while
-    /// learning), green for steady and for the saved voice, amber for a
-    /// possible change, red for a confirmed change and for a failed learning.
+    /// Colours stay as they were: grey while there is nothing to say, green for
+    /// steady, amber for a possible change, red for a confirmed change.
     func testEachLineKeepsItsColourRole() {
         XCTAssertEqual(VoiceGuard.tone(ofLine: .waiting), .neutral)
-        XCTAssertEqual(VoiceGuard.tone(ofLine: .learning), .neutral)
         XCTAssertEqual(VoiceGuard.tone(ofLine: .steady), .success)
-        XCTAssertEqual(VoiceGuard.tone(ofLine: .learned), .success)
         XCTAssertEqual(VoiceGuard.tone(ofLine: .suspect), .warning)
         XCTAssertEqual(VoiceGuard.tone(ofLine: .changed), .riskHigh)
-        XCTAssertEqual(VoiceGuard.tone(ofLine: .learnFailed), .riskHigh)
         // The line and the pieces of the card that colour it agree.
         XCTAssertEqual(VoiceGuard.tone(ofLine: .steady), VoiceGuard.tone(of: .verified))
         XCTAssertEqual(VoiceGuard.tone(ofLine: .suspect), VoiceGuard.tone(of: .caution))
         XCTAssertEqual(VoiceGuard.tone(ofLine: .changed), VoiceGuard.tone(of: .highRisk))
         XCTAssertEqual(VoiceGuard.tone(ofLine: .waiting), VoiceGuard.tone(of: nil))
-        XCTAssertEqual(VoiceGuard.tone(ofLine: .learned), VoiceGuard.bannerTone(of: .learned))
-        XCTAssertEqual(VoiceGuard.tone(ofLine: .learnFailed), VoiceGuard.bannerTone(of: .failed))
     }
 
     /// The words are the same in the app whatever the phone's language: each
@@ -520,35 +511,20 @@ final class VoiceGuardModelTests: XCTestCase {
             .steady: "in_call.voice_guard.line_steady",
             .suspect: "in_call.voice_guard.line_suspect",
             .changed: "in_call.voice_guard.line_changed",
-            .learning: "in_call.voice_guard.line_learning",
-            .learned: "in_call.voice_guard.line_learned",
-            .learnFailed: "in_call.voice_guard.line_learn_failed",
         ]
         let expected: [String: [VoiceGuardLine: String]] = [
             "it": [.waiting: "Ascolto della voce in corso", .steady: "Nessun cambio di voce in chiamata",
-                   .suspect: "Possibile cambio di voce", .changed: "Voce cambiata durante la chiamata",
-                   .learning: "Apprendimento della voce", .learned: "Voce memorizzata",
-                   .learnFailed: "Apprendimento non riuscito"],
+                   .suspect: "Possibile cambio di voce", .changed: "Voce cambiata durante la chiamata"],
             "en": [.waiting: "Listening to the voice\u{2026}", .steady: "No voice change in this call",
-                   .suspect: "Possible voice change", .changed: "Voice changed during the call",
-                   .learning: "Learning this voice", .learned: "Voice saved",
-                   .learnFailed: "Learning failed"],
+                   .suspect: "Possible voice change", .changed: "Voice changed during the call"],
             "de": [.waiting: "Stimme wird erfasst\u{2026}", .steady: "Kein Stimmwechsel im Anruf",
-                   .suspect: "M\u{00F6}glicher Stimmwechsel", .changed: "Stimme im Anruf gewechselt",
-                   .learning: "Stimme wird gelernt", .learned: "Stimme gespeichert",
-                   .learnFailed: "Lernen fehlgeschlagen"],
+                   .suspect: "M\u{00F6}glicher Stimmwechsel", .changed: "Stimme im Anruf gewechselt"],
             "es": [.waiting: "Escuchando la voz\u{2026}", .steady: "Sin cambio de voz en la llamada",
-                   .suspect: "Posible cambio de voz", .changed: "La voz cambi\u{00F3} durante la llamada",
-                   .learning: "Aprendiendo esta voz", .learned: "Voz guardada",
-                   .learnFailed: "Aprendizaje fallido"],
+                   .suspect: "Posible cambio de voz", .changed: "La voz cambi\u{00F3} durante la llamada"],
             "fr": [.waiting: "\u{00C9}coute de la voix\u{2026}", .steady: "Voix inchang\u{00E9}e pendant l'appel",
-                   .suspect: "Changement de voix possible", .changed: "La voix a chang\u{00E9} pendant l'appel",
-                   .learning: "Apprentissage de la voix", .learned: "Voix enregistr\u{00E9}e",
-                   .learnFailed: "\u{00C9}chec de l'apprentissage"],
+                   .suspect: "Changement de voix possible", .changed: "La voix a chang\u{00E9} pendant l'appel"],
             "pt-BR": [.waiting: "Ouvindo a voz\u{2026}", .steady: "Sem mudan\u{00E7}a de voz na chamada",
-                      .suspect: "Poss\u{00ED}vel mudan\u{00E7}a de voz", .changed: "A voz mudou durante a chamada",
-                      .learning: "Aprendendo esta voz", .learned: "Voz salva",
-                      .learnFailed: "Falha no aprendizado"],
+                      .suspect: "Poss\u{00ED}vel mudan\u{00E7}a de voz", .changed: "A voz mudou durante a chamada"],
         ]
         let popup: [String: String] = [
             "it": "Confronta la voce dell'altra persona con l'inizio di questa chiamata. Tutto avviene su questo telefono. \u{00C8} un indizio, non una prova d'identit\u{00E0}: per esserne certo usa il codice di sicurezza della chiamata.",
@@ -585,7 +561,7 @@ final class VoiceGuardModelTests: XCTestCase {
     func testTheCardLineFollowsTheLocalDetector() {
         func cardLine(_ monitor: RemoteSpeakerChangeMonitor) -> VoiceGuardLine {
             let level = VoiceGuard.level(ofVerdict: monitor.verdict)
-            let line = VoiceGuard.line(for: VoiceGuard.content(banner: nil, learning: nil, hasHistory: false, level: level))
+            let line = VoiceGuard.line(for: VoiceGuard.content(hasHistory: false, level: level))
             // The gate gives the same line with the switch on, and none with it off.
             XCTAssertEqual(VoiceGuard.shownLine(forChange: monitor.verdict.level, displayed: true), line)
             XCTAssertNil(VoiceGuard.shownLine(forChange: monitor.verdict.level, displayed: false))
@@ -611,133 +587,24 @@ final class VoiceGuardModelTests: XCTestCase {
         XCTAssertEqual(suspect.verdict, RemoteSpeakerChangeMonitor.Verdict(level: .suspect))
     }
 
-    // MARK: - Contact screen: the saved voice
-
-    /// Noon of that day in the time zone of the device, which is the one the
-    /// date formatter of `VoiceSavedRow.dateText` uses, so the day printed is
-    /// the day asked for wherever the test runs.
-    private func noon(year: Int, month: Int, day: Int) -> Date {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone.current
-        return calendar.date(from: DateComponents(year: year, month: month, day: day, hour: 12)) ?? Date()
-    }
-
-    /// The date is formatted for the language, not as a fixed pattern.
-    func testTheSavedVoiceDateFollowsTheLocale() {
-        let date = noon(year: 2026, month: 10, day: 12)
-        let italian = VoiceSavedRow.dateText(date, locale: Locale(identifier: "it_IT"))
-        let english = VoiceSavedRow.dateText(date, locale: Locale(identifier: "en_US"))
-        XCTAssertTrue(italian.contains("12") && italian.contains("ott") && italian.contains("2026"), italian)
-        XCTAssertTrue(english.contains("Oct") && english.contains("12") && english.contains("2026"), english)
-        XCTAssertNotEqual(italian, english)
-    }
-
-    /// The row says when the voice was saved, or that none is, and never that
-    /// it is verified.
-    func testTheSavedVoiceRowNeverSaysVerified() {
-        let date = noon(year: 2026, month: 10, day: 12)
-        let locale = Locale(identifier: "it_IT")
-        let saved = VoiceSavedRow.label(savedAt: date, locale: locale)
-        let none = VoiceSavedRow.label(savedAt: nil, locale: locale)
-        XCTAssertTrue(saved.contains(VoiceSavedRow.dateText(date, locale: locale)), saved)
-        XCTAssertNotEqual(saved, none)
-        XCTAssertFalse(none.isEmpty)
-        for text in [saved, none] {
-            XCTAssertFalse(text.lowercased().contains("verif"), text)
-        }
-    }
-
-    /// The row and the security-log line in each language, from the compiled
-    /// catalog. The row's text takes the date in place of %@.
-    func testTheSavedVoiceTextsReadAsSpecifiedInEveryLanguage() throws {
-        let rows: [String: String] = [
-            "it": "Voce memorizzata il %@", "en": "Voice saved on %@", "de": "Stimme gespeichert am %@",
-            "es": "Voz guardada el %@", "fr": "Voix enregistr\u{00E9}e le %@", "pt-BR": "Voz salva em %@",
-        ]
-        let events: [String: String] = [
-            "it": "Voce memorizzata", "en": "Voice saved", "de": "Stimme gespeichert",
-            "es": "Voz guardada", "fr": "Voix enregistr\u{00E9}e", "pt-BR": "Voz salva",
-        ]
-        for (language, row) in rows {
-            let bundle = try languageBundle(language)
-            XCTAssertEqual(bundle.localizedString(forKey: "contact_detail.voice_saved_on", value: nil, table: nil),
-                           row, language)
-            XCTAssertEqual(bundle.localizedString(forKey: "contact_detail.voice_saved_event", value: nil, table: nil),
-                           try XCTUnwrap(events[language]), language)
-            let notSaved = bundle.localizedString(forKey: "contact_detail.voice_not_saved", value: nil, table: nil)
-            XCTAssertNotEqual(notSaved, "contact_detail.voice_not_saved", "\(language): text missing")
-        }
-    }
-
-    func testIconFollowsBannerAndVerdict() {
-        XCTAssertEqual(VoiceGuard.icon(banner: .learned, level: nil), .check)
-        XCTAssertEqual(VoiceGuard.icon(banner: nil, level: .verified), .check)
-        XCTAssertEqual(VoiceGuard.icon(banner: nil, level: .highRisk), .warning)
-        XCTAssertEqual(VoiceGuard.icon(banner: nil, level: .caution), .microphone)
-        XCTAssertEqual(VoiceGuard.icon(banner: nil, level: nil), .microphone)
-        XCTAssertEqual(VoiceGuard.icon(banner: .failed, level: nil), .microphone)
-        XCTAssertEqual(VoiceGuard.icon(banner: .failed, level: .highRisk), .warning)
+    func testIconFollowsTheVerdict() {
+        XCTAssertEqual(VoiceGuard.icon(level: .verified), .check)
+        XCTAssertEqual(VoiceGuard.icon(level: .highRisk), .warning)
+        XCTAssertEqual(VoiceGuard.icon(level: .caution), .microphone)
+        XCTAssertEqual(VoiceGuard.icon(level: nil), .microphone)
     }
 
     // MARK: - Voice check card: what it shows
 
-    func testBannerBeatsEverythingElse() {
-        let content = VoiceGuard.content(banner: .learned,
-                                         learning: .inProgress(progress: 0.5),
-                                         hasHistory: true,
-                                         level: .highRisk)
-        XCTAssertEqual(content, .banner(.learned))
-    }
-
-    func testLearningProgressBeatsWaitingAndVerdict() {
-        XCTAssertEqual(VoiceGuard.content(banner: nil, learning: .inProgress(progress: 0.4),
-                                          hasHistory: false, level: nil),
-                       .learning(progress: 0.4))
-        XCTAssertEqual(VoiceGuard.content(banner: nil, learning: .inProgress(progress: 0.4),
-                                          hasHistory: true, level: .verified),
-                       .learning(progress: 0.4))
-    }
-
     /// With no level and no sample there is nothing to compare: the card then
-    /// shows just the waiting line, whatever a finished or idle
-    /// learning session says.
+    /// shows just the waiting line.
     func testWaitsForVoiceDataUntilThereIsALevelOrASample() {
-        let states: [VoiceLearningState?] = [nil, .idle, .failed, .completed(contactId: "c1")]
-        for state in states {
-            XCTAssertEqual(VoiceGuard.content(banner: nil, learning: state, hasHistory: false, level: nil),
-                           .waiting)
-        }
+        XCTAssertEqual(VoiceGuard.content(hasHistory: false, level: nil), .waiting)
     }
 
     func testVerdictOnceThereIsHistory() {
-        XCTAssertEqual(VoiceGuard.content(banner: nil, learning: nil, hasHistory: true, level: nil),
-                       .verdict(level: nil))
-        XCTAssertEqual(VoiceGuard.content(banner: nil, learning: .completed(contactId: "c1"),
-                                          hasHistory: true, level: .caution),
-                       .verdict(level: .caution))
-    }
-
-    func testBannerOnlyForTheTwoFinalLearningStates() {
-        XCTAssertEqual(VoiceGuard.banner(for: .completed(contactId: "c1")), .learned)
-        XCTAssertEqual(VoiceGuard.banner(for: .failed), .failed)
-        XCTAssertNil(VoiceGuard.banner(for: .idle))
-        XCTAssertNil(VoiceGuard.banner(for: .inProgress(progress: 0.9)))
-        XCTAssertNil(VoiceGuard.banner(for: nil))
-    }
-
-    func testBannerColourRoles() {
-        XCTAssertEqual(VoiceGuard.bannerTone(of: .learned), .success)
-        XCTAssertEqual(VoiceGuard.bannerTone(of: .failed), .riskHigh)
-        XCTAssertNil(VoiceGuard.bannerTone(of: nil))
-        XCTAssertEqual(VoiceGuard.bannerSeconds, 3.5)
-    }
-
-    func testLearningProgressIsKeptInsideTheBar() {
-        XCTAssertEqual(VoiceGuard.clampedProgress(-0.2), 0)
-        XCTAssertEqual(VoiceGuard.clampedProgress(1.7), 1)
-        XCTAssertEqual(VoiceGuard.clampedProgress(.nan), 0)
-        XCTAssertEqual(VoiceGuard.percentText(0.5), "50%")
-        XCTAssertEqual(VoiceGuard.percentText(2), "100%")
+        XCTAssertEqual(VoiceGuard.content(hasHistory: true, level: nil), .verdict(level: nil))
+        XCTAssertEqual(VoiceGuard.content(hasHistory: true, level: .caution), .verdict(level: .caution))
     }
 
     // MARK: - Custody of the voice card
@@ -987,13 +854,11 @@ final class VoiceGuardModelTests: XCTestCase {
     /// history is still empty (the wave then has a spectrum overlay or a flat
     /// trace to draw). The bare waiting line is for no level and no sample.
     func testALevelIsShownEvenBeforeTheFirstConfidenceSample() {
-        XCTAssertEqual(VoiceGuard.content(banner: nil, learning: nil, hasHistory: false, level: .verified),
-                       .verdict(level: .verified))
-        XCTAssertEqual(VoiceGuard.content(banner: nil, learning: nil, hasHistory: false, level: .highRisk),
-                       .verdict(level: .highRisk))
+        XCTAssertEqual(VoiceGuard.content(hasHistory: false, level: .verified), .verdict(level: .verified))
+        XCTAssertEqual(VoiceGuard.content(hasHistory: false, level: .highRisk), .verdict(level: .highRisk))
     }
 
     func testNoLevelAndNoSampleIsTheBareWaitingLine() {
-        XCTAssertEqual(VoiceGuard.content(banner: nil, learning: nil, hasHistory: false, level: nil), .waiting)
+        XCTAssertEqual(VoiceGuard.content(hasHistory: false, level: nil), .waiting)
     }
 }

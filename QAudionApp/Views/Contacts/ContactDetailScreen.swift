@@ -87,6 +87,7 @@ struct ContactDetailScreen: View {
                     trustBadgesRow
                     actionRow.padding(.horizontal, 16).padding(.top, 4)
                     trustVerificationCard.padding(.horizontal, 16)
+                    ContactVoiceRecognitionRow(userId: item.userId).padding(.horizontal, 16)
                     safetyNumberSection.padding(.horizontal, 16)
                     presenceAuthCard.padding(.horizontal, 16)
                     metadataCard.padding(.horizontal, 16)
