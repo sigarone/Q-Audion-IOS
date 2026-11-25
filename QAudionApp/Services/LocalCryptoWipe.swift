@@ -115,7 +115,7 @@ enum LocalCryptoWipe {
     static func wipeContactVoice() -> Bool {
         let clean = VoiceCallWiring.wipeAll()
         if !clean {
-            print("[LocalCryptoWipe] the contact voice wipe left something")
+            RTLog.warn("call", "contact voice wipe failed")
         }
         return clean
     }
