@@ -23,7 +23,7 @@ final class VoiceRxTapTests: XCTestCase {
         tap.ingest(samples: [Int16](repeating: 1, count: 160), frames: 160, rateHz: 16_000)
         tap.ingest(samples: [Int16](repeating: 1, count: 320), frames: 320, rateHz: 32_000)
         let blocks = queue.drain()
-        XCTAssertEqual(blocks.map { $0.ticks }, [960, 960 + 960, 960 + 960 + 960, 960 + 960 + 960 + 960])
+        XCTAssertEqual(blocks.map { $0.ticks }, [960, 1920, 2880, 3840] as [Int64])
         XCTAssertEqual(blocks.map { $0.rateHz }, [48_000, 24_000, 16_000, 32_000])
     }
 
