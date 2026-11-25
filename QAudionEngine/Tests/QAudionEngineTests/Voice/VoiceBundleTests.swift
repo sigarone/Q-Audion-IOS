@@ -30,8 +30,8 @@ final class VoiceBundleTests: XCTestCase {
     }
 
     /// What the manifest lists and this repository does not carry: the measurement report and the reading texts of the
-    /// vectors (this repository is public) and the vectors of the stages that nothing here runs (10 and 13, and their
-    /// inputs). The cohort file and the vectors of stages 6 to 9, 11 and 12 are here, as test resources next to the other
+    /// vectors (this repository is public) and the vectors of the stages that nothing here runs (13 and its
+    /// inputs). The cohort file and the vectors of stages 6 to 12 are here, as test resources next to the other
     /// vectors, with the two clips that stage 11 reads. A name ending in "/" is a folder.
     private static let notShipped: [String] = [
         "report.md",
@@ -40,7 +40,6 @@ final class VoiceBundleTests: XCTestCase {
         "kat/README_stages8-10-12.md",
         "kat/README_stages11.md",
         "kat/inputs/",
-        "kat/stage10_vcons/",
         "kat/stage13_e2e/"
     ]
 
@@ -80,8 +79,8 @@ final class VoiceBundleTests: XCTestCase {
             XCTAssertEqual(VoiceHash.sha256Hex(data), parts[0], path)
             checked += 1
         }
-        XCTAssertEqual(checked, 176)
-        XCTAssertEqual(skipped, 25)
+        XCTAssertEqual(checked, 177)
+        XCTAssertEqual(skipped, 24)
         // No reading text of the vectors and no report in the shipped folders, whatever the manifest lists.
         for directory in [runtime, kat] {
             let names = FileManager.default.enumerator(atPath: directory.path)?.compactMap { $0 as? String } ?? []

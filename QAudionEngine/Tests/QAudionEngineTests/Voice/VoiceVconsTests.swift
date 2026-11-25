@@ -229,9 +229,11 @@ final class VoiceVconsExchangeTests: XCTestCase {
         box.key = key
         let ex = make(box)
         ex.onReceived(peerMessage(seq: 1))
+        ex.flush()
         let next = Data((0..<32).map { UInt8($0 + 50) })
         box.key = next // a new session key (the exchange has seen the first one)
         ex.onReceived(peerMessage(seq: 2, key: key)) // sealed by the peer just before it changed
+        ex.flush()
         ex.onReceived(peerMessage(seq: 3, key: next))
         ex.flush()
         XCTAssertEqual(box.read { box.peer.map { $0.seq } }, [1, 2, 3])
