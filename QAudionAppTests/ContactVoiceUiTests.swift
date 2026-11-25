@@ -134,4 +134,35 @@ final class ContactVoiceUiTests: XCTestCase {
         XCTAssertTrue(VoiceCheckCopy.wasHimTitle(name: "Anna").contains("Anna"))
         XCTAssertFalse(VoiceCheckCopy.compareCodeTitle.isEmpty)
     }
+
+    // MARK: where the check starts
+
+    /// The functions of the app state that start the check of a call (and its announcement): an answered call must be one of them,
+    /// not only the function that a placed call reaches.
+    func testAnAnsweredCallStartsTheCheckToo() throws {
+        var dir = URL(fileURLWithPath: "\(#filePath)")
+        var found: URL?
+        for _ in 0..<10 {
+            dir = dir.deletingLastPathComponent()
+            let candidate = dir.appendingPathComponent("QAudionApp/AppState.swift")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                found = candidate
+                break
+            }
+        }
+        let lines = try String(contentsOf: XCTUnwrap(found), encoding: .utf8).components(separatedBy: "\n")
+        var enclosing = ""
+        var starters: Set<String> = []
+        for raw in lines {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("//") { continue }
+            if let r = line.range(of: "func ") {
+                enclosing = String(line[r.upperBound...].prefix { $0 != "(" && $0 != "<" && $0 != " " })
+                continue
+            }
+            if line.contains("startVoiceCheckForThisCall()") { starters.insert(enclosing) }
+        }
+        XCTAssertFalse(starters.isEmpty)
+        XCTAssertTrue(starters.contains { $0 != "finalizeCallActive" }, "started only from \(starters.sorted())")
+    }
 }
