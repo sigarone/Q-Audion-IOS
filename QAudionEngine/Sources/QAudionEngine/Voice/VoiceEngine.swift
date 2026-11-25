@@ -50,7 +50,7 @@ final class VoiceEngine {
     }
 
     private final class PendingWindow {
-        let window: VoiceWindowResult
+        var window: VoiceWindowResult
         let rec: VoiceWindowRecord
         let rf: Int
         let ep: Int
@@ -292,6 +292,9 @@ final class VoiceEngine {
         cancelLock.unlock()
     }
 
+    /// True once `requestPostCancel` was called (tests).
+    var postCancelRequested: Bool { isCancelRequested() }
+
     private func isCancelRequested() -> Bool {
         cancelLock.lock()
         defer { cancelLock.unlock() }
@@ -357,6 +360,8 @@ final class VoiceEngine {
             budget.add(who: who, startNs: startNs, endNs: endNs)
         case .wasHim:
             wasHim = true
+        case .audioFault:
+            if !ended && !offEngine && inactiveReason == nil { inactive(.audio) }
         case .callEnd(_, let tNs):
             onCallEnd(tEndItem: tNs, now: now)
         case .postCancel(let atNs):
@@ -834,6 +839,12 @@ final class VoiceEngine {
         return start(w, t)
     }
 
+    /// The audio of a window is not kept once the model has seen it.
+    private func wipeSamples(_ w: PendingWindow) {
+        VoiceWipe.floats(&w.window.samples)
+        w.window.samples = []
+    }
+
     private func embedOf(_ w: PendingWindow) -> VoiceEmbedding? {
         do {
             return try embedder.embed(window: w.window)
@@ -843,7 +854,9 @@ final class VoiceEngine {
     }
 
     private func start(_ w: PendingWindow, _ t: Int64) -> Bool {
-        guard let e = embedOf(w), let raw = VoiceMath.rawEmbedding(e.raw) else {
+        let embedded = embedOf(w)
+        wipeSamples(w)
+        guard let e = embedded, let raw = VoiceMath.rawEmbedding(e.raw) else {
             w.rec.fate = .embedFailed
             return true
         }
@@ -1074,7 +1087,9 @@ final class VoiceEngine {
             }
             let w = rest.first(where: { $0.disjoint }) ?? rest[0]
             if let i = rest.firstIndex(where: { $0 === w }) { rest.remove(at: i) }
-            guard let e = embedOf(w), let raw = VoiceMath.rawEmbedding(e.raw) else {
+            let embedded = embedOf(w)
+            wipeSamples(w)
+            guard let e = embedded, let raw = VoiceMath.rawEmbedding(e.raw) else {
                 w.rec.fate = .embedFailed
                 continue
             }

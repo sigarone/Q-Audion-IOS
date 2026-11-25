@@ -175,6 +175,8 @@ struct VoiceBundle {
     let engine: VoiceEngineConstants
     let tables: VoiceFbankTables
     let vadModelURL: URL
+    /// The AS-norm cohort file (pinned by `scoring.cohort.sha256`; `VoiceCohort.parse` checks it).
+    let cohortURL: URL
 
     /// Loads and verifies the bundle files in `directory`. A file that is missing, or whose hash differs from its pin,
     /// stops the load.
@@ -211,7 +213,8 @@ struct VoiceBundle {
             scoring: scoring,
             engine: engine,
             tables: tables,
-            vadModelURL: directory.appendingPathComponent(vadFile)
+            vadModelURL: directory.appendingPathComponent(vadFile),
+            cohortURL: directory.appendingPathComponent(scoring.cohort.file)
         )
     }
 

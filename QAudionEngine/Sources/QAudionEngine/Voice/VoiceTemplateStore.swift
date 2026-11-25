@@ -463,6 +463,11 @@ final class VoiceTemplateStore: @unchecked Sendable {
         }
     }
 
+    /// The salt of the file names (creates `meta.bin` when there is none): the device tag of a peer is derived from it.
+    func nameSalt() throws -> [UInt8] {
+        try lock.withLock { try ensureMeta().nameSalt }
+    }
+
     func recordCount() -> Int {
         lock.withLock { names().filter { $0.hasSuffix(Self.ext) }.count }
     }

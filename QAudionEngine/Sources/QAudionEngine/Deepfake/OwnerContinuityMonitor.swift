@@ -336,7 +336,8 @@ public final class OwnerContinuityMonitor: @unchecked Sendable {
         // the call's share of windows.
         let collecting = learning && (!enrolledCached || collectForRefinement)
             && pendingWindows.count < OwnerVoiceLearning.maxWindowsPerCall
-        let windowEmbedding = (collecting || enrolledCached) ? verifier.embed(pcm16k: window) : nil
+        // The embedding counts in the process-wide budget of the contact-voice check (nothing while that is off).
+        let windowEmbedding = (collecting || enrolledCached) ? (VoiceBusy.measure("owner") { verifier.embed(pcm16k: window) }) : nil
         let windowCosine = windowEmbedding.flatMap { enrolledCached ? verifier.cosine(embedding: $0) : nil }
         // With a template, another voice must not become part of it: while the call's collection is open, a window
         // below the lower bar is not kept and is counted (`flushPendingWindows` drops a call that is mostly

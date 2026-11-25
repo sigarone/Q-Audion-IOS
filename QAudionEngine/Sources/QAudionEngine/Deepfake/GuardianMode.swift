@@ -180,7 +180,8 @@ public final class GuardianMode: @unchecked Sendable {
 
     private func runInference(on window: [Float]) {
         let startedNs = DispatchTime.now().uptimeNanoseconds
-        let scored = scorer(window)
+        // The inference counts in the process-wide budget of the contact-voice check (nothing while that is off).
+        let scored = VoiceBusy.measure("guardian") { scorer(window) }
         let elapsedMs = Int((DispatchTime.now().uptimeNanoseconds &- startedNs) / 1_000_000)
 
         // 2026-08-21 — no real inference (model not loaded, inference error) MUST skip the EMA update rather

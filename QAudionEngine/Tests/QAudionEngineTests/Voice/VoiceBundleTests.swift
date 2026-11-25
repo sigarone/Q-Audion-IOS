@@ -68,9 +68,6 @@ final class VoiceBundleTests: XCTestCase {
             let url: URL
             if path.hasPrefix("kat/") {
                 url = kat.appendingPathComponent(String(path.dropFirst(4)))
-            } else if path == "cohort.bin" {
-                // Test resource only: next to the vectors, never in the app bundle.
-                url = kat.appendingPathComponent(path)
             } else {
                 url = runtime.appendingPathComponent(path)
             }
@@ -97,14 +94,15 @@ final class VoiceBundleTests: XCTestCase {
         }
     }
 
-    /// The cohort is a test resource: it is pinned by the constants and absent from the runtime bundle.
-    func testCohortIsPinnedAndNotInTheAppBundle() throws {
+    /// The cohort is part of the runtime bundle: it is pinned by the constants, and the bundle loader names its file.
+    func testCohortIsPinnedAndInTheAppBundle() throws {
         let runtime = try runtimeDirectory()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: runtime.appendingPathComponent("cohort.bin").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: runtime.appendingPathComponent("cohort.bin").path))
+        XCTAssertEqual(try VoiceBundle.loadFromModule().cohortURL.lastPathComponent, "cohort.bin")
         let scoring = try VoiceScoringConstants.decode(try Data(contentsOf: runtime.appendingPathComponent(VoiceBundle.constantsFile)))
         XCTAssertEqual(scoring.cohort.file, "cohort.bin")
         XCTAssertEqual(scoring.cohort.sha256, "e5ff93a8fcd08560427c5f7de998bf02c87e189e06660000fddd0e258d18c221")
-        XCTAssertEqual(VoiceHash.sha256Hex(try VoiceKat.data("cohort.bin")), scoring.cohort.sha256)
+        XCTAssertEqual(VoiceHash.sha256Hex(try VoiceScoringKat.cohortData()), scoring.cohort.sha256)
     }
 
     func testAFileWithAWrongHashIsRejected() throws {

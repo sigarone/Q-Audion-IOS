@@ -168,7 +168,7 @@ final class VoiceKatStage6Tests: XCTestCase {
 
     func testTheCohortLoaderChecksThePinTheSizeAndTheValues() throws {
         let constants = try VoiceScoringKat.constants().cohort
-        let bytes = try VoiceKat.data("cohort.bin")
+        let bytes = try VoiceScoringKat.cohortData()
         XCTAssertEqual(try VoiceCohort.parse(bytes, constants: constants).count, 80)
 
         var flipped = bytes

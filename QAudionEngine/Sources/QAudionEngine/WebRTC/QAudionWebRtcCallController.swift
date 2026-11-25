@@ -322,6 +322,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             return
         }
         log?("audiosrtp caplive=0 after=0 fb=1")
+        voiceLatch.noteFallback()
         onAudioSrtpFallbackEngage?()
     }
 
@@ -944,7 +945,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             setMediaJitterBuffer(delaySec: 0.0, emittedCount: 0)
             return
         }
-        pc.statistics { [weak self] report in
+        statsGate.statistics(of: pc) { [weak self] report in
             guard let self else { return }
             // Audio wire shape -- the capture stamp of this report (monotonic uptime), taken first thing in the
             // callback: the bound of the `audiowire` window.
@@ -1773,9 +1774,46 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// video-upgrade rebuild — and any future one): the moment a
     /// PeerConnection exists, it is told the LATCHED intent this controller
     /// currently wants, not whatever that PC's own constructor defaulted to.
+    /// The gate of the live connection; a call that has no connection any more asks through a gate of its own, whose
+    /// registry nothing else uses.
+    private var statsGate: PeerConnectionStatsGate { peerConnection?.statsGate ?? detachedStatsGate }
+    private let detachedStatsGate = PeerConnectionStatsGate()
+
+    /// What this call keeps for the contact-voice check from the moment it exists: a fallback to the data channel that comes
+    /// before media start is replayed to the session when it is created. Inert while the check is off.
+    private let voiceLatch = VoiceCallLatch()
+
+    /// Media start of the contact-voice check, at the genuine-accept points of the call. Does nothing while the flag is off, and
+    /// only once per call. `peerDeviceId` is the device that THIS call pinned.
+    public func voiceMediaStart(callId: String, contactId: String, peerDeviceId: String?, tStartS: Int, utcOffsetS: Int) {
+        guard VoiceFeature.isEnabled, voiceLatch.currentSession == nil, let pc = peerConnection else { return }
+        let binding = VoiceCallBinding(
+            callId: callId, contactId: contactId, peerDeviceId: peerDeviceId, tStartS: tStartS, utcOffsetS: utcOffsetS)
+        guard let session = VoiceProcess.shared.beginCall(binding) else { return }
+        voiceLatch.attach(session)
+        // The poll asks the CURRENT connection every time: a rebuild of the connection (video upgrade) moves the source with it.
+        session.attachStatsSource(VoiceClosureStatsSource { [weak self] deliver in
+            guard let live = self?.peerConnection else {
+                deliver(.unavailable)
+                return
+            }
+            live.pollOnce(deliver)
+        })
+        pc.setVoiceRxTap(session.rxTap)
+        session.mediaStart()
+    }
+
+    /// The call is over: the tap is removed and the session runs its post-call work.
+    private func voiceEndCall() {
+        guard let session = voiceLatch.detach() else { return }
+        peerConnection?.setVoiceRxTap(nil)
+        session.callEnded()
+    }
+
     private var peerConnection: QAudionPeerConnection? {
         didSet {
             guard let pc = peerConnection, pc !== oldValue else { return }
+            if let voice = voiceLatch.currentSession { pc.setVoiceRxTap(voice.rxTap) }
             cryptorAttachQueue.async { [weak self] in
                 guard let self, self.peerConnection === pc else { return }
                 pc.setNativeAudioSrtpMuted(self.nativeSenderMuted, source: "pcinit")
@@ -3105,6 +3143,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         // this teardown races a start method that hasn't assigned
         // `peerConnection` yet (the exact gap the early-return used to miss).
         intentionalShutdown = true
+        voiceEndCall()
         // W-SILENTPATHDEATH — stop the call-scoped path monitor and the
         // recovery watchdog/park unconditionally, even on the early-return
         // below: `armRestartPathMonitor()` can have started them during a
@@ -3588,6 +3627,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
                     // how long the fallback actually stayed engaged.
                     self.srtpFallbackEngagedAtMs = Self.nowMs()
                     self.log?("audiosrtp fallback=1 engage=1")
+                    self.voiceLatch.noteFallback()
                     self.onAudioSrtpFallbackEngage?()
                     return
                 }
@@ -3766,7 +3806,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public func selectedRelayAddress() async -> String? {
         guard let pc = peerConnection?.peerConnection else { return nil }
         return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
-            pc.statistics { report in
+            statsGate.statistics(of: pc) { report in
                 // Same pair choice `pollMediaRttOnce` uses: a succeeded pair
                 // that is nominated or selected, else the first succeeded one.
                 var preferredLocalId: String?
@@ -4832,6 +4872,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// `audiosrtp muteapply` line — see `QAudionPeerConnection
     /// .onNativeSenderMuteApplied`'s kdoc.
     public func setNativeAudioSrtpMuted(_ muted: Bool, source: String = "user") {
+        voiceLatch.currentSession?.muteChanged(muted)
         cryptorAttachQueue.async { [weak self] in
             guard let self else { return }
             self.nativeSenderMuted = muted
@@ -5565,7 +5606,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     private func readAudioRxPackets() async -> Int64? {
         guard let pc = peerConnection?.peerConnection else { return nil }
         return await withCheckedContinuation { (cont: CheckedContinuation<Int64?, Never>) in
-            pc.statistics { report in
+            statsGate.statistics(of: pc) { report in
                 var best: Int64 = -1
                 for (_, st) in report.statistics where st.type == "inbound-rtp" && (st.values["kind"] as? String) == "audio" {
                     best = max(best, (st.values["packetsReceived"] as? NSNumber)?.int64Value ?? -1)
@@ -5907,7 +5948,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// "event-driven," not actually closing the gap.
     private func resolveAndApplyRouteTier() {
         guard let pc = peerConnection?.peerConnection else { return }
-        pc.statistics { [weak self] report in
+        statsGate.statistics(of: pc) { [weak self] report in
             guard let self else { return }
             // The tier follows the pair the transport selected (nominated as the fallback), not
             // the first succeeded pair in dictionary order: after a network change an old relay
@@ -6071,7 +6112,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
     private func pollVideoStatsOnce() {
         guard let pc = peerConnection?.peerConnection, let sink = videoTelemetry else { return }
-        pc.statistics { report in
+        statsGate.statistics(of: pc) { report in
             var outFramesEnc = -1, outBytes = -1, outW = -1, outH = -1
             var outKeyFramesEnc = -1
             var outEncoderImpl = "", outQualityLimit = ""

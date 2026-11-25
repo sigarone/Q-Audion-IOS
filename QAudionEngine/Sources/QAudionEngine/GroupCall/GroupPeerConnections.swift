@@ -32,6 +32,8 @@ public class GroupPeerBase: NSObject, RTCPeerConnectionDelegate, @unchecked Send
     private var iceServers: [RTCIceServer]
     let stateLock = NSLock()
     var peerConnection: RTCPeerConnection?
+    /// The registry of every `statistics` call on this wrapper's connection: a group connection has a gate of its own.
+    let statsGate = PeerConnectionStatsGate()
     private var closed = false
     private var tornDown = false
 
@@ -194,7 +196,7 @@ public class GroupPeerBase: NSObject, RTCPeerConnectionDelegate, @unchecked Send
     func statsReport() async -> RTCStatisticsReport? {
         guard let pc = currentPeerConnection else { return nil }
         return await withCheckedContinuation { continuation in
-            pc.statistics { report in continuation.resume(returning: report) }
+            statsGate.statistics(of: pc) { report in continuation.resume(returning: report) }
         }
     }
 
@@ -225,6 +227,7 @@ public class GroupPeerBase: NSObject, RTCPeerConnectionDelegate, @unchecked Send
         stateLock.unlock()
         onState = nil
         onCandidate = nil
+        statsGate.close()
         pc?.close()
     }
 

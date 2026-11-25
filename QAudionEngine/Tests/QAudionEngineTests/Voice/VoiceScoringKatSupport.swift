@@ -26,9 +26,15 @@ enum VoiceScoringKat {
         return try VoiceScoringConstants.decode(try Data(contentsOf: directory.appendingPathComponent(VoiceBundle.constantsFile)))
     }
 
-    /// The pinned cohort, a test resource next to the vectors.
+    /// The bytes of the cohort file of the runtime bundle.
+    static func cohortData() throws -> Data {
+        let directory = try XCTUnwrap(VoiceBundle.moduleDirectory(), "voice bundle not found in the module resources")
+        return try Data(contentsOf: directory.appendingPathComponent("cohort.bin"))
+    }
+
+    /// The pinned cohort of the runtime bundle.
     static func cohort() throws -> VoiceCohort {
-        try VoiceCohort.parse(try VoiceKat.data("cohort.bin"), constants: try constants().cohort)
+        try VoiceCohort.parse(try cohortData(), constants: try constants().cohort)
     }
 
     /// A file of the engine's own resource folder, found from this source file (the tests already read repository files by path).

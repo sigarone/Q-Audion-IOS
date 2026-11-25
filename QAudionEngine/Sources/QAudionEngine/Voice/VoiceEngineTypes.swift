@@ -48,6 +48,9 @@ enum VoiceEngineItem {
     case busy(atNs: Int64, who: String, startNs: Int64, endNs: Int64)
     /// The owner's "It was <name>".
     case wasHim(atNs: Int64)
+    /// A poll that cannot be used (no audio inbound row, more than one, or not Opus): the engine is inactive for the rest of the
+    /// call and reports Cannot verify (audio).
+    case audioFault(atNs: Int64)
     /// The call ends at tap clock `tNs`.
     case callEnd(atNs: Int64, tNs: Int64)
     /// A call, incoming or outgoing, starts: the post-call work of this one is cancelled (never resumed).
@@ -66,6 +69,7 @@ enum VoiceEngineItem {
         case .tier(let at, _): return at
         case .busy(let at, _, _, _): return at
         case .wasHim(let at): return at
+        case .audioFault(let at): return at
         case .callEnd(let at, _): return at
         case .postCancel(let at): return at
         }

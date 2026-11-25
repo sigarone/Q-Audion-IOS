@@ -2256,7 +2256,13 @@ final class AppState: ObservableObject {
     /// W-CALLERBUSY (review of #169) — an incoming ring silences the busy tone of the outgoing call that just ended
     /// (it is a system sound that would otherwise play under the ring for the rest of its 4 s, `CallerBusyFeedback`).
     @Published var incomingCallRingVisible: Bool = false {
-        didSet { if incomingCallRingVisible { callerBusyTone.stop() } }
+        didSet {
+            if incomingCallRingVisible {
+                callerBusyTone.stop()
+                // A call starts to ring: the post-call work of the contact-voice check of an earlier call is cancelled.
+                VoiceCallWiring.callStarting()
+            }
+        }
     }
     /// H-6 — re-entrancy guard for endCall(). A second endCall() (e.g.
     /// CallKit onEndCall + remote call_hangup racing) while teardown is
@@ -5383,6 +5389,8 @@ final class AppState: ObservableObject {
         #if canImport(UIKit) && os(iOS)
         // Voice-check inference stays idle while protected data is unreadable (phone locked).
         ProtectedDataFlag.shared.set(isAvailable: UIApplication.shared.isProtectedDataAvailable)
+        // The post-call work of the contact-voice check runs under a background-task assertion.
+        VoiceBackgroundTaskBridge.install()
         // Key vault entries still on the class readable only while the phone is unlocked move to the
         // after-first-unlock class, while it is unlocked (a no-op when locked; see `upgradeLegacyAccessibility`).
         Task.detached(priority: .utility) { _ = SovereignKeyVault().upgradeLegacyAccessibility() }
@@ -20892,6 +20900,8 @@ final class AppState: ObservableObject {
 
     func startCall(contactId: String, video: Bool = false, origin: CallStartOrigin = .phone) async {
         RTLog.info("call", "startCall contactId=\(contactId.prefix(8))… video=\(video)")
+        // A call starts: the post-call work of the contact-voice check of an earlier call is cancelled (nothing while it is off).
+        VoiceCallWiring.callStarting()
         // Admission, before ANY side effect and before any `await`.
         //
         // Guard against double-tap / concurrent calls. Without this, two rapid
@@ -22808,6 +22818,19 @@ final class AppState: ObservableObject {
             )
         }
         maybeExchangeAvatarOnCallConnect()
+        startVoiceCheckForThisCall()
+    }
+
+    /// The contact-voice check starts at the genuine-accept points, here and nowhere else. The device is the one that THIS
+    /// call pinned (`callPinDeviceId`), never the peer-keyed value that an earlier call may have left. Inert while the check is
+    /// off: the controller returns before it creates anything.
+    @MainActor
+    private func startVoiceCheckForThisCall() {
+        guard let controller = webRtcController as? QAudionWebRtcCallController,
+              let contactId = callContactId, let callId = canonicalActiveCallId() else { return }
+        controller.voiceMediaStart(
+            callId: callId, contactId: contactId, peerDeviceId: callPinDeviceId(for: contactId),
+            tStartS: Int(Date().timeIntervalSince1970), utcOffsetS: TimeZone.current.secondsFromGMT())
     }
 
     /// E2EE avatar transport (2026-07-30) — Pavel: "durante la chiamata ci
