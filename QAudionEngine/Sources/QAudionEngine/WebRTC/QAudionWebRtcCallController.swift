@@ -2132,6 +2132,9 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     public init(callingApi: CallingApi, relayProvider: RelayCredentialsProvider? = nil) {
         self.callingApi = callingApi
         self.relayProvider = relayProvider
+        // A call starts (this controller is built for one call, incoming or outgoing): the post-call work of the contact-voice
+        // check of an earlier call is cancelled and never resumed. Nothing happens while the check is off.
+        VoiceCallWiring.callStarting()
     }
 
     // MARK: - Outgoing

@@ -2256,13 +2256,7 @@ final class AppState: ObservableObject {
     /// W-CALLERBUSY (review of #169) — an incoming ring silences the busy tone of the outgoing call that just ended
     /// (it is a system sound that would otherwise play under the ring for the rest of its 4 s, `CallerBusyFeedback`).
     @Published var incomingCallRingVisible: Bool = false {
-        didSet {
-            if incomingCallRingVisible {
-                callerBusyTone.stop()
-                // A call starts to ring: the post-call work of the contact-voice check of an earlier call is cancelled.
-                VoiceCallWiring.callStarting()
-            }
-        }
+        didSet { if incomingCallRingVisible { callerBusyTone.stop() } }
     }
     /// H-6 — re-entrancy guard for endCall(). A second endCall() (e.g.
     /// CallKit onEndCall + remote call_hangup racing) while teardown is
