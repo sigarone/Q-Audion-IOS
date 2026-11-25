@@ -1569,6 +1569,8 @@ final class AppState: ObservableObject {
         let shield = IdentityShieldRules.callShield(auth: callIdentityAuth, callId: callId, record: record)
         if shield != callIdentityShield { callIdentityShield = shield }
         emitShieldLogIfChanged(callId: callId)
+        // A held identity, a changed pin word or a new protection line is a new moment of the voice tier.
+        reportVoiceTierMoment()
     }
 
     /// The protection line of THIS call: a value tagged with another call (a late value of the call that just ended) is no value yet.
@@ -5708,12 +5710,11 @@ final class AppState: ObservableObject {
         // the only way to verify it live instead of inferring it from
         // re-key timing. `RTLog.info` (not `print`) because plain stdout
         // never reaches the shipped Loki pipeline.
-        callService.onContactVoiceScoreBreakdown = { [weak self] df, lv, vp, combined in
+        callService.onContactVoiceScoreBreakdown = { [weak self] df, lv, combined in
             RTLog.info(
                 "rekey",
                 "guardian3sig df=" + String(format: "%.2f", df) +
                     " lv=" + String(format: "%.2f", lv) +
-                    " vp=" + String(format: "%.2f", vp) +
                     " combined=" + String(format: "%.2f", combined)
             )
             // W-GUARDIAN3SIG (2026-09-11) — this is now what drives the
@@ -17418,6 +17419,9 @@ final class AppState: ObservableObject {
             if round == 1 {
                 promotionContexts[key]?.anchor.noteKcMacVerified(round: round)
                 reevaluatePromotedInvites(trigger: .kcmac)
+                // The peer's round-1 MAC verified: the voice check gets its first moment of trust inputs for this call.
+                voiceKcVerifiedCalls.insert(key)
+                reportVoiceTierMoment()
                 // A verified round-1 MAC: when the second signature judged the round, its policy writes the record of the contact device
                 // whose signature verified (including the tag of the call settings under the extension). Otherwise a verified
                 // round-1 MAC under the extension pins the tag for that device.
@@ -22838,9 +22842,65 @@ final class AppState: ObservableObject {
     private func startVoiceCheckForThisCall() {
         guard let controller = webRtcController as? QAudionWebRtcCallController,
               let contactId = callContactId, let callId = canonicalActiveCallId() else { return }
+        // The device is read from the stash of THIS call only (stamped by this call's own `call_incoming`): an outgoing call has
+        // none, and never reads what an earlier call from the same peer left in a peer-keyed field. No device is tier 0.
+        let deviceId = VoiceTierInputs.peerDeviceId(forCall: callId, callScopedStash: senderDeviceIdByCallId)
+        let startS = Int64(Date().timeIntervalSince1970)
         controller.voiceMediaStart(
-            callId: callId, contactId: contactId, peerDeviceId: callPinDeviceId(for: contactId),
-            tStartS: Int(Date().timeIntervalSince1970), utcOffsetS: TimeZone.current.secondsFromGMT())
+            callId: callId, contactId: contactId, peerDeviceId: deviceId,
+            tStartS: Int(startS), utcOffsetS: TimeZone.current.secondsFromGMT())
+        voiceTierCall = VoiceTierCall(callId: callId, peerId: contactId, deviceId: deviceId, startS: startS)
+        reportVoiceTierMoment()
+    }
+
+    /// What the voice check keeps of the call for the tier: the call, its peer, the device THIS call is bound to, and its start.
+    private struct VoiceTierCall {
+        let callId: String
+        let peerId: String
+        let deviceId: String?
+        let startS: Int64
+    }
+
+    private var voiceTierCall: VoiceTierCall?
+    /// Calls (lowercased id) whose peer round-1 key-confirmation MAC verified. A moment of the tier is reported only once it did.
+    private var voiceKcVerifiedCalls: Set<String> = []
+
+    /// Reports one moment of the trust inputs of this call to the voice check: from the moment the peer's round-1 MAC verified AND
+    /// the call has its protection line. The pin is read for exactly (peer, device) of this call. Re-run whenever the identity
+    /// state, the protection line or the key confirmation changes; the engine keeps the lowest tier of every moment and an input
+    /// equal to the last one is not passed again. Does nothing while the voice check has no session for this call.
+    @MainActor
+    private func reportVoiceTierMoment() {
+        guard let call = voiceTierCall, voiceKcVerifiedCalls.contains(call.callId),
+              let controller = webRtcController as? QAudionWebRtcCallController, controller.voiceCheckActive,
+              callPqProtection != nil else { return }
+        let auth = callIdentityAuth
+        let protection = callPqProtection
+        let selfUserId = AppState.currentUserIdSnapshot
+        DispatchQueue.global(qos: .utility).async {
+            let store = PeerIdentityPinStore()
+            var trust: VoiceTierTrust?
+            if let device = call.deviceId,
+               let key = store.exactPinnedKey(contactId: call.peerId, deviceId: device) {
+                let pinnedAtS = store.pinnedAt(contactId: call.peerId, deviceId: device).map { Int64($0.timeIntervalSince1970.rounded(.up)) }
+                let contact = ContactsStore().load().first(where: { $0.userId == call.peerId })
+                var outOfBand = false
+                if let contact, contact.isVerified, VoiceTierInputs.isOutOfBand(method: contact.verificationMethod),
+                   let recorded = contact.verifiedFingerprintHex, !recorded.isEmpty,
+                   let selfUserId, !selfUserId.isEmpty,
+                   let selfKey = SovereignIdentityManager().loadIdentity()?.signingPublic,
+                   let current = SasPinVerification.fingerprintHex(
+                       selfUserId: selfUserId, selfIdentityKey: selfKey, peerUserId: call.peerId, peerIdentityKey: key) {
+                    outOfBand = current == recorded
+                }
+                trust = VoiceTierTrust(
+                    pinnedKey: key, pinnedAtS: pinnedAtS, pendingChange: contact?.identityChangePendingAtMs != nil,
+                    oobVerified: outOfBand)
+            }
+            controller.voiceReportTier(
+                callId: call.callId, peerDeviceId: call.deviceId, trust: trust, auth: auth, protection: protection,
+                kcmacOk: true, callStartS: call.startS)
+        }
     }
 
     /// E2EE avatar transport (2026-07-30) — Pavel: "durante la chiamata ci
@@ -24879,6 +24939,9 @@ extension AppState {
         if let endedId = endCallId {
             senderDeviceIdByCallId.removeValue(forKey: endedId)
         }
+        // The trust inputs of the voice check belong to the call that just ended.
+        voiceTierCall = nil
+        voiceKcVerifiedCalls.removeAll()
         // WIRE_SPEC §8.7 — reset the RX render gate (parked track,
         // failsafe watchdog, readiness memo) for the next call.
         resetRemoteVideoRenderGate()

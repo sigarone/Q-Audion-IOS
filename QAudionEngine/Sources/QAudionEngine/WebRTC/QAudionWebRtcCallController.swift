@@ -1803,6 +1803,27 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         session.mediaStart()
     }
 
+    /// True while the contact-voice check has a session for this call (never while the flag is off): the app reads the trust
+    /// stores for a tier moment only then.
+    public var voiceCheckActive: Bool { voiceLatch.currentSession != nil }
+
+    /// One moment of the trust inputs of this call, for the tier of the contact-voice check. The engine keeps the lowest tier of
+    /// every moment it is given, so nothing is passed before every input is known: the caller reports from the moment the peer's
+    /// round-1 key-confirmation MAC verified AND this call has a protection line. `peerDeviceId` is the device that THIS call is
+    /// bound to (see `VoiceTierInputs.peerDeviceId(forCall:callScopedStash:)`), `trust` the exact (peer, device) pin or nil.
+    /// A repeated identical input is not passed again. Does nothing while the check is off or has no session for this call.
+    public func voiceReportTier(
+        callId: String, peerDeviceId: String?, trust: VoiceTierTrust?, auth: CallIdentityAuth,
+        protection: CallPqProtection?, kcmacOk: Bool, callStartS: Int64
+    ) {
+        guard let session = voiceLatch.currentSession,
+              session.binding.callId.lowercased() == callId.lowercased() else { return }
+        guard let input = VoiceTierInputs.build(
+            callId: callId, peerDeviceId: peerDeviceId, trust: trust, auth: auth, protection: protection,
+            kcmacOk: kcmacOk, callStartS: callStartS) else { return }
+        session.reportTier(input)
+    }
+
     /// The call is on hold (this side or the peer) or resumed: the voice check starts a new stretch.
     public func voiceHoldChanged(_ held: Bool) {
         voiceLatch.currentSession?.holdChanged(held)

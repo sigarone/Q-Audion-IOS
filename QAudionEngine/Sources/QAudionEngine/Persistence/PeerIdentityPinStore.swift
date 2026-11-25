@@ -62,7 +62,12 @@ public final class PeerIdentityPinStore {
         NotificationCenter.default.post(name: didChangeNotification, object: nil, userInfo: ["contactId": contactId])
     }
 
-    public init() {}
+    /// The time that is written as the pinned-at time of a key. Injected for tests; the app uses the system clock.
+    private let clock: () -> Date
+
+    public init(clock: @escaping () -> Date = { Date() }) {
+        self.clock = clock
+    }
 
     // MARK: - Account keying (D11 per-(peer,device))
 
@@ -253,14 +258,7 @@ public final class PeerIdentityPinStore {
         #if canImport(Security)
         // A device added to a peer that already has a pin is a change of what is known about the peer.
         let peerHadAnotherPin: Bool = !allPinnedKeys(contactId: contactId).isEmpty
-        let add: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: account,
-            kSecValueData as String: ed25519Pub,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        ]
-        let status = SecItemAdd(add as CFDictionary, nil)
+        let status = addPin(account: account, key: ed25519Pub)
         if status == errSecDuplicateItem {
             // Raced with another writer between the read above and this add.
             // Re-read and compare so two concurrent first-contacts converge on
@@ -330,29 +328,78 @@ public final class PeerIdentityPinStore {
         if existing == ed25519Pub { return .unchanged }
         #if canImport(Security)
         if existing != nil {
-            let query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: Self.keychainService,
-                kSecAttrAccount as String: account
-            ]
-            let update: [String: Any] = [kSecValueData as String: ed25519Pub]
-            let replaced: Bool = SecItemUpdate(query as CFDictionary, update as CFDictionary) == errSecSuccess
+            let replaced: Bool = updatePin(account: account, key: ed25519Pub)
             if replaced { Self.announceChange(contactId: contactId) }
             return replaced ? .overwritten : .failed
         }
         let peerHadAnotherPin: Bool = !allPinnedKeys(contactId: contactId).isEmpty
-        let add: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.keychainService,
-            kSecAttrAccount as String: account,
-            kSecValueData as String: ed25519Pub,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        ]
-        let added: Bool = SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+        let added: Bool = addPin(account: account, key: ed25519Pub) == errSecSuccess
         if added && peerHadAnotherPin { Self.announceChange(contactId: contactId) }
         return added ? .added : .failed
         #else
         return .failed
+        #endif
+    }
+
+    // MARK: - Pinned-at time
+
+    // The only two places that write a pin to the Keychain. Both stamp the pinned-at time into `kSecAttrGeneric`, so no path that
+    // adds or replaces a key can leave the age of the key behind (a source scan test fails on any other write to this service).
+    // A write that does not change the key (`pinOrMatch` on a match, `repin` with the same key) never reaches them, so the age of
+    // a key is not reset by being seen again.
+    #if canImport(Security)
+    private func addPin(account: String, key: Data) -> OSStatus {
+        let add: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.keychainService,
+            kSecAttrAccount as String: account,
+            kSecValueData as String: key,
+            kSecAttrGeneric as String: PinTime.encode(clock()),
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        return SecItemAdd(add as CFDictionary, nil)
+    }
+
+    private func updatePin(account: String, key: Data) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.keychainService,
+            kSecAttrAccount as String: account
+        ]
+        let update: [String: Any] = [
+            kSecValueData as String: key,
+            kSecAttrGeneric as String: PinTime.encode(clock())
+        ]
+        return SecItemUpdate(query as CFDictionary, update as CFDictionary) == errSecSuccess
+    }
+    #endif
+
+    /// The key pinned at EXACTLY `(contactId, deviceId)`: no fallback to the legacy bare-`contactId` item. nil with no device id.
+    public func exactPinnedKey(contactId: String, deviceId: String?) -> Data? {
+        guard !contactId.isEmpty, let d = deviceId, !d.isEmpty else { return nil }
+        return rawPinnedKey(account: Self.account(contactId, d))
+    }
+
+    /// When the key pinned at EXACTLY `(contactId, deviceId)` was pinned: the time written with it, or, for an item written before
+    /// the time existed, the Keychain modification date of the item (never earlier than the real pin, so the age of the key is never
+    /// overstated). No fallback to the legacy bare-`contactId` item and none to any other time. nil when there is no such pin, no
+    /// device id, or nothing readable.
+    public func pinnedAt(contactId: String, deviceId: String?) -> Date? {
+        #if canImport(Security)
+        guard !contactId.isEmpty, let d = deviceId, !d.isEmpty else { return nil }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.keychainService,
+            kSecAttrAccount as String: Self.account(contactId, d),
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let attrs = item as? [String: Any] else { return nil }
+        return PinTime.resolve(
+            stamped: attrs[kSecAttrGeneric as String] as? Data, modified: attrs[kSecAttrModificationDate as String] as? Date)
+        #else
+        return nil
         #endif
     }
 
@@ -445,5 +492,29 @@ public final class PeerIdentityPinStore {
         ]
         SecItemDelete(query as CFDictionary)
         #endif
+    }
+}
+
+/// The pinned-at time of a key as it is stored: 8 bytes, big-endian unix seconds, in `kSecAttrGeneric`. Rounded up to the
+/// second, so the age of a key is never overstated.
+enum PinTime {
+    static func encode(_ date: Date) -> Data {
+        let seconds = UInt64(max(0, min(date.timeIntervalSince1970.rounded(.up), Double(Int32.max) * 4)))
+        return Data((0..<8).map { UInt8(truncatingIfNeeded: seconds >> UInt64(56 - 8 * $0)) })
+    }
+
+    /// The stored time, or nil when the data is not exactly 8 bytes (or is not a plausible time).
+    static func decode(_ data: Data) -> Date? {
+        guard data.count == 8 else { return nil }
+        var seconds: UInt64 = 0
+        for b in data { seconds = (seconds << 8) | UInt64(b) }
+        guard seconds <= UInt64(Int32.max) * 4 else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(seconds))
+    }
+
+    /// The stamped time when there is a valid one, otherwise the modification date of the item (an item written before the stamp).
+    static func resolve(stamped: Data?, modified: Date?) -> Date? {
+        if let stamped, let date = decode(stamped) { return date }
+        return modified
     }
 }

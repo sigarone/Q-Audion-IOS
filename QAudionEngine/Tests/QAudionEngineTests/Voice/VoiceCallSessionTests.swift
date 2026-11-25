@@ -569,6 +569,57 @@ final class VoiceCallSessionTests: XCTestCase {
         XCTAssertEqual(session.holdEventsFed, 2)
     }
 
+    // MARK: the tier of the call
+
+    private func tierInput(keyAgeS: Int = 90_000, device: Bool = true) -> VoiceTierInput {
+        VoiceTierInput(
+            pinState: .pinned, keyAgeS: keyAgeS, viaLegacyRow: !device, oobVerified: false, pinAnomaly: false, kcmacOk: true,
+            heldUnresolved: false, authWord: .h)
+    }
+
+    func testACallIsTierZeroUntilATierMomentIsReportedAndTheLowestTierOfEveryMomentSticks() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertEqual(session.withEngine { $0?.tier }, 0, "no moment yet")
+        session.reportTier(tierInput())
+        session.queue.sync {}
+        XCTAssertEqual(session.withEngine { $0?.tier }, 1)
+        session.reportTier(tierInput(keyAgeS: 3_600))
+        session.queue.sync {}
+        XCTAssertEqual(session.withEngine { $0?.tier }, 0, "a young key at any moment")
+        session.reportTier(tierInput())
+        session.queue.sync {}
+        XCTAssertEqual(session.withEngine { $0?.tier }, 0, "sticky: it never goes back up in the same call")
+    }
+
+    func testATierMomentBeforeTheEngineExistsIsNotAnInputOfTheCall() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let (session, _) = makeSession(fake, process)
+        session.reportTier(tierInput())
+        session.queue.sync {}
+        XCTAssertNil(session.withEngine { $0 })
+    }
+
+    func testTheEngineOfEachCallGetsTheDeviceOfThatCallAndANextCallWithoutOneGetsNone() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let (first, _) = makeSession(fake, process, binding: binding(device: "dev-1"))
+        first.mediaStart()
+        first.queue.sync {}
+        let (second, _) = makeSession(fake, process, binding: binding(device: nil))
+        second.mediaStart()
+        second.queue.sync {}
+        XCTAssertEqual(fake.tagDevices, ["dev-1", ""], "the second call is bound to no device, not to the one of the call before")
+        XCTAssertNil(second.binding.peerDeviceId)
+    }
+
     // MARK: the card
 
     func testEachStateOfTheMachineHasItsOwnStateOfTheCard() {

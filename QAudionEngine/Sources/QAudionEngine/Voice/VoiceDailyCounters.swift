@@ -121,11 +121,11 @@ final class VoiceDailyCounters: @unchecked Sendable {
             default: break
             }
             if s.shadow { counters.sdiff += 1 }
-            switch s.routeClass {
-            case 1: counters.hs += 1
-            case 2: counters.spk += 1
-            case 3, 4, 5: counters.hf += 1
-            default: counters.unk += 1
+            switch Self.routeGroup(ofClass: s.routeClass) {
+            case .handset: counters.hs += 1
+            case .loudspeaker: counters.spk += 1
+            case .handsFree: counters.hf += 1
+            case .unknown: counters.unk += 1
             }
             if s.newDevice { counters.newdev += 1 }
             let stratum = Self.stratum(speechS: s.speechS)
@@ -145,6 +145,22 @@ final class VoiceDailyCounters: @unchecked Sendable {
             state.emitAtS[day] = (day + 1) * Self.secondsPerDay - call.utcOffsetS + max(0, min(Self.secondsPerDay - 1, random()))
         }
         persist()
+    }
+
+    /// The group of the daily counters: the route groups of `constants.json` (`conditions.route_groups`), by the codes of
+    /// `route_class_codes`: ear (1) and wired (4) are the handset, speaker (2) the loudspeaker, bt (3) and car (5) hands-free, and
+    /// unknown (0, or a code that the table does not have) its own group. A test reads the bundle and fails when they drift apart.
+    enum RouteGroup: Equatable {
+        case unknown, handset, loudspeaker, handsFree
+    }
+
+    static func routeGroup(ofClass code: Int) -> RouteGroup {
+        switch code {
+        case 1, 4: return .handset
+        case 2: return .loudspeaker
+        case 3, 5: return .handsFree
+        default: return .unknown
+        }
     }
 
     /// The stratum of a call by its seconds of speech: up to 2, 2 to 10, 10 to 30, over 30 minutes.

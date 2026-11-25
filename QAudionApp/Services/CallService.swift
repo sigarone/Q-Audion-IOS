@@ -119,7 +119,7 @@ final class CallService: @unchecked Sendable {
     var onContactVoiceScoreUpdated: ((Float) -> Void)?
     /// W-GUARDIAN3SIG (2026-09-11) — pass-through of
     /// `QAudionCallIntegration.onContactVoiceScoreBreakdown`. Diagnostics only.
-    var onContactVoiceScoreBreakdown: ((Float, Float, Float, Float) -> Void)?
+    var onContactVoiceScoreBreakdown: ((Float, Float, Float) -> Void)?
 
     /// W65+W66: Full audio capture + processing pipeline.
     ///
@@ -2781,8 +2781,8 @@ final class CallService: @unchecked Sendable {
         integration.onContactVoiceScoreUpdated = { [weak self] score in
             self?.onContactVoiceScoreUpdated?(score)
         }
-        integration.onContactVoiceScoreBreakdown = { [weak self] df, lv, vp, combined in
-            self?.onContactVoiceScoreBreakdown?(df, lv, vp, combined)
+        integration.onContactVoiceScoreBreakdown = { [weak self] df, lv, combined in
+            self?.onContactVoiceScoreBreakdown?(df, lv, combined)
         }
         // W-FECDECODE (2026-08-25) — a single-frame wire gap just got a real
         // reconstruction instead of concealment; play it BEFORE the frame
@@ -3113,8 +3113,8 @@ final class CallService: @unchecked Sendable {
         integration.onContactVoiceScoreUpdated = { [weak self] score in
             self?.onContactVoiceScoreUpdated?(score)
         }
-        integration.onContactVoiceScoreBreakdown = { [weak self] df, lv, vp, combined in
-            self?.onContactVoiceScoreBreakdown?(df, lv, vp, combined)
+        integration.onContactVoiceScoreBreakdown = { [weak self] df, lv, combined in
+            self?.onContactVoiceScoreBreakdown?(df, lv, combined)
         }
         // W-FECDECODE — mirror the outgoing-side wiring 1:1, same reasoning
         // as `onOwnerContinuityStateChanged` above.

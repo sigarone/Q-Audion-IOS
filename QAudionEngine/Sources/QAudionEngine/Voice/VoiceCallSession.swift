@@ -196,6 +196,7 @@ final class VoiceCallSession: @unchecked Sendable {
     private var ticker: VoiceTicker?
     private var pollsInFlight = 0
     private var lastHold = false
+    private var lastTierInput: VoiceTierInput?
     private var engineRan = false
     private var releaseModels: (() -> Void)?
 
@@ -263,6 +264,17 @@ final class VoiceCallSession: @unchecked Sendable {
             lastHold = held
             holdEventsFed += 1
             feed(.hold(atNs: stamped(now), held: held))
+        }
+    }
+
+    /// One moment of the trust inputs of the call. The engine keeps the lowest tier of every moment; an input equal to the one
+    /// reported last is not passed again.
+    func reportTier(_ input: VoiceTierInput) {
+        let now = clock()
+        queue.async { [self] in
+            guard engine != nil, input != lastTierInput else { return }
+            lastTierInput = input
+            feed(.tier(atNs: stamped(now), input: input))
         }
     }
 
@@ -410,7 +422,8 @@ final class VoiceCallSession: @unchecked Sendable {
             let replayFallback = fallbackSeen
             lock.unlock()
             lastAt = now
-            // Tier 0 until the trust inputs exist: nothing is learned and nothing is shown as Matches.
+            // Tier 0 until the trust inputs exist (`reportTier`, once the peer's key confirmation verified and the call has its
+            // protection line): nothing is learned and nothing is shown as Matches.
             built.feed(.mediaStart(atNs: now, tNs: now, tierInput: nil))
             if replayFallback { built.feed(.path(atNs: stamped(now), path: .dc)) }
             if cancel { built.requestPostCancel() }

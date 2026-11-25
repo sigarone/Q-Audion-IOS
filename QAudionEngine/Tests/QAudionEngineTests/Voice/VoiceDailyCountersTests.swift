@@ -40,6 +40,16 @@ final class VoiceDailyCountersTests: XCTestCase {
         XCTAssertEqual(lines[4], "QA-VOICE v=1 ev=dstr st=4 calls=0 sdiff=0 m1=0 m2=0 m3=0 m4=0")
     }
 
+    func testEarAndWiredAreHandsetSpeakerIsLoudspeakerBluetoothAndCarAreHandsFreeAndUnknownIsItsOwnGroup() {
+        let counters = VoiceDailyCounters(storage: Memory(), random: { 0 })
+        // The codes of `route_class_codes`: unknown 0, ear 1, speaker 2, bt 3, wired 4, car 5; a code that is not in the table.
+        for (i, route) in [0, 1, 2, 3, 4, 5, 99].enumerated() {
+            counters.record(call(summary(route: route), contact: "c\(i)"))
+        }
+        let line = counters.dueLines(nowS: 1_790_000_000 + 3 * 86_400, utcOffsetS: 0)[0]
+        XCTAssertTrue(line.contains(" hs=2 spk=1 hf=2 unk=2 "), line)
+    }
+
     func testTheStrataSplitAtTwoTenAndThirtyMinutesOfSpeech() {
         XCTAssertEqual(VoiceDailyCounters.stratum(speechS: 120), 0)
         XCTAssertEqual(VoiceDailyCounters.stratum(speechS: 121), 1)

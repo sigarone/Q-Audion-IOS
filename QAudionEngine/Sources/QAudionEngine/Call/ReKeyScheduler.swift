@@ -15,7 +15,9 @@ import Foundation
 ///
 /// The next re-key deadline is a function of the live Confidence Index C
 /// emitted by `ContactVoiceVerifier` (via `onScoreUpdated`, relayed through
-/// `QAudionCallIntegration`/`CallService`/`AppState`):
+/// `QAudionCallIntegration`/`CallService`/`AppState`). C is the voice-free
+/// Guardian index c_ex = (0.4 df' + 0.3 lv') / 0.7: no voice state of the
+/// contact-voice check enters it, so none can change a re-key decision:
 ///
 ///   period = basePeriod * clamp(C, cMin, cMax)
 ///

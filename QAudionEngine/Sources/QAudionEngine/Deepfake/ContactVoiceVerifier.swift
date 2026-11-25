@@ -13,12 +13,13 @@ import Foundation
 /// see `SpeakerVerifier.startAutoEnrollment`/`feedVerificationFrame`. Nothing
 /// writes a contact template to the store any more, so every call starts here.
 ///
-/// W-GUARDIAN3SIG (2026-09-11) — this class now reproduces Android's full
-/// `DeepfakeMonitor` 3-signal fusion (deepfake classifier + liveness +
-/// voiceprint), not just the voiceprint sub-score alone. See that class's
-/// kdoc for the reference formulas this ports verbatim: weighted combine
-/// (0.4/0.3/0.3), per-sub-score `calibrate()` remap, and a whole-tick VAD
-/// gate. The deepfake classifier (`DeepfakeClassifier`) and its 16kHz
+/// W-GUARDIAN3SIG (2026-09-11) — this class reproduces Android's
+/// `DeepfakeMonitor` fusion (deepfake classifier + liveness), not just a
+/// single sub-score. The voiceprint is NOT part of it:
+/// voice evidence is shown once, on the voice card, and never moves the
+/// Guardian index, its alerts or the re-key timing. The index is
+/// c_ex = (0.4 df' + 0.3 lv') / 0.7 with the per-sub-score `calibrate()`
+/// remap, and a whole-tick VAD gate. The deepfake classifier (`DeepfakeClassifier`) and its 16kHz
 /// resampler (`SpeakerVerifier.resampleTo16k`) already existed on iOS but
 /// were unwired outside their own files; liveness has no separate ML model
 /// on Android either — it's `heuristicLiveness` below, a direct port of
@@ -65,10 +66,10 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     /// @ 16kHz, matching Android's `MIN_WINDOW_SAMPLES`.
     private static let deepfakeMinSamples = KaldiFbankExtractor.sampleRate
 
-    /// Same weighting Android's `DeepfakeMonitor.combine()` uses.
+    /// The weights of the two signals of the voice-free index (the former three-signal weights 0.4/0.3/0.3, without the
+    /// voiceprint third, divided by their sum).
     private static let wDeepfake: Float = 0.4
     private static let wLiveness: Float = 0.3
-    private static let wVoiceprint: Float = 0.3
 
     /// Same calibration constants as Android's `DeepfakeMonitor.calibrate()`
     /// — see that function's kdoc for the reasoning (genuine-speech AASIST
@@ -132,21 +133,20 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
     /// tick. `ReKeyScheduler.observeConfidence` — Android's adaptive re-key
     /// period formula — needs the continuous value.
     ///
-    /// W-GUARDIAN3SIG (2026-09-11) — now the calibrated, weighted 3-signal
-    /// combine (deepfake + liveness + voiceprint), not the raw voiceprint
-    /// score alone. Same value Android's `guardian.index`/`confidence` Flow
-    /// carries into its own `ReKeyScheduler.observeConfidence` call.
+    /// The voice-free Guardian index c_ex = (0.4 df' + 0.3 lv') / 0.7 (deepfake and liveness, each calibrated), the same value
+    /// Android's `guardian.index`/`confidence` Flow carries into its own `ReKeyScheduler.observeConfidence` call. No voice state
+    /// enters it.
     public var onScoreUpdated: ((Float) -> Void)?
 
     /// W-GUARDIAN3SIG (2026-09-11) — pure diagnostics, fired alongside
     /// [onScoreUpdated] on the same tick with the individual RAW (pre-
     /// `calibrate()`) sub-scores plus the final calibrated combine, in the
-    /// order (deepfake, liveness, voiceprint, combined). Exists ONLY so the
+    /// order (deepfake, liveness, combined). Exists ONLY so the
     /// re-key-facing confidence — which has no on-screen display anywhere,
     /// unlike Tier 1's badge — can be verified live instead of inferred
     /// indirectly from re-key timing. Never touches `onScoreUpdated`'s own
     /// behavior or value.
-    public var onScoreBreakdown: ((_ deepfake: Float, _ liveness: Float, _ voiceprint: Float, _ combined: Float) -> Void)?
+    public var onScoreBreakdown: ((_ deepfake: Float, _ liveness: Float, _ combined: Float) -> Void)?
 
     /// Fires on `scoreQueue` whenever the speaker-change verdict actually
     /// changes. Informational: the app layer shows it and does nothing else
@@ -400,9 +400,8 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
         let window = snapshotRingLocked()
         lock.unlock()
 
-        // Voiceprint score first — cheap-ish CAM++ pass, and its own nil
-        // ("not enough audio yet" / "template not ready") is meaningful on
-        // its own, exactly as before this class combined signals.
+        // The voiceprint pass feeds the speaker-change monitor ONLY (the in-memory chain of today's change card, removed with
+        // that card). Its result is not an input of the Guardian index below.
         let vp = verifier.computeVerificationScore()
         let asNorm = verifier.computeAsNormScore()
         speakerChange.feed(asNorm ?? vp)
@@ -410,12 +409,9 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
         // Whole-tick VAD gate on the deepfake-classifier window — mirrors
         // Android's `DeepfakeMonitor.feed()`: silence/comfort-noise skips
         // the WHOLE tick (no update at all), it doesn't degrade the score.
-        // Matches the pre-existing contract too: no meaningful combine
-        // without a real voiceprint reading this tick either.
         let windowRms = Self.rms(window)
         guard window.count >= Self.deepfakeMinSamples,
-              windowRms >= SpeakerVerifier.voiceActivityRmsThreshold,
-              let vp
+              windowRms >= SpeakerVerifier.voiceActivityRmsThreshold
         else {
             lock.lock(); tickInFlight = false; lock.unlock()
             return
@@ -443,20 +439,23 @@ public final class ContactVoiceVerifier: @unchecked Sendable {
                 genuineProb = 1
             }
             let liveness = Self.heuristicLiveness(window)
-            let combined = (
-                Self.wDeepfake * Self.calibrate(genuineProb)
-                    + Self.wLiveness * Self.calibrate(liveness)
-                    + Self.wVoiceprint * Self.calibrate(vp)
-            ).clamped01()
+            let combined = Self.guardianIndex(deepfake: genuineProb, liveness: liveness)
 
             self.scoreQueue.async {
                 self.onScoreUpdated?(combined)
-                self.onScoreBreakdown?(genuineProb, liveness, vp, combined)
+                self.onScoreBreakdown?(genuineProb, liveness, combined)
                 self.lock.lock()
                 self.tickInFlight = false
                 self.lock.unlock()
             }
         }
+    }
+
+    /// The voice-free Guardian index c_ex = (0.4 df' + 0.3 lv') / 0.7, df' and lv' the calibrated deepfake and liveness
+    /// scores. It takes no voice input, so no voice state can change it, the re-key timing or the confidence announcement that are
+    /// derived from it.
+    static func guardianIndex(deepfake: Float, liveness: Float) -> Float {
+        ((wDeepfake * calibrate(deepfake) + wLiveness * calibrate(liveness)) / (wDeepfake + wLiveness)).clamped01()
     }
 
     /// Below `genuineFloor` is left unchanged (deepfake zone — no

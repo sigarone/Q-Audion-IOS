@@ -162,7 +162,7 @@ final class VoiceEngine {
     private var path = VoicePath.srtp
     private var pathEverDc = false
     private var tiers: [Int] = []
-    private var tier = 0
+    private(set) var tier = 0
     private var blockedCall = false
     private var withdrawn = false
     private var consentS = 0
