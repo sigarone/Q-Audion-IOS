@@ -1785,7 +1785,10 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
 
     /// Media start of the contact-voice check, at the genuine-accept points of the call. Does nothing while the flag is off, and
     /// only once per call. `peerDeviceId` is the device that THIS call pinned.
-    public func voiceMediaStart(callId: String, contactId: String, peerDeviceId: String?, tStartS: Int, utcOffsetS: Int) {
+    /// `held` is the hold state of the call right now (this side or the peer): the check starts from it.
+    public func voiceMediaStart(
+        callId: String, contactId: String, peerDeviceId: String?, tStartS: Int, utcOffsetS: Int, held: Bool = false
+    ) {
         guard VoiceFeature.isEnabled, voiceLatch.currentSession == nil, let pc = peerConnection else { return }
         let binding = VoiceCallBinding(
             callId: callId, contactId: contactId, peerDeviceId: peerDeviceId, tStartS: tStartS, utcOffsetS: utcOffsetS)
@@ -1800,7 +1803,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
             live.pollOnce(deliver)
         })
         pc.setVoiceRxTap(session.rxTap)
-        session.mediaStart()
+        session.mediaStart(held: held)
     }
 
     /// True while the contact-voice check has a session for this call (never while the flag is off): the app reads the trust

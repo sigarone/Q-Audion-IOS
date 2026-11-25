@@ -178,6 +178,10 @@ FORGED += [
     END.replace(" sc=-", ""), END.replace("rsnr=1 rclip=0", "rclip=0 rsnr=1"),
     # a number that is a measured value: an LLR, a score, a threshold, a ratio
     END.replace("margin=1", "margin=1 llr=-3.2"), END.replace("margin=1", "margin=0.84"), STATE.replace("blk=0", "blk=0 b=0.61"),
+    # the same numbers under other keys and in other notations (integer, negative, scientific, a key that ends in the word)
+    END.replace("margin=1", "margin=1 asnorm_score=0.71"), END.replace("margin=1", "margin=1 vpscore=0.82"),
+    END.replace("margin=1", "margin=1 llr=-3"), END.replace("margin=1", "margin=1 cos=1e-3"),
+    END.replace("margin=1", "margin=1 score=3"), END.replace("margin=1", "margin=1 similarity: .5"),
     "QA-VOICE v=1 [OwnerCont] cos=0.83 v=0.42",
     P + "end call=5a000000 cos=0.83 v=0.42",
     P + "score call=5a000000 v=0.83",
@@ -204,6 +208,25 @@ for line in ("[OwnerCont] cos=0.83 v=0.42", "[OwnerCont] cos=0.91 v=0.77 lv=ok",
         checks += 1
         if "cos=" in line and shipped(line, tag) is not None:
             failures.append("a score line was shipped under %r: %r" % (tag, line))
+
+# The measure rule: every notation of a voice number is dropped whatever the tag, and the neighbours that only look like it stay.
+MEASURES = ["asnorm_score=0.71", "vpscore=0.82", "llr=-3", "cos=1e-3", "score=3", "cosine = -0.5", "logit=+2", "similarity:.25",
+            "voice.score=0.1", "X_LLR=4E+2"]
+for text in MEASURES:
+    line = "voice check done " + text + " ok"
+    checks += 1
+    if not m._RE_VOICE_MEASURE.search(line.lower()):
+        failures.append("the measure rule misses %r" % text)
+    for tag in ("call", "stdout", "chat", "net"):
+        checks += 1
+        if red(line, tag) != "" or shipped(line, tag) is not None:
+            failures.append("a voice measure was shipped under %r: %r" % (tag, line))
+NEIGHBOURS = ["scale=0.5", "cost=3", "scoreboard=1", "scores=3", "cosmos=7", "sc=-", "sc=3", "llr=na", "score=none", "logit_count=4",
+              "similarity_mode=fast", "cosine_table=ready", "latency=0.5", "calls=12", "margin=1", "t=1e-3"]
+for text in NEIGHBOURS:
+    checks += 1
+    if m._RE_VOICE_MEASURE.search(("call 5a000000 " + text).lower()):
+        failures.append("the measure rule refuses a neighbour: %r" % text)
 
 # The pattern itself: one whole-line alternation, no other pattern accepts these lines.
 checks += 1

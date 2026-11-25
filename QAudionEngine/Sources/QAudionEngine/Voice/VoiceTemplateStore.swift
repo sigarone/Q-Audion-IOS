@@ -179,15 +179,25 @@ final class VoiceTemplateStore: @unchecked Sendable {
     private let aead: VoiceAead
     private let accountId: String
     private let dirSync: VoiceDirectorySync
+    /// The wipe generation of the process. An operation that carries the generation its caller read is refused, inside the lock
+    /// and before `meta.bin`, the key or any file is touched, once the generation has moved on.
+    private let generationProbe: () -> Int
     private let fm = FileManager.default
     private let lock = NSLock()
     private var meta: VoiceMeta?
 
-    init(dir: URL, aead: VoiceAead, accountId: String, dirSync: @escaping VoiceDirectorySync = VoiceDirectorySyncs.posix) {
+    init(dir: URL, aead: VoiceAead, accountId: String, dirSync: @escaping VoiceDirectorySync = VoiceDirectorySyncs.posix,
+         generationProbe: @escaping () -> Int = { 0 }) {
         self.dir = dir
         self.aead = aead
         self.accountId = accountId
         self.dirSync = dirSync
+        self.generationProbe = generationProbe
+    }
+
+    /// Called first inside the lock by every operation that may create `meta.bin` or the key.
+    private func admit(_ generation: Int?) throws {
+        if let generation, generationProbe() != generation { throw VoiceStaleCall() }
     }
 
     /// `<Application Support>/voice/v3/`.
@@ -395,8 +405,11 @@ final class VoiceTemplateStore: @unchecked Sendable {
     }
 
     /// `load`, then: a record of another model or front-end version is deleted (relearn).
-    func loadCompatible(_ contactId: String, _ cfg: VoiceStateConstants) throws -> TemplateRecord? {
-        try lock.withLock { try loadCompatibleLocked(contactId, cfg) }
+    func loadCompatible(_ contactId: String, _ cfg: VoiceStateConstants, generation: Int? = nil) throws -> TemplateRecord? {
+        try lock.withLock {
+            try admit(generation)
+            return try loadCompatibleLocked(contactId, cfg)
+        }
     }
 
     /// Encrypts and writes the record (temp file, fsync, rename, directory fsync). Throws and leaves the old file when anything fails.
@@ -408,9 +421,10 @@ final class VoiceTemplateStore: @unchecked Sendable {
     /// what it returns (nil deletes the record). Nothing else can change this contact's file in between. A failure of the
     /// load throws before `body` runs; a failure of `body` throws before anything is written. Returns what was stored.
     @discardableResult
-    func update(contactId: String, compatibleWith cfg: VoiceStateConstants? = nil,
+    func update(contactId: String, compatibleWith cfg: VoiceStateConstants? = nil, generation: Int? = nil,
                 _ body: (TemplateRecord?) throws -> TemplateRecord?) throws -> TemplateRecord? {
         try lock.withLock {
+            try admit(generation)
             let current: TemplateRecord?
             if let cfg {
                 current = try loadCompatibleLocked(contactId, cfg)
@@ -429,8 +443,11 @@ final class VoiceTemplateStore: @unchecked Sendable {
 
     /// Forget this voice: contact deleted or blocked, retention, model change. True when a file was there.
     @discardableResult
-    func delete(_ contactId: String) throws -> Bool {
-        try lock.withLock { try deleteLocked(contactId) }
+    func delete(_ contactId: String, generation: Int? = nil) throws -> Bool {
+        try lock.withLock {
+            try admit(generation)
+            return try deleteLocked(contactId)
+        }
     }
 
     /// Runs the sweep on one contact: the record is deleted (retention) or rewritten when something was purged.
@@ -464,8 +481,11 @@ final class VoiceTemplateStore: @unchecked Sendable {
     }
 
     /// The salt of the file names (creates `meta.bin` when there is none): the device tag of a peer is derived from it.
-    func nameSalt() throws -> [UInt8] {
-        try lock.withLock { try ensureMeta().nameSalt }
+    func nameSalt(generation: Int? = nil) throws -> [UInt8] {
+        try lock.withLock {
+            try admit(generation)
+            return try ensureMeta().nameSalt
+        }
     }
 
     func recordCount() -> Int {

@@ -40,6 +40,9 @@ final class VoiceCallSessionTests: XCTestCase {
         var wipes = 0
         var wipeFails = false
         var staleUpdates = 0
+        var staleReads = 0
+        /// The signed-in account as the fake store sees it; nil: nobody is signed in.
+        var account: String? = "acct-1"
         var threadsWereBackground = true
         var record: TemplateRecord?
         private(set) var budget: VoiceCpuBudget?
@@ -72,27 +75,41 @@ final class VoiceCallSessionTests: XCTestCase {
             })
         }
 
-        func loadRecord(contactId: String, cfg: VoiceStateConstants) throws -> TemplateRecord? {
+        func currentAccount() -> String? {
             lock.lock()
             defer { lock.unlock() }
-            note()
-            loadCalls += 1
-            return record
+            return account
         }
 
-        func deviceTag(deviceId: String) throws -> Int {
-            lock.lock()
-            defer { lock.unlock() }
-            tagDevices.append(deviceId)
-            return 7
-        }
-
-        func update(contactId: String, cfg: VoiceStateConstants, generation expected: Int,
-                    _ body: (TemplateRecord?) throws -> TemplateRecord?) throws {
+        func loadRecord(contactId: String, cfg: VoiceStateConstants, generation expected: Int) throws -> TemplateRecord? {
             lock.lock()
             defer { lock.unlock() }
             note()
             guard generationValue == expected else {
+                staleReads += 1
+                throw VoiceStaleCall()
+            }
+            loadCalls += 1
+            return record
+        }
+
+        func deviceTag(deviceId: String, generation expected: Int) throws -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            guard generationValue == expected else {
+                staleReads += 1
+                throw VoiceStaleCall()
+            }
+            tagDevices.append(deviceId)
+            return 7
+        }
+
+        func update(contactId: String, cfg: VoiceStateConstants, generation expected: Int, account expectedAccount: String,
+                    _ body: (TemplateRecord?) throws -> TemplateRecord?) throws {
+            lock.lock()
+            defer { lock.unlock() }
+            note()
+            guard generationValue == expected, account == expectedAccount else {
                 staleUpdates += 1
                 throw VoiceStaleCall()
             }
@@ -108,9 +125,13 @@ final class VoiceCallSessionTests: XCTestCase {
             if wipeFails { throw VoiceStoreError(.io, "records left") }
         }
 
-        func deleteRecord(contactId: String) throws {
+        func deleteRecord(contactId: String, generation expected: Int) throws {
             lock.lock()
             defer { lock.unlock() }
+            guard generationValue == expected else {
+                staleReads += 1
+                throw VoiceStaleCall()
+            }
             deletes.append(contactId)
         }
 
@@ -296,13 +317,174 @@ final class VoiceCallSessionTests: XCTestCase {
     }
 
     private final class RecordingTasks: VoiceBackgroundTasks {
-        var begun: [String] = []
-        var ended: [Int] = []
+        private let lock = NSLock()
+        private var begunValue: [String] = []
+        private var endedValue: [Int] = []
+        private(set) var expirations: [() -> Void] = []
+        var begun: [String] { lock.withLock { begunValue } }
+        var ended: [Int] { lock.withLock { endedValue } }
         func begin(name: String, onExpiration: @escaping () -> Void) -> Int? {
-            begun.append(name)
-            return begun.count
+            lock.withLock {
+                begunValue.append(name)
+                expirations.append(onExpiration)
+                return begunValue.count
+            }
         }
-        func end(_ token: Int) { ended.append(token) }
+        func end(_ token: Int) { lock.withLock { endedValue.append(token) } }
+    }
+
+    /// The system's expiration comes before the post-call work is over: the assertion is given back in the handler, once, and the
+    /// end of the post-call work does not give it back again.
+    func testTheExpirationHandlerGivesTheAssertionBackOnceAndTheFinishDoesNotGiveItBackAgain() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let tasks = RecordingTasks()
+        process.backgroundTasks = tasks
+        let session = try XCTUnwrap(process.beginCall(binding()))
+        session.mediaStart()
+        session.queue.sync {}
+        // The queue of the session is busy, so the post-call work has not started when the system expires the assertion.
+        let gate = DispatchSemaphore(value: 0)
+        session.queue.async { gate.wait() }
+        session.callEnded()
+        XCTAssertEqual(tasks.begun, ["voice-post-call"])
+        XCTAssertEqual(tasks.ended, [])
+        let expire = try XCTUnwrap(tasks.expirations.first)
+        expire()
+        XCTAssertEqual(tasks.ended, [1], "ended inside the expiration handler, before the post-call work")
+        expire() // the system never calls it twice, but a second call must not end it twice
+        gate.signal()
+        session.queue.sync {}
+        XCTAssertEqual(tasks.ended, [1], "exactly one end for one begin")
+        XCTAssertEqual(fake.finished, 1)
+    }
+
+    func testAnExpirationAfterTheFinishDoesNotEndTheAssertionAgain() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let tasks = RecordingTasks()
+        process.backgroundTasks = tasks
+        let session = try XCTUnwrap(process.beginCall(binding()))
+        session.mediaStart()
+        session.queue.sync {}
+        session.callEnded()
+        session.queue.sync {}
+        XCTAssertEqual(tasks.ended, [1])
+        try XCTUnwrap(tasks.expirations.first)()
+        XCTAssertEqual(tasks.ended, [1])
+    }
+
+    func testAnAssertionThatExpiresBeforeBeginReturnsItsTokenIsEndedAsSoonAsTheTokenIsKnown() {
+        let tasks = RecordingTasks()
+        let hold = VoiceTaskHold(tasks: tasks)
+        hold.end() // the expiration came first
+        hold.began(5)
+        hold.end()
+        XCTAssertEqual(tasks.ended, [5])
+    }
+
+    // MARK: the account of the call and the hold at the start
+
+    func testTheFinalizerRefusesToWriteIntoAnotherAccountThanTheOneTheCallStartedWith() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let session = try XCTUnwrap(process.beginCall(binding()))
+        session.mediaStart()
+        session.queue.sync {}
+        fake.account = "acct-2" // another account signed in during the call, without a wipe
+        session.callEnded()
+        session.queue.sync {}
+        XCTAssertTrue(fake.updates.isEmpty, "the record of account 1 is not written into the store of account 2")
+        XCTAssertEqual(fake.staleUpdates, 1)
+    }
+
+    func testTheFinalizerWritesWhenTheAccountIsTheSame() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let session = try XCTUnwrap(process.beginCall(binding()))
+        session.mediaStart()
+        session.queue.sync {}
+        session.callEnded()
+        session.queue.sync {}
+        XCTAssertEqual(fake.updates, ["contact-1"])
+        XCTAssertEqual(fake.staleUpdates, 0)
+    }
+
+    func testACallThatStartsWithNobodySignedInRunsNoCheck() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        fake.account = nil
+        let process = processWithMemoryCounters(fake)
+        let session = try XCTUnwrap(process.beginCall(binding()))
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertNil(session.withEngine { $0 })
+        XCTAssertEqual(fake.loadCalls, 0)
+        session.callEnded()
+        session.queue.sync {}
+        XCTAssertEqual(fake.finished, 1, "the models are given back")
+    }
+
+    func testTheReadsOfTheStartOfACallCarryTheGenerationAndAWipeBeforeThemEndsTheCheck() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let stale = fake.generation
+        try fake.wipeAll()
+        XCTAssertThrowsError(try fake.loadRecord(contactId: "c", cfg: try VoiceKat.bundle().state, generation: stale)) {
+            XCTAssertTrue($0 is VoiceStaleCall)
+        }
+        XCTAssertThrowsError(try fake.deviceTag(deviceId: "d", generation: stale))
+        XCTAssertThrowsError(try fake.deleteRecord(contactId: "c", generation: stale))
+        XCTAssertEqual(fake.staleReads, 3)
+    }
+
+    func testACallThatIsOnHoldWhenTheEngineStartsBeginsHeldAndOnlyAChangeIsPassedAfter() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart(held: true)
+        session.queue.sync {}
+        XCTAssertEqual(session.holdEventsFed, 1, "the engine starts from the real hold state")
+        session.holdChanged(true)
+        session.queue.sync {}
+        XCTAssertEqual(session.holdEventsFed, 1, "the same state is not passed again")
+        session.holdChanged(false)
+        session.queue.sync {}
+        XCTAssertEqual(session.holdEventsFed, 2)
+    }
+
+    func testAHoldThatChangesBetweenTheCallToMediaStartAndTheEngineIsNotLost() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let (session, _) = makeSession(fake, process)
+        let gate = DispatchSemaphore(value: 0)
+        session.queue.async { gate.wait() }
+        session.mediaStart(held: false)
+        session.holdChanged(true) // before the engine exists
+        gate.signal()
+        session.queue.sync {}
+        XCTAssertEqual(session.holdEventsFed, 1)
+        XCTAssertEqual(session.withEngine { $0 == nil }, false)
+    }
+
+    func testAWipeOfTheDailyCountersAfterTheCallBeganLeavesNoDayOfThatCall() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let session = try XCTUnwrap(process.beginCall(binding(contact: "alice-contact-id")))
+        session.mediaStart()
+        session.queue.sync {}
+        process.daily.wipe() // the wipe of the account lands between the forgetting of the session and the daily write
+        session.callEnded()
+        session.queue.sync {}
+        let later = process.daily.dueLines(nowS: Int(Date().timeIntervalSince1970) + 3 * 86_400, utcOffsetS: 0)
+        XCTAssertTrue(later.isEmpty, "a call that began before the wipe adds nothing to the counters after it")
     }
 
     // MARK: the poll

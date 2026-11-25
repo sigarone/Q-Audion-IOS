@@ -81,6 +81,8 @@ final class VoiceDailyCounters: @unchecked Sendable {
     private let random: () -> Int
     private let lock = NSLock()
     private var state: VoiceDailyState
+    /// Counts the wipes. A call remembers the value it began with; its day is not written when a wipe came after that.
+    private var wipeEpoch = 0
 
     /// `random` gives a number in `0..<secondsPerDay`.
     init(storage: VoiceDailyStorage = VoiceDefaultsDailyStorage(),
@@ -100,9 +102,19 @@ final class VoiceDailyCounters: @unchecked Sendable {
 
     // MARK: recording
 
-    func record(_ call: VoiceDailyCall) {
+    /// The number of wipes so far: read when a call begins, given back to `record`.
+    var epoch: Int {
         lock.lock()
         defer { lock.unlock() }
+        return wipeEpoch
+    }
+
+    /// Adds a call. With `ifEpoch`, nothing is written when a wipe came after that value was read (checked inside the lock, so a
+    /// wipe either comes after this write and clears it, or before it and this call leaves nothing).
+    func record(_ call: VoiceDailyCall, ifEpoch expected: Int? = nil) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let expected, expected != wipeEpoch { return }
         let day = Self.dayIndex(call.endS, utcOffsetS: call.utcOffsetS)
         var counters = state.days[day] ?? VoiceDayCounters()
         let key = contactKey(call.contactId)
@@ -215,8 +227,9 @@ final class VoiceDailyCounters: @unchecked Sendable {
     func wipe() {
         lock.lock()
         state = VoiceDailyState()
-        lock.unlock()
+        wipeEpoch += 1
         storage.clear()
+        lock.unlock()
     }
 
     // MARK: private

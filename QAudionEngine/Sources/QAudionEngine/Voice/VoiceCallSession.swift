@@ -154,6 +154,42 @@ final class VoiceCallLatch: @unchecked Sendable {
     }
 }
 
+/// The background-task assertion of the post-call work of one call. It is ended exactly once: by the system's expiration, or by the
+/// end of the post-call work, whichever comes first (the second one finds it ended and does nothing).
+final class VoiceTaskHold: @unchecked Sendable {
+    private let tasks: VoiceBackgroundTasks
+    private let lock = NSLock()
+    private var token: Int?
+    private var ended = false
+
+    init(tasks: VoiceBackgroundTasks) {
+        self.tasks = tasks
+    }
+
+    /// The token that `begin` returned. When the assertion already expired, it is given back at once.
+    func began(_ newToken: Int?) {
+        guard let newToken else { return }
+        lock.lock()
+        if ended {
+            lock.unlock()
+            tasks.end(newToken)
+            return
+        }
+        token = newToken
+        lock.unlock()
+    }
+
+    /// Gives the assertion back, once. Callable from any thread, also from the expiration handler.
+    func end() {
+        lock.lock()
+        let t = token
+        token = nil
+        ended = true
+        lock.unlock()
+        if let t { tasks.end(t) }
+    }
+}
+
 /// An embedder for a call whose speaker model did not load: every window fails.
 private final class UnavailableEmbedder: VoiceWindowEmbedder {
     func embed(window: VoiceWindowResult) throws -> VoiceEmbedding? { nil }
@@ -174,10 +210,14 @@ final class VoiceCallSession: @unchecked Sendable {
     private let makeTicker: () -> VoiceTicker
     private let governor: BackgroundCpuGovernor
     private let protectedData: ProtectedDataFlag
+    /// The wipe epoch of the daily counters when the call began.
+    private let dailyEpoch: Int
 
     // Shared with other threads.
     private let lock = NSLock()
     private var fallbackSeen = false
+    /// The hold state of the call as last told (this side or the peer): the engine starts from it, whenever it is built.
+    private var holdNow = false
     private var cancelRequested = false
     private var ended = false
     /// The result of this call must not be written: the voice was wiped or the contact was deleted while the call ran.
@@ -217,6 +257,7 @@ final class VoiceCallSession: @unchecked Sendable {
         self.makeTicker = ticker
         self.governor = governor
         self.protectedData = protectedData
+        self.dailyEpoch = process.daily.epoch
         self.rxTap = VoiceRxTap(queue: rxQueue, clock: clock, wake: { [weak self] in self?.scheduleDrain() })
     }
 
@@ -230,8 +271,11 @@ final class VoiceCallSession: @unchecked Sendable {
     }
 
     /// The call is genuinely accepted: the engine is built (models, record, device tag) and started.
-    func mediaStart() {
+    func mediaStart(held: Bool = false) {
         let now = clock()
+        lock.lock()
+        holdNow = held
+        lock.unlock()
         queue.async { [self] in startEngine(now) }
     }
 
@@ -259,6 +303,9 @@ final class VoiceCallSession: @unchecked Sendable {
     /// The call is put on hold (by this side or by the peer) or resumed. Only a change is passed on.
     func holdChanged(_ held: Bool) {
         let now = clock()
+        lock.lock()
+        holdNow = held
+        lock.unlock()
         queue.async { [self] in
             guard engine != nil, held != lastHold else { return }
             lastHold = held
@@ -311,8 +358,15 @@ final class VoiceCallSession: @unchecked Sendable {
         rxTap.stop()
         let now = clock()
         // The assertion is taken here, on the caller's thread, while the app can still get the time.
-        let token = process.backgroundTasks.begin(name: "voice-post-call", onExpiration: { [weak self] in self?.requestPostCancel() })
-        queue.async { [self] in finish(now, token: token) }
+        // The assertion is given back inside the expiration handler too (the system ends the app soon after it returns), and only once.
+        let tasks = process.backgroundTasks
+        let hold = VoiceTaskHold(tasks: tasks)
+        let token = tasks.begin(name: "voice-post-call", onExpiration: { [weak self] in
+            self?.requestPostCancel()
+            hold.end()
+        })
+        hold.began(token)
+        queue.async { [self] in finish(now, hold: hold) }
     }
 
     /// The result of this call is not written any more (the contact was deleted or blocked). The call itself goes on.
@@ -342,7 +396,7 @@ final class VoiceCallSession: @unchecked Sendable {
         e?.requestPostCancel()
         rxTap.stop()
         if first {
-            queue.async { [self] in finish(clock(), token: nil) }
+            queue.async { [self] in finish(clock(), hold: nil) }
         }
     }
 
@@ -382,10 +436,15 @@ final class VoiceCallSession: @unchecked Sendable {
         releaseModels = ready.release
         let services = process.services
         let startedGeneration = services.generation
+        // The account of this call, taken once: the write at the end of the call goes to this account's store or nowhere.
+        guard let startedAccount = services.currentAccount() else {
+            gaveUp = true
+            return
+        }
         do {
             let cfg = ready.config
-            let record = try services.loadRecord(contactId: binding.contactId, cfg: cfg.state)
-            let tag = try services.deviceTag(deviceId: binding.peerDeviceId ?? "")
+            let record = try services.loadRecord(contactId: binding.contactId, cfg: cfg.state, generation: startedGeneration)
+            let tag = try services.deviceTag(deviceId: binding.peerDeviceId ?? "", generation: startedGeneration)
             guard let budget = services.budget else {
                 gaveUp = true
                 return
@@ -396,7 +455,7 @@ final class VoiceCallSession: @unchecked Sendable {
                 var result: CallEnd?
                 // The generation is checked inside the lock of the store, and so is this call's own flag: a wipe or a deletion that came
                 // first leaves nothing for this call to write.
-                try services.update(contactId: contactId, cfg: cfg.state, generation: startedGeneration) { loaded in
+                try services.update(contactId: contactId, cfg: cfg.state, generation: startedGeneration, account: startedAccount) { loaded in
                     if self?.isResultDiscarded ?? true { throw VoiceStaleCall() }
                     before = loaded
                     let end = try VoiceTemplateState.endOfCall(loaded, call, cfg.state)
@@ -409,7 +468,8 @@ final class VoiceCallSession: @unchecked Sendable {
             let info = VoiceCallInfo(
                 callId: binding.callId, ownerOn: true, model: ready.model, record: record, tStartS: binding.tStartS,
                 utcOffsetS: binding.utcOffsetS, deviceTag: tag, display: nil, ownerTemplate: nil)
-            let listener = VoiceSessionEffectListener(contactId: contactId, services: services, process: process)
+            let listener = VoiceSessionEffectListener(
+                contactId: contactId, services: services, process: process, generation: startedGeneration)
             let built = try VoiceEngine(
                 config: cfg, call: info, vad: ready.vad, embedder: ready.embedder ?? UnavailableEmbedder(), budget: budget,
                 finalizer: finalizer, listener: listener)
@@ -420,12 +480,19 @@ final class VoiceCallSession: @unchecked Sendable {
             engineForCancel = built
             let cancel = cancelRequested
             let replayFallback = fallbackSeen
+            let heldAtStart = holdNow
             lock.unlock()
             lastAt = now
             // Tier 0 until the trust inputs exist (`reportTier`, once the peer's key confirmation verified and the call has its
             // protection line): nothing is learned and nothing is shown as Matches.
             built.feed(.mediaStart(atNs: now, tNs: now, tierInput: nil))
             if replayFallback { built.feed(.path(atNs: stamped(now), path: .dc)) }
+            // A call that is on hold when the engine starts begins as held (the hold hooks pass changes only).
+            if heldAtStart {
+                lastHold = true
+                holdEventsFed += 1
+                built.feed(.hold(atNs: stamped(now), held: true))
+            }
             if cancel { built.requestPostCancel() }
             let t = makeTicker()
             ticker = t
@@ -484,7 +551,7 @@ final class VoiceCallSession: @unchecked Sendable {
         }
     }
 
-    private func finish(_ now: Int64, token: Int?) {
+    private func finish(_ now: Int64, hold: VoiceTaskHold?) {
         ticker?.stop()
         ticker = nil
         var summary: VoiceCallSummary?
@@ -497,7 +564,7 @@ final class VoiceCallSession: @unchecked Sendable {
             e.close()
             summary = e.summary
         }
-        if let token { process.backgroundTasks.end(token) }
+        hold?.end()
         lock.lock()
         engineForCancel = nil
         let keepResult = !(resultDiscarded || engineDiscarded)
@@ -515,7 +582,8 @@ final class VoiceCallSession: @unchecked Sendable {
         if let summary, keepResult {
             let nowS = Int(Date().timeIntervalSince1970)
             let offset = TimeZone.current.secondsFromGMT()
-            process.daily.record(VoiceDailyCall(summary: summary, contactId: binding.contactId, endS: nowS, utcOffsetS: offset))
+            process.daily.record(
+                VoiceDailyCall(summary: summary, contactId: binding.contactId, endS: nowS, utcOffsetS: offset), ifEpoch: dailyEpoch)
         }
         if engineRan {
             let nowS = Int(Date().timeIntervalSince1970)
@@ -532,11 +600,14 @@ final class VoiceSessionEffectListener: VoiceEngineListener {
     private let contactId: String
     private let services: VoiceServices
     private let process: VoiceProcess?
+    /// The wipe generation the call began with (nil: the one at the time of the effect).
+    private let generation: Int?
 
-    init(contactId: String, services: VoiceServices, process: VoiceProcess? = nil) {
+    init(contactId: String, services: VoiceServices, process: VoiceProcess? = nil, generation: Int? = nil) {
         self.contactId = contactId
         self.services = services
         self.process = process
+        self.generation = generation
     }
 
     /// A per-call line of the log: the process writes it only for an account that has the diagnostic flag.
@@ -552,7 +623,7 @@ final class VoiceSessionEffectListener: VoiceEngineListener {
     func onEffect(_ tNs: Int64, _ effect: VoiceEffect) {
         switch effect {
         case .deleteRecord:
-            try? services.deleteRecord(contactId: contactId)
+            try? services.deleteRecord(contactId: contactId, generation: generation ?? services.generation)
         }
     }
 }

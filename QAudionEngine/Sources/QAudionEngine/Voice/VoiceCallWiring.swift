@@ -34,6 +34,12 @@ public enum VoiceCallWiring {
         VoiceProcess.shared.wipeAll()
     }
 
+    /// The signed-in account, for the store of the contact voice: installed once by the app at launch, so the store has it also when
+    /// no call exists (the post-call write, the deletion of a contact). Called from background queues; nil when nobody is signed in.
+    public static func setAccountProvider(_ provider: @escaping () -> String?) {
+        VoiceProcess.shared.accountIdProvider = provider
+    }
+
     /// The source of the background-task assertion that the post-call work runs under (the app provides it once).
     public static func setBackgroundTasks(
         begin: @escaping (_ name: String, _ onExpiration: @escaping () -> Void) -> Int?,

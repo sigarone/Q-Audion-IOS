@@ -23,15 +23,21 @@ protocol VoiceServices: AnyObject {
     var generation: Int { get }
     /// Loads the bundle, the cohort and the models (once per process). Nil when the check cannot run at all.
     func prepare() -> VoicePrepared?
+    /// The signed-in account as the store sees it now (trimmed), or nil when nobody is signed in.
+    func currentAccount() -> String?
     /// The record of a contact, or nil. Throws when the store cannot be read now (locked keychain, I/O): the call then runs no check.
-    func loadRecord(contactId: String, cfg: VoiceStateConstants) throws -> TemplateRecord?
-    /// The tag of a peer device, from the salt of the store.
-    func deviceTag(deviceId: String) throws -> Int
+    /// Throws `VoiceStaleCall`, before anything is created, when `generation` (read by the caller) is no longer the current one.
+    func loadRecord(contactId: String, cfg: VoiceStateConstants, generation: Int) throws -> TemplateRecord?
+    /// The tag of a peer device, from the salt of the store. Same refusal for a stale `generation`.
+    func deviceTag(deviceId: String, generation: Int) throws -> Int
     /// The one locked operation of a contact: load, `body`, write. Throws `VoiceStaleCall` before `body` runs when `generation` is not
-    /// the current one; the check is made inside the lock of the store.
-    func update(contactId: String, cfg: VoiceStateConstants, generation: Int, _ body: (TemplateRecord?) throws -> TemplateRecord?) throws
-    /// Deletes the contact's record under the same lock. Nothing happens when the store has no data.
-    func deleteRecord(contactId: String) throws
+    /// the current one, or when the signed-in account is not `account` (the one the call started with); the checks are made inside the
+    /// lock of the store.
+    func update(contactId: String, cfg: VoiceStateConstants, generation: Int, account: String,
+                _ body: (TemplateRecord?) throws -> TemplateRecord?) throws
+    /// Deletes the contact's record under the same lock. Nothing happens when the store has no data. Throws `VoiceStaleCall` when
+    /// `generation` is stale (a wipe came first: nothing is left to delete).
+    func deleteRecord(contactId: String, generation: Int) throws
     /// Deletes every record, `meta.bin` and the key, and moves `generation` on. Throws when something is left.
     func wipeAll() throws
     /// A call that used the models is over: the services may let go of them when no other call uses them.
@@ -76,18 +82,11 @@ final class VoiceProcess: @unchecked Sendable {
         self.daily = daily
     }
 
-    /// The account of the signed-in user (the store belongs to it). Set once by the app; read when the store is first used.
+    /// The account of the signed-in user (the store belongs to it). Set once by the app at launch, process-wide: it does not depend on
+    /// a call or on any object that a call creates. Called from background queues; it must not wait for the main thread.
     var accountIdProvider: (() -> String?)? {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return (services as? VoiceSystemServices)?.accountIdProvider
-        }
-        set {
-            lock.lock()
-            (services as? VoiceSystemServices)?.accountIdProvider = newValue
-            lock.unlock()
-        }
+        get { VoiceAccountSource.shared.provider }
+        set { VoiceAccountSource.shared.provider = newValue }
     }
 
     var backgroundTasks: VoiceBackgroundTasks {
@@ -186,10 +185,14 @@ final class VoiceProcess: @unchecked Sendable {
     /// queue: the store blocks on files and the keychain). `done` tells whether the deletion worked.
     func forgetContact(_ contactId: String, done: ((Bool) -> Void)? = nil) {
         for s in liveSessions() where s.binding.contactId.lowercased() == contactId.lowercased() { s.discardResult() }
+        // Read now: a wipe that comes before the deletion runs has already removed the record.
+        let generation = services.generation
         maintenance.async { [self] in
             var ok = true
             do {
-                try services.deleteRecord(contactId: contactId)
+                try services.deleteRecord(contactId: contactId, generation: generation)
+            } catch is VoiceStaleCall {
+                // a wipe came first: nothing of this contact is left
             } catch {
                 ok = false
                 emitCallLine("QA-VOICE v=1 ev=store call=- op=delete res=fail why=contact")
@@ -229,13 +232,39 @@ enum VoiceBusy {
     }
 }
 
+/// Where the whole process reads the signed-in account from: one provider, installed by the app at launch. A store is never
+/// created without an account.
+final class VoiceAccountSource: @unchecked Sendable {
+    static let shared = VoiceAccountSource()
+
+    private let lock = NSLock()
+    private var providerValue: (() -> String?)?
+
+    var provider: (() -> String?)? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return providerValue
+        }
+        set {
+            lock.lock()
+            providerValue = newValue
+            lock.unlock()
+        }
+    }
+
+    /// The trimmed account, or nil (nobody signed in, or no provider). The provider runs outside the lock.
+    func current() -> String? {
+        let trimmed = provider?()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
 /// The real services: the bundle and the models are loaded on the first call that needs them and let go when the last one ends;
 /// the store and its key are created once per account, never for an empty one.
 final class VoiceSystemServices: VoiceServices, @unchecked Sendable {
     /// Speech-model sessions kept for the next call (one per overlapping engine; the rest are let go).
     private static let vadPoolLimit = 2
-
-    var accountIdProvider: (() -> String?)?
 
     private let lock = NSLock()
     private var budgetValue: VoiceCpuBudget?
@@ -335,44 +364,53 @@ final class VoiceSystemServices: VoiceServices, @unchecked Sendable {
     }
 
     /// The store of the signed-in account: one instance (with one key cache) for the process, rebuilt when the account changes and
-    /// never made for an account that is empty or unknown.
-    private func theStore() throws -> VoiceTemplateStore {
+    /// never made for an account that is empty or unknown. Refuses with `VoiceStaleCall`, under the lock and before anything is
+    /// made, when `generation` (read by the caller) is not the current one or the account is not `account`.
+    private func theStore(generation expected: Int, account expectedAccount: String? = nil) throws -> VoiceTemplateStore {
+        // The provider reads the keychain: outside the lock.
+        guard let account = VoiceAccountSource.shared.current() else { throw VoiceStoreError(.key, "no account") }
         lock.lock()
         defer { lock.unlock() }
-        let account = accountIdProvider?()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !account.isEmpty else { throw VoiceStoreError(.key, "no account") }
+        guard generationValue == expected else { throw VoiceStaleCall() }
+        if let expectedAccount, expectedAccount != account { throw VoiceStaleCall() }
         if let s = store, storeAccount == account { return s }
         guard let dir = Self.directory() else { throw VoiceStoreError(.io, "no application support directory") }
         let aead = VoiceKeychainAead(dataExists: { try VoiceTemplateStore.dataExists(in: dir) })
-        let fresh = VoiceTemplateStore(dir: dir, aead: aead, accountId: account)
+        let fresh = VoiceTemplateStore(
+            dir: dir, aead: aead, accountId: account, generationProbe: { [weak self] in self?.generation ?? -1 })
         store = fresh
         storeAccount = account
         return fresh
     }
 
-    func loadRecord(contactId: String, cfg: VoiceStateConstants) throws -> TemplateRecord? {
-        try theStore().loadCompatible(contactId, cfg)
+    func currentAccount() -> String? {
+        VoiceAccountSource.shared.current()
     }
 
-    func deviceTag(deviceId: String) throws -> Int {
-        VoiceTags.deviceTag(nameSalt: try theStore().nameSalt(), deviceId: deviceId)
+    func loadRecord(contactId: String, cfg: VoiceStateConstants, generation expected: Int) throws -> TemplateRecord? {
+        try theStore(generation: expected).loadCompatible(contactId, cfg, generation: expected)
     }
 
-    func update(contactId: String, cfg: VoiceStateConstants, generation expected: Int,
+    func deviceTag(deviceId: String, generation expected: Int) throws -> Int {
+        VoiceTags.deviceTag(nameSalt: try theStore(generation: expected).nameSalt(generation: expected), deviceId: deviceId)
+    }
+
+    func update(contactId: String, cfg: VoiceStateConstants, generation expected: Int, account: String,
                 _ body: (TemplateRecord?) throws -> TemplateRecord?) throws {
-        // Before the store is touched at all: a call that began before a wipe creates nothing.
-        guard generation == expected else { throw VoiceStaleCall() }
-        try theStore().update(contactId: contactId, compatibleWith: cfg) { loaded in
+        // Before the store is touched at all: a call that began before a wipe, or under another account, creates nothing.
+        try theStore(generation: expected, account: account).update(
+            contactId: contactId, compatibleWith: cfg, generation: expected
+        ) { loaded in
             // Inside the lock of the store: a wipe that moved the generation on cannot be followed by this write.
             guard self.generation == expected else { throw VoiceStaleCall() }
             return try body(loaded)
         }
     }
 
-    func deleteRecord(contactId: String) throws {
+    func deleteRecord(contactId: String, generation expected: Int) throws {
         // Nothing on disk: nothing to delete, and nothing is read from the keychain.
         if let dir = Self.directory(), let exists = try? VoiceTemplateStore.dataExists(in: dir), !exists { return }
-        _ = try theStore().delete(contactId)
+        _ = try theStore(generation: expected).delete(contactId, generation: expected)
     }
 
     func wipeAll() throws {

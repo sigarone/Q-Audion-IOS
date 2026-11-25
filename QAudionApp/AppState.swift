@@ -22848,7 +22848,8 @@ final class AppState: ObservableObject {
         let startS = Int64(Date().timeIntervalSince1970)
         controller.voiceMediaStart(
             callId: callId, contactId: contactId, peerDeviceId: deviceId,
-            tStartS: Int(startS), utcOffsetS: TimeZone.current.secondsFromGMT())
+            tStartS: Int(startS), utcOffsetS: TimeZone.current.secondsFromGMT(),
+            held: callService.isLocalHeld || callService.peerOnHold)
         voiceTierCall = VoiceTierCall(callId: callId, peerId: contactId, deviceId: deviceId, startS: startS)
         reportVoiceTierMoment()
     }

@@ -24,6 +24,19 @@ final class VoiceDailyCountersTests: XCTestCase {
 
     private let day = VoiceDailyCounters.dayIndex(1_790_000_000, utcOffsetS: 0)
 
+    func testARecordOfAnEarlierWipeEpochIsRefusedInsideTheLock() {
+        let storage = Memory()
+        let counters = VoiceDailyCounters(storage: storage, random: { 0 })
+        let before = counters.epoch
+        counters.wipe()
+        XCTAssertNotEqual(counters.epoch, before)
+        counters.record(call(summary()), ifEpoch: before)
+        XCTAssertNil(storage.data, "nothing is persisted for a call of before the wipe")
+        XCTAssertTrue(counters.dueLines(nowS: 1_790_000_000 + 5 * 86_400, utcOffsetS: 0).isEmpty)
+        counters.record(call(summary()), ifEpoch: counters.epoch)
+        XCTAssertNotNil(storage.data)
+    }
+
     func testACallOfAnEnrolledContactAddsToItsStateItsRouteAndItsStratum() {
         let counters = VoiceDailyCounters(storage: Memory(), random: { 100 })
         counters.record(call(summary(res: "match", speechS: 60, margin: 2, route: 2)))

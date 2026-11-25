@@ -8,6 +8,11 @@ import QAudionEngine
 enum VoiceBackgroundTaskBridge {
     static func install() {
         VoiceCallWiring.setBackgroundTasks(begin: begin, end: end)
+        // The store of the contact voice belongs to the signed-in account, which is read here, once for the whole process: the
+        // post-call write of a call and the deletion of a contact outside a call happen when no call object exists. The user id is
+        // read from the keychain (what `AppState.currentUserIdSnapshot` returns), never from the main thread: the store runs on
+        // background queues. Nobody signed in gives nil and the store refuses.
+        VoiceCallWiring.setAccountProvider { TokenVault.loadUserId() }
         // The lines of the contact-voice check go to the log. The per-call lines (each has a call number) are written only for an
         // account that has the diagnostic flag; the id-free daily counters are written whenever the check runs.
         VoiceCallWiring.setLogging(
@@ -44,6 +49,11 @@ enum VoiceBackgroundTaskBridge {
 
     private static func end(_ token: Int) {
         let id = UIBackgroundTaskIdentifier(rawValue: token)
-        DispatchQueue.main.async { UIApplication.shared.endBackgroundTask(id) }
+        // From the expiration handler (main thread) the assertion must be ended before the handler returns.
+        if Thread.isMainThread {
+            UIApplication.shared.endBackgroundTask(id)
+        } else {
+            DispatchQueue.main.async { UIApplication.shared.endBackgroundTask(id) }
+        }
     }
 }

@@ -1448,8 +1448,6 @@ public final class QAudionCallIntegration: @unchecked Sendable {
         guardianMode.onAlert = { [weak self] level, score in self?.onDeepfakeAlert?(level, score) }
         ownerContinuityMonitor.onStateChanged = { [weak self] state in self?.onOwnerContinuityStateChanged?(state) }
         ownerContinuityMonitor.userIdProvider = { [weak self] in self?.resolveVoiceAccountId?() ?? "" }
-        // The store of the contact-voice check belongs to the same account; it is read only when a check runs.
-        VoiceProcess.shared.accountIdProvider = { [weak self] in self?.resolveVoiceAccountId?() }
         contactVoiceVerifier.onSpeakerChanged = { [weak self] verdict in self?.onSpeakerChangeVerdict?(verdict) }
         acousticPathAnchor.onReanchor = { [weak self] in self?.acousticPathChanged() }
         // MASVS-CRYPTO remediation (2026-08-20/21) — relay the raw score.

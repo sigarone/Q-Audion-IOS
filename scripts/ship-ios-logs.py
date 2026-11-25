@@ -2562,9 +2562,12 @@ def _attribute_summary(attrs):
     return "[summary] " + " ".join(parts) if parts else ""
 
 
-# A number that measures a voice (a cosine, a score, a LLR, a similarity, written as a decimal): biometric about a third party, never
-# shipped under any tag. The QA-VOICE family has no decimal at all (test_ship_ios_voice_vocab.py).
-_RE_VOICE_MEASURE = re.compile(r"\b(?:cos|cosine|score|llr|logit|similarity)\s*[=:]\s*-?[0-9]*\.[0-9]+")
+# A number that measures a voice (a cosine, a score, a LLR, a logit, a similarity): biometric about a third party, never shipped under
+# any tag. The key is `score`, `cos`, `cosine`, `llr`, `logit` or `similarity` itself or ends in one of them (`asnorm_score`,
+# `vpscore`), and the value is an integer, a negative number, a decimal or a number in scientific notation (`3`, `-3`, `0.71`,
+# `.5`, `1e-3`). The QA-VOICE family has no such number at all (test_ship_ios_voice_vocab.py).
+_RE_VOICE_MEASURE = re.compile(
+    r"\b[a-z0-9_]*(?:cos|cosine|score|llr|logit|similarity)\s*[=:]\s*[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[-+]?[0-9]+)?")
 
 
 def redact_body(orig_body, tag_is_safe, attrs, tag=None):
