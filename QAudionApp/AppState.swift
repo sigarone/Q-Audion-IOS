@@ -4159,6 +4159,12 @@ final class AppState: ObservableObject {
     /// earbud connection state (avoids duplicate BLE stacks). Nil until first KMS
     /// sweep that needs it (lazy instantiation via runKmsSweep).
     ///
+    /// The ONE earbud GATT client of the app: the diagnostics screen (Settings > SVILUPPATORE) is
+    /// handed this same instance (SettingsScreen), so the link it makes is the one a key import
+    /// finds ready, and the sweep reaches the earbud remembered by rememberEarbudIdentifier when no
+    /// link is up (performKmsSweep: EarbudAckPopRelay.prepareLink). Without a connection made here,
+    /// `isConnected` would be false in every sweep and every hw_only key would end earbud_not_connected.
+    ///
     /// Compiled only with QAUDION_EARBUD (the earbud hardware stack). Without it there is no
     /// proxy, no CBCentralManager is created for the earbud, and runKmsSweep builds the KMS
     /// poller without a relay.
@@ -4169,6 +4175,12 @@ final class AppState: ObservableObject {
     static func rememberEarbudIdentifier(_ identifier: UUID) {
         UserDefaults.standard.set(identifier.uuidString,
                                   forKey: "qaudion_paired_earbud_uuid")
+    }
+
+    /// The identifier remembered by rememberEarbudIdentifier, nil until an earbud was connected once.
+    static func rememberedEarbudIdentifier() -> UUID? {
+        guard let stored = UserDefaults.standard.string(forKey: "qaudion_paired_earbud_uuid") else { return nil }
+        return UUID(uuidString: stored)
     }
     #endif
 
@@ -15861,7 +15873,13 @@ final class AppState: ObservableObject {
             // earbudRelay — skip", no ack, nothing stored), exactly what the relay does in a
             // store build today, where nothing ever connects the proxy to an earbud.
             #if QAUDION_EARBUD
-            let relay: EarbudAckPopRelay? = EarbudAckPopRelay(gatt: earbudGattProxy)
+            // The link is made only when a hw_only key is there to deliver and none is up: prepareLink reaches
+            // the remembered earbud (a bounded wait), so a sweep without such a key never waits for an earbud.
+            let earbudProxy = earbudGattProxy
+            let rememberedEarbud = AppState.rememberedEarbudIdentifier()
+            let relay: EarbudAckPopRelay? = EarbudAckPopRelay(gatt: earbudProxy, prepareLink: {
+                await earbudProxy.reconnect(to: rememberedEarbud, timeout: 12)
+            })
             #else
             let relay: EarbudAckPopRelay? = nil
             #endif

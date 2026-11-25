@@ -16,11 +16,15 @@ import QAudionEngine
 //   heap (free / total bytes), PDM/TDM status, CPU%, CRACEN AEAD ops,
 //   Axon pipeline state, BLE connection state.
 //
-// The BLE service/characteristic UUIDs must match the ones the earbud
-// firmware's GATT server exposes. Until the iOS BLE client is wired to
-// the real firmware UUIDs the screen operates in "scan only" mode and
-// surfaces whatever advertisement data is visible — same fallback state
-// as the Android implementation before pairing.
+// The BLE connection to the earbud is NOT owned here: this screen scans (its own CBCentralManager, scan
+// only) and hands the chosen identifier to the app's ONE earbud GATT client, IOSEarbudGattProxy
+// (AppState.earbudGattProxy), which connects, discovers the service and serves every read and write:
+// the DIAG poll, the FE-5 pairing and the KMS key relay all go through it, one operation at a time.
+// DIAG (0x90) is READ only in the firmware, so the metrics are polled with a read every 2 s, as
+// Android does.
+//
+// FE-5 pairing waits, before PAIR_FIN is written, for the person to compare six words with the other
+// phone and confirm (EarbudSasPrompter, CL-2.2): there is no auto-confirm.
 //
 // This file follows CLAUDE.md §16 (no AppState parameter type) and
 // SWIFT6_PATTERNS §13 (all closures extracted to named methods).
@@ -44,16 +48,24 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
     @Published var pairingStatus: PairingStatus = .idle
     /// Human-readable step label emitted by startAutoRelay(); nil when no relay is running.
     @Published var relayStatus: String? = nil
+    /// What the confirmation sheet shows while an FE-5 pairing waits for the person (CL-2.2); non-nil
+    /// while a question is open. The sheet must call confirmSas(_:) or rejectSas(_:) with this prompt.
+    @Published var sasPrompt: EarbudSasPrompter.Prompt? = nil
+    /// Why the pairing ended with the link dropped (the earbud keeps this attempt's PAIR_RESP until it
+    /// disconnects, so a retry needs a fresh link); shown under the connection state until the next connect.
+    @Published var pairingNotice: String? = nil
 
     enum PairingStatus: Equatable {
         case idle
         case inProgress
         case success(pairId: String)
         case failed(String)
+        /// The person did not confirm the words: PAIR_FIN was never written, the earbud sealed nothing.
+        case aborted
 
         static func == (lhs: PairingStatus, rhs: PairingStatus) -> Bool {
             switch (lhs, rhs) {
-            case (.idle, .idle), (.inProgress, .inProgress): return true
+            case (.idle, .idle), (.inProgress, .inProgress), (.aborted, .aborted): return true
             case (.success(let a), .success(let b)): return a == b
             case (.failed(let a), .failed(let b)):   return a == b
             default: return false
@@ -106,29 +118,36 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
 
     // MARK: - Private state
 
+    /// Scan only: connecting is the GATT client's job (see the header comment).
     private var central: CBCentralManager?
-    private var connectedPeripheral: CBPeripheral?
 
-    // FE-5: GATT proxy for earbud-exclusive pairing operations (c5/c6/c7/c8).
-    // Created when a peripheral connects; torn down on disconnect.
-    private var gattProxy: (any EarbudPairingGattProxy)? = nil
+    /// The app's ONE earbud GATT client (AppState.earbudGattProxy).
+    private let gatt: IOSEarbudGattProxy
+    /// The person's side of the CL-2.2 gate.
+    private let sasPrompter = EarbudSasPrompter()
     private let fe5Exchange = Fe5ExchangeService()
+    private var connectTask: Task<Void, Never>? = nil
+    private var pollTask: Task<Void, Never>? = nil
     private var relayTask: Task<Void, Never>? = nil
+    private var pairTask: Task<Void, Never>? = nil
 
     // W511: client-side CRACEN fps tracking (mirrors Android LaunchedEffect pattern).
     @Published var cracenFps: Int? = nil
     private var prevAeadOps: UInt32? = nil
     private var prevAeadOpsAt: TimeInterval = 0
 
-    // Q-Audion GATT service and DIAG characteristic UUIDs — the canonical values
-    // defined by the firmware (QAUDION_SVC_UUID_VAL / QAUDION_CH_DIAG_UUID_VAL,
-    // slot 0x90).
-    // nonisolated(unsafe): these are constants (never mutated) accessed from
-    // CBCentralManager/CBPeripheralDelegate callbacks which are nonisolated.
-    // Swift 6 strict-concurrency requires explicit opt-in for @MainActor statics
-    // referenced from nonisolated context.
-    private nonisolated(unsafe) static let serviceUUID    = CBUUID(string: "f2c0aaaa-bcc0-4001-8000-000000000001")
-    private nonisolated(unsafe) static let metricsCharUUID = CBUUID(string: "f2c0aaaa-bcc0-4001-8000-000000000090")
+    /// How often DIAG is read (Android: POLL_INTERVAL_MS = 2_000).
+    private static let diagPollIntervalNS: UInt64 = 2_000_000_000
+
+    // MARK: - Init
+
+    init(gatt: IOSEarbudGattProxy) {
+        self.gatt = gatt
+        super.init()
+        sasPrompter.onChange = { [weak self] prompt in
+            self?.sasPrompt = prompt
+        }
+    }
 
     // MARK: - Public API
 
@@ -154,48 +173,123 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
         scanState = .stopped
     }
 
+    /// Hands the earbud to the app's GATT client and, once its service is discovered, starts the DIAG poll.
     func connect(to earbud: DiscoveredEarbud) {
         connectedEarbud = earbud
         connectionState = .connecting
-        connectedPeripheral = earbud.peripheral
-        central?.connect(earbud.peripheral, options: nil)
+        pairingNotice = nil
+        stopPolling()
+        let identifier = earbud.id
+        connectTask?.cancel()
+        connectTask = Task { await self.runConnect(identifier: identifier) }
+    }
+
+    private func runConnect(identifier: UUID) async {
+        do {
+            try await gatt.ensureConnected(identifier: identifier, timeout: 20)
+        } catch {
+            if Task.isCancelled { return }
+            let msg: String = String(describing: error)
+            connectionState = .error(msg)
+            connectedEarbud = nil
+            return
+        }
+        if Task.isCancelled { return }
+        connectionState = .connected
+        metrics = EarbudMetrics(
+            heapFreeKb: 0, heapTotalKb: 0,
+            cpuPercent: 0, hsCount: 0,
+            pdmActive: false, tdmActive: false,
+            axonOk: false, batteryPct: 0, uptimeSec: 0,
+            firmwareVersion: "—", lastUpdated: Date()
+        )
+        AppState.rememberEarbudIdentifier(identifier)
+        pairingStatus = .idle
+        startPolling()
     }
 
     func disconnect() {
+        connectTask?.cancel()
+        connectTask = nil
+        stopPolling()
         relayTask?.cancel()
         relayTask = nil
+        pairTask?.cancel()
+        pairTask = nil
+        // A confirmation that is still open must not outlive the screen: it ends as "not confirmed".
+        sasPrompter.reject()
         relayStatus = nil
-        if let p = connectedPeripheral {
-            central?.cancelPeripheralConnection(p)
-        }
-        connectedPeripheral = nil
+        gatt.disconnect()
         connectedEarbud = nil
         connectionState = .disconnected
         metrics = nil
-        gattProxy = nil
         pairingStatus = .idle
+    }
+
+    // MARK: - DIAG poll
+
+    /// The loop holds the view model only for the length of one poll, so a screen that goes away without
+    /// calling disconnect() cannot be kept alive by it.
+    private func startPolling() {
+        pollTask?.cancel()
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let vm = self else { return }
+                await vm.pollDiagOnce()
+                if Task.isCancelled { return }
+                try? await Task.sleep(nanoseconds: EarbudDiagViewModel.diagPollIntervalNS)
+            }
+        }
+    }
+
+    private func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    /// One READ of DIAG (0x90): the firmware does not notify it. A failed read on a link that is still up
+    /// is retried on the next tick; on a link that is gone the screen goes back to "not connected".
+    private func pollDiagOnce() async {
+        do {
+            let data = try await gatt.readDiag()
+            applyDiagPayload(data)
+        } catch {
+            if Task.isCancelled { return }
+            if !gatt.isConnected { handleLinkLost() }
+        }
+    }
+
+    /// The link is gone (the earbud went away, or the app dropped it): back to the not-connected state.
+    /// pairingStatus is left as it is: a finished pairing keeps its result until the next connect.
+    private func handleLinkLost() {
+        stopPolling()
+        relayTask?.cancel()
+        relayTask = nil
+        pairTask?.cancel()
+        pairTask = nil
+        sasPrompter.reject()
+        connectedEarbud = nil
+        connectionState = .disconnected
+        metrics = nil
     }
 
     // MARK: - FE-5 Earbud Pairing
 
+    /// Starts one manual GATT pairing exchange; the task is tracked so a disconnect can cancel it.
+    func startPairing() {
+        pairTask?.cancel()
+        pairTask = Task { await self.pairWithConnectedEarbud() }
+    }
+
     /// Execute one GATT pairing exchange against the currently-connected earbud.
     ///
     /// Phase-1 diagnostic mode: both earbuds are owned by the same phone, so
-    /// peer/own material fields are zero-filled placeholders and isConfirmed
-    /// is { _ in true } (SAS gate bypassed). The firmware still exercises the
-    /// full c5/c6/c7 exchange; pair_id is recorded in pairingStatus.
-    ///
-    /// Production note: for Phase-2 cross-user pairing, replace the isConfirmed
-    /// closure with:
-    ///   { SasVerificationStore.shared.isEarbudPairConfirmed(pairId: $0) }
-    /// and supply real attestation material from the server in the six Data fields.
+    /// peer/own material fields are zero-filled placeholders. The firmware still exercises the
+    /// full c5/c6/c7 exchange; pair_id is recorded in pairingStatus. The SAS gate is NOT bypassed:
+    /// the six words of the pair_id are shown and PAIR_FIN waits for the person.
     func pairWithConnectedEarbud() async {
         guard connectedEarbud != nil else {
             pairingStatus = .failed("nessun auricolare connesso")
-            return
-        }
-        guard let proxy = gattProxy else {
-            pairingStatus = .failed("proxy GATT non disponibile")
             return
         }
 
@@ -207,7 +301,8 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
         let zeroMaterial = Data(count: 1568)
         let zeroEid      = Data(count: 32)
 
-        let relay = EarbudPairingRelay(gatt: proxy)
+        let relay = EarbudPairingRelay(gatt: gatt)
+        let prompter = sasPrompter
         let result = await relay.pairWithPeer(
             peerPkSe:     zeroPkSe,
             peerMaterial: zeroMaterial,
@@ -215,18 +310,53 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
             ownPkSe:      zeroPkSe,
             ownMaterial:  zeroMaterial,
             ownEid:       zeroEid,
-            // Phase-1 diagnostic: SAS gate bypassed.
-            // Phase-2 production: { SasVerificationStore.shared.isEarbudPairConfirmed(pairId: $0) }
-            isConfirmed: { _ in true }
+            isConfirmed:  { pairId in await prompter.ask(pairId: pairId) }
         )
 
         switch result {
         case .success(let pairId, _):
-            let hex = pairId.prefix(8).map { String(format: "%02x", $0) }.joined() + "…"
-            pairingStatus = .success(pairId: hex)
-        case .defer(let reason):
+            recordPairConfirmed(pairId)
+            pairingStatus = .success(pairId: Self.shortHex(pairId))
+        case .defer(let reason, _):
             pairingStatus = .failed(reason)
+        case .sasRejected:
+            pairingStatus = .aborted
         }
+        dropLinkIfNeeded(after: result)
+    }
+
+    /// The person confirms that the words on the sheet match the other phone: PAIR_FIN may be written.
+    /// `prompt` is the question the sheet shows: a tap that reaches this after that question has closed,
+    /// with another one open, answers nothing (EarbudSasPrompter binds the answer to its token).
+    func confirmSas(_ prompt: EarbudSasPrompter.Prompt) {
+        sasPrompter.confirm(prompt)
+    }
+
+    /// The person declines (or backs out of) the sheet: the pairing stops and PAIR_FIN is never written.
+    func rejectSas(_ prompt: EarbudSasPrompter.Prompt) {
+        sasPrompter.reject(prompt)
+    }
+
+    /// Android records the confirmation only once PAIR_FIN has been acknowledged, not at the tap: a tap
+    /// followed by a failed PAIR_FIN must not leave a "confirmed" entry for a pair the earbud never sealed.
+    private func recordPairConfirmed(_ pairId: Data) {
+        SasVerificationStore.shared.recordEarbudPairConfirmed(pairId: pairId)
+    }
+
+    /// The earbud keeps this attempt's PAIR_RESP until it disconnects and a new PAIR_BEGIN does not refresh
+    /// it, so a retry on this link could never pair (EarbudPairingRelay.PairResult.needsFreshLink). Dropped
+    /// last, after the status above is published; the person connects again to retry.
+    private func dropLinkIfNeeded(after result: EarbudPairingRelay.PairResult) {
+        guard result.needsFreshLink else { return }
+        let notice: String
+        if case .sasRejected = result {
+            notice = "Pairing annullato: codice non confermato. Nulla è stato sigillato sull'auricolare. Ricollega l'auricolare per riprovare."
+        } else {
+            notice = "Pairing fallito: ricollega l'auricolare per riprovare (l'auricolare conserva la risposta di questo tentativo fino alla disconnessione)."
+        }
+        pairingNotice = notice
+        gatt.disconnect()
+        handleLinkLost()
     }
 
     // MARK: - FE-5 Auto-relay (two-phone cross-earbud pairing via server exchange)
@@ -242,15 +372,10 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
     }
 
     private func runAutoRelay() async {
-        guard let proxy = gattProxy else {
-            relayStatus = "proxy GATT non disponibile"
-            return
-        }
-
         relayStatus = "Lettura chiavi auricolare connesso…"
         let pairRespRaw: Data
         do {
-            pairRespRaw = try await proxy.readPairResp()
+            pairRespRaw = try await gatt.readPairResp()
         } catch {
             relayStatus = "Errore lettura c6: \(error)"
             return
@@ -288,7 +413,8 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
         }
         let peerEid = Data(SHA256.hash(data: peerPkSe))
 
-        let relay = EarbudPairingRelay(gatt: proxy)
+        let relay = EarbudPairingRelay(gatt: gatt)
+        let prompter = sasPrompter
         let weAreResponderPhone = Self.lexGreater(connEid, peerEid)
 
         if weAreResponderPhone {
@@ -298,24 +424,29 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
             let result = await relay.pairWithPeer(
                 peerPkSe: connPkSe, peerMaterial: connMat, peerEid: connEid,
                 ownPkSe: peerPkSe, ownMaterial: peerMat, ownEid: peerEid,
-                isConfirmed: { _ in true }
+                isConfirmed: { pairId in await prompter.ask(pairId: pairId) }
             )
             switch result {
             case .success(let pairId, let ctEe):
+                recordPairConfirmed(pairId)
                 if let ct = ctEe {
                     _ = await fe5Exchange.publishCt(
                         pkSeHex: connPkSeHex, ctB64: ct.base64EncodedString())
-                    let hex = pairId.prefix(8).map { String(format: "%02x", $0) }.joined() + "…"
-                    pairingStatus = .success(pairId: hex)
+                    pairingStatus = .success(pairId: Self.shortHex(pairId))
                     relayStatus = "Completato (RESPONDER) · ct_ee pubblicato"
                 } else {
                     pairingStatus = .failed("ct_ee assente (Stage 1)")
                     relayStatus = "Errore: ct_ee assente dopo Stage 1"
                 }
-            case .defer(let reason):
+            case .defer(let reason, _):
                 pairingStatus = .failed(reason)
                 relayStatus = "Pairing fallito: \(reason)"
+            case .sasRejected:
+                // The person said "no" or did not answer: STOP, nothing is published (no ct_ee).
+                pairingStatus = .aborted
+                relayStatus = "Pairing annullato: codice non confermato"
             }
+            dropLinkIfNeeded(after: result)
         } else {
             // Connected earbud is INITIATOR: wait for peer's ct_ee, then Stage 2
             relayStatus = "Attesa ct_ee dal RESPONDER (120s)…"
@@ -338,21 +469,30 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
             let result = await relay.pairWithPeer(
                 peerPkSe: connPkSe, peerMaterial: connMat, peerEid: connEid,
                 ownPkSe: peerPkSe, ownMaterial: ctEe, ownEid: peerEid,
-                isConfirmed: { _ in true }
+                isConfirmed: { pairId in await prompter.ask(pairId: pairId) }
             )
             switch result {
             case .success(let pairId, _):
-                let hex = pairId.prefix(8).map { String(format: "%02x", $0) }.joined() + "…"
-                pairingStatus = .success(pairId: hex)
+                recordPairConfirmed(pairId)
+                pairingStatus = .success(pairId: Self.shortHex(pairId))
                 relayStatus = "Completato (INITIATOR)"
-            case .defer(let reason):
+            case .defer(let reason, _):
                 pairingStatus = .failed(reason)
                 relayStatus = "Pairing fallito: \(reason)"
+            case .sasRejected:
+                pairingStatus = .aborted
+                relayStatus = "Pairing annullato: codice non confermato"
             }
+            dropLinkIfNeeded(after: result)
         }
     }
 
     // MARK: - Helpers
+
+    /// The first 8 bytes of a pair_id as hex, with an ellipsis: what the status row shows.
+    private static func shortHex(_ pairId: Data) -> String {
+        pairId.prefix(8).map { String(format: "%02x", $0) }.joined() + "…"
+    }
 
     private static func lexGreater(_ a: Data, _ b: Data) -> Bool {
         for i in 0..<min(a.count, b.count) {
@@ -373,9 +513,76 @@ final class EarbudDiagViewModel: NSObject, ObservableObject {
         }
         return result
     }
+
+    // MARK: - Binary DIAG parser
+    //
+    // Wire layout (little-endian packed, 28 or 32 bytes — matching Android EarbudDiag.kt):
+    //   off  0  UInt32  heap_used_kb
+    //   off  4  UInt32  heap_free_kb
+    //   off  8  UInt8   cpu_load_pct
+    //   off  9  UInt8   battery_pct
+    //   off 10  UInt8   pdm_ok
+    //   off 11  UInt8   tdm_ok
+    //   off 12  Int32   hs_count
+    //   off 16  UInt8   axon_ok
+    //   off 17  UInt8   call_state
+    //   off 18  UInt16  ble_interval_125us
+    //   off 20  Float32 deepfake_score
+    //   off 24  UInt32  uptime_sec
+    //   off 28  UInt32  aead_ops_total  (V2 / 32-byte payload only)
+    nonisolated private static func u32le(_ d: Data, _ off: Int) -> UInt32 {
+        var v: UInt32 = 0
+        _ = withUnsafeMutableBytes(of: &v) { d.copyBytes(to: $0, from: off..<(off + 4)) }
+        return UInt32(littleEndian: v)
+    }
+    nonisolated private static func u16le(_ d: Data, _ off: Int) -> UInt16 {
+        var v: UInt16 = 0
+        _ = withUnsafeMutableBytes(of: &v) { d.copyBytes(to: $0, from: off..<(off + 2)) }
+        return UInt16(littleEndian: v)
+    }
+
+    /// Applies one DIAG packet read from the earbud (anything but 28 or 32 bytes is ignored).
+    private func applyDiagPayload(_ data: Data) {
+        let sz = data.count
+        guard sz == 28 || sz == 32 else { return }
+        let heapUsed = Int(Self.u32le(data, 0))
+        let heapFree = Int(Self.u32le(data, 4))
+        let cpuPct   = Int(data[8])
+        let batPct   = Int(data[9])
+        let pdmOk    = data[10] != 0
+        let tdmOk    = data[11] != 0
+        let hsCount  = Int(Int32(bitPattern: Self.u32le(data, 12)))
+        let axonOk   = data[16] != 0
+        let uptimeSec = Int(Self.u32le(data, 24))
+        let aeadOps: UInt32? = sz == 32 ? Self.u32le(data, 28) : nil
+        // Preserve existing firmwareVersion (set separately via PROTOVER char).
+        let fwVer = metrics?.firmwareVersion ?? "—"
+        // fps computation: unsigned delta with 2^32 wrap (mirrors Android unsignedDelta32)
+        if let curr = aeadOps {
+            let now = Date().timeIntervalSinceReferenceDate
+            if let prev = prevAeadOps, prevAeadOpsAt > 0 {
+                let delta = curr &- prev
+                let dt = now - prevAeadOpsAt
+                cracenFps = dt > 0 ? Int((Double(delta) / dt).rounded()) : nil
+            } else {
+                cracenFps = nil
+            }
+            prevAeadOps = curr
+            prevAeadOpsAt = now
+        } else {
+            cracenFps = nil
+        }
+        metrics = EarbudMetrics(
+            heapFreeKb: heapFree, heapTotalKb: heapUsed + heapFree,
+            cpuPercent: cpuPct, hsCount: hsCount, aeadOpsTotal: aeadOps,
+            pdmActive: pdmOk, tdmActive: tdmOk, axonOk: axonOk,
+            batteryPct: batPct, uptimeSec: uptimeSec,
+            firmwareVersion: fwVer, lastUpdated: Date()
+        )
+    }
 }
 
-// MARK: - CBCentralManagerDelegate
+// MARK: - CBCentralManagerDelegate (scan only)
 
 extension EarbudDiagViewModel: CBCentralManagerDelegate {
     nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
@@ -409,172 +616,21 @@ extension EarbudDiagViewModel: CBCentralManagerDelegate {
             }
         }
     }
-
-    nonisolated func centralManager(
-        _ central: CBCentralManager,
-        didConnect peripheral: CBPeripheral
-    ) {
-        let identifier = peripheral.identifier
-        Task { @MainActor in
-            self.connectionState = .connected
-            self.metrics = EarbudMetrics(
-                heapFreeKb: 0, heapTotalKb: 0,
-                cpuPercent: 0, hsCount: 0,
-                pdmActive: false, tdmActive: false,
-                axonOk: false, batteryPct: 0, uptimeSec: 0,
-                firmwareVersion: "—", lastUpdated: Date()
-            )
-            AppState.rememberEarbudIdentifier(identifier)
-            let proxy = IOSEarbudGattProxy()
-            proxy.connect(peripheral)
-            self.gattProxy = proxy
-            self.pairingStatus = .idle
-        }
-        peripheral.delegate = self
-        peripheral.discoverServices([EarbudDiagViewModel.serviceUUID])
-    }
-
-    nonisolated func centralManager(
-        _ central: CBCentralManager,
-        didDisconnectPeripheral peripheral: CBPeripheral,
-        error: Error?
-    ) {
-        Task { @MainActor in
-            self.connectionState = .disconnected
-            self.connectedEarbud = nil
-            self.metrics = nil
-            self.gattProxy = nil
-            self.pairingStatus = .idle
-        }
-    }
-
-    nonisolated func centralManager(
-        _ central: CBCentralManager,
-        didFailToConnect peripheral: CBPeripheral,
-        error: Error?
-    ) {
-        let msg = error?.localizedDescription ?? "connessione fallita"
-        Task { @MainActor in
-            self.connectionState = .error(msg)
-            self.connectedEarbud = nil
-        }
-    }
-}
-
-// MARK: - CBPeripheralDelegate
-
-extension EarbudDiagViewModel: CBPeripheralDelegate {
-    nonisolated func peripheral(
-        _ peripheral: CBPeripheral,
-        didDiscoverServices error: Error?
-    ) {
-        guard let services = peripheral.services else { return }
-        for svc in services where svc.uuid == EarbudDiagViewModel.serviceUUID {
-            peripheral.discoverCharacteristics(
-                [EarbudDiagViewModel.metricsCharUUID],
-                for: svc
-            )
-        }
-    }
-
-    nonisolated func peripheral(
-        _ peripheral: CBPeripheral,
-        didDiscoverCharacteristicsFor service: CBService,
-        error: Error?
-    ) {
-        guard let chars = service.characteristics else { return }
-        for ch in chars where ch.uuid == EarbudDiagViewModel.metricsCharUUID {
-            peripheral.setNotifyValue(true, for: ch)
-        }
-    }
-
-    nonisolated func peripheral(
-        _ peripheral: CBPeripheral,
-        didUpdateValueFor characteristic: CBCharacteristic,
-        error: Error?
-    ) {
-        guard error == nil, let data = characteristic.value else { return }
-        if characteristic.uuid == EarbudDiagViewModel.metricsCharUUID {
-            parseDiagPayload(data)
-        }
-    }
-
-    // MARK: - Binary DIAG parser
-    //
-    // Wire layout (little-endian packed, 28 or 32 bytes — matching Android EarbudDiag.kt):
-    //   off  0  UInt32  heap_used_kb
-    //   off  4  UInt32  heap_free_kb
-    //   off  8  UInt8   cpu_load_pct
-    //   off  9  UInt8   battery_pct
-    //   off 10  UInt8   pdm_ok
-    //   off 11  UInt8   tdm_ok
-    //   off 12  Int32   hs_count
-    //   off 16  UInt8   axon_ok
-    //   off 17  UInt8   call_state
-    //   off 18  UInt16  ble_interval_125us
-    //   off 20  Float32 deepfake_score
-    //   off 24  UInt32  uptime_sec
-    //   off 28  UInt32  aead_ops_total  (V2 / 32-byte payload only)
-    nonisolated private static func u32le(_ d: Data, _ off: Int) -> UInt32 {
-        var v: UInt32 = 0
-        _ = withUnsafeMutableBytes(of: &v) { d.copyBytes(to: $0, from: off..<(off + 4)) }
-        return UInt32(littleEndian: v)
-    }
-    nonisolated private static func u16le(_ d: Data, _ off: Int) -> UInt16 {
-        var v: UInt16 = 0
-        _ = withUnsafeMutableBytes(of: &v) { d.copyBytes(to: $0, from: off..<(off + 2)) }
-        return UInt16(littleEndian: v)
-    }
-
-    nonisolated private func parseDiagPayload(_ data: Data) {
-        let sz = data.count
-        guard sz == 28 || sz == 32 else { return }
-        let heapUsed = Int(Self.u32le(data, 0))
-        let heapFree = Int(Self.u32le(data, 4))
-        let cpuPct   = Int(data[8])
-        let batPct   = Int(data[9])
-        let pdmOk    = data[10] != 0
-        let tdmOk    = data[11] != 0
-        let hsCount  = Int(Int32(bitPattern: Self.u32le(data, 12)))
-        let axonOk   = data[16] != 0
-        let uptimeSec = Int(Self.u32le(data, 24))
-        let aeadOps: UInt32? = sz == 32 ? Self.u32le(data, 28) : nil
-        Task { @MainActor in
-            // Preserve existing firmwareVersion (set separately via PROTOVER char).
-            let fwVer = self.metrics?.firmwareVersion ?? "—"
-            // fps computation: unsigned delta with 2^32 wrap (mirrors Android unsignedDelta32)
-            if let curr = aeadOps {
-                let now = Date().timeIntervalSinceReferenceDate
-                if let prev = self.prevAeadOps, self.prevAeadOpsAt > 0 {
-                    let delta = curr &- prev
-                    let dt = now - self.prevAeadOpsAt
-                    self.cracenFps = dt > 0 ? Int((Double(delta) / dt).rounded()) : nil
-                } else {
-                    self.cracenFps = nil
-                }
-                self.prevAeadOps = curr
-                self.prevAeadOpsAt = now
-            } else {
-                self.cracenFps = nil
-            }
-            self.metrics = EarbudMetrics(
-                heapFreeKb: heapFree, heapTotalKb: heapUsed + heapFree,
-                cpuPercent: cpuPct, hsCount: hsCount, aeadOpsTotal: aeadOps,
-                pdmActive: pdmOk, tdmActive: tdmOk, axonOk: axonOk,
-                batteryPct: batPct, uptimeSec: uptimeSec,
-                firmwareVersion: fwVer, lastUpdated: Date()
-            )
-        }
-    }
 }
 
 // MARK: - View
 
 struct EarbudDiagScreen: View {
-    @StateObject private var vm = EarbudDiagViewModel()
+    @StateObject private var vm: EarbudDiagViewModel
     @Environment(\.qaudionScheme) private var scheme
     @Environment(\.qaudionExtras) private var extras
     @Environment(\.qaudionType)   private var type
+
+    /// `gatt` is the app's ONE earbud GATT client (AppState.earbudGattProxy), the same instance the KMS
+    /// sweep uses, so the link this screen makes is the one a key import finds ready.
+    init(gatt: IOSEarbudGattProxy) {
+        _vm = StateObject(wrappedValue: EarbudDiagViewModel(gatt: gatt))
+    }
 
     var body: some View {
         ZStack {
@@ -601,10 +657,85 @@ struct EarbudDiagScreen: View {
             }
         }
         .navigationTitle("Diagnostica auricolare")
+        .sheet(item: sasPromptBinding) { prompt in
+            sasConfirmSheet(prompt)
+        }
         .onDisappear {
             vm.stopScan()
             vm.disconnect()
         }
+    }
+
+    // MARK: - SAS confirmation (FE-5, CL-2.2)
+
+    /// The sheet is driven by the view model alone: an interactive dismissal is disabled and the binding
+    /// ignores a set, so the question closes only through confirm / reject (or the relay's timeout).
+    private var sasPromptBinding: Binding<EarbudSasPrompter.Prompt?> {
+        Binding<EarbudSasPrompter.Prompt?>(
+            get: { vm.sasPrompt },
+            set: { _ in }
+        )
+    }
+
+    /// FE-5 pairing confirmation: six words (two rows of three, monospaced upper case, like the in-call
+    /// SAS) and the pair_id fingerprint. An explicit tap is required: there is no outside-tap dismissal,
+    /// and "Annulla pairing" stops the flow without writing PAIR_FIN.
+    private func sasConfirmSheet(_ prompt: EarbudSasPrompter.Prompt) -> some View {
+        let firstRow: String = prompt.words.prefix(3).map { $0.uppercased() }.joined(separator: "   ")
+        let secondRow: String = prompt.words.dropFirst(3).prefix(3).map { $0.uppercased() }.joined(separator: "   ")
+        let fingerprintLine: String = "Impronta del pairing: \(prompt.fingerprint)"
+        return ZStack {
+            scheme.background.ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Conferma il codice di pairing")
+                    .qaudionStyle(type.titleSmall)
+                    .foregroundStyle(scheme.onSurface)
+                Text("Confronta queste sei parole con quelle mostrate sull'altro telefono. Se sono identiche, tocca CONFERMA COINCIDONO. Se sono diverse, annulla: qualcuno potrebbe aver alterato lo scambio e l'auricolare non sigillerà alcuna chiave.")
+                    .qaudionStyle(type.bodyMedium)
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                VStack(spacing: 8) {
+                    Text(firstRow)
+                        .font(.system(.title3, design: .monospaced))
+                        .fontWeight(.semibold)
+                        .foregroundStyle(scheme.onSurface)
+                    Text(secondRow)
+                        .font(.system(.title3, design: .monospaced))
+                        .fontWeight(.semibold)
+                        .foregroundStyle(scheme.onSurface)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                Text(fingerprintLine)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(scheme.onSurfaceVariant)
+                Button(action: { vm.confirmSas(prompt) }) {
+                    Text("CONFERMA COINCIDONO")
+                        .qaudionStyle(type.labelLarge)
+                        .foregroundStyle(scheme.onPrimary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(scheme.primary.opacity(0.85))
+                        )
+                }
+                .buttonStyle(.plain)
+                Button(action: { vm.rejectSas(prompt) }) {
+                    Text("Annulla pairing")
+                        .qaudionStyle(type.labelLarge)
+                        .foregroundStyle(extras.riskHigh)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(extras.riskHigh.opacity(0.12))
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(20)
+        }
+        .interactiveDismissDisabled(true)
     }
 
     // MARK: - Scan section
@@ -654,7 +785,30 @@ struct EarbudDiagScreen: View {
             }
 
             connectionStatePill
+
+            if let notice = vm.pairingNotice {
+                pairingNoticeRow(notice)
+            }
         }
+    }
+
+    /// Why a pairing ended with the link dropped (declined / not confirmed, or failed after PAIR_RESP).
+    private func pairingNoticeRow(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .qaudionScaledFont(size: 12, weight: .semibold, family: .label)
+                .foregroundStyle(extras.warning)
+            Text(text)
+                .qaudionStyle(type.labelSmall)
+                .foregroundStyle(extras.warning)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(extras.warning.opacity(0.12))
+        )
     }
 
     private var connectionStatePill: some View {
@@ -900,7 +1054,7 @@ struct EarbudDiagScreen: View {
         return VStack(alignment: .leading, spacing: 12) {
             // Manual single-earbud pairing (Phase-1 diagnostic)
             Button {
-                Task { await vm.pairWithConnectedEarbud() }
+                vm.startPairing()
             } label: {
                 HStack(spacing: 8) {
                     if isPairing {
@@ -992,6 +1146,7 @@ struct EarbudDiagScreen: View {
         case .inProgress: return extras.pqcAccent
         case .success:    return extras.success
         case .failed:     return extras.riskHigh
+        case .aborted:    return extras.warning
         }
     }
 
@@ -1019,6 +1174,8 @@ struct EarbudDiagScreen: View {
             return ("checkmark.shield.fill", "Pairing completato · pair_id: " + pairId, extras.success)
         case .failed(let reason):
             return ("xmark.circle.fill", "Errore: " + reason, extras.riskHigh)
+        case .aborted:
+            return ("hand.raised.fill", "Pairing annullato: codice non confermato · nulla sigillato sull'auricolare", extras.warning)
         }
     }
 
@@ -1089,7 +1246,7 @@ struct EarbudDiagScreen: View {
 
 #Preview {
     NavigationStack {
-        EarbudDiagScreen()
+        EarbudDiagScreen(gatt: IOSEarbudGattProxy())
     }
     .qAudionTheme(dark: true)
 }

@@ -10,9 +10,11 @@ import QAudionEngine
 
 /// Concrete `SovereignEarbudGattRelay` driving a real CBCentralManager /
 /// CBPeripheral against the canonical QAUDION crypto service
-/// `f2c0aaaa-bcc0-4001-8000-000000000000` (NOT the QA-P3-BENCH diagnostic
-/// service `5a3e0001…` — that is QaP3GattManager). The crypto service is the
-/// same family `EarbudDiagViewModel` already talks to (metrics char 0x90);
+/// `f2c0aaaa-bcc0-4001-8000-000000000001` (NOT the QA-P3-BENCH diagnostic
+/// service `5a3e0001…` — that is QaP3GattManager; the string is
+/// `EarbudGattConstants.SERVICE_UUID`, shared with the diagnostics screen and
+/// IOSEarbudGattProxy). The crypto service is the
+/// same service `EarbudDiagViewModel` already talks to (metrics char 0x90);
 /// here we drive KEY_IMPORT (0xc3) + ATTEST_POP (0xc1) for the KMS-v2
 /// sovereign relay (lockstep §5 iOS, Phase-2).
 ///
@@ -154,11 +156,14 @@ public final class CoreBluetoothSovereignRelay: NSObject, SovereignEarbudGattRel
     }
 
     /// The negotiated ATT MTU minus the 3-byte ATT write header — the max
-    /// payload per Write-With-Response. The relay() caller uses this to size
+    /// payload per ATT write PDU. The relay() caller uses this to size
     /// package fragments. Falls back to 20 (MTU 23 default) before discovery.
     public var maxWritePayload: Int {
         guard let p = peripheral else { return 20 }
-        let mtu = p.maximumWriteValueLength(for: .withResponse)
+        // `.withoutResponse` is ATT_MTU - 3, what ONE PDU carries. The `.withResponse`
+        // figure CoreBluetooth reports is 512 (it splits a longer write into a Prepare
+        // Write sequence), and the firmware refuses an ATT write with a non-zero offset.
+        let mtu = p.maximumWriteValueLength(for: .withoutResponse)
         // maximumWriteValueLength already accounts for the ATT header; but our
         // KEY_IMPORT frame format is [frag_offset:2][payload], so the payload
         // budget is mtu - 2. Clamp to >=1.

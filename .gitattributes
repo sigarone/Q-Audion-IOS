@@ -68,3 +68,9 @@ QAudionEngine/Sources/CLiboqs/src/mldsa/** -text
 # tests check it: git must never rewrite their line endings.
 QAudionEngine/Sources/QAudionEngine/Resources/voice/** -text
 QAudionEngine/Tests/QAudionEngineTests/Resources/voice-kat/** -text
+
+# FE-5 earbud pairing SAS words (earbud-pair-sas-v1): the generator and the known-answer vectors are byte-for-byte shared with the
+# Android app (both test suites pin the SHA-256 of the vectors): git must never rewrite their line endings.
+scripts/kat/gen_earbud_pair_sas_kat.py -text
+scripts/kat/earbud-pair-sas-v1-kat.json -text
+QAudionEngine/Tests/QAudionEngineTests/Resources/kat/earbud-pair-sas-v1-kat.json -text

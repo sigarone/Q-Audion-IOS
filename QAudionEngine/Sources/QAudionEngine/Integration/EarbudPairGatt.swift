@@ -33,6 +33,35 @@ public enum EarbudPairGatt {
         return buf
     }
 
+    /// The ATT writes of PAIR_BEGIN (c5): `[offset: u16 LITTLE-endian][data]`, contiguous from 0.
+    ///
+    /// c5 is little-endian (`pair_begin_write`: `frag_off = p[0] | p[1] << 8`) while KEY_IMPORT (c3)
+    /// is big-endian (`EarbudKeyImportFragmenter`): the two characteristics of one service take
+    /// opposite byte orders, and sharing one fragmenter between them breaks one of the two.
+    ///
+    /// `maxWriteLength` is the largest ATT write one PDU carries (ATT_MTU - 3); every frame fits in
+    /// it, so no write ever becomes a Prepare Write (the firmware reads the frame header from the
+    /// start of each write and ignores the ATT offset).
+    ///
+    /// - Returns: nil when `maxWriteLength` is below 3 (`[off:2][>=1 data]`) or the payload is empty.
+    public static func pairBeginFrames(_ payload: Data, maxWriteLength: Int) -> [Data]? {
+        guard maxWriteLength >= 3, !payload.isEmpty else { return nil }
+        let dataPerFrame = maxWriteLength - EarbudGattConstants.EE_PAIR_FRAG_HDR
+        let bytes = [UInt8](payload)
+        var frames: [Data] = []
+        var offset = 0
+        while offset < bytes.count {
+            let end = min(offset + dataPerFrame, bytes.count)
+            var frame = Data(capacity: EarbudGattConstants.EE_PAIR_FRAG_HDR + (end - offset))
+            frame.append(UInt8(offset & 0xFF))
+            frame.append(UInt8((offset >> 8) & 0xFF))
+            frame.append(contentsOf: bytes[offset..<end])
+            frames.append(frame)
+            offset = end
+        }
+        return frames
+    }
+
     // MARK: - PAIR_FIN
 
     /// Build the 32B PAIR_FIN confirm hash.
