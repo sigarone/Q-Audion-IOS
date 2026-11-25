@@ -9,14 +9,13 @@ final class ContactVoiceUiTests: XCTestCase {
     private let keys = [
         "in_call.voice_check.was_him", "in_call.voice_check.compare_code",
         "contact_detail.voice_rec.label", "contact_detail.voice_rec.off", "contact_detail.voice_rec.learning",
-        "contact_detail.voice_rec.partly", "contact_detail.voice_rec.learned", "contact_detail.voice_rec.learned_nodate",
+        "contact_detail.voice_rec.partly", "contact_detail.voice_rec.sessions", "contact_detail.voice_rec.days", "contact_detail.voice_rec.learned", "contact_detail.voice_rec.learned_nodate",
         "contact_detail.voice_rec.changed", "contact_detail.voice_rec.forget", "contact_detail.voice_rec.relearn",
         "settings.contact_voice.section", "settings.contact_voice.title", "settings.contact_voice.subtitle",
         "settings.contact_voice.unavailable", "settings.contact_voice.list_title", "settings.contact_voice.list_empty",
         "settings.contact_voice.delete_all", "settings.contact_voice.confirm_title", "settings.contact_voice.confirm_body",
         "settings.contact_voice.confirm", "settings.contact_voice.cancel", "settings.contact_voice.failed",
     ]
-    private let pluralKeys = ["contact_detail.voice_rec.sessions %lld", "contact_detail.voice_rec.days %lld"]
 
     private func catalog() throws -> [String: Any] {
         var dir = URL(fileURLWithPath: "\(#filePath)")
@@ -47,14 +46,6 @@ final class ContactVoiceUiTests: XCTestCase {
         for key in keys {
             for language in languages {
                 XCTAssertFalse(try value(key, language, in: strings).isEmpty, "\(key) \(language)")
-            }
-        }
-        for key in pluralKeys {
-            for language in languages {
-                let variations = try XCTUnwrap(try localization(key, language, in: strings)["variations"] as? [String: Any], "\(key) \(language)")
-                let plural = try XCTUnwrap(variations["plural"] as? [String: Any], "\(key) \(language)")
-                XCTAssertNotNil(plural["one"], "\(key) \(language)")
-                XCTAssertNotNil(plural["other"], "\(key) \(language)")
             }
         }
     }

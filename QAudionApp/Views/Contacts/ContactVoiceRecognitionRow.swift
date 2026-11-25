@@ -58,8 +58,12 @@ enum ContactVoiceRowText {
                                 comment: "Contact screen, voice recognition row: progress as net speech")
             let head = String(format: format, Int64(summary?.speechS ?? 0), Int64(summary?.targetS ?? 120))
             guard let s = summary, s.sessions > 0 else { return head }
-            let sessions = String(localized: "contact_detail.voice_rec.sessions \(s.sessions)")
-            let days = String(localized: "contact_detail.voice_rec.days \(s.days)")
+            let sessionsFormat = String(localized: "contact_detail.voice_rec.sessions", defaultValue: "Sessioni: %lld",
+                                        comment: "Contact screen, voice recognition row: number of calls the voice was learned from")
+            let daysFormat = String(localized: "contact_detail.voice_rec.days", defaultValue: "Giorni: %lld",
+                                    comment: "Contact screen, voice recognition row: number of days the voice was learned over")
+            let sessions = String(format: sessionsFormat, Int64(s.sessions))
+            let days = String(format: daysFormat, Int64(s.days))
             return head + " · " + sessions + " · " + days
         }
     }

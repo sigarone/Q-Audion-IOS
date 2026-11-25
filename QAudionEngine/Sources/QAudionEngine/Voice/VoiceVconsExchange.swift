@@ -97,18 +97,23 @@ public final class VoiceVconsExchange: @unchecked Sendable {
         queue.sync {}
     }
 
+    private static func zero(_ key: inout Data?) {
+        if var k = key {
+            k.resetBytes(in: 0..<k.count)
+        }
+        key = nil
+    }
+
     private func clearKeys() {
-        lastKey?.resetBytes(in: 0..<(lastKey?.count ?? 0))
-        previousKey?.resetBytes(in: 0..<(previousKey?.count ?? 0))
-        lastKey = nil
-        previousKey = nil
+        Self.zero(&lastKey)
+        Self.zero(&previousKey)
     }
 
     /// The current key, as a copy; the key that it replaced is kept as the previous one.
     private func track() -> (current: Data, previous: Data?)? {
         guard let now = keys(), !now.isEmpty else { return nil }
         if let last = lastKey, last != now {
-            previousKey?.resetBytes(in: 0..<(previousKey?.count ?? 0))
+            Self.zero(&previousKey)
             previousKey = last
         }
         lastKey = Data(now)
