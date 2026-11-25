@@ -427,6 +427,7 @@ final class VoiceCallSession: @unchecked Sendable {
     }
 
     private func startEngine(_ now: Int64) {
+        let startedGeneration = process.services.generation
         guard engine == nil, !gaveUp, !isEnded, VoiceFeature.isEnabled else { return }
         guard let ready = process.services.prepare() else {
             gaveUp = true
@@ -435,7 +436,6 @@ final class VoiceCallSession: @unchecked Sendable {
         prepared = true
         releaseModels = ready.release
         let services = process.services
-        let startedGeneration = services.generation
         // The account of this call, taken once: the write at the end of the call goes to this account's store or nowhere.
         guard let startedAccount = services.currentAccount() else {
             gaveUp = true

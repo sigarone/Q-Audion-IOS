@@ -111,6 +111,8 @@ final class VoiceStoreAccountTests: XCTestCase {
             XCTAssertNotEqual(error, Self.noAccount,
                               "the deletion of the contact failed for want of an account: the learned voice of the deleted contact stays")
         }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: planted[0].path),
+                       "the planted record of the earlier run is still on disk after the deletion")
     }
 
     /// Logged out: the provider answers nil, the store refuses and creates nothing.

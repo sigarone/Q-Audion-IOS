@@ -352,6 +352,12 @@ final class CallControlDockTests: XCTestCase {
         }
     }
 
+    func testTheVoiceBackgroundBridgeInstallsTheAccountProviderFromTheTokenVault() throws {
+        let bridge = try source("QAudionApp/Services/VoiceBackgroundTaskBridge.swift")
+        XCTAssertTrue(bridge.contains("VoiceCallWiring.setAccountProvider"))
+        XCTAssertTrue(bridge.contains("TokenVault"))
+    }
+
     // MARK: - Source helpers
 
     private func sourceURL(_ relativePath: String, file: StaticString = #filePath) throws -> URL {
