@@ -352,6 +352,55 @@ final class VoiceCallSessionTests: XCTestCase {
         XCTAssertEqual(session.announcedFlags, 0, "the announcement that came first blocks the call")
     }
 
+    func testAWithdrawalAfterAnAllowZeroDeletesTheRecord() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        fake.record = VoiceStoreFixtures.record(fake.config.state)
+        let process = processWithMemoryCounters(fake)
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        session.peerVcons(announcement(1, allow: false), wallS: 1_790_000_000)
+        session.queue.sync {}
+        XCTAssertTrue(fake.deletes.isEmpty)
+        session.peerVcons(announcement(2, allow: false, withdraw: true), wallS: 1_790_000_001)
+        session.queue.sync {}
+        XCTAssertEqual(fake.deletes, ["contact-1"])
+        session.callEnded()
+        session.queue.sync {}
+        XCTAssertTrue(fake.updates.isEmpty, "the end of the call writes nothing back")
+    }
+
+    func testAWithdrawalDeletesTheRecordOfAnOwnerWhoIsNotEntitled() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        fake.record = VoiceStoreFixtures.record(fake.config.state)
+        let process = processWithMemoryCounters(fake)
+        process.setOwnerPolicy(ownerOn: { false }, ownerTemplate: { nil })
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertNil(session.withEngine { $0 }, "no engine for this owner")
+        session.peerVcons(announcement(1, allow: true, withdraw: true), wallS: 1_790_000_000)
+        session.queue.sync {}
+        XCTAssertEqual(fake.deletes, ["contact-1"])
+    }
+
+    func testAWithdrawalAfterTheEngineGaveUpDeletesTheRecord() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        fake.account = nil // nobody signed in: the engine gives up
+        let process = processWithMemoryCounters(fake)
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertNil(session.withEngine { $0 })
+        fake.account = "acct-1"
+        session.peerVcons(announcement(1, allow: true, withdraw: true), wallS: 1_790_000_000)
+        session.queue.sync {}
+        XCTAssertEqual(fake.deletes, ["contact-1"])
+    }
+
     func testAnAnnouncementThatArrivesBeforeTheSessionIsKeptForIt() throws {
         VoiceFeature.setProvider { true }
         let fake = try services()

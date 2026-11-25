@@ -346,14 +346,17 @@ final class VoiceCallSession: @unchecked Sendable {
     func peerVcons(_ v: VoiceVcons, wallS: Int) {
         let now = clock()
         queue.async { [self] in
+            // A withdrawal deletes the record of the contact whenever one exists, whatever the owner setting, the entitlement or the
+            // state of the engine is, and the end of this call writes nothing back. It comes before every early return.
+            if v.withdraw {
+                discardResult()
+                try? process.services.deleteRecord(contactId: binding.contactId, generation: process.services.generation)
+            }
             if let e = engine, !isEnded {
                 e.feed(.vcons(atNs: stamped(now), vcons: v, wallS: wallS))
                 return
             }
             if offForCall || gaveUp || isEnded { return }
-            if v.withdraw && process.ownerOn {
-                try? process.services.deleteRecord(contactId: binding.contactId, generation: process.services.generation)
-            }
             if pendingVcons.count < 16 { pendingVcons.append((v, wallS)) }
         }
     }
