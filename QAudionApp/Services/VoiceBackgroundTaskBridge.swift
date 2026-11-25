@@ -12,11 +12,20 @@ enum VoiceBackgroundTaskBridge {
         // account that has the diagnostic flag; the id-free daily counters are written whenever the check runs.
         VoiceCallWiring.setLogging(
             sink: { RTLog.info("call", $0) },
-            diagLinesEnabled: { FeatureFlags.bool("voice.diag_lines", false) })
+            diagLinesEnabled: { diagLinesFlag() })
         // The card of the call screen follows the state of the check.
         VoiceCallWiring.setDisplayHandler { display in
             DispatchQueue.main.async { VoiceCheckModel.shared.set(display) }
         }
+    }
+
+    /// The flag is read on the main thread (the flags are main-actor state); the lines are written from the worker of the call, which
+    /// waits for the answer: a handful of lines per call, and the main thread never waits for that worker.
+    private static func diagLinesFlag() -> Bool {
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated { FeatureFlags.bool("voice.diag_lines", false) }
+        }
+        return DispatchQueue.main.sync { MainActor.assumeIsolated { FeatureFlags.bool("voice.diag_lines", false) } }
     }
 
     private static func begin(_ name: String, _ onExpiration: @escaping () -> Void) -> Int? {
