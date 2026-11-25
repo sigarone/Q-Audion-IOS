@@ -66,6 +66,9 @@ enum LocalCryptoWipe {
         // (windows, account, final mark) and, through the learner's generation, the windows of a call that is still running.
         // The next account must not start from this account's voice. Reported like any other failed step.
         wipeOwnerVoice()
+        // The voices learned of the contacts of the account that is leaving: every running or post-call engine is stopped first,
+        // then the records, the meta file and the key are deleted under the lock of the store. A failure is reported.
+        wipeContactVoice()
         // The call history of the account that is leaving: without this the next account on the
         // device saw the previous account's calls (the encrypted file and its copies, the Keychain
         // key and the legacy UserDefaults copy were all left alone).
@@ -103,6 +106,18 @@ enum LocalCryptoWipe {
             print("[LocalCryptoWipe] OwnerVoiceLearner.wipe left: \(left.map(\.rawValue).joined(separator: ","))")
         }
         return left.isEmpty
+    }
+
+    /// Removes the voices that the phone learned of the contacts (the contact-voice check): the engines of the calls that are running
+    /// or doing their post-call work are stopped and discarded, then the records, `meta.bin` and the key are deleted. `true` when
+    /// nothing is left; a failure is printed like any failed step and returned, never swallowed.
+    @discardableResult
+    static func wipeContactVoice() -> Bool {
+        let clean = VoiceCallWiring.wipeAll()
+        if !clean {
+            print("[LocalCryptoWipe] the contact voice wipe left something")
+        }
+        return clean
     }
 
     /// Deletes the saved log queue so lines of the account that leaves cannot be uploaded under the next one.

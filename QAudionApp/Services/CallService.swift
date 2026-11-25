@@ -1472,6 +1472,8 @@ final class CallService: @unchecked Sendable {
     /// Fired on the main queue when this side becomes HELD (first cause, any cause) and when it stops being HELD (last cause
     /// removed, after CALL_HOLD RESUMED was written). AppState pauses and restores the outbound video on it.
     public var onLocalHoldActiveChanged: ((Bool) -> Void)?
+    /// Fired on the main queue when the PEER's hold changed (a hold frame that was applied). The contact-voice check follows it.
+    public var onPeerHoldChanged: (() -> Void)?
     private var holdAudioCauseCap: HoldCancel?
     /// Causes recorded before the call is connected (a CallKit hold that arrives while it still rings or connects). The
     /// privacy effects apply at once (video paused, sender muted); CALL_HOLD goes out when the call becomes active.
@@ -3851,6 +3853,7 @@ final class CallService: @unchecked Sendable {
         guard outcome.changed else { return }
         holdLastBeepAtMs = HoldToneSynth.never
         syncOuterHold()
+        DispatchQueue.main.async { [weak self] in self?.onPeerHoldChanged?() }
         if hold.held {
             holdTick()  // the tone plays at t=0 of HELD
         } else {

@@ -8,6 +8,32 @@ public enum VoiceCallWiring {
         VoiceProcess.shared.cancelPostCallWork()
     }
 
+    /// Where the lines of the log go, and whether the per-call lines are written for this account (the `voice.diag_lines` flag of the
+    /// account). The id-free daily counters are written whatever the second closure says, whenever the engine runs.
+    public static func setLogging(sink: @escaping (String) -> Void, diagLinesEnabled: @escaping () -> Bool) {
+        VoiceProcess.shared.setLogging(sink: sink, diagLinesEnabled: diagLinesEnabled)
+    }
+
+    /// Receives the state that the voice card shows, and nil when there is nothing to show (no check, or the call is over).
+    /// Called on a background queue: the app moves it to the main thread.
+    public static func setDisplayHandler(_ handler: @escaping (VoiceCheckDisplay?) -> Void) {
+        VoiceProcess.shared.setDisplayHandler(handler)
+    }
+
+    /// The contact was deleted or blocked: the calls with it write nothing any more and its record is deleted. Works before any call
+    /// of the process, and does nothing when no record was ever written.
+    public static func contactRemoved(userId: String) {
+        VoiceProcess.shared.forgetContact(userId)
+    }
+
+    /// The voice step of the local wipe (logout, account change, remote wipe, account deletion): every running or post-call engine is
+    /// stopped and discarded, then the records, `meta.bin` and the key are deleted under the store's lock. False when something is
+    /// left or a step failed; the caller reports it like any other failed step.
+    @discardableResult
+    public static func wipeAll() -> Bool {
+        VoiceProcess.shared.wipeAll()
+    }
+
     /// The source of the background-task assertion that the post-call work runs under (the app provides it once).
     public static func setBackgroundTasks(
         begin: @escaping (_ name: String, _ onExpiration: @escaping () -> Void) -> Int?,

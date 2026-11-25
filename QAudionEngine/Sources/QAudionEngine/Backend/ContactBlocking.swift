@@ -353,6 +353,8 @@ public final class ContactBlockCoordinator {
             guard account == self.generation else { return .failed(.accountChanged) }
             if blocked {
                 self.storage.insert(id)
+                // A contact that is blocked takes the voice learned from its calls with it.
+                VoiceCallWiring.contactRemoved(userId: id)
             } else {
                 self.storage.remove(id)
             }

@@ -8,6 +8,15 @@ import QAudionEngine
 enum VoiceBackgroundTaskBridge {
     static func install() {
         VoiceCallWiring.setBackgroundTasks(begin: begin, end: end)
+        // The lines of the contact-voice check go to the log. The per-call lines (each has a call number) are written only for an
+        // account that has the diagnostic flag; the id-free daily counters are written whenever the check runs.
+        VoiceCallWiring.setLogging(
+            sink: { RTLog.info("call", $0) },
+            diagLinesEnabled: { FeatureFlags.bool("voice.diag_lines", false) })
+        // The card of the call screen follows the state of the check.
+        VoiceCallWiring.setDisplayHandler { display in
+            DispatchQueue.main.async { VoiceCheckModel.shared.set(display) }
+        }
     }
 
     private static func begin(_ name: String, _ onExpiration: @escaping () -> Void) -> Int? {

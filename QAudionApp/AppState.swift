@@ -7026,11 +7026,15 @@ final class AppState: ObservableObject {
                 self.recomputeCallIdentityShield()
             }
         }
+        callService.onPeerHoldChanged = { [weak self] in
+            Task { @MainActor [weak self] in self?.tellVoiceCheckAboutHold() }
+        }
         callService.onLocalHoldActiveChanged = { [weak self] held in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 // A stale event (the hold changed again before this ran): the latest one decides.
                 guard held == self.callService.isLocalHeld else { return }
+                self.tellVoiceCheckAboutHold()
                 let video = CallHoldPolicy.videoAction(
                     isOnHold: held,
                     isGroupCall: self.groupCallKitId != nil,
@@ -8936,6 +8940,8 @@ final class AppState: ObservableObject {
                                 self.endedCalls.forget(callUUID.uuidString); self.endedCalls.forget(callIdStr)
                                 if self.activeCallKitId == nil { self.activeCallKitId = callUUID }
                                 self.incomingCallRingVisible = true
+                                // A call starts to ring: the post-call work of the contact-voice check of an earlier call is cancelled.
+                                VoiceCallWiring.callStarting()
                             }
                             // W-CARPLAYVIDEOFIX (2026-09-08) — not forced on
                             // CarPlay, same reasoning as the PushKit 1:1
@@ -8966,6 +8972,8 @@ final class AppState: ObservableObject {
                         // no-op and keeps this block correct standalone for the
                         // useCustomUI/registerSuppressedCall branches too.)
                         self.incomingCallRingVisible = true
+                        // A call starts to ring: the post-call work of the contact-voice check of an earlier call is cancelled.
+                        VoiceCallWiring.callStarting()
                         // W450-fix: when PushKit woke the device first, CallKit's
                         // native phone UI is already visible. Setting .ringing here
                         // would also trigger Q-Audion's in-app ringing banner →
@@ -19335,6 +19343,8 @@ final class AppState: ObservableObject {
         // app becomes active — same reasoning as the WS site above.
         incomingCallerName = display
         incomingCallRingVisible = true
+        // A call starts to ring: the post-call work of the contact-voice check of an earlier call is cancelled.
+        VoiceCallWiring.callStarting()
         return display
     }
 
@@ -22813,6 +22823,12 @@ final class AppState: ObservableObject {
         }
         maybeExchangeAvatarOnCallConnect()
         startVoiceCheckForThisCall()
+    }
+
+    /// The call is on hold when this side or the peer holds it; the voice check starts a new stretch at every change.
+    @MainActor
+    func tellVoiceCheckAboutHold() {
+        (webRtcController as? QAudionWebRtcCallController)?.voiceHoldChanged(callService.isLocalHeld || callService.peerOnHold)
     }
 
     /// The contact-voice check starts at the genuine-accept points, here and nowhere else. The device is the one that THIS

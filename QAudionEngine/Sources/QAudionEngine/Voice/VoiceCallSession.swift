@@ -180,6 +180,10 @@ final class VoiceCallSession: @unchecked Sendable {
     private var fallbackSeen = false
     private var cancelRequested = false
     private var ended = false
+    /// The result of this call must not be written: the voice was wiped or the contact was deleted while the call ran.
+    private var resultDiscarded = false
+    /// The engine and its post-call work are dropped (a wipe): nothing of the call goes on.
+    private var engineDiscarded = false
     private var source: VoiceStatsSource?
     private var engineForCancel: VoiceEngine?
 
@@ -191,11 +195,15 @@ final class VoiceCallSession: @unchecked Sendable {
     private var lastAt: Int64 = 0
     private var ticker: VoiceTicker?
     private var pollsInFlight = 0
+    private var lastHold = false
+    private var engineRan = false
+    private var releaseModels: (() -> Void)?
 
     /// Polls that the lock or the CPU governor held back, and RX blocks that went on to the engine (diagnostics and tests).
     private(set) var heldBackPolls = 0
     private(set) var fedBlocks = 0
     private(set) var heldBackBlocks = 0
+    private(set) var holdEventsFed = 0
 
     init(binding: VoiceCallBinding, process: VoiceProcess, queue: DispatchQueue? = nil,
          clock: @escaping () -> Int64 = VoiceClock.nowNs, ticker: @escaping () -> VoiceTicker = { VoiceDispatchTicker() },
@@ -247,10 +255,13 @@ final class VoiceCallSession: @unchecked Sendable {
         }
     }
 
+    /// The call is put on hold (by this side or by the peer) or resumed. Only a change is passed on.
     func holdChanged(_ held: Bool) {
         let now = clock()
         queue.async { [self] in
-            guard engine != nil else { return }
+            guard engine != nil, held != lastHold else { return }
+            lastHold = held
+            holdEventsFed += 1
             feed(.hold(atNs: stamped(now), held: held))
         }
     }
@@ -292,6 +303,37 @@ final class VoiceCallSession: @unchecked Sendable {
         queue.async { [self] in finish(now, token: token) }
     }
 
+    /// The result of this call is not written any more (the contact was deleted or blocked). The call itself goes on.
+    func discardResult() {
+        lock.lock()
+        resultDiscarded = true
+        lock.unlock()
+    }
+
+    private var isResultDiscarded: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return resultDiscarded || engineDiscarded
+    }
+
+    /// A wipe: the engine and its post-call work are stopped and dropped, nothing is flushed, nothing is written, and the models
+    /// are given back. Callable from any thread; the work itself runs on the queue.
+    func discardAll() {
+        lock.lock()
+        resultDiscarded = true
+        engineDiscarded = true
+        cancelRequested = true
+        let e = engineForCancel
+        let first = !ended
+        ended = true
+        lock.unlock()
+        e?.requestPostCancel()
+        rxTap.stop()
+        if first {
+            queue.async { [self] in finish(clock(), token: nil) }
+        }
+    }
+
     /// Runs `body` on the queue of the session with its engine (tests).
     func withEngine<T>(_ body: (VoiceEngine?) -> T) -> T {
         queue.sync { body(engine) }
@@ -325,7 +367,9 @@ final class VoiceCallSession: @unchecked Sendable {
             return
         }
         prepared = true
+        releaseModels = ready.release
         let services = process.services
+        let startedGeneration = services.generation
         do {
             let cfg = ready.config
             let record = try services.loadRecord(contactId: binding.contactId, cfg: cfg.state)
@@ -335,10 +379,13 @@ final class VoiceCallSession: @unchecked Sendable {
                 return
             }
             let contactId = binding.contactId
-            let finalizer: VoiceCallFinalizer = { _, call in
+            let finalizer: VoiceCallFinalizer = { [weak self] _, call in
                 var before: TemplateRecord?
                 var result: CallEnd?
-                try services.update(contactId: contactId, cfg: cfg.state) { loaded in
+                // The generation is checked inside the lock of the store, and so is this call's own flag: a wipe or a deletion that came
+                // first leaves nothing for this call to write.
+                try services.update(contactId: contactId, cfg: cfg.state, generation: startedGeneration) { loaded in
+                    if self?.isResultDiscarded ?? true { throw VoiceStaleCall() }
                     before = loaded
                     let end = try VoiceTemplateState.endOfCall(loaded, call, cfg.state)
                     result = end
@@ -350,12 +397,13 @@ final class VoiceCallSession: @unchecked Sendable {
             let info = VoiceCallInfo(
                 callId: binding.callId, ownerOn: true, model: ready.model, record: record, tStartS: binding.tStartS,
                 utcOffsetS: binding.utcOffsetS, deviceTag: tag, display: nil, ownerTemplate: nil)
-            let listener = VoiceSessionEffectListener(contactId: contactId, services: services)
+            let listener = VoiceSessionEffectListener(contactId: contactId, services: services, process: process)
             let built = try VoiceEngine(
                 config: cfg, call: info, vad: ready.vad, embedder: ready.embedder ?? UnavailableEmbedder(), budget: budget,
                 finalizer: finalizer, listener: listener)
             mediaStartNs = now
             engine = built
+            engineRan = true
             lock.lock()
             engineForCancel = built
             let cancel = cancelRequested
@@ -426,20 +474,41 @@ final class VoiceCallSession: @unchecked Sendable {
     private func finish(_ now: Int64, token: Int?) {
         ticker?.stop()
         ticker = nil
-        if let e = engine {
+        var summary: VoiceCallSummary?
+        lock.lock()
+        let dropped = engineDiscarded
+        lock.unlock()
+        if let e = engine, !dropped {
             drainRx()
             e.feed(.callEnd(atNs: stamped(now), tNs: now))
             e.close()
+            summary = e.summary
         }
         if let token { process.backgroundTasks.end(token) }
         lock.lock()
         engineForCancel = nil
+        let keepResult = !(resultDiscarded || engineDiscarded)
         lock.unlock()
         engine = nil
         process.forget(self)
+        process.showDisplay(nil)
         if prepared {
             prepared = false
+            releaseModels?()
+            releaseModels = nil
             process.services.callFinished()
+        }
+        // The id-free daily counters: what this call adds, and the lines of the days that are over and due.
+        if let summary, keepResult {
+            let nowS = Int(Date().timeIntervalSince1970)
+            let offset = TimeZone.current.secondsFromGMT()
+            process.daily.record(VoiceDailyCall(summary: summary, contactId: binding.contactId, endS: nowS, utcOffsetS: offset))
+        }
+        if engineRan {
+            let nowS = Int(Date().timeIntervalSince1970)
+            for line in process.daily.dueLines(nowS: nowS, utcOffsetS: TimeZone.current.secondsFromGMT()) {
+                process.emitDailyLine(line)
+            }
         }
     }
 
@@ -449,10 +518,22 @@ final class VoiceCallSession: @unchecked Sendable {
 final class VoiceSessionEffectListener: VoiceEngineListener {
     private let contactId: String
     private let services: VoiceServices
+    private let process: VoiceProcess?
 
-    init(contactId: String, services: VoiceServices) {
+    init(contactId: String, services: VoiceServices, process: VoiceProcess? = nil) {
         self.contactId = contactId
         self.services = services
+        self.process = process
+    }
+
+    /// A per-call line of the log: the process writes it only for an account that has the diagnostic flag.
+    func onLine(_ tNs: Int64, _ line: String) {
+        process?.emitCallLine(line)
+    }
+
+    /// The state of the voice card.
+    func onTransition(_ transition: VoiceTransition) {
+        process?.showDisplay(VoiceCheckDisplay(shown: transition.shown, detail: transition.detail))
     }
 
     func onEffect(_ tNs: Int64, _ effect: VoiceEffect) {

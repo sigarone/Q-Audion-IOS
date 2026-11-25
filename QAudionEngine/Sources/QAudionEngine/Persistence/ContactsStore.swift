@@ -758,6 +758,8 @@ public final class ContactsStore {
         var current = load()
         current.removeAll { $0.userId == userId }
         save(current)
+        // A contact that is deleted takes the voice learned from its calls with it.
+        VoiceCallWiring.contactRemoved(userId: userId)
     }
 
     // MARK: - Auto-save-from-call (call-driven address-book enrichment)

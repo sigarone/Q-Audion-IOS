@@ -11905,6 +11905,426 @@
         }
       }
     },
+    "in_call.voice_check.matches": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card (contact voice) — the voice matches the one learned of this contact",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voce corrisponde"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice matches"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Stimme stimmt überein"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voz coincide"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voix correspond"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A voz corresponde"
+          }
+        }
+      }
+    },
+    "in_call.voice_check.checking": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card (contact voice) — the voice is being checked against the learned one (also while the setup differs)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica della voce"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking voice"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimme wird geprüft"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comprobando la voz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification de la voix"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificando a voz"
+          }
+        }
+      }
+    },
+    "in_call.voice_check.checking_setup_detail": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card (contact voice) — detail popup while the call uses a setup that the voice was not learned on",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questa chiamata usa una configurazione diversa da quelle in cui la voce è stata appresa, quindi la voce viene solo verificata."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This call uses a different setup from the calls the voice was learned on, so the voice is only being checked."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieser Anruf verwendet eine andere Konfiguration als die Anrufe, in denen die Stimme gelernt wurde; die Stimme wird deshalb nur geprüft."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta llamada usa una configuración distinta de las llamadas en las que se aprendió la voz, así que la voz solo se está comprobando."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cet appel utilise une configuration différente de celle des appels où la voix a été apprise ; la voix est donc seulement vérifiée."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta chamada usa uma configuração diferente das chamadas em que a voz foi aprendida, então a voz está apenas sendo verificada."
+          }
+        }
+      }
+    },
+    "in_call.voice_check.differs": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card (contact voice) — the voice sounds different from the one learned (never says impostor, fake or fraud)",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voce sembra diversa da quella appresa"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The voice sounds different from the one learned"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Stimme klingt anders als die gelernte"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voz suena distinta de la aprendida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voix semble différente de celle apprise"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A voz parece diferente da aprendida"
+          }
+        }
+      }
+    },
+    "in_call.voice_check.differs_new_device": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card (contact voice) — the voice sounds different and the contact calls from a device that earlier calls did not use; %@ is the contact name",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voce sembra diversa e %@ chiama da un dispositivo non usato nelle chiamate precedenti"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The voice sounds different, and %@ is calling from a device not used in earlier calls"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Stimme klingt anders, und %@ ruft von einem Gerät an, das in früheren Anrufen nicht verwendet wurde"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voz suena distinta y %@ llama desde un dispositivo que no se usó en llamadas anteriores"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voix semble différente et %@ appelle depuis un appareil qui n'a pas servi lors des appels précédents"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A voz parece diferente e %@ está ligando de um dispositivo não usado em chamadas anteriores"
+          }
+        }
+      }
+    },
+    "in_call.voice_check.differs_detail": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card (contact voice) — detail popup when the voice sounds different; %1$@ is the contact name. It says what the security code does and does not confirm",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Può succedere con un raffreddore, un telefono nuovo, un auricolare o una linea disturbata. Il codice di sicurezza conferma che la chiamata arriva al dispositivo di %1$@, ma non chi sta parlando. Nel dubbio, chiedi qualcosa che solo %1$@ può sapere, oppure richiama più tardi."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This can happen with a cold, a new phone, a headset or a poor line. The security code confirms that the call reaches %1$@'s device; it cannot confirm who is speaking. If in doubt, ask something only %1$@ would know, or call back later."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das kann bei einer Erkältung, einem neuen Telefon, einem Headset oder einer schlechten Verbindung vorkommen. Der Sicherheitscode bestätigt, dass der Anruf das Gerät von %1$@ erreicht; er kann nicht bestätigen, wer spricht. Fragen Sie im Zweifel etwas, das nur %1$@ wissen kann, oder rufen Sie später zurück."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Puede ocurrir con un resfriado, un teléfono nuevo, unos auriculares o una línea con ruido. El código de seguridad confirma que la llamada llega al dispositivo de %1$@, pero no quién está hablando. Si tienes dudas, pregunta algo que solo %1$@ pueda saber, o vuelve a llamar más tarde."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cela peut arriver avec un rhume, un nouveau téléphone, un casque ou une mauvaise ligne. Le code de sécurité confirme que l'appel arrive sur l'appareil de %1$@, mais pas qui parle. Dans le doute, demande quelque chose que seul %1$@ peut savoir, ou rappelle plus tard."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Isso pode acontecer com um resfriado, um celular novo, um fone de ouvido ou uma linha ruim. O código de segurança confirma que a chamada chega ao dispositivo de %1$@, mas não quem está falando. Na dúvida, pergunte algo que só %1$@ saberia, ou ligue de novo mais tarde."
+          }
+        }
+      }
+    },
+    "in_call.voice_check.off": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card (contact voice) — the check is off for this call",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verifica della voce disattivata per questa chiamata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice check off for this call"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimmenprüfung für diesen Anruf ausgeschaltet"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comprobación de voz desactivada para esta llamada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vérification de la voix désactivée pour cet appel"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verificação de voz desativada para esta chamada"
+          }
+        }
+      }
+    },
+    "in_call.voice_check.cannot_verify": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card (contact voice) — the voice cannot be checked at the moment because of the audio quality",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voce non verificabile ora (qualità audio)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Voice can't be checked right now (audio quality)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Stimme lässt sich gerade nicht prüfen (Audioqualität)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se puede comprobar la voz ahora (calidad del audio)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voix ne peut pas être vérifiée pour le moment (qualité audio)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não é possível verificar a voz agora (qualidade do áudio)"
+          }
+        }
+      }
+    },
+    "in_call.voice_check.learning": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card (contact voice) — the voice of this contact is being learned",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apprendimento della voce"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Learning this voice"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stimme wird gelernt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aprendiendo esta voz"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apprentissage de cette voix"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aprendendo esta voz"
+          }
+        }
+      }
+    },
+    "in_call.voice_check.changed": {
+      "extractionState": "manual",
+      "comment": "Call screen voice check card (contact voice) — the voice of a contact that is not enrolled yet seems to have changed during the call",
+      "localizations": {
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voce sembra cambiata durante la chiamata"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The voice seems to have changed during the call"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Stimme scheint sich während des Anrufs geändert zu haben"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voz parece haber cambiado durante la llamada"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La voix semble avoir changé pendant l'appel"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A voz parece ter mudado durante a chamada"
+          }
+        }
+      }
+    },
     "in_call.voice_guard.info_body": {
       "extractionState": "manual",
       "comment": "Call screen voice check card — body of the info popup opened by tapping the card: what is compared, that it stays on the phone, and that it is a hint and not proof of identity",

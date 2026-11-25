@@ -1803,6 +1803,11 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         session.mediaStart()
     }
 
+    /// The call is on hold (this side or the peer) or resumed: the voice check starts a new stretch.
+    public func voiceHoldChanged(_ held: Bool) {
+        voiceLatch.currentSession?.holdChanged(held)
+    }
+
     /// The call is over: the tap is removed and the session runs its post-call work.
     private func voiceEndCall() {
         guard let session = voiceLatch.detach() else { return }

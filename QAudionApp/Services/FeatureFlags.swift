@@ -55,6 +55,7 @@ import Foundation
 ///   | `mesh_ble.enabled` | Bool | `true` (kill switch) | Bluetooth mesh (`MeshFeature.enabled`, resolved through `FeatureFlags.killSwitch`): compiled default ON, so the public file can only switch it OFF. On: the mesh entry point in the chat, the Settings toggle and the radio are available, but the radio still starts only after the user's one-time explicit consent (`MeshConsent` / `MeshStartGate`). `false` hides every entry point and stops a running radio at the next refresh. A `true` in the file can never turn on a build whose compiled default is off. Public flags only -- not overlay-eligible. Same key name on Android. |
 ///   | `location_share.enabled` | Bool | `true` (kill switch) | Location sharing in chat (`LocationShareCenter.isFeatureEnabled`, WIRE_SPEC 14, docs/LOCATION_SHARING.md): the "Posizione" entry of the composer, the live strip, the conversation-list chip and the Settings list appear only while it is `true`; `false` hides them and ends the live shares this device is running (the final frame and the stop go out first). Cards that were received still render. Compiled default ON, resolved through `FeatureFlags.killSwitch` (`LocationShareCenter.compiledDefault`): absent or non-Bool reads ON and the public file can only switch it OFF; it is never read from the per-account overlay, so it resolves the same for every account. It is a client gate only: the server relays `eph_relay` whatever the flag says. Same key name on Android and Desktop. |
 ///   | `peer_diag.enabled` | Bool | `true` (kill switch) | Answering a server diagnostics request (`PeerDiagFeature`, `PeerDiagResponder`), resolved through `FeatureFlags.killSwitch`: compiled ON, so the public file can only switch it OFF. `false` makes the responder ignore every request (no ack, no ring read, no upload) and stops a pending one before its next step. The diagnostics toggle in Settings stays the consent either way. Public flags only -- not overlay-eligible.
+///   | `voice.diag_lines` | Bool | `false` | Whether the per-call lines of the contact-voice check (`QA-VOICE`, each with a call number and no contact) are written for this account (`VoiceCallWiring.setLogging`, read at every line). Overlay-eligible: it is a logging flag and changes nothing the user sees; it is set for internal test accounts only, and the id-free daily counters do not depend on it. |
 ///   | `pqc.mldsa_publish` | Bool | `true` (kill switch) | Whether this device adds its second signature key and certificate to the identity bundle it publishes (`MldsaPublishPolicy.flagKey`), resolved through `FeatureFlags.killSwitch`: compiled ON, so the public file can only switch it OFF. `false` makes the next publish go out without the extra fields (the device republishes once when the value changes). It changes nothing for calls. Public flags only -- not overlay-eligible. Same key name on Android. |
 ///   | `calls.ring_signaling_only` | -- | (not read) | REMOVED (v6 timer round, T2): the callee has ONE path, answer first (WIRE_SPEC 3.7.4 R-ANSWER-FIRST). A flags.json that still carries this key is ignored; no code reads it. |
 ///   | `calls.p2p_probe_kill` | Bool | `false` | D6 (2026-09-28, TURN-stuck-on-P2P fix, owner-requested) -- remote kill switch for the P2P-probe ICE restart (`QAudionWebRtcCallController.startP2pProbeWatch`/`P2pProbeDecisions`), which tries ONE ICE restart on an already-connected call still stuck on a TURN relay pair to see if a direct pair is now reachable. Wired via `p2pProbeKillSwitchProvider` (this engine target cannot import `FeatureFlags` directly) and re-read LIVE on every probe-gate tick, not latched at `call_incoming` -- the probe only ever fires minutes into a call, so a flag flip should take effect immediately. `absent`/`false` = probe active (default); `true` = never probe, on any call, until the flag flips back. Same key name on Android (`CallCapabilities.p2pProbeKillSwitchActive`), so one flag flip kills the feature on both platforms at once. Public flags only -- not overlay-eligible (same fleet-wide-safety-net reasoning as `calls.native_srtp_kill`). |
@@ -303,14 +304,17 @@ public final class FeatureFlags {
     /// differently for one account than another. Default-deny: a key not
     /// in this set NEVER reads the overlay, no matter what the server
     /// sends -- only a key explicitly reviewed and added here can be
-    /// account-targeted. `LOG_OTLP_EXPORT_ENABLED` is the only member: it
-    /// can only ever turn telemetry SHIPPING off (never on, and it changes
-    /// no rendered UI), so per-account targeting of it changes no visible
-    /// behavior.
+    /// account-targeted. `LOG_OTLP_EXPORT_ENABLED` can only ever turn
+    /// telemetry SHIPPING off (never on, and it changes no rendered UI), so
+    /// per-account targeting of it changes no visible behavior. `voice.diag_lines`
+    /// is the other member: it only decides whether the per-call lines of the
+    /// contact-voice check (`QA-VOICE`, each with a call number) are written for
+    /// that account; it is a logging flag too, it changes nothing the user sees,
+    /// and it is off for every account that does not have it.
     ///
     /// `location_share.enabled` is NOT a member: location sharing ships ON and its flag is a kill switch read from the public file
     /// only (`killSwitch`), so a visible feature never differs by account.
-    private static let overlayEligibleKeys: Set<String> = ["LOG_OTLP_EXPORT_ENABLED"]
+    private static let overlayEligibleKeys: Set<String> = ["LOG_OTLP_EXPORT_ENABLED", "voice.diag_lines"]
 
     // MARK: - Typed lookups (compiled default always wins on absence)
 

@@ -36,9 +36,20 @@ final class VoiceCallSessionTests: XCTestCase {
         var updates: [String] = []
         var deletes: [String] = []
         var finished = 0
+        var released = 0
+        var wipes = 0
+        var wipeFails = false
+        var staleUpdates = 0
         var threadsWereBackground = true
         var record: TemplateRecord?
         private(set) var budget: VoiceCpuBudget?
+        private var generationValue = 0
+
+        var generation: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return generationValue
+        }
 
         init(config: VoiceEngineConfig) {
             self.config = config
@@ -54,7 +65,11 @@ final class VoiceCallSessionTests: XCTestCase {
             note()
             prepareCalls += 1
             if budget == nil { budget = VoiceCpuBudget(cpu: config.engine.cpu) }
-            return VoicePrepared(config: config, vad: StubVad(), embedder: StubEmbedder(), model: .ok)
+            return VoicePrepared(config: config, vad: StubVad(), embedder: StubEmbedder(), model: .ok, release: { [self] in
+                lock.lock()
+                released += 1
+                lock.unlock()
+            })
         }
 
         func loadRecord(contactId: String, cfg: VoiceStateConstants) throws -> TemplateRecord? {
@@ -72,12 +87,25 @@ final class VoiceCallSessionTests: XCTestCase {
             return 7
         }
 
-        func update(contactId: String, cfg: VoiceStateConstants, _ body: (TemplateRecord?) throws -> TemplateRecord?) throws {
+        func update(contactId: String, cfg: VoiceStateConstants, generation expected: Int,
+                    _ body: (TemplateRecord?) throws -> TemplateRecord?) throws {
             lock.lock()
             defer { lock.unlock() }
             note()
-            updates.append(contactId)
+            guard generationValue == expected else {
+                staleUpdates += 1
+                throw VoiceStaleCall()
+            }
             _ = try body(record)
+            updates.append(contactId)
+        }
+
+        func wipeAll() throws {
+            lock.lock()
+            defer { lock.unlock() }
+            generationValue += 1
+            wipes += 1
+            if wipeFails { throw VoiceStoreError(.io, "records left") }
         }
 
         func deleteRecord(contactId: String) throws {
@@ -132,7 +160,7 @@ final class VoiceCallSessionTests: XCTestCase {
 
     func testWithTheFlagOffNothingIsCreatedAndNothingIsTouched() throws {
         let fake = try services()
-        let process = VoiceProcess(services: fake)
+        let process = processWithMemoryCounters(fake)
         XCTAssertFalse(VoiceFeature.isEnabled)
         XCTAssertNil(process.beginCall(binding()))
         process.cancelPostCallWork()
@@ -148,7 +176,7 @@ final class VoiceCallSessionTests: XCTestCase {
 
     func testASessionThatIsStartedWithTheFlagOffDoesNothing() throws {
         let fake = try services()
-        let process = VoiceProcess(services: fake)
+        let process = processWithMemoryCounters(fake)
         let (session, _) = makeSession(fake, process)
         session.mediaStart()
         session.queue.sync {}
@@ -161,7 +189,7 @@ final class VoiceCallSessionTests: XCTestCase {
     func testMediaStartBuildsTheEngineOnABackgroundQueueWithTheDeviceOfThisCall() throws {
         VoiceFeature.setProvider { true }
         let fake = try services()
-        let process = VoiceProcess(services: fake)
+        let process = processWithMemoryCounters(fake)
         let (session, ticker) = makeSession(fake, process, binding: binding(device: "dev-of-this-call"))
         session.mediaStart()
         session.queue.sync {}
@@ -180,7 +208,7 @@ final class VoiceCallSessionTests: XCTestCase {
     func testAFallbackThatComesBeforeMediaStartIsReplayedWhenTheEngineIsBuilt() throws {
         VoiceFeature.setProvider { true }
         let fake = try services()
-        let process = VoiceProcess(services: fake)
+        let process = processWithMemoryCounters(fake)
         let latch = VoiceCallLatch()
         latch.noteFallback() // the call fell back to the data channel before media start
         let (session, _) = makeSession(fake, process)
@@ -196,7 +224,7 @@ final class VoiceCallSessionTests: XCTestCase {
     func testWithoutAFallbackTheCallIsHandedToTheStateFunctionsUnderTheContactLock() throws {
         VoiceFeature.setProvider { true }
         let fake = try services()
-        let process = VoiceProcess(services: fake)
+        let process = processWithMemoryCounters(fake)
         let (session, ticker) = makeSession(fake, process)
         session.mediaStart()
         session.queue.sync {}
@@ -210,7 +238,7 @@ final class VoiceCallSessionTests: XCTestCase {
     func testAFallbackAfterMediaStartReachesTheEngine() throws {
         VoiceFeature.setProvider { true }
         let fake = try services()
-        let process = VoiceProcess(services: fake)
+        let process = processWithMemoryCounters(fake)
         let latch = VoiceCallLatch()
         let (session, _) = makeSession(fake, process)
         latch.attach(session)
@@ -228,7 +256,7 @@ final class VoiceCallSessionTests: XCTestCase {
     func testACancelThatComesBeforeTheEngineExistsStillReachesIt() throws {
         VoiceFeature.setProvider { true }
         let fake = try services()
-        let process = VoiceProcess(services: fake)
+        let process = processWithMemoryCounters(fake)
         let (session, _) = makeSession(fake, process)
         process.cancelPostCallWork() // no engine yet, no session registered by this test's own call
         session.requestPostCancel()
@@ -240,7 +268,7 @@ final class VoiceCallSessionTests: XCTestCase {
     func testACallStartCancelsThePostCallWorkOfALiveSession() throws {
         VoiceFeature.setProvider { true }
         let fake = try services()
-        let process = VoiceProcess(services: fake)
+        let process = processWithMemoryCounters(fake)
         let session = try XCTUnwrap(process.beginCall(binding()))
         session.mediaStart()
         session.queue.sync {}
@@ -252,7 +280,7 @@ final class VoiceCallSessionTests: XCTestCase {
     func testAnEndedSessionIsForgottenAndTheBackgroundTaskIsGivenBack() throws {
         VoiceFeature.setProvider { true }
         let fake = try services()
-        let process = VoiceProcess(services: fake)
+        let process = processWithMemoryCounters(fake)
         let tasks = RecordingTasks()
         process.backgroundTasks = tasks
         let session = try XCTUnwrap(process.beginCall(binding()))
@@ -282,7 +310,7 @@ final class VoiceCallSessionTests: XCTestCase {
     func testEveryTickAsksTheSourceOnceAndAFaultReachesTheEngine() throws {
         VoiceFeature.setProvider { true }
         let fake = try services()
-        let process = VoiceProcess(services: fake)
+        let process = processWithMemoryCounters(fake)
         let (session, ticker) = makeSession(fake, process)
         let source = FakeSource()
         session.attachStatsSource(source)
@@ -302,7 +330,7 @@ final class VoiceCallSessionTests: XCTestCase {
     func testAPollIsHeldBackWhileTheProtectedDataIsUnreadable() throws {
         VoiceFeature.setProvider { true }
         let fake = try services()
-        let process = VoiceProcess(services: fake)
+        let process = processWithMemoryCounters(fake)
         let locked = ProtectedDataFlag()
         locked.set(isAvailable: false)
         let (session, ticker) = makeSession(fake, process, protectedData: locked)
@@ -323,7 +351,7 @@ final class VoiceCallSessionTests: XCTestCase {
     func testBlocksOfTheTapReachTheEngineOnTheWorkerAndNeverBeforeMediaStart() throws {
         VoiceFeature.setProvider { true }
         let fake = try services()
-        let process = VoiceProcess(services: fake)
+        let process = processWithMemoryCounters(fake)
         let (session, _) = makeSession(fake, process)
         session.rxTap.ingest(samples: [Int16](repeating: 100, count: 480), frames: 480, rateHz: 48_000)
         session.queue.sync {}
@@ -340,7 +368,7 @@ final class VoiceCallSessionTests: XCTestCase {
     func testBlocksAreLetGoWhileTheProtectedDataIsUnreadable() throws {
         VoiceFeature.setProvider { true }
         let fake = try services()
-        let process = VoiceProcess(services: fake)
+        let process = processWithMemoryCounters(fake)
         let locked = ProtectedDataFlag()
         locked.set(isAvailable: false)
         let (session, _) = makeSession(fake, process, protectedData: locked)
@@ -368,11 +396,190 @@ final class VoiceCallSessionTests: XCTestCase {
     func testTheOtherModelsReportTheirBusyTimeToTheBudgetOfTheEngineWhenTheCheckIsOn() throws {
         VoiceFeature.setProvider { true }
         let fake = try services()
-        let process = VoiceProcess(services: fake)
+        let process = processWithMemoryCounters(fake)
         _ = process.services.prepare() // the budget exists once a call prepared the check
         let budget = try XCTUnwrap(fake.budget)
         XCTAssertEqual(budget.total(100), 0)
         process.reportBusy(who: "guardian", startNs: 10, endNs: 60)
         XCTAssertEqual(budget.total(100), 50)
+    }
+
+    // MARK: the log
+
+    private final class MemoryDaily: VoiceDailyStorage {
+        var data: Data?
+        func load() -> Data? { data }
+        func save(_ newData: Data) { data = newData }
+        func clear() { data = nil }
+    }
+
+    private func processWithMemoryCounters(_ fake: FakeServices) -> VoiceProcess {
+        VoiceProcess(services: fake, daily: VoiceDailyCounters(storage: MemoryDaily(), random: { 0 }))
+    }
+
+    func testPerCallLinesAreWrittenOnlyForAnAccountWithTheDiagnosticFlagAndDailyLinesAlways() throws {
+        let process = processWithMemoryCounters(try services())
+        var lines: [String] = []
+        var diag = false
+        process.setLogging(sink: { lines.append($0) }, diagLinesEnabled: { diag })
+        process.emitCallLine("QA-VOICE v=1 ev=cstate call=0a1b2c3d st=lrn")
+        XCTAssertTrue(lines.isEmpty, "no diagnostic flag: no per-call line")
+        diag = true
+        process.emitCallLine("QA-VOICE v=1 ev=cstate call=0a1b2c3d st=lrn")
+        XCTAssertEqual(lines.count, 1)
+        diag = false
+        process.emitDailyLine("QA-VOICE v=1 ev=day calls=0")
+        XCTAssertEqual(lines.count, 2, "the id-free daily counters do not depend on the flag")
+    }
+
+    func testTheLinesOfACallCarryNoContactAndTheCardFollowsTheStateAndEndsEmpty() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        var lines: [String] = []
+        var displays: [VoiceCheckDisplay?] = []
+        process.setLogging(sink: { lines.append($0) }, diagLinesEnabled: { true })
+        process.setDisplayHandler { displays.append($0) }
+        let session = try XCTUnwrap(process.beginCall(binding(contact: "alice-contact-id")))
+        session.mediaStart()
+        session.queue.sync {}
+        session.callEnded()
+        session.queue.sync {}
+        XCTAssertTrue(lines.contains { $0.hasPrefix("QA-VOICE v=1 ev=start call=11111111 ") })
+        XCTAssertTrue(lines.contains { $0.hasPrefix("QA-VOICE v=1 ev=end call=11111111 ") })
+        for line in lines {
+            XCTAssertTrue(line.hasPrefix("QA-VOICE v=1 ev="), line)
+            XCTAssertFalse(line.lowercased().contains("alice"), "no contact id in a line: \(line)")
+            XCTAssertFalse(line.contains("11111111-2222"), "only the first eight characters of the call id: \(line)")
+        }
+        XCTAssertFalse(displays.isEmpty)
+        if case .some(.some(let first)) = displays.first {
+            XCTAssertEqual(first, .learning, "a contact without a record is being learned")
+        } else {
+            XCTFail("the first state of the card is a state")
+        }
+        if case .some(.none) = displays.last {} else { XCTFail("nothing is shown after the call") }
+    }
+
+    func testTheDailyCountersOfACallAreWrittenWhenTheirDayIsOverAndDue() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let session = try XCTUnwrap(process.beginCall(binding(contact: "alice-contact-id")))
+        session.mediaStart()
+        session.queue.sync {}
+        session.callEnded()
+        session.queue.sync {}
+        let now = Int(Date().timeIntervalSince1970)
+        XCTAssertTrue(process.daily.dueLines(nowS: now, utcOffsetS: 0).isEmpty, "a day is written after it is over")
+        let later = process.daily.dueLines(nowS: now + 3 * 86_400, utcOffsetS: 0)
+        XCTAssertEqual(later.count, 5, "one day line and four strata")
+        XCTAssertTrue(later[0].contains(" lrn=1 "), later[0])
+        XCTAssertFalse(later.joined().lowercased().contains("alice"))
+    }
+
+    // MARK: the wipe, the deletion and the generation
+
+    func testAWipeStopsEveryLiveSessionAndNothingOfThemIsWrittenAfterIt() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let session = try XCTUnwrap(process.beginCall(binding()))
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertTrue(process.hasLiveSession)
+        XCTAssertTrue(process.wipeAll())
+        session.queue.sync {}
+        session.callEnded() // the call ends later: the engine is gone and nothing is written
+        session.queue.sync {}
+        XCTAssertEqual(fake.wipes, 1)
+        XCTAssertTrue(fake.updates.isEmpty)
+        XCTAssertEqual(fake.finished, 1)
+        XCTAssertEqual(fake.released, 1, "the speech model session goes back")
+        XCTAssertFalse(process.hasLiveSession)
+    }
+
+    func testAWipeThatFailsIsReportedAsAFailure() throws {
+        let fake = try services()
+        fake.wipeFails = true
+        let process = processWithMemoryCounters(fake)
+        XCTAssertFalse(process.wipeAll())
+        XCTAssertEqual(fake.wipes, 1)
+    }
+
+    func testACallThatFinishesAfterAWipeOfAnotherPathWritesNothingBecauseTheGenerationMovedOn() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let session = try XCTUnwrap(process.beginCall(binding()))
+        session.mediaStart()
+        session.queue.sync {}
+        try fake.wipeAll() // a wipe that did not go through the process: only the generation tells the call
+        session.callEnded()
+        session.queue.sync {}
+        XCTAssertEqual(fake.staleUpdates, 1, "refused inside the lock of the store")
+        XCTAssertTrue(fake.updates.isEmpty)
+    }
+
+    func testDeletingAContactDiscardsTheResultOfItsRunningCallAndDeletesItsRecord() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let session = try XCTUnwrap(process.beginCall(binding(contact: "Contact-1")))
+        session.mediaStart()
+        session.queue.sync {}
+        let done = expectation(description: "deleted")
+        var ok = false
+        process.forgetContact("contact-1") { result in
+            ok = result
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 10)
+        XCTAssertTrue(ok)
+        XCTAssertEqual(fake.deletes, ["contact-1"])
+        session.callEnded()
+        session.queue.sync {}
+        XCTAssertTrue(fake.updates.isEmpty, "the call with a deleted contact writes no record")
+    }
+
+    func testDeletingAContactWorksBeforeAnyCallOfTheProcess() throws {
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let done = expectation(description: "deleted")
+        process.forgetContact("contact-7") { _ in done.fulfill() }
+        wait(for: [done], timeout: 10)
+        XCTAssertEqual(fake.deletes, ["contact-7"])
+        XCTAssertEqual(fake.prepareCalls, 0, "no model is loaded for a deletion")
+    }
+
+    // MARK: hold
+
+    func testOnlyAChangeOfTheHoldReachesTheEngine() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        session.holdChanged(false)
+        session.holdChanged(true)
+        session.holdChanged(true)
+        session.holdChanged(false)
+        session.queue.sync {}
+        XCTAssertEqual(session.holdEventsFed, 2)
+    }
+
+    // MARK: the card
+
+    func testEachStateOfTheMachineHasItsOwnStateOfTheCard() {
+        XCTAssertEqual(VoiceCheckDisplay(shown: .matches, detail: nil), .matches)
+        XCTAssertEqual(VoiceCheckDisplay(shown: .checking, detail: nil), .checking)
+        XCTAssertEqual(VoiceCheckDisplay(shown: .checking, detail: .differentSetup), .checkingDifferentSetup)
+        XCTAssertEqual(VoiceCheckDisplay(shown: .differs, detail: nil), .differs)
+        XCTAssertEqual(VoiceCheckDisplay(shown: .differs, detail: .deviceNew), .differsNewDevice)
+        XCTAssertEqual(VoiceCheckDisplay(shown: .off, detail: nil), .off)
+        XCTAssertEqual(VoiceCheckDisplay(shown: .cannotVerify, detail: .audio), .cannotVerify)
+        XCTAssertEqual(VoiceCheckDisplay(shown: .learning, detail: nil), .learning)
+        XCTAssertEqual(VoiceCheckDisplay(shown: .changed, detail: nil), .changed)
     }
 }
