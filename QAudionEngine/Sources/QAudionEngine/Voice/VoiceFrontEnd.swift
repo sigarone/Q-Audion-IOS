@@ -22,6 +22,11 @@ enum VoiceFrontEndEvent {
 /// number makes the front-end inactive for the rest of the call. `isInactive` reads true, what it holds (the waiting chunks,
 /// the accumulator, the labeller) is discarded, no further chunk or window is emitted and every later input is ignored.
 /// Nothing is thrown at the caller; the engine reports that the voice cannot be verified.
+///
+/// EXTERNAL STATS (the engine): the caller feeds the stats stream itself, through `statsStream`, in the order of the stream and
+/// after its own reorder hold, tells it the media start, and calls `drainReleased` after every feed. `registerTapBlock` then does
+/// not feed the stream, and `finish(endNs:)` also forgets the chunks that end after the end of the call (they are never
+/// released). A front-end that is not external feeds the stream itself (the clip tests).
 final class VoiceFrontEnd {
     private struct Pending {
         var chunk: VoiceChunk
@@ -35,12 +40,19 @@ final class VoiceFrontEnd {
     var onChunk: ((VoiceChunkRecord) -> Void)?
     /// Called for every window, right after the chunk that completes it.
     var onWindow: ((VoiceWindowResult) -> Void)?
+    /// Called for every chunk that was made (its VAD call succeeded), before its label or flags are known, in index order:
+    /// the index, the end of the chunk on the tap clock, and the accumulator epoch it was made in.
+    var onChunkCreated: ((Int, Int64, Int) -> Void)?
+    /// Called when the label of a chunk became final, in index order, before its stats flags are final: the index, the end of
+    /// the chunk on the tap clock, the label.
+    var onLabel: ((Int, Int64, Int) -> Void)?
 
     private let chunker: VoiceChunker
     private let vad: VoiceVadModel
     private let labeller: VoiceLabeller
     private let stats: VoiceStatsStream
     private let assembler: VoiceWindowAssembler
+    private let externalStats: Bool
 
     private var epoch = 0
     private var currentRate: Int?
@@ -48,16 +60,20 @@ final class VoiceFrontEnd {
     private var ended = false
     private var pending: [Pending] = []
 
-    init(bundle: VoiceBundle, vad: VoiceVadModel) {
-        let constants = bundle.constants
+    init(constants: VoiceConstants, tables: VoiceFbankTables, vad: VoiceVadModel, externalStats: Bool = false) {
         self.chunker = VoiceChunker(constants: constants)
         self.vad = vad
         self.labeller = VoiceLabeller(config: constants.vad)
         self.stats = VoiceStatsStream(gates: constants.gates)
         self.assembler = VoiceWindowAssembler(
             constants: constants,
-            fbank: VoiceFbank(tables: bundle.tables, constants: constants.fbank)
+            fbank: VoiceFbank(tables: tables, constants: constants.fbank)
         )
+        self.externalStats = externalStats
+    }
+
+    convenience init(bundle: VoiceBundle, vad: VoiceVadModel) {
+        self.init(constants: bundle.constants, tables: bundle.tables, vad: vad)
     }
 
     /// True from the first unsupported tap rate, failed VAD call or non-finite VAD output to the end of the call: nothing
@@ -69,6 +85,9 @@ final class VoiceFrontEnd {
 
     /// Input samples consumed in the current tap segment (the position of a discontinuity).
     var inputPosition: Int { chunker.inputPosition }
+
+    /// The accumulator epoch that the next chunk gets: it counts the events that started one.
+    var currentEpoch: Int { epoch }
 
     /// Index the next chunk will get; also the `at_chunk` of an event that happens now.
     var nextChunkIndex: Int { chunker.nextIndex }
@@ -105,10 +124,12 @@ final class VoiceFrontEnd {
             currentRate = rateHz
         }
         chunker.registerBlock(count: count, tNs: tNs)
-        if let mediaStart = chunker.mediaStartNs {
-            stats.setMediaStart(mediaStart)
+        if !externalStats {
+            if let mediaStart = chunker.mediaStartNs {
+                stats.setMediaStart(mediaStart)
+            }
+            stats.addTapBlock(tNs: tNs, ticks: tapTicks)
         }
-        stats.addTapBlock(tNs: tNs, ticks: tapTicks)
         releaseFinalChunks()
     }
 
@@ -181,10 +202,28 @@ final class VoiceFrontEnd {
         }
         if !inactive {
             finalizeLabels(labeller.flush())
+            if externalStats, let endNs {
+                stats.discardPendingAfter(endNs)
+            }
             stats.finish(endNs: endNs)
             releaseFinalChunks()
         }
         ended = true
+    }
+
+    /// Takes the chunks that the stats stream released after the caller fed it, and goes on with the windows.
+    func drainReleased() {
+        if ended || inactive {
+            return
+        }
+        releaseFinalChunks()
+    }
+
+    /// The caller declares the front-end inactive for a reason of its own (the rate of a block): it discards what it holds.
+    func deactivate() {
+        if !inactive {
+            goInactive()
+        }
     }
 
     // MARK: pipeline
@@ -221,6 +260,7 @@ final class VoiceFrontEnd {
         let outcome = labeller.push(index: chunk.index, probability: Double(p))
         pending.append(Pending(chunk: chunk, epoch: epoch, probability: p, label: nil))
         stats.addChunk(index: chunk.index, t0Ns: chunk.t0Ns, t1Ns: chunk.t1Ns)
+        onChunkCreated?(chunk.index, chunk.t1Ns, epoch)
         finalizeLabels(outcome.finalized)
         releaseFinalChunks()
     }
@@ -233,8 +273,10 @@ final class VoiceFrontEnd {
             let offset = entry.index - base
             if offset >= 0, offset < pending.count, pending[offset].chunk.index == entry.index {
                 pending[offset].label = Int(entry.label)
+                onLabel?(entry.index, pending[offset].chunk.t1Ns, Int(entry.label))
             } else if let at = pending.firstIndex(where: { $0.chunk.index == entry.index }) {
                 pending[at].label = Int(entry.label)
+                onLabel?(entry.index, pending[at].chunk.t1Ns, Int(entry.label))
             }
         }
     }

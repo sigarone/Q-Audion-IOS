@@ -66,7 +66,9 @@ struct BuildInfo: Equatable {
 
 /// What the engine knows of the call's outcome for an Enrolled or Needs refresh contact.
 struct StateOutcome {
-    var u: [Float]
+    /// The unit mean of the disjoint enrollment-eligible windows; nil when there is none (then there are fewer windows than an
+    /// update or a slot entry needs, and the rule that counts them fails first).
+    var u: [Float]?
     var lC: [Double]
     var gateWindows: Int
     var matched: Bool
@@ -261,7 +263,7 @@ enum VoiceTemplateState {
 
     /// Step 1: the windows in time order while the set of their distinct chunks stays within `free`; the first that would
     /// exceed it and all later ones are left out.
-    private static func takeWithin(_ windows: [StateWindow], free: Int) -> (taken: [StateWindow], chunks: Int) {
+    static func takeWithin(_ windows: [StateWindow], free: Int) -> (taken: [StateWindow], chunks: Int) {
         var seen = Set<Int>()
         var taken = [StateWindow]()
         for w in windows {
@@ -550,15 +552,20 @@ enum VoiceTemplateState {
 
     // MARK: Enrolled and Needs refresh
 
-    private struct Cov {
+    struct Cov {
         var route: Bool
         var device: Bool
         var slot: Int?
     }
 
     private static func coverage(_ rec: TemplateRecord, _ call: StateCall, _ cfg: VoiceStateConstants) -> Cov {
-        let g = cfg.conditions.routeGroup(call.routeClass)
-        let tag = call.deviceTag
+        coverage(rec, routeClass: call.routeClass, deviceTag: call.deviceTag, cfg)
+    }
+
+    /// Whether the record covers the route group and the device of a call, and the index of the active slot that fits it.
+    static func coverage(_ rec: TemplateRecord, routeClass: Int, deviceTag: Int, _ cfg: VoiceStateConstants) -> Cov {
+        let g = cfg.conditions.routeGroup(routeClass)
+        let tag = deviceTag
         let slotI = rec.slots.firstIndex(where: { $0.state == TemplateSlot.active && $0.routeGroup == g && $0.deviceTag == tag })
         let cons = rec.sessions.filter { $0.inConsensus }
         let route = slotI != nil || cons.contains(where: { cfg.conditions.routeGroup($0.routeClass) == g })
@@ -591,7 +598,7 @@ enum VoiceTemplateState {
         let up = cfg.update
         let now = call.tEndS
         if let why = commonOk(rec, call, out, cfg, relaxed: false) { return UpdateInfo(updated: false, why: why, w: nil) }
-        let u = out.u
+        guard let u = out.u else { throw VoiceStateError(message: "an outcome with enough windows has its mean") }
         guard let target = slotI == nil ? rec.adaptive : rec.slots[slotI!].centroid else {
             throw VoiceStateError(message: "no template to update")
         }
@@ -631,7 +638,8 @@ enum VoiceTemplateState {
         guard let session = candidateSession else { return no("no_session") }
         if let why = commonOk(rec, call, out, cfg, relaxed: out.wasHim) { return no(why) }
         guard let anchor = rec.anchor else { throw VoiceStateError(message: "an enrolled record has an anchor") }
-        if !(StateVec.dot(out.u, anchor) >= cond.tauSlotAnchor) { return no("bound") }
+        guard let u = out.u else { throw VoiceStateError(message: "an outcome with enough windows has its mean") }
+        if !(StateVec.dot(u, anchor) >= cond.tauSlotAnchor) { return no("bound") }
         let g = cond.routeGroup(call.routeClass)
         let tag = call.deviceTag
         let day = VoiceTags.dayIndex(startS: call.tStartS, utcOffsetS: call.utcOffsetS)

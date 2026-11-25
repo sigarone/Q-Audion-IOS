@@ -297,6 +297,12 @@ final class VoiceStatsStream {
         release()
     }
 
+    /// The end of the call forgets the chunks that end after `t1Max` (the end of the track): they are never released. Chunks end
+    /// in order, so these are the newest ones.
+    func discardPendingAfter(_ t1Max: Int64) {
+        pending.removeAll { $0.t1 > t1Max }
+    }
+
     /// The flags of the oldest registered chunk once they are released (final, or overdue), else nil.
     func pollFinal() -> VoiceChunkFlags? {
         ready.isEmpty ? nil : ready.removeFirst()
