@@ -917,6 +917,7 @@ jobs:
             -only-testing:QAudionAppTests/SiriIntentPolicyTests \
             -only-testing:QAudionAppTests/TrustEvaluationModelTests \
             -only-testing:QAudionAppTests/PeerIdentityPinKeychainTimeTests \
+            -only-testing:QAudionAppTests/ContactVoiceUiTests \
             -only-testing:QAudionAppTests/VoiceCheckCardTests \
             -only-testing:QAudionAppTests/VoiceDisplayFormatTests \
             -only-testing:QAudionAppTests/VoiceGuardModelTests \

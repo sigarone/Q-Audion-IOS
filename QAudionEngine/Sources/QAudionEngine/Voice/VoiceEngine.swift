@@ -411,6 +411,7 @@ final class VoiceEngine {
         } else {
             mode = .callLocal
         }
+        updateAnnounced()
         // the front-end and the stats stream
         let frontEnd = VoiceFrontEnd(constants: config.constants, tables: config.tables, vad: costVad, externalStats: true)
         frontEnd.onChunkCreated = { [unowned self] idx, _, epoch in self.chunkCreated(idx, epoch) }
@@ -538,7 +539,27 @@ final class VoiceEngine {
         guard let r = rec, r.state == TemplateState.enrolled || r.state == TemplateState.needsRefresh else {
             return VoiceTemplateState.Cov(route: false, device: false, slot: nil)
         }
-        return VoiceTemplateState.coverage(r, routeClass: routeClass, deviceTag: call.deviceTag, config.state)
+        let c = VoiceTemplateState.coverage(r, routeClass: routeClass, deviceTag: call.deviceTag, config.state)
+        // An unknown device is never "a new device".
+        return (call.deviceKnown || c.device) ? c : VoiceTemplateState.Cov(route: c.route, device: true, slot: c.slot)
+    }
+
+    private let announcedLock = NSLock()
+    private var announcedValue = 0
+
+    /// The learning and verifying bits of this device's own announcement: this engine learns the contact's voice or checks it, none
+    /// of them when the owner setting is off or the call is blocked by the peer. Callable from any thread.
+    var announcedFlags: Int {
+        announcedLock.lock()
+        defer { announcedLock.unlock() }
+        return announcedValue
+    }
+
+    private func updateAnnounced() {
+        let value = (offEngine || blockedCall) ? 0 : (mode == .verify ? VoiceVconsCodec.flagVerifying : VoiceVconsCodec.flagLearning)
+        announcedLock.lock()
+        announcedValue = value
+        announcedLock.unlock()
     }
 
     private func coverageCtx(_ t: Int64, _ routeClass: Int) {
@@ -1015,6 +1036,7 @@ final class VoiceEngine {
             }
         }
         if v.allow && !v.withdraw { consentS = wallS }
+        updateAnnounced()
         if vseq == nil || v.seq > vseq! {
             vseq = v.seq
             if v.routeClass != peerRoute { route(v.routeClass, now) }

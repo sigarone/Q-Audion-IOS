@@ -42,6 +42,20 @@ protocol VoiceServices: AnyObject {
     func wipeAll() throws
     /// A call that used the models is over: the services may let go of them when no other call uses them.
     func callFinished()
+    /// What the owner sees of the learned voices of `contactIds`. Reads only: never creates a store, a file or a key. Throws
+    /// `VoiceStaleCall` when `generation` is not the current one.
+    func summaries(contactIds: [String], generation: Int) throws -> [String: ContactVoiceSummary]
+    /// Deletes the records of contacts that are not in `knownContactIds`. Never creates `meta.bin` or the key; nothing happens
+    /// without data, and a stale `generation` throws `VoiceStaleCall`.
+    func deleteOrphans(knownContactIds: [String], directorySynced: Bool, generation: Int) throws -> Int
+    /// True when at least one learned voice record exists on this device (reads the directory only).
+    func hasRecords() -> Bool
+}
+
+extension VoiceServices {
+    func summaries(contactIds: [String], generation: Int) throws -> [String: ContactVoiceSummary] { [:] }
+    func deleteOrphans(knownContactIds: [String], directorySynced: Bool, generation: Int) throws -> Int { 0 }
+    func hasRecords() -> Bool { false }
 }
 
 /// The background-execution assertion of the post-call work (the app provides the UIKit one).
@@ -70,6 +84,9 @@ final class VoiceProcess: @unchecked Sendable {
     private var logSink: ((String) -> Void)?
     private var diagLines: () -> Bool = { false }
     private var displayHandler: ((VoiceCheckDisplay?) -> Void)?
+    private var ownerOnProvider: () -> Bool = { false }
+    private var ownerTemplateProvider: () -> [Float]? = { nil }
+    private var entitledProvider: () -> Bool = { false }
     private let maintenance = DispatchQueue(label: "com.bcrypto.qaudion.voice.maintenance", qos: .utility)
 
     private final class Weak {
@@ -108,6 +125,39 @@ final class VoiceProcess: @unchecked Sendable {
         logSink = sink
         diagLines = diagLinesEnabled
         lock.unlock()
+    }
+
+    /// The owner choice together with the entitlement (what a call reads once, at its start), and the enrolled voice template of
+    /// the owner for the diagnostic counter only. Until the app installs them the check is off.
+    func setOwnerPolicy(ownerOn: @escaping () -> Bool, ownerTemplate: @escaping () -> [Float]?, available: @escaping () -> Bool = { false }) {
+        lock.lock()
+        entitledProvider = available
+        ownerOnProvider = ownerOn
+        ownerTemplateProvider = ownerTemplate
+        lock.unlock()
+    }
+
+    /// True when the check is available to this account (the entitlement): an owner who turned the setting off then sees "Off for this
+    /// call"; an account without it sees no card at all.
+    var checkAvailable: Bool {
+        lock.lock()
+        let read = entitledProvider
+        lock.unlock()
+        return read()
+    }
+
+    var ownerOn: Bool {
+        lock.lock()
+        let read = ownerOnProvider
+        lock.unlock()
+        return read()
+    }
+
+    func ownerTemplate() -> [Float]? {
+        lock.lock()
+        let read = ownerTemplateProvider
+        lock.unlock()
+        return read()
     }
 
     func setDisplayHandler(_ handler: @escaping (VoiceCheckDisplay?) -> Void) {
@@ -204,7 +254,7 @@ final class VoiceProcess: @unchecked Sendable {
     /// The wipe of everything of the contact voice on this device: every running or post-call engine is stopped and discarded first,
     /// then the records, `meta.bin` and the key are deleted under the store's lock, and the daily counters are forgotten. False
     /// when something is left: a failure is never swallowed.
-    func wipeAll() -> Bool {
+    func wipeAll(why: String = "account") -> Bool {
         for s in liveSessions() { s.discardAll() }
         var ok = true
         do {
@@ -214,8 +264,24 @@ final class VoiceProcess: @unchecked Sendable {
         }
         daily.wipe()
         showDisplay(nil)
-        emitCallLine("QA-VOICE v=1 ev=store call=- op=wipe res=\(ok ? "ok" : "fail") why=account")
+        emitCallLine("QA-VOICE v=1 ev=store call=- op=wipe res=\(ok ? "ok" : "fail") why=\(why)")
         return ok
+    }
+
+    /// What the owner sees of the learned voices of `contactIds` (blocking: call it from a background queue). Reads only.
+    func summaries(contactIds: [String]) -> [String: ContactVoiceSummary] {
+        let generation = services.generation
+        return (try? services.summaries(contactIds: contactIds, generation: generation)) ?? [:]
+    }
+
+    /// The contact list was synced: the records of contacts that are no longer in it are deleted. Does nothing for a list that is
+    /// empty or not yet synced, and never creates `meta.bin` or the key.
+    func sweepOrphans(knownContactIds: [String], directorySynced: Bool, done: ((Int) -> Void)? = nil) {
+        let generation = services.generation
+        maintenance.async { [self] in
+            let n = (try? services.deleteOrphans(knownContactIds: knownContactIds, directorySynced: directorySynced, generation: generation)) ?? 0
+            done?(n)
+        }
     }
 }
 
@@ -411,6 +477,34 @@ final class VoiceSystemServices: VoiceServices, @unchecked Sendable {
         // Nothing on disk: nothing to delete, and nothing is read from the keychain.
         if let dir = Self.directory(), let exists = try? VoiceTemplateStore.dataExists(in: dir), !exists { return }
         _ = try theStore(generation: expected).delete(contactId, generation: expected)
+    }
+
+    func summaries(contactIds: [String], generation expected: Int) throws -> [String: ContactVoiceSummary] {
+        // Nothing on disk: nothing to read, and no store is looked at.
+        guard let dir = Self.directory(), (try? VoiceTemplateStore.dataExists(in: dir)) == true else { return [:] }
+        lock.lock()
+        let loaded: VoiceBundle?
+        if let b = bundle {
+            loaded = b
+        } else {
+            loaded = try? VoiceBundle.loadFromModule()
+            bundle = loaded
+        }
+        lock.unlock()
+        guard let cfg = loaded?.state else { return [:] }
+        return try theStore(generation: expected).summaries(contactIds: contactIds, cfg: cfg, generation: expected)
+    }
+
+    func hasRecords() -> Bool {
+        guard let dir = Self.directory() else { return false }
+        return (try? VoiceTemplateStore.recordsExist(in: dir)) ?? false
+    }
+
+    func deleteOrphans(knownContactIds: [String], directorySynced: Bool, generation expected: Int) throws -> Int {
+        guard directorySynced, !knownContactIds.isEmpty else { return 0 }
+        guard let dir = Self.directory(), (try? VoiceTemplateStore.dataExists(in: dir)) == true else { return 0 }
+        return try theStore(generation: expected).deleteOrphans(
+            knownContactIds: knownContactIds, directorySynced: directorySynced, generation: expected)
     }
 
     func wipeAll() throws {

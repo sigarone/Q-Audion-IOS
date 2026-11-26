@@ -758,7 +758,9 @@ final class AppState: ObservableObject {
             #endif
         }
     }
-    @Published var callContactId: String?
+    @Published var callContactId: String? {
+        didSet { if callContactId != nil, callContactId != oldValue { startVoiceCheckAtAnswer() } }
+    }
     /// W-CALLSPKR (2026-07-20) — the user's live loudspeaker preference for
     /// the CURRENT 1:1 call, set by `setSpeaker(_:)` and consulted by the
     /// `onAudioSessionActivated` fork below. Mirrors the state group calls
@@ -3543,6 +3545,13 @@ final class AppState: ObservableObject {
     /// hasn't been resolved yet.
     var webRtcController: Any? {
         didSet {
+            // The check of an answered call starts when its controller (and later its connection) exists.
+            if let controller = webRtcController as? QAudionWebRtcCallController {
+                controller.voiceConnectionReady = { [weak self] in
+                    Task { @MainActor [weak self] in self?.startVoiceCheckAtAnswer() }
+                }
+                startVoiceCheckAtAnswer()
+            }
             // W-CALLERUNMUTELOST (2026-09-27) — every assignment to this
             // property runs on the main thread (same as the answer path
             // that races it), so this and `reapplyNativeSenderMute`'s own
@@ -3710,13 +3719,6 @@ final class AppState: ObservableObject {
     /// Main-actor only, like every other field of this object.
     private let voiceReferenceEnvelope = VoiceReferenceEnvelope()
 
-    /// State of the voice-learning progress that the voice check card
-    /// (`VoiceGuardCard`) can show: a brief progress indicator and, when it
-    /// ends, a short confirmation. Nothing sets it while the contact voice
-    /// engine is off (`VoiceContactV3.enabled`), so the card shows only its
-    /// verdict lines. Reset in endCall().
-    @Published var voiceLearningState: VoiceLearningState?
-
     /// This device's OWN TX-side owner-continuity self-check state,
     /// published from `callService.onOwnerContinuityStateChanged`.
     /// `.inactive` whenever the user has no Voice-as-Key enrollment. NOT
@@ -3724,7 +3726,7 @@ final class AppState: ObservableObject {
     /// `InCallScreen.peerOwnerContinuityLevel`'s doc); its only consumer is
     /// `sendOwnerContinuityAnnounceIfChanged`, which announces real
     /// transitions to the peer so THEIR device can show `.mismatch` on
-    /// their trust bar. Reset in endCall() alongside `voiceLearningState`.
+    /// their trust bar. Reset in endCall().
     @Published var ownerContinuityState: OwnerContinuityMonitor.State = .inactive
 
     /// Last level actually sent to the peer via `OWNER_CONT` — dedup guard
@@ -16862,6 +16864,10 @@ final class AppState: ObservableObject {
         // this correctly resolves to nil rather than a stale cross-call value.
         let senderDeviceId = AcceptDeviceIdResolution.callerAcceptDeviceId(
             callId: parsed.callId, callScopedStash: senderDeviceIdByCallId)
+        // The contact-voice check binds its device to this call: the one the identity check above used, with the sender of the ACCEPT
+        // as a cross-check (two different devices for one call leave the device unknown).
+        voiceDeviceBinding.bind(callId: parsed.callId, deviceId: senderDeviceId)
+        voiceDeviceBinding.noteAccept(callId: parsed.callId, deviceId: envelopeSenderDeviceId)
         let sendOpaqueRaw: (String) async throws -> Void = { [weak self] wireString in
             guard let provider = await MainActor.run(body: { self?.liveProvider }) else { return }
             let payload = wireString.data(using: .utf8) ?? Data()
@@ -16986,6 +16992,14 @@ final class AppState: ObservableObject {
             }
             callService.applyPeerPacketLossReport(percent)
             print("[AppState] PLP received callId=\(callId.prefix(8))… percent=\(percent) from=\(senderId.prefix(8))…")
+        case .voiceConsent(let callId, let sealed):
+            // Only the registered peer of the call that is running; a message that does not open is dropped.
+            guard VoiceVconsExchange.isFromRegisteredPeer(
+                registeredPeer: callContactId, senderId: senderId, activeCallId: canonicalActiveCallId(), messageCallId: callId) else {
+                print("[AppState] VCONS dropped: not from the peer of the running call")
+                return
+            }
+            voiceVcons?.onReceived(sealed)
         case .voiceConfidence(let callId, let sealedPayload):
             // W-VOICECONFSYNC (2026-09-11) — the responder's sealed
             // voice-confidence advisory about OUR (the caller's) voice.
@@ -22838,20 +22852,100 @@ final class AppState: ObservableObject {
     /// The contact-voice check starts at the genuine-accept points, here and nowhere else. The device is the one that THIS
     /// call pinned (`callPinDeviceId`), never the peer-keyed value that an earlier call may have left. Inert while the check is
     /// off: the controller returns before it creates anything.
+    /// True when there is nothing more to do (the check started for this call, or it is off); false while the call is not ready yet.
     @MainActor
-    private func startVoiceCheckForThisCall() {
+    @discardableResult
+    private func startVoiceCheckForThisCall() -> Bool {
+        guard VoiceCallWiring.isEnabled else { return true }
         guard let controller = webRtcController as? QAudionWebRtcCallController,
-              let contactId = callContactId, let callId = canonicalActiveCallId() else { return }
+              let contactId = callContactId, let callId = canonicalActiveCallId() else { return false }
+        if voiceCheckStartedCallId == callId { return true } // once per call, from whichever accept point comes first
         // The device is read from the stash of THIS call only (stamped by this call's own `call_incoming`): an outgoing call has
         // none, and never reads what an earlier call from the same peer left in a peer-keyed field. No device is tier 0.
-        let deviceId = VoiceTierInputs.peerDeviceId(forCall: callId, callScopedStash: senderDeviceIdByCallId)
+        voiceDeviceBinding.bind(
+            callId: callId, deviceId: VoiceTierInputs.peerDeviceId(forCall: callId, callScopedStash: senderDeviceIdByCallId))
+        let deviceId = voiceDeviceBinding.device(forCall: callId)
         let startS = Int64(Date().timeIntervalSince1970)
-        controller.voiceMediaStart(
+        guard controller.voiceMediaStart(
             callId: callId, contactId: contactId, peerDeviceId: deviceId,
             tStartS: Int(startS), utcOffsetS: TimeZone.current.secondsFromGMT(),
-            held: callService.isLocalHeld || callService.peerOnHold)
+            held: callService.isLocalHeld || callService.peerOnHold) else { return false }
+        voiceCheckStartedCallId = callId
         voiceTierCall = VoiceTierCall(callId: callId, peerId: contactId, deviceId: deviceId, startS: startS)
         reportVoiceTierMoment()
+        startVoiceVcons(callId: callId, peerId: contactId, controller: controller)
+        return true
+    }
+
+    /// The call this device started the check for (once per call).
+    private var voiceCheckStartedCallId: String?
+
+    /// The answered call whose check has not started yet (see `VoiceAnswerGate`).
+    private var voiceAnswerGate = VoiceAnswerGate()
+
+    /// The callee's accept point. `finalizeCallActive` is reached only through frames that the caller receives, so an answered call
+    /// starts its check from the events that make it ready (the answer, the call peer, the controller, its connection), with no
+    /// time limit while that call is live, and once.
+    @MainActor
+    private func startVoiceCheckAtAnswer() {
+        guard VoiceCallWiring.isEnabled else { return }
+        guard voiceAnswerGate.pending(activeCallId: canonicalActiveCallId(), inCall: isInCall) != nil else { return }
+        if startVoiceCheckForThisCall() { voiceAnswerGate.started() }
+    }
+
+    /// The device that THIS call's contact-voice check is bound to (see `VoiceDeviceBinding`).
+    private let voiceDeviceBinding = VoiceDeviceBinding()
+    /// The announcement exchange of the running call, sent in every call while the check is on, whatever the owner setting is.
+    private var voiceVcons: VoiceVconsExchange?
+    private var voiceVconsCallId: String?
+
+    /// The route class of the local audio route: 1 ear, 2 speaker, 3 bt, 4 wired, 5 car (only when the system reports a car route).
+    nonisolated static func voiceLocalRouteClass() -> Int {
+        switch CallAudioRoute.current() {
+        case .earpiece: return VoiceRouteClass.ear
+        case .speaker: return VoiceRouteClass.speaker
+        case .bluetooth: return VoiceRouteClass.bluetooth
+        case .wired: return VoiceRouteClass.wired
+        case .car: return VoiceRouteClass.car
+        }
+    }
+
+    /// Starts the announcement of this call (once per call): at media start and then every 3 s, four more times, again at every
+    /// change of the learning or verifying bits or of the audio route. Inert while the check is off.
+    @MainActor
+    private func startVoiceVcons(callId: String, peerId: String, controller: QAudionWebRtcCallController) {
+        guard VoiceCallWiring.isEnabled else { return }
+        if voiceVconsCallId == callId.lowercased(), voiceVcons != nil { return }
+        voiceVcons?.stop()
+        voiceVconsCallId = callId.lowercased()
+        let exchange = VoiceVconsExchange(
+            callId: callId,
+            keys: { CallKeyStore.shared.get(callId) },
+            send: { [weak self] payload in
+                Task { @MainActor [weak self] in await self?.sendVoiceVcons(payload: payload, callId: callId, peerId: peerId) }
+            },
+            local: { [weak controller] in
+                VoiceVconsExchange.Local(flags: controller?.voiceAnnouncedFlags ?? 0, routeClass: AppState.voiceLocalRouteClass())
+            },
+            onPeer: { [weak controller] f in
+                controller?.voicePeerVcons(seq: f.seq, allow: f.allow, withdraw: f.withdraw, routeClass: f.routeClass)
+            })
+        voiceVcons = exchange
+        exchange.start()
+    }
+
+    @MainActor
+    private func sendVoiceVcons(payload: String, callId: String, peerId: String) async {
+        guard callContactId == peerId, let provider = liveProvider else { return }
+        let wire = CallPiggyBack.serializeVoiceConsent(callId: callId, payload: payload)
+        OpaqueSelfEchoFilter.shared.markSent(wire)
+        try? await provider.callingApi.sendOpaqueMessageString(recipientId: peerId, payload: wire)
+    }
+
+    /// "It was <name>" on the Differs sheet of the running call.
+    @MainActor
+    func voiceCheckWasHim() {
+        (webRtcController as? QAudionWebRtcCallController)?.voiceWasHim()
     }
 
     /// What the voice check keeps of the call for the tier: the call, its peer, the device THIS call is bound to, and its start.
@@ -23642,6 +23736,9 @@ extension AppState {
         // gap). Fire it here, on the single point every accept path converges
         // through, so answering a call is as good a trigger as placing one.
         self.maybeExchangeAvatarOnCallConnect()
+        // The contact-voice check of an answered call (media start and the announcement); never reached for a declined call.
+        voiceAnswerGate.arm(callId: self.canonicalActiveCallId())
+        self.startVoiceCheckAtAnswer()
         // W450 + cold-start race: boot audio + notify caller (latched/replayed
         // when the responder integration isn't ready yet).
         self.consumeDeferredAnswerIfReady("performAcceptIncoming")
@@ -24709,9 +24806,6 @@ extension AppState {
         // builds its own from its own opening seconds.
         voiceReferenceEnvelope.reset()
         voiceReference = nil
-        // Drop the last learning state so a stale confirmation doesn't leak
-        // into the next call's UI.
-        voiceLearningState = nil
         // Tier 1 — same reasoning: a stale "voce storica" shield state must
         // not leak into the next call's UI before that call's own first real
         // tick arrives.
@@ -24943,6 +25037,12 @@ extension AppState {
         // The trust inputs of the voice check belong to the call that just ended.
         voiceTierCall = nil
         voiceKcVerifiedCalls.removeAll()
+        voiceVcons?.stop()
+        voiceVcons = nil
+        voiceVconsCallId = nil
+        voiceCheckStartedCallId = nil
+        voiceAnswerGate.disarm()
+        if let endedId = endCallId { voiceDeviceBinding.clear(callId: endedId) }
         // WIRE_SPEC §8.7 — reset the RX render gate (parked track,
         // failsafe watchdog, readiness memo) for the next call.
         resetRemoteVideoRenderGate()

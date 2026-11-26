@@ -1786,13 +1786,17 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
     /// Media start of the contact-voice check, at the genuine-accept points of the call. Does nothing while the flag is off, and
     /// only once per call. `peerDeviceId` is the device that THIS call pinned.
     /// `held` is the hold state of the call right now (this side or the peer): the check starts from it.
+    /// True when there is nothing more to do for this call (started, already started, or the check is off); false while the
+    /// connection does not exist yet, so the caller tries again.
+    @discardableResult
     public func voiceMediaStart(
         callId: String, contactId: String, peerDeviceId: String?, tStartS: Int, utcOffsetS: Int, held: Bool = false
-    ) {
-        guard VoiceFeature.isEnabled, voiceLatch.currentSession == nil, let pc = peerConnection else { return }
+    ) -> Bool {
+        guard VoiceFeature.isEnabled, voiceLatch.currentSession == nil else { return true }
+        guard let pc = peerConnection else { return false }
         let binding = VoiceCallBinding(
             callId: callId, contactId: contactId, peerDeviceId: peerDeviceId, tStartS: tStartS, utcOffsetS: utcOffsetS)
-        guard let session = VoiceProcess.shared.beginCall(binding) else { return }
+        guard let session = VoiceProcess.shared.beginCall(binding) else { return true }
         voiceLatch.attach(session)
         // The poll asks the CURRENT connection every time: a rebuild of the connection (video upgrade) moves the source with it.
         session.attachStatsSource(VoiceClosureStatsSource { [weak self] deliver in
@@ -1804,6 +1808,7 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         })
         pc.setVoiceRxTap(session.rxTap)
         session.mediaStart(held: held)
+        return true
     }
 
     /// True while the contact-voice check has a session for this call (never while the flag is off): the app reads the trust
@@ -1827,6 +1832,23 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         session.reportTier(input)
     }
 
+    /// The peer's announcement, opened and decoded: the engine reads the route class, an allow = 0 or withdraw = 1 blocks the check
+    /// for the call (a withdrawal also deletes the contact's record, before the engine exists too). Does nothing while the check is off.
+    public func voicePeerVcons(seq: UInt32, allow: Bool, withdraw: Bool, routeClass: Int) {
+        guard VoiceFeature.isEnabled else { return }
+        voiceLatch.noteVcons(
+            VoiceVcons(seq: Int(seq), allow: allow, withdraw: withdraw, routeClass: routeClass),
+            wallS: Int(Date().timeIntervalSince1970))
+    }
+
+    /// The learning and verifying bits of this device's own announcement (0 when there is no check in this call).
+    public var voiceAnnouncedFlags: Int { voiceLatch.currentSession?.announcedFlags ?? 0 }
+
+    /// The owner chose "It was <name>" on the Differs sheet of this call.
+    public func voiceWasHim() {
+        voiceLatch.currentSession?.wasHimTapped()
+    }
+
     /// The call is on hold (this side or the peer) or resumed: the voice check starts a new stretch.
     public func voiceHoldChanged(_ held: Bool) {
         voiceLatch.currentSession?.holdChanged(held)
@@ -1839,9 +1861,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         session.callEnded()
     }
 
+    /// Told when this call's connection exists (a new one is set): the app asks again to start the contact-voice check of an
+    /// answered call. May be called from any thread.
+    public var voiceConnectionReady: (() -> Void)?
+
     private var peerConnection: QAudionPeerConnection? {
         didSet {
             guard let pc = peerConnection, pc !== oldValue else { return }
+            voiceConnectionReady?()
             if let voice = voiceLatch.currentSession { pc.setVoiceRxTap(voice.rxTap) }
             cryptorAttachQueue.async { [weak self] in
                 guard let self, self.peerConnection === pc else { return }

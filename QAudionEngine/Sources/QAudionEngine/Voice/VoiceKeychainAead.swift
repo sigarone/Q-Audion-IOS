@@ -77,6 +77,8 @@ final class VoiceKeychainVault: VoiceKeyVault, @unchecked Sendable {
 ///    decides that once, when it creates `meta.bin`, and then calls `deleteKey`.
 final class VoiceKeychainAead: VoiceAead, @unchecked Sendable {
     private let delegate: VoiceAesGcmAead
+    private let keyPresent: () throws -> Bool
+    private static let backoffMs = [50, 150, 400]
 
     init(dataExists: @escaping () throws -> Bool, vault: VoiceKeyVault = VoiceKeychainVault(),
          log: @escaping (String) -> Void = { _ in }, sleep: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1000.0) }) {
@@ -96,6 +98,16 @@ final class VoiceKeychainAead: VoiceAead, @unchecked Sendable {
             dataExists: dataExists,
             log: log,
             sleep: sleep)
+        keyPresent = {
+            if keyLock.withLock({ cached != nil }) { return true }
+            // A read that comes back empty can be a moment of the system, not a lost key: look again, as the key rule does.
+            if try vault.read() != nil { return true }
+            for pause in Self.backoffMs {
+                sleep(pause)
+                if try vault.read() != nil { return true }
+            }
+            return false
+        }
         delegate = VoiceAesGcmAead(
             key: {
                 try keyLock.withLock {
@@ -123,5 +135,11 @@ final class VoiceKeychainAead: VoiceAead, @unchecked Sendable {
 
     func deleteKey() throws {
         try delegate.deleteKey()
+    }
+
+    /// Whether a key exists, without ever creating one or deleting anything: an empty read is repeated after 50, 150 and 400 ms.
+    /// Any other keychain status throws.
+    func keyExists() throws -> Bool {
+        try keyPresent()
     }
 }

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Small uppercase trust chip used in `ContactRow` and `ContactDetailScreen`
-/// (e.g. "PQC", "VOICE", "ENTERPRISE"). 1:1 port of the Android trust pill.
+/// (e.g. "PQC", "OTA", "ENTERPRISE"). 1:1 port of the Android trust pill.
 ///
 /// Capsule, monospace, 1.2sp tracking. Foreground = `accent`, fill =
 /// `accent @ 0.18α`, border = `accent @ 0.55α`.
@@ -38,7 +38,7 @@ struct TrustChip: View {
 #Preview {
     HStack(spacing: 6) {
         TrustChip("PQC", accent: .purple)
-        TrustChip("VOICE", accent: .green)
+        TrustChip("OTA", accent: .green)
         TrustChip("ENTERPRISE", accent: .blue)
     }
     .padding()

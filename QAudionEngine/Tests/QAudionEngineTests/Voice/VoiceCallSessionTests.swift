@@ -223,7 +223,7 @@ final class VoiceCallSessionTests: XCTestCase {
         let (other, _) = makeSession(fake, process, binding: binding(device: nil, contact: "contact-2"))
         other.mediaStart()
         other.queue.sync {}
-        XCTAssertEqual(fake.tagDevices, ["dev-of-this-call", ""])
+        XCTAssertEqual(fake.tagDevices, ["dev-of-this-call"], "a device that is really unknown has no tag and is not a new device")
     }
 
     func testAFallbackThatComesBeforeMediaStartIsReplayedWhenTheEngineIsBuilt() throws {
@@ -270,6 +270,187 @@ final class VoiceCallSessionTests: XCTestCase {
         session.callEnded()
         session.queue.sync {}
         XCTAssertTrue(fake.updates.isEmpty)
+    }
+
+    // MARK: the owner setting, the announcements and the device of the call
+
+    private func announcement(_ seq: Int, allow: Bool = true, withdraw: Bool = false, route: Int = 0) -> VoiceVcons {
+        VoiceVcons(seq: seq, allow: allow, withdraw: withdraw, routeClass: route)
+    }
+
+    func testWithTheOwnerSettingOffNothingIsLoadedReadOrCreated() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        process.setOwnerPolicy(ownerOn: { false }, ownerTemplate: { nil })
+        var shown: [VoiceCheckDisplay?] = []
+        process.setDisplayHandler { shown.append($0) }
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertEqual(fake.prepareCalls, 0, "no model is loaded")
+        XCTAssertEqual(fake.loadCalls, 0, "no store is read")
+        XCTAssertTrue(fake.tagDevices.isEmpty, "no meta file or key is made for a device tag")
+        XCTAssertNil(session.withEngine { $0 })
+        XCTAssertEqual(session.announcedFlags, 0)
+        XCTAssertTrue(shown.compactMap { $0 }.isEmpty, "no card at all for an account without the check")
+        session.callEnded()
+        session.queue.sync {}
+        XCTAssertTrue(fake.updates.isEmpty)
+        XCTAssertEqual(fake.finished, 0)
+    }
+
+    func testAnEntitledOwnerWhoTurnedTheSettingOffSeesOffForThisCall() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        process.setOwnerPolicy(ownerOn: { false }, ownerTemplate: { nil }, available: { true })
+        var shown: [VoiceCheckDisplay?] = []
+        process.setDisplayHandler { shown.append($0) }
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertEqual(fake.prepareCalls, 0, "nothing is processed")
+        XCTAssertEqual(shown.compactMap { $0 }, [.off])
+    }
+
+    func testAnAccountWithoutTheEntitlementSeesNoCardAtAll() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        process.setOwnerPolicy(ownerOn: { false }, ownerTemplate: { nil }, available: { false })
+        var shown: [VoiceCheckDisplay?] = []
+        process.setDisplayHandler { shown.append($0) }
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertTrue(shown.compactMap { $0 }.isEmpty)
+    }
+
+    func testWithNoAnnouncementTheCallIsProcessedAndReportsLearning() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertNotNil(session.withEngine { $0 }, "processing is not gated on an announcement")
+        XCTAssertEqual(session.announcedFlags, VoiceVconsCodec.flagLearning)
+    }
+
+    func testAnAllowZeroBlocksTheCheckForTheCall() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        session.peerVcons(announcement(1, allow: false), wallS: 1_790_000_000)
+        session.queue.sync {}
+        XCTAssertEqual(session.announcedFlags, 0, "nothing is learned or checked")
+        XCTAssertTrue(fake.deletes.isEmpty, "allow = 0 deletes nothing")
+    }
+
+    func testAWithdrawalDeletesTheRecordOfTheContactAndBlocksTheCall() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        fake.record = VoiceStoreFixtures.record(fake.config.state)
+        let process = processWithMemoryCounters(fake)
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertEqual(session.announcedFlags, VoiceVconsCodec.flagVerifying)
+        session.peerVcons(announcement(2, allow: true, withdraw: true), wallS: 1_790_000_000)
+        session.queue.sync {}
+        XCTAssertEqual(Set(fake.deletes), ["contact-1"], "the record is deleted (more than once is harmless)")
+        XCTAssertEqual(session.announcedFlags, 0)
+    }
+
+    func testAWithdrawalThatComesBeforeTheEngineExistsStillDeletesTheRecord() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let (session, _) = makeSession(fake, process)
+        session.peerVcons(announcement(1, allow: true, withdraw: true), wallS: 1_790_000_000)
+        session.queue.sync {}
+        XCTAssertEqual(fake.deletes, ["contact-1"])
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertEqual(session.announcedFlags, 0, "the announcement that came first blocks the call")
+    }
+
+    func testAWithdrawalAfterAnAllowZeroDeletesTheRecord() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        fake.record = VoiceStoreFixtures.record(fake.config.state)
+        let process = processWithMemoryCounters(fake)
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        session.peerVcons(announcement(1, allow: false), wallS: 1_790_000_000)
+        session.queue.sync {}
+        XCTAssertTrue(fake.deletes.isEmpty)
+        session.peerVcons(announcement(2, allow: false, withdraw: true), wallS: 1_790_000_001)
+        session.queue.sync {}
+        XCTAssertEqual(Set(fake.deletes), ["contact-1"])
+        session.callEnded()
+        session.queue.sync {}
+        XCTAssertTrue(fake.updates.isEmpty, "the end of the call writes nothing back")
+    }
+
+    func testAWithdrawalDeletesTheRecordOfAnOwnerWhoIsNotEntitled() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        fake.record = VoiceStoreFixtures.record(fake.config.state)
+        let process = processWithMemoryCounters(fake)
+        process.setOwnerPolicy(ownerOn: { false }, ownerTemplate: { nil })
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertNil(session.withEngine { $0 }, "no engine for this owner")
+        session.peerVcons(announcement(1, allow: true, withdraw: true), wallS: 1_790_000_000)
+        session.queue.sync {}
+        XCTAssertEqual(fake.deletes, ["contact-1"])
+    }
+
+    func testAWithdrawalAfterTheEngineGaveUpDeletesTheRecord() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        fake.account = nil // nobody signed in: the engine gives up
+        let process = processWithMemoryCounters(fake)
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertNil(session.withEngine { $0 })
+        fake.account = "acct-1"
+        session.peerVcons(announcement(1, allow: true, withdraw: true), wallS: 1_790_000_000)
+        session.queue.sync {}
+        XCTAssertEqual(fake.deletes, ["contact-1"])
+    }
+
+    func testAnAnnouncementThatArrivesBeforeTheSessionIsKeptForIt() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        let latch = VoiceCallLatch()
+        latch.noteVcons(announcement(1, allow: false), wallS: 1_790_000_000)
+        let (session, _) = makeSession(fake, process)
+        latch.attach(session)
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertEqual(session.announcedFlags, 0)
+    }
+
+    func testTheOwnerTemplateIsUsedOnlyWhenItIsAUnitVectorOfTheEmbeddingSize() {
+        var unit = [Float](repeating: 0, count: 512)
+        unit[3] = 1
+        XCTAssertEqual(VoiceCallSession.usableOwnerTemplate(unit), unit)
+        XCTAssertNil(VoiceCallSession.usableOwnerTemplate(nil))
+        XCTAssertNil(VoiceCallSession.usableOwnerTemplate([1, 0, 0]))
+        XCTAssertNil(VoiceCallSession.usableOwnerTemplate([Float](repeating: 1, count: 512)))
+        var bad = unit
+        bad[0] = .nan
+        XCTAssertNil(VoiceCallSession.usableOwnerTemplate(bad))
     }
 
     // MARK: the post-call work
@@ -596,7 +777,9 @@ final class VoiceCallSessionTests: XCTestCase {
     }
 
     private func processWithMemoryCounters(_ fake: FakeServices) -> VoiceProcess {
-        VoiceProcess(services: fake, daily: VoiceDailyCounters(storage: MemoryDaily(), random: { 0 }))
+        let process = VoiceProcess(services: fake, daily: VoiceDailyCounters(storage: MemoryDaily(), random: { 0 }))
+        process.setOwnerPolicy(ownerOn: { true }, ownerTemplate: { nil })
+        return process
     }
 
     func testPerCallLinesAreWrittenOnlyForAnAccountWithTheDiagnosticFlagAndDailyLinesAlways() throws {
@@ -798,7 +981,7 @@ final class VoiceCallSessionTests: XCTestCase {
         let (second, _) = makeSession(fake, process, binding: binding(device: nil))
         second.mediaStart()
         second.queue.sync {}
-        XCTAssertEqual(fake.tagDevices, ["dev-1", ""], "the second call is bound to no device, not to the one of the call before")
+        XCTAssertEqual(fake.tagDevices, ["dev-1"], "the second call is bound to no device, not to the one of the call before, and has no tag")
         XCTAssertNil(second.binding.peerDeviceId)
     }
 
