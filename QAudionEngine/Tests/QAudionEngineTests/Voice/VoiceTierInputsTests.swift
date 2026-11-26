@@ -169,7 +169,7 @@ final class VoiceTierInputsTests: XCTestCase {
 
     func testTheAppReadsTheDeviceOfTheCallOnlyFromTheStashOfThatCall() throws {
         let app = try Self.source("QAudionApp/AppState.swift")
-        let start = try XCTUnwrap(app.range(of: "private func startVoiceCheckForThisCall() {"))
+        let start = try XCTUnwrap(app.range(of: "private func startVoiceCheckForThisCall() -> Bool {"))
         let end = try XCTUnwrap(app.range(of: "private struct VoiceTierCall {", range: start.upperBound..<app.endIndex))
         let body = String(app[start.lowerBound..<end.lowerBound])
         XCTAssertTrue(body.contains("VoiceTierInputs.peerDeviceId(forCall: callId, callScopedStash: senderDeviceIdByCallId)"))
