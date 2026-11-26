@@ -11,8 +11,15 @@ public final class VoiceDeviceBinding: @unchecked Sendable {
     private struct Bound {
         var answer: String?
         var accept: String?
+        /// The device that the server stamped on the `call_answer` of an outgoing call.
+        var answerSender: String?
         var mismatch: Bool { answer != nil && accept != nil && answer != accept }
-        var effective: String? { (answer == nil || mismatch) ? nil : answer }
+        var effective: String? {
+            if answer != nil { return mismatch ? nil : answer }
+            // Outgoing call: the answering device counts only when the sender of the accept message is the same one.
+            if let answerSender, answerSender == accept { return answerSender }
+            return nil
+        }
     }
 
     private let lock = NSLock()
@@ -43,6 +50,25 @@ public final class VoiceDeviceBinding: @unchecked Sendable {
         b.accept = Self.clean(deviceId) ?? b.accept
         bound[key] = b
         lock.unlock()
+    }
+
+    /// The sender of the `call_answer` of an outgoing call. It binds the device only when the sender of the accept message is the
+    /// same device, whatever the order in which the two arrive; a missing or a different one leaves the device unknown.
+    public func noteAnswerSender(callId: String, deviceId: String?) {
+        let key = callId.lowercased()
+        lock.lock()
+        var b = bound[key] ?? Bound()
+        b.answerSender = Self.clean(deviceId) ?? b.answerSender
+        bound[key] = b
+        lock.unlock()
+    }
+
+    /// True when the device of this call comes from the `call_answer` and not from the identity check.
+    public func isFromAnswerSender(forCall callId: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let b = bound[callId.lowercased()] else { return false }
+        return b.answer == nil && b.effective != nil
     }
 
     /// The device of exactly this call, or nil when none is known (or the two sources disagree).
