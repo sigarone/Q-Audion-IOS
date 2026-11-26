@@ -90,6 +90,15 @@ public enum VoiceTierInputs {
             pinAnomaly: line.pin == "anomaly", kcmacOk: kcmacOk, heldUnresolved: heldUnresolved, authWord: word)
     }
 
+    /// The pin row of a device that an outgoing call learned from the answer: kept only when its key is the identity key that THIS
+    /// call's handshake verified. No verified key of this call, or another key, gives nil (tier 0); the identity verdict is not
+    /// changed by this.
+    public static func rowForAnsweredDevice(_ trust: VoiceTierTrust?, auth: CallIdentityAuth, callId: String) -> VoiceTierTrust? {
+        guard let trust, auth.callIdOrNil == callId.lowercased(),
+              case .authenticated(_, let key) = auth, key == trust.pinnedKey else { return nil }
+        return trust
+    }
+
     /// The device that THIS call is bound to, from the stash that holds a device id per call id (the id of the call that stamped
     /// it). Never a value that belongs to the peer or to another call: a call whose own entry is missing or blank has no device
     /// (tier 0), whatever an earlier call from the same peer left behind.

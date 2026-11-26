@@ -11890,6 +11890,16 @@ final class AppState: ObservableObject {
                     ? (impl.getActiveCallId() ?? "") : answerEnvelopeCallId
                 self.callAnswerSeenCallId = seenAnswerId.lowercased()
             }
+            // The device that the server stamped on this answer feeds the contact-voice check only (never the identity check):
+            // kept for exactly the bound outgoing call, never by peer, and used only when the sender of the ACCEPT is the same.
+            let answerSenderDeviceId = SasCommit.normalizedDeviceId(data["sender_device_id"] as? String)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !answerEnvelopeCallId.isEmpty, answerSenderDeviceId != nil,
+                      let impl = self.liveProvider?.callingApi as? BCryptoCallingApiImpl,
+                      let bound = impl.getActiveCallId()?.lowercased(), bound == answerEnvelopeCallId.lowercased(),
+                      self.senderDeviceIdByCallId[bound] == nil else { return }
+                self.voiceDeviceBinding.noteAnswerSender(callId: bound, deviceId: answerSenderDeviceId)
+            }
             if let pc = peerCaps, !pc.isEmpty {
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
@@ -22871,7 +22881,9 @@ final class AppState: ObservableObject {
             tStartS: Int(startS), utcOffsetS: TimeZone.current.secondsFromGMT(),
             held: callService.isLocalHeld || callService.peerOnHold) else { return false }
         voiceCheckStartedCallId = callId
-        voiceTierCall = VoiceTierCall(callId: callId, peerId: contactId, deviceId: deviceId, startS: startS)
+        voiceTierCall = VoiceTierCall(
+            callId: callId, peerId: contactId, deviceId: deviceId, startS: startS,
+            fromAnswer: voiceDeviceBinding.isFromAnswerSender(forCall: callId))
         reportVoiceTierMoment()
         startVoiceVcons(callId: callId, peerId: contactId, controller: controller)
         return true
@@ -22954,6 +22966,8 @@ final class AppState: ObservableObject {
         let peerId: String
         let deviceId: String?
         let startS: Int64
+        /// The device comes from the `call_answer` of an outgoing call: its pin row counts only for the key this call verified.
+        let fromAnswer: Bool
     }
 
     private var voiceTierCall: VoiceTierCall?
@@ -22991,6 +23005,9 @@ final class AppState: ObservableObject {
                 trust = VoiceTierTrust(
                     pinnedKey: key, pinnedAtS: pinnedAtS, pendingChange: contact?.identityChangePendingAtMs != nil,
                     oobVerified: outOfBand)
+            }
+            if call.fromAnswer {
+                trust = VoiceTierInputs.rowForAnsweredDevice(trust, auth: auth, callId: call.callId)
             }
             controller.voiceReportTier(
                 callId: call.callId, peerDeviceId: call.deviceId, trust: trust, auth: auth, protection: protection,
