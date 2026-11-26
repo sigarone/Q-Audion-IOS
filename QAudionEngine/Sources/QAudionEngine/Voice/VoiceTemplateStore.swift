@@ -415,18 +415,17 @@ final class VoiceTemplateStore: @unchecked Sendable {
         return any
     }
 
-    /// True when `meta.bin` is there AND the key exists: only then can a record be read or named. A `meta.bin` whose key is gone
-    /// can never be read again: every file of the learner data is removed and nothing is created. A key store that cannot be read
-    /// now throws and removes nothing.
+    /// True when `meta.bin` is there AND the key exists (after the key rule's repeated looks): only then can a record be read or
+    /// named. When it is not, nothing is created and NOTHING IS DELETED: a missing key is cleaned up only by `ensureMeta`'s own rule.
+    /// A key store that cannot be read now throws.
     private func readableData() throws -> Bool {
         if !hasMeta() { return false }
-        if try aead.keyExists() { return true }
-        deleteAllLocked()
-        return false
+        return try aead.keyExists()
     }
 
     private func deleteLocked(_ contactId: String) throws -> Bool {
-        if try !readableData() { return deleteStrayRecords() } // a deletion never creates `meta.bin` or the key
+        if !hasMeta() { return deleteStrayRecords() } // a deletion never creates `meta.bin` or the key
+        if try !aead.keyExists() { return false }
         let url = try fileURL(contactId)
         guard fm.fileExists(atPath: url.path) else { return false }
         do {

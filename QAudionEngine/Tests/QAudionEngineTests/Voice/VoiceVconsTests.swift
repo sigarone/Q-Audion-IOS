@@ -458,35 +458,45 @@ final class VoiceOwnerOffStoreTests: XCTestCase {
         XCTAssertNil(vault.current)
     }
 
-    /// A `meta.bin` whose key is gone can never be read again: reading, forgetting, a withdrawal and a sweep remove the stray files
-    /// and create neither a key nor a new `meta.bin`.
-    func testWithMetaOnDiskAndTheKeyGoneNothingIsCreatedAndTheStrayFilesAreRemoved() throws {
+    /// A `meta.bin` whose key stays missing after the key rule looked again is "nothing readable": reading, forgetting, a withdrawal
+    /// and a sweep delete nothing and create neither a key nor a new `meta.bin`.
+    func testWithMetaOnDiskAndTheKeyGoneNothingIsCreatedAndNothingIsDeleted() throws {
         let vault = VoiceMemoryVault()
         let first = makeStore(vault)
         try first.save("a", VoiceStoreFixtures.record(cfg))
         try vault.remove() // the Keychain lost the key
         let adds = vault.addCount
-        XCTAssertTrue(names().contains("meta.bin"))
+        let before = names()
 
-        let second = makeStore(vault) // a new process: no key in memory
-        XCTAssertEqual(try second.summaries(contactIds: ["a"], cfg: cfg), [:])
-        XCTAssertFalse(names().contains("meta.bin"))
-        XCTAssertEqual(names().filter { $0.hasSuffix(".qvt") }.count, 0)
-        XCTAssertNil(vault.current)
-        XCTAssertEqual(vault.addCount, adds)
-
-        for operation in 0..<3 {
-            let again = makeStore(vault)
-            try Data([1]).write(to: dir.appendingPathComponent("meta.bin"))
+        for operation in 0..<4 {
+            let again = makeStore(vault) // a new process: no key in memory
             switch operation {
-            case 0: _ = try again.delete("a")
-            case 1: _ = try again.sweep("a", nowS: 1_790_000_000, cfg)
-            default: _ = try again.deleteOrphans(knownContactIds: ["x"], directorySynced: true)
+            case 0: XCTAssertEqual(try again.summaries(contactIds: ["a"], cfg: cfg), [:])
+            case 1: XCTAssertFalse(try again.delete("a"))
+            case 2: XCTAssertNil(try again.sweep("a", nowS: 1_790_000_000, cfg))
+            default: XCTAssertEqual(try again.deleteOrphans(knownContactIds: ["x"], directorySynced: true), 0)
             }
-            XCTAssertFalse(names().contains("meta.bin"), "operation \(operation)")
+            XCTAssertEqual(names(), before, "operation \(operation) deleted or created a file")
             XCTAssertNil(vault.current, "operation \(operation)")
             XCTAssertEqual(vault.addCount, adds, "operation \(operation)")
         }
+    }
+
+    /// A key read that comes back empty once is not a lost key: the key rule of the store looks again before it acts, so a screen
+    /// that lists the voices must not delete what the key still opens.
+    func testOneEmptyKeyReadDeletesNothing() throws {
+        let vault = VoiceMemoryVault()
+        let first = makeStore(vault)
+        try first.save("a", VoiceStoreFixtures.record(cfg))
+        let reading = makeStore(vault) // a new process
+        vault.emptyReads = 1
+        XCTAssertNotNil(try reading.load("a"), "the record opens after one empty read")
+        let listing = makeStore(vault) // another new process
+        vault.emptyReads = 1
+        let out = try listing.summaries(contactIds: ["a"], cfg: cfg)
+        XCTAssertEqual(Set(out.keys), ["a"], "the key was looked for again and found")
+        XCTAssertTrue(names().contains("meta.bin"), "meta.bin is still there")
+        XCTAssertEqual(names().filter { $0.hasSuffix(".qvt") }.count, 1, "the record is still there")
     }
 
     func testAKeyStoreThatCannotBeReadRemovesNothingAndCreatesNothing() throws {
@@ -554,5 +564,46 @@ final class VoiceContactRemovalWiringTests: XCTestCase {
     func testBlockingAContactForgetsItsVoice() throws {
         let text = try source("Backend/ContactBlocking.swift")
         XCTAssertTrue(text.contains("VoiceCallWiring.contactRemoved(userId: id)"))
+    }
+}
+
+/// The start of the check at the answer: armed with the id of the answered call, asked again by every event, no time limit, once.
+final class VoiceAnswerGateTests: XCTestCase {
+    func testAConnectionThatComesLateStillStartsTheCheckOnceWhileTheCallIsLive() {
+        var gate = VoiceAnswerGate()
+        gate.arm(callId: "CALL-1")
+        for _ in 0..<1000 { // the connection is built much later: every event asks, none gives up
+            XCTAssertEqual(gate.pending(activeCallId: "call-1", inCall: true), "call-1")
+        }
+        gate.started()
+        XCTAssertNil(gate.pending(activeCallId: "call-1", inCall: true), "once per call")
+    }
+
+    func testACallIdThatIsNotKnownAtTheAnswerIsCapturedByTheFirstQuestion() {
+        var gate = VoiceAnswerGate()
+        gate.arm(callId: nil)
+        XCTAssertNil(gate.pending(activeCallId: nil, inCall: true))
+        XCTAssertEqual(gate.pending(activeCallId: "call-2", inCall: true), "call-2")
+        XCTAssertNil(gate.pending(activeCallId: "call-3", inCall: true), "a replaced call never starts")
+        XCTAssertNil(gate.pending(activeCallId: "call-2", inCall: true), "and the gate is disarmed")
+    }
+
+    func testAnEndedOrUnansweredCallNeverStarts() {
+        var gate = VoiceAnswerGate()
+        XCTAssertNil(gate.pending(activeCallId: "call-1", inCall: true), "not armed: nothing was answered")
+        gate.arm(callId: "call-1")
+        XCTAssertNil(gate.pending(activeCallId: "call-1", inCall: false))
+        gate.disarm()
+        XCTAssertNil(gate.pending(activeCallId: "call-1", inCall: true))
+    }
+
+    func testAnotherCallAnsweredLaterGetsItsOwnStart() {
+        var gate = VoiceAnswerGate()
+        gate.arm(callId: "call-1")
+        _ = gate.pending(activeCallId: "call-1", inCall: true)
+        gate.started()
+        gate.disarm()
+        gate.arm(callId: "call-2")
+        XCTAssertEqual(gate.pending(activeCallId: "call-2", inCall: true), "call-2")
     }
 }

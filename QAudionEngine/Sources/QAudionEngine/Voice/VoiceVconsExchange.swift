@@ -119,7 +119,7 @@ public final class VoiceVconsExchange: @unchecked Sendable {
                 Self.scrub(&previousKey)
                 previousKey = old
             }
-            lastKey = Data([UInt8](now))
+            lastKey = VoiceVconsCodec.privateCopy(now)
         }
         return lastKey
     }

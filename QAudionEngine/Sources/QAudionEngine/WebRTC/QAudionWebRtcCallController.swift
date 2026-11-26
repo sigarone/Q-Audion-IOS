@@ -1861,9 +1861,14 @@ public final class QAudionWebRtcCallController: NSObject, QAudionPeerConnection.
         session.callEnded()
     }
 
+    /// Told when this call's connection exists (a new one is set): the app asks again to start the contact-voice check of an
+    /// answered call. May be called from any thread.
+    public var voiceConnectionReady: (() -> Void)?
+
     private var peerConnection: QAudionPeerConnection? {
         didSet {
             guard let pc = peerConnection, pc !== oldValue else { return }
+            voiceConnectionReady?()
             if let voice = voiceLatch.currentSession { pc.setVoiceRxTap(voice.rxTap) }
             cryptorAttachQueue.async { [weak self] in
                 guard let self, self.peerConnection === pc else { return }

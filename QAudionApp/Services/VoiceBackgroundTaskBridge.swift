@@ -21,7 +21,8 @@ enum VoiceBackgroundTaskBridge {
         // What a call reads once at its start: the owner setting together with the entitlement, and the owner template (read only, for a
         // diagnostic counter).
         VoiceCallWiring.setOwnerPolicy(
-            ownerOn: { ContactVoiceSettings.shared.ownerOn }, ownerTemplate: { ContactVoiceSettings.ownerTemplate() })
+            ownerOn: { ContactVoiceSettings.shared.ownerOn }, ownerTemplate: { ContactVoiceSettings.ownerTemplate() },
+            available: { ContactVoiceSettings.shared.available })
         // The card of the call screen follows the state of the check.
         VoiceCallWiring.setDisplayHandler { display in
             DispatchQueue.main.async { VoiceCheckModel.shared.set(display) }

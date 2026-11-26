@@ -165,4 +165,32 @@ final class ContactVoiceUiTests: XCTestCase {
         XCTAssertFalse(starters.isEmpty)
         XCTAssertTrue(starters.contains { $0 != "finalizeCallActive" }, "started only from \(starters.sorted())")
     }
+
+    private func appStateText() throws -> String {
+        var dir = URL(fileURLWithPath: "\(#filePath)")
+        for _ in 0..<10 {
+            dir = dir.deletingLastPathComponent()
+            let candidate = dir.appendingPathComponent("QAudionApp/AppState.swift")
+            if FileManager.default.fileExists(atPath: candidate.path) { return try String(contentsOf: candidate, encoding: .utf8) }
+        }
+        throw NSError(domain: "ContactVoiceUiTests", code: 2)
+    }
+
+    /// A connection that is built later, or a call peer that is known later, still starts the check of an answered call: the start has
+    /// no time limit and is asked again by the events that make the call ready.
+    func testTheStartOfAnAnsweredCallIsEventDrivenWithNoTimeLimit() throws {
+        let text = try appStateText()
+        let start = try XCTUnwrap(text.range(of: "private func startVoiceCheckAtAnswer() {"))
+        let body = String(text[start.lowerBound...].prefix(500))
+        XCTAssertFalse(body.contains("Task.sleep"), "no retry loop")
+        XCTAssertFalse(body.contains("attempt"), "no attempt limit")
+        XCTAssertTrue(body.contains("voiceAnswerGate.pending(activeCallId: canonicalActiveCallId(), inCall: isInCall)"))
+        let controllerSet = try XCTUnwrap(text.range(of: "var webRtcController: Any? {"))
+        XCTAssertTrue(String(text[controllerSet.lowerBound...].prefix(900)).contains("startVoiceCheckAtAnswer()"))
+        XCTAssertTrue(String(text[controllerSet.lowerBound...].prefix(900)).contains("voiceConnectionReady"))
+        let peerSet = try XCTUnwrap(text.range(of: "@Published var callContactId: String? {"))
+        XCTAssertTrue(String(text[peerSet.lowerBound...].prefix(300)).contains("startVoiceCheckAtAnswer()"))
+        XCTAssertTrue(text.contains("voiceAnswerGate.arm(callId: self.canonicalActiveCallId())"))
+        XCTAssertTrue(text.contains("voiceAnswerGate.disarm()"))
+    }
 }

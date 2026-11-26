@@ -56,6 +56,17 @@ public enum VoiceVconsCodec {
 
     private struct Rejection: Error { let reason: String }
 
+    /// A copy of the key bytes straight into a buffer of its own (no intermediate array), to be cleared after use.
+    static func privateCopy(_ key: Data) -> Data {
+        var copy = Data(count: key.count)
+        copy.withUnsafeMutableBytes { destination in
+            key.withUnsafeBytes { source in
+                if let from = source.baseAddress, let to = destination.baseAddress { to.copyMemory(from: from, byteCount: key.count) }
+            }
+        }
+        return copy
+    }
+
     static func lowerAscii(_ s: String) -> String {
         var out = String.UnicodeScalarView()
         for u in s.unicodeScalars {
@@ -87,7 +98,7 @@ public enum VoiceVconsCodec {
 
     /// The padded Base64 string. `nonce` is random unless a test pins it. Nil only when the cipher fails.
     public static func seal(sessionKey: Data, callId: String, fields: Fields, nonce: Data? = nil) -> String? {
-        var copy = Data([UInt8](sessionKey)) // a copy of the key bytes, cleared after use
+        var copy = privateCopy(sessionKey) // a copy of the key bytes, cleared after use
         defer { CryptoConstants.zeroize(&copy) }
         do {
             let n = try nonce.map { try AES.GCM.Nonce(data: $0) } ?? AES.GCM.Nonce()
@@ -146,7 +157,7 @@ public enum VoiceVconsCodec {
     }
 
     private static func tryOpen(_ sessionKey: Data, _ callId: String, _ sealed: Data) -> Data? {
-        var copy = Data([UInt8](sessionKey)) // a copy of the key bytes, cleared after use
+        var copy = privateCopy(sessionKey) // a copy of the key bytes, cleared after use
         defer { CryptoConstants.zeroize(&copy) }
         let key = deriveKey(sessionKey: copy, callId: callId)
         do {

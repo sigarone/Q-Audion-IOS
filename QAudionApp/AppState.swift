@@ -758,7 +758,9 @@ final class AppState: ObservableObject {
             #endif
         }
     }
-    @Published var callContactId: String?
+    @Published var callContactId: String? {
+        didSet { if callContactId != nil, callContactId != oldValue { startVoiceCheckAtAnswer() } }
+    }
     /// W-CALLSPKR (2026-07-20) — the user's live loudspeaker preference for
     /// the CURRENT 1:1 call, set by `setSpeaker(_:)` and consulted by the
     /// `onAudioSessionActivated` fork below. Mirrors the state group calls
@@ -3543,6 +3545,13 @@ final class AppState: ObservableObject {
     /// hasn't been resolved yet.
     var webRtcController: Any? {
         didSet {
+            // The check of an answered call starts when its controller (and later its connection) exists.
+            if let controller = webRtcController as? QAudionWebRtcCallController {
+                controller.voiceConnectionReady = { [weak self] in
+                    Task { @MainActor [weak self] in self?.startVoiceCheckAtAnswer() }
+                }
+                startVoiceCheckAtAnswer()
+            }
             // W-CALLERUNMUTELOST (2026-09-27) — every assignment to this
             // property runs on the main thread (same as the answer path
             // that races it), so this and `reapplyNativeSenderMute`'s own
@@ -22871,17 +22880,17 @@ final class AppState: ObservableObject {
     /// The call this device started the check for (once per call).
     private var voiceCheckStartedCallId: String?
 
+    /// The answered call whose check has not started yet (see `VoiceAnswerGate`).
+    private var voiceAnswerGate = VoiceAnswerGate()
+
     /// The callee's accept point. `finalizeCallActive` is reached only through frames that the caller receives, so an answered call
-    /// starts its check here, once the call and its connection exist (a few short retries, only while this call is the live one).
+    /// starts its check from the events that make it ready (the answer, the call peer, the controller, its connection), with no
+    /// time limit while that call is live, and once.
     @MainActor
-    private func startVoiceCheckAtAnswer(peer: String?, attempt: Int = 0) {
-        guard VoiceCallWiring.isEnabled, isInCall, callContactId == peer else { return }
-        if startVoiceCheckForThisCall() { return }
-        guard attempt < 20 else { return }
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            self?.startVoiceCheckAtAnswer(peer: peer, attempt: attempt + 1)
-        }
+    private func startVoiceCheckAtAnswer() {
+        guard VoiceCallWiring.isEnabled else { return }
+        guard voiceAnswerGate.pending(activeCallId: canonicalActiveCallId(), inCall: isInCall) != nil else { return }
+        if startVoiceCheckForThisCall() { voiceAnswerGate.started() }
     }
 
     /// The device that THIS call's contact-voice check is bound to (see `VoiceDeviceBinding`).
@@ -23728,7 +23737,8 @@ extension AppState {
         // through, so answering a call is as good a trigger as placing one.
         self.maybeExchangeAvatarOnCallConnect()
         // The contact-voice check of an answered call (media start and the announcement); never reached for a declined call.
-        self.startVoiceCheckAtAnswer(peer: self.callContactId)
+        voiceAnswerGate.arm(callId: self.canonicalActiveCallId())
+        self.startVoiceCheckAtAnswer()
         // W450 + cold-start race: boot audio + notify caller (latched/replayed
         // when the responder integration isn't ready yet).
         self.consumeDeferredAnswerIfReady("performAcceptIncoming")
@@ -25031,6 +25041,7 @@ extension AppState {
         voiceVcons = nil
         voiceVconsCallId = nil
         voiceCheckStartedCallId = nil
+        voiceAnswerGate.disarm()
         if let endedId = endCallId { voiceDeviceBinding.clear(callId: endedId) }
         // WIRE_SPEC §8.7 — reset the RX render gate (parked track,
         // failsafe watchdog, readiness memo) for the next call.

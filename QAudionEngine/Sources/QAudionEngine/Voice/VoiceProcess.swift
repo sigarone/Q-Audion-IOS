@@ -86,6 +86,7 @@ final class VoiceProcess: @unchecked Sendable {
     private var displayHandler: ((VoiceCheckDisplay?) -> Void)?
     private var ownerOnProvider: () -> Bool = { false }
     private var ownerTemplateProvider: () -> [Float]? = { nil }
+    private var entitledProvider: () -> Bool = { false }
     private let maintenance = DispatchQueue(label: "com.bcrypto.qaudion.voice.maintenance", qos: .utility)
 
     private final class Weak {
@@ -128,11 +129,21 @@ final class VoiceProcess: @unchecked Sendable {
 
     /// The owner choice together with the entitlement (what a call reads once, at its start), and the enrolled voice template of
     /// the owner for the diagnostic counter only. Until the app installs them the check is off.
-    func setOwnerPolicy(ownerOn: @escaping () -> Bool, ownerTemplate: @escaping () -> [Float]?) {
+    func setOwnerPolicy(ownerOn: @escaping () -> Bool, ownerTemplate: @escaping () -> [Float]?, available: @escaping () -> Bool = { false }) {
         lock.lock()
+        entitledProvider = available
         ownerOnProvider = ownerOn
         ownerTemplateProvider = ownerTemplate
         lock.unlock()
+    }
+
+    /// True when the check is available to this account (the entitlement): an owner who turned the setting off then sees "Off for this
+    /// call"; an account without it sees no card at all.
+    var checkAvailable: Bool {
+        lock.lock()
+        let read = entitledProvider
+        lock.unlock()
+        return read()
     }
 
     var ownerOn: Bool {

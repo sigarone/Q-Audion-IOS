@@ -300,6 +300,33 @@ final class VoiceCallSessionTests: XCTestCase {
         XCTAssertEqual(fake.finished, 0)
     }
 
+    func testAnEntitledOwnerWhoTurnedTheSettingOffSeesOffForThisCall() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        process.setOwnerPolicy(ownerOn: { false }, ownerTemplate: { nil }, available: { true })
+        var shown: [VoiceCheckDisplay?] = []
+        process.setDisplayHandler { shown.append($0) }
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertEqual(fake.prepareCalls, 0, "nothing is processed")
+        XCTAssertEqual(shown.compactMap { $0 }, [.off])
+    }
+
+    func testAnAccountWithoutTheEntitlementSeesNoCardAtAll() throws {
+        VoiceFeature.setProvider { true }
+        let fake = try services()
+        let process = processWithMemoryCounters(fake)
+        process.setOwnerPolicy(ownerOn: { false }, ownerTemplate: { nil }, available: { false })
+        var shown: [VoiceCheckDisplay?] = []
+        process.setDisplayHandler { shown.append($0) }
+        let (session, _) = makeSession(fake, process)
+        session.mediaStart()
+        session.queue.sync {}
+        XCTAssertTrue(shown.compactMap { $0 }.isEmpty)
+    }
+
     func testWithNoAnnouncementTheCallIsProcessedAndReportsLearning() throws {
         VoiceFeature.setProvider { true }
         let fake = try services()

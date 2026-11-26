@@ -45,8 +45,11 @@ public enum VoiceCallWiring {
 
     /// What a call reads once, at its start: whether the check may run (the owner setting AND the entitlement) and the enrolled voice
     /// template of the owner, used only for a diagnostic counter and never in a decision. Until installed the check is off.
-    public static func setOwnerPolicy(ownerOn: @escaping () -> Bool, ownerTemplate: @escaping () -> [Float]?) {
-        VoiceProcess.shared.setOwnerPolicy(ownerOn: ownerOn, ownerTemplate: ownerTemplate)
+    /// `available` tells whether the check is available to the account at all (the entitlement), apart from the owner choice.
+    public static func setOwnerPolicy(
+        ownerOn: @escaping () -> Bool, ownerTemplate: @escaping () -> [Float]?, available: @escaping () -> Bool = { false }
+    ) {
+        VoiceProcess.shared.setOwnerPolicy(ownerOn: ownerOn, ownerTemplate: ownerTemplate, available: available)
     }
 
     /// The owner turned the setting off: every running engine is stopped, then every record, `meta.bin` and the key are deleted.
