@@ -503,6 +503,22 @@ final class VoiceOwnerOffStoreTests: XCTestCase {
         XCTAssertEqual(vault.addCount, adds)
     }
 
+    /// A key read that comes back empty once is not a lost key: the key rule of the store looks again before it acts, so a screen
+    /// that lists the voices must not delete what the key still opens.
+    func testOneEmptyKeyReadDeletesNothing() throws {
+        let vault = VoiceMemoryVault()
+        let first = makeStore(vault)
+        try first.save("a", VoiceStoreFixtures.record(cfg))
+        let reading = makeStore(vault) // a new process
+        vault.emptyReads = 1
+        XCTAssertNotNil(try reading.load("a"), "the record opens after one empty read")
+        let listing = makeStore(vault) // another new process
+        vault.emptyReads = 1
+        _ = try listing.summaries(contactIds: ["a"], cfg: cfg)
+        XCTAssertTrue(names().contains("meta.bin"), "meta.bin is still there")
+        XCTAssertEqual(names().filter { $0.hasSuffix(".qvt") }.count, 1, "the record is still there")
+    }
+
     func testSummariesReadTheRecordWithItsDateAndProgress() throws {
         let vault = VoiceMemoryVault()
         let store = makeStore(vault)
