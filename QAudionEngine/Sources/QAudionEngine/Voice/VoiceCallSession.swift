@@ -485,8 +485,7 @@ final class VoiceCallSession: @unchecked Sendable {
         // The owner setting (and the entitlement) is read once, here. Off: no model, no store, no key, nothing is created.
         guard process.ownerOn else {
             gaveUp = true
-            offForCall = true
-            process.showDisplay(.off)
+            offForCall = true // nothing is drawn: the card is for an account that has the check
             return
         }
         guard let ready = process.services.prepare() else {

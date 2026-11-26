@@ -293,7 +293,7 @@ final class VoiceCallSessionTests: XCTestCase {
         XCTAssertTrue(fake.tagDevices.isEmpty, "no meta file or key is made for a device tag")
         XCTAssertNil(session.withEngine { $0 })
         XCTAssertEqual(session.announcedFlags, 0)
-        XCTAssertEqual(shown.last ?? nil, .off)
+        XCTAssertTrue(shown.compactMap { $0 }.isEmpty, "no card at all for an account without the check")
         session.callEnded()
         session.queue.sync {}
         XCTAssertTrue(fake.updates.isEmpty)

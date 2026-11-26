@@ -22843,23 +22843,45 @@ final class AppState: ObservableObject {
     /// The contact-voice check starts at the genuine-accept points, here and nowhere else. The device is the one that THIS
     /// call pinned (`callPinDeviceId`), never the peer-keyed value that an earlier call may have left. Inert while the check is
     /// off: the controller returns before it creates anything.
+    /// True when there is nothing more to do (the check started for this call, or it is off); false while the call is not ready yet.
     @MainActor
-    private func startVoiceCheckForThisCall() {
+    @discardableResult
+    private func startVoiceCheckForThisCall() -> Bool {
+        guard VoiceCallWiring.isEnabled else { return true }
         guard let controller = webRtcController as? QAudionWebRtcCallController,
-              let contactId = callContactId, let callId = canonicalActiveCallId() else { return }
+              let contactId = callContactId, let callId = canonicalActiveCallId() else { return false }
+        if voiceCheckStartedCallId == callId { return true } // once per call, from whichever accept point comes first
         // The device is read from the stash of THIS call only (stamped by this call's own `call_incoming`): an outgoing call has
         // none, and never reads what an earlier call from the same peer left in a peer-keyed field. No device is tier 0.
         voiceDeviceBinding.bind(
             callId: callId, deviceId: VoiceTierInputs.peerDeviceId(forCall: callId, callScopedStash: senderDeviceIdByCallId))
         let deviceId = voiceDeviceBinding.device(forCall: callId)
         let startS = Int64(Date().timeIntervalSince1970)
-        controller.voiceMediaStart(
+        guard controller.voiceMediaStart(
             callId: callId, contactId: contactId, peerDeviceId: deviceId,
             tStartS: Int(startS), utcOffsetS: TimeZone.current.secondsFromGMT(),
-            held: callService.isLocalHeld || callService.peerOnHold)
+            held: callService.isLocalHeld || callService.peerOnHold) else { return false }
+        voiceCheckStartedCallId = callId
         voiceTierCall = VoiceTierCall(callId: callId, peerId: contactId, deviceId: deviceId, startS: startS)
         reportVoiceTierMoment()
         startVoiceVcons(callId: callId, peerId: contactId, controller: controller)
+        return true
+    }
+
+    /// The call this device started the check for (once per call).
+    private var voiceCheckStartedCallId: String?
+
+    /// The callee's accept point. `finalizeCallActive` is reached only through frames that the caller receives, so an answered call
+    /// starts its check here, once the call and its connection exist (a few short retries, only while this call is the live one).
+    @MainActor
+    private func startVoiceCheckAtAnswer(peer: String?, attempt: Int = 0) {
+        guard VoiceCallWiring.isEnabled, isInCall, callContactId == peer else { return }
+        if startVoiceCheckForThisCall() { return }
+        guard attempt < 20 else { return }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            self?.startVoiceCheckAtAnswer(peer: peer, attempt: attempt + 1)
+        }
     }
 
     /// The device that THIS call's contact-voice check is bound to (see `VoiceDeviceBinding`).
@@ -23705,6 +23727,8 @@ extension AppState {
         // gap). Fire it here, on the single point every accept path converges
         // through, so answering a call is as good a trigger as placing one.
         self.maybeExchangeAvatarOnCallConnect()
+        // The contact-voice check of an answered call (media start and the announcement); never reached for a declined call.
+        self.startVoiceCheckAtAnswer(peer: self.callContactId)
         // W450 + cold-start race: boot audio + notify caller (latched/replayed
         // when the responder integration isn't ready yet).
         self.consumeDeferredAnswerIfReady("performAcceptIncoming")
@@ -25006,6 +25030,7 @@ extension AppState {
         voiceVcons?.stop()
         voiceVcons = nil
         voiceVconsCallId = nil
+        voiceCheckStartedCallId = nil
         if let endedId = endCallId { voiceDeviceBinding.clear(callId: endedId) }
         // WIRE_SPEC §8.7 — reset the RX render gate (parked track,
         // failsafe watchdog, readiness memo) for the next call.

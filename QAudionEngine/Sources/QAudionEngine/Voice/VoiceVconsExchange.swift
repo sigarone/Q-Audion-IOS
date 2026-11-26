@@ -97,34 +97,35 @@ public final class VoiceVconsExchange: @unchecked Sendable {
         queue.sync {}
     }
 
-    private static func zero(_ key: inout Data?) {
+    /// Clears the bytes of a held key and lets it go.
+    private static func scrub(_ key: inout Data?) {
         if var k = key {
-            k.resetBytes(in: 0..<k.count)
+            key = nil // the held reference is gone, so `k` is the only owner of the bytes
+            CryptoConstants.zeroize(&k)
         }
-        key = nil
     }
 
     private func clearKeys() {
-        Self.zero(&lastKey)
-        Self.zero(&previousKey)
+        Self.scrub(&lastKey)
+        Self.scrub(&previousKey)
     }
 
-    /// The current key, as a copy; the key that it replaced is kept as the previous one.
-    private func track() -> (current: Data, previous: Data?)? {
+    /// The current key. A copy of the bytes is made only when the key changed (the one it replaced becomes the previous key, the
+    /// one before that is cleared); nothing is copied on a tick or a message.
+    private func refreshKeys() -> Data? {
         guard let now = keys(), !now.isEmpty else { return nil }
-        if let last = lastKey, last != now {
-            Self.zero(&previousKey)
-            previousKey = last
+        if lastKey != now {
+            if let old = lastKey {
+                Self.scrub(&previousKey)
+                previousKey = old
+            }
+            lastKey = Data([UInt8](now))
         }
-        lastKey = Data(now)
-        return (Data(now), previousKey.map { Data($0) })
+        return lastKey
     }
 
     private func step() {
-        guard var k = track() else { return } // no session key yet: nothing is sent, the next tick tries again
-        defer {
-            k.current.resetBytes(in: 0..<k.current.count)
-        }
+        guard let key = refreshKeys() else { return } // no session key yet: nothing is sent, the next tick tries again
         let now = local()
         if now != lastSent { // a flag or route change (or the start): a new series, at once
             lastSent = now
@@ -142,7 +143,7 @@ public final class VoiceVconsExchange: @unchecked Sendable {
             seq: nextSeq, allow: true, withdraw: false,
             learning: now.flags & VoiceVconsCodec.flagLearning != 0, verifying: now.flags & VoiceVconsCodec.flagVerifying != 0,
             routeClass: now.routeClass, platform: VoiceVconsCodec.platformIos, unixMs: nowMs())
-        guard let sealed = VoiceVconsCodec.seal(sessionKey: k.current, callId: callId, fields: f) else { return }
+        guard let sealed = VoiceVconsCodec.seal(sessionKey: key, callId: callId, fields: f) else { return }
         nextSeq &+= 1
         send(Self.prefix + sealed)
     }
@@ -150,15 +151,11 @@ public final class VoiceVconsExchange: @unchecked Sendable {
     /// One message from the registered peer: the string after `VCONS:`.
     public func onReceived(_ sealed: String) {
         queue.async { [self] in
-            guard var k = track() else {
+            guard let key = refreshKeys() else {
                 onDropped("tag")
                 return
             }
-            defer {
-                k.current.resetBytes(in: 0..<k.current.count)
-                if var p = k.previous { p.resetBytes(in: 0..<p.count) }
-            }
-            switch VoiceVconsCodec.open(current: k.current, previous: k.previous, callId: callId, string: sealed) {
+            switch VoiceVconsCodec.open(current: key, previous: previousKey, callId: callId, string: sealed) {
             case .rejected(let reason):
                 onDropped(reason)
             case .ok(let f):

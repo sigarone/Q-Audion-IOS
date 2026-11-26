@@ -33,6 +33,14 @@ protocol VoiceAead: AnyObject {
 
     /// Deletes the key (the owner turns the feature off, wipe). Every blob sealed with it is unreadable afterwards.
     func deleteKey() throws
+
+    /// Whether the key exists. Never creates one. Throws `.key` when the key store cannot be read now.
+    func keyExists() throws -> Bool
+}
+
+extension VoiceAead {
+    /// A key that the platform does not hold in a keychain (the tests) is always there.
+    func keyExists() throws -> Bool { true }
 }
 
 /// `VoiceAead` over CryptoKit AES-GCM with the key from `key`: an in-memory key in the tests, the Keychain key in the app
@@ -407,8 +415,18 @@ final class VoiceTemplateStore: @unchecked Sendable {
         return any
     }
 
+    /// True when `meta.bin` is there AND the key exists: only then can a record be read or named. A `meta.bin` whose key is gone
+    /// can never be read again: every file of the learner data is removed and nothing is created. A key store that cannot be read
+    /// now throws and removes nothing.
+    private func readableData() throws -> Bool {
+        if !hasMeta() { return false }
+        if try aead.keyExists() { return true }
+        deleteAllLocked()
+        return false
+    }
+
     private func deleteLocked(_ contactId: String) throws -> Bool {
-        if !hasMeta() { return deleteStrayRecords() } // a deletion never creates `meta.bin` or the key
+        if try !readableData() { return deleteStrayRecords() } // a deletion never creates `meta.bin` or the key
         let url = try fileURL(contactId)
         guard fm.fileExists(atPath: url.path) else { return false }
         do {
@@ -475,7 +493,7 @@ final class VoiceTemplateStore: @unchecked Sendable {
     func sweep(_ contactId: String, nowS: Int, _ cfg: VoiceStateConstants, generation: Int? = nil) throws -> SweepResult? {
         try lock.withLock {
             try admit(generation)
-            if !hasMeta() { return nil } // nothing can be named, and a sweep never creates `meta.bin` or the key
+            if try !readableData() { return nil } // nothing can be named, and a sweep never creates `meta.bin` or the key
             guard let rec = try loadCompatibleLocked(contactId, cfg) else { return nil }
             let r = VoiceTemplateState.sweep(rec, nowS: nowS, cfg)
             if let kept = r.record {
@@ -494,7 +512,7 @@ final class VoiceTemplateStore: @unchecked Sendable {
         guard directorySynced, !knownContactIds.isEmpty else { return 0 }
         return try lock.withLock {
             try admit(generation)
-            if !hasMeta() { return 0 } // no salt: nothing can be known, and nothing is created
+            if try !readableData() { return 0 } // no salt or no key: nothing can be known, and nothing is created
             let salt = try ensureMeta().nameSalt
             let keep = Set(knownContactIds.map { fileName(salt: salt, contactId: $0) })
             var n = 0
@@ -518,7 +536,7 @@ final class VoiceTemplateStore: @unchecked Sendable {
     func summaries(contactIds: [String], cfg: VoiceStateConstants, generation: Int? = nil) throws -> [String: ContactVoiceSummary] {
         try lock.withLock {
             try admit(generation)
-            if !hasMeta() { return [:] }
+            if try !readableData() { return [:] }
             var out: [String: ContactVoiceSummary] = [:]
             for id in contactIds {
                 if let rec = try? loadCompatibleLocked(id, cfg) { out[id] = ContactVoiceSummary.of(rec, cfg) }
@@ -549,8 +567,21 @@ final class VoiceTemplateStore: @unchecked Sendable {
     /// are deleted first; a failure to delete the key is thrown after that.
     func wipeAll() throws {
         try lock.withLock {
-            deleteAllLocked()
-            try aead.deleteKey()
+            meta = nil
+            var failure: Error?
+            for name in names() where name.hasSuffix(Self.ext) || name.hasSuffix(Self.tmp) || name == Self.metaFile {
+                do {
+                    try fm.removeItem(at: dir.appendingPathComponent(name))
+                } catch {
+                    failure = failure ?? VoiceStoreError(.io, "file not deleted")
+                }
+            }
+            do {
+                try aead.deleteKey()
+            } catch {
+                failure = failure ?? error
+            }
+            if let failure { throw failure }
         }
     }
 

@@ -87,8 +87,8 @@ public enum VoiceVconsCodec {
 
     /// The padded Base64 string. `nonce` is random unless a test pins it. Nil only when the cipher fails.
     public static func seal(sessionKey: Data, callId: String, fields: Fields, nonce: Data? = nil) -> String? {
-        var copy = Data(sessionKey) // a copy of the key bytes, cleared after use
-        defer { copy.resetBytes(in: 0..<copy.count) }
+        var copy = Data([UInt8](sessionKey)) // a copy of the key bytes, cleared after use
+        defer { CryptoConstants.zeroize(&copy) }
         do {
             let n = try nonce.map { try AES.GCM.Nonce(data: $0) } ?? AES.GCM.Nonce()
             let box = try AES.GCM.seal(plaintext(fields), using: deriveKey(sessionKey: copy, callId: callId), nonce: n)
@@ -146,8 +146,8 @@ public enum VoiceVconsCodec {
     }
 
     private static func tryOpen(_ sessionKey: Data, _ callId: String, _ sealed: Data) -> Data? {
-        var copy = Data(sessionKey) // a copy of the key bytes, cleared after use
-        defer { copy.resetBytes(in: 0..<copy.count) }
+        var copy = Data([UInt8](sessionKey)) // a copy of the key bytes, cleared after use
+        defer { CryptoConstants.zeroize(&copy) }
         let key = deriveKey(sessionKey: copy, callId: callId)
         do {
             let s = [UInt8](sealed)

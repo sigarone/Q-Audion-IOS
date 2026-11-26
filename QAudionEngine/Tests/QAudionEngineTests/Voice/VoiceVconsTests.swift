@@ -458,6 +458,51 @@ final class VoiceOwnerOffStoreTests: XCTestCase {
         XCTAssertNil(vault.current)
     }
 
+    /// A `meta.bin` whose key is gone can never be read again: reading, forgetting, a withdrawal and a sweep remove the stray files
+    /// and create neither a key nor a new `meta.bin`.
+    func testWithMetaOnDiskAndTheKeyGoneNothingIsCreatedAndTheStrayFilesAreRemoved() throws {
+        let vault = VoiceMemoryVault()
+        let first = makeStore(vault)
+        try first.save("a", VoiceStoreFixtures.record(cfg))
+        try vault.remove() // the Keychain lost the key
+        let adds = vault.addCount
+        XCTAssertTrue(names().contains("meta.bin"))
+
+        let second = makeStore(vault) // a new process: no key in memory
+        XCTAssertEqual(try second.summaries(contactIds: ["a"], cfg: cfg), [:])
+        XCTAssertFalse(names().contains("meta.bin"))
+        XCTAssertEqual(names().filter { $0.hasSuffix(".qvt") }.count, 0)
+        XCTAssertNil(vault.current)
+        XCTAssertEqual(vault.addCount, adds)
+
+        for operation in 0..<3 {
+            let again = makeStore(vault)
+            try Data([1]).write(to: dir.appendingPathComponent("meta.bin"))
+            switch operation {
+            case 0: _ = try again.delete("a")
+            case 1: _ = try again.sweep("a", nowS: 1_790_000_000, cfg)
+            default: _ = try again.deleteOrphans(knownContactIds: ["x"], directorySynced: true)
+            }
+            XCTAssertFalse(names().contains("meta.bin"), "operation \(operation)")
+            XCTAssertNil(vault.current, "operation \(operation)")
+            XCTAssertEqual(vault.addCount, adds, "operation \(operation)")
+        }
+    }
+
+    func testAKeyStoreThatCannotBeReadRemovesNothingAndCreatesNothing() throws {
+        let vault = VoiceMemoryVault()
+        let first = makeStore(vault)
+        try first.save("a", VoiceStoreFixtures.record(cfg))
+        let adds = vault.addCount
+        let second = makeStore(vault)
+        vault.unavailable = true
+        XCTAssertThrowsError(try second.delete("a"))
+        XCTAssertTrue(names().contains("meta.bin"))
+        XCTAssertEqual(names().filter { $0.hasSuffix(".qvt") }.count, 1)
+        vault.unavailable = false
+        XCTAssertEqual(vault.addCount, adds)
+    }
+
     func testSummariesReadTheRecordWithItsDateAndProgress() throws {
         let vault = VoiceMemoryVault()
         let store = makeStore(vault)
@@ -482,5 +527,32 @@ final class VoiceOwnerOffStoreTests: XCTestCase {
             XCTAssertEqual(summary.kind, kind)
             XCTAssertEqual(summary.canRelearn, kind == .mayHaveChanged)
         }
+    }
+}
+
+/// Deleting or blocking a contact takes that contact's learned voice with it: both paths call the one function that forgets it.
+final class VoiceContactRemovalWiringTests: XCTestCase {
+    private func source(_ relative: String) throws -> String {
+        var dir = URL(fileURLWithPath: "\(#filePath)")
+        for _ in 0..<10 {
+            dir = dir.deletingLastPathComponent()
+            let candidate = dir.appendingPathComponent("Sources/QAudionEngine/" + relative)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return try String(contentsOf: candidate, encoding: .utf8)
+            }
+        }
+        throw CocoaError(.fileNoSuchFile)
+    }
+
+    func testDeletingAContactForgetsItsVoice() throws {
+        let text = try source("Persistence/ContactsStore.swift")
+        let start = try XCTUnwrap(text.range(of: "public func remove(userId: String)"))
+        let body = String(text[start.lowerBound...].prefix(600))
+        XCTAssertTrue(body.contains("VoiceCallWiring.contactRemoved(userId: userId)"))
+    }
+
+    func testBlockingAContactForgetsItsVoice() throws {
+        let text = try source("Backend/ContactBlocking.swift")
+        XCTAssertTrue(text.contains("VoiceCallWiring.contactRemoved(userId: id)"))
     }
 }
